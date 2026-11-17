@@ -1,12 +1,17 @@
 //! Scene structures for GPU rendering
 
-use std::{ops::Range, sync::Arc};
+use std::{
+    hash::{Hash, Hasher},
+    ops::Range,
+    sync::Arc,
+};
 
 use cranpose_core::{NodeId, collections::growth_slack::GrowthSlack};
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::{
     glyph_reach::{InkSpread, glyph_part},
     graph::DrawCommandId,
+    layer_paint::LayerPaint,
     layer_shadow::ShadowRRect,
     scene_store::ShapeRef,
     text_paint::TextPaint,
@@ -15,7 +20,7 @@ use cranpose_render_common::{
 use cranpose_ui::{TextStyle, text::RenderString};
 use cranpose_ui_graphics::{
     BlendMode, Color, ColorFilter, CommandRecording, DrawPrimitive, GraphicsLayer, ImageBitmap,
-    ImageSampling, Point, Recorded, Rect, RenderEffect, ShapeRecorder,
+    ImageSampling, Point, Recorded, Rect, RenderEffect, RenderHash, ShapeRecorder,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -409,7 +414,11 @@ pub(crate) struct TextDraw {
     pub text: DrawnText,
     /// The lines and glyphs, from `rect`'s top left corner.
     pub layout: cranpose_text::TextLayout,
+    // The color of glyphs whose style names none, before `layer_paint`.
     pub color: Color,
+    // The paint of the layer over every resolved color of the glyphs;
+    // `LayerPaint::NONE` for a draw with colors painted by the pipeline.
+    pub layer_paint: LayerPaint,
     pub text_style: Arc<TextStyle>,
     /// `text_style`'s [`TextStyle::render_hash`], hashed once per text.
     pub style_hash: u64,
@@ -429,6 +438,13 @@ impl TextDraw {
             self.color,
             scale,
         )
+        .with_layer_paint(&self.layer_paint)
+    }
+
+    // Hashes the colors of the glyphs: `color` and the paint over it.
+    pub(crate) fn hash_glyph_paint<H: Hasher>(&self, state: &mut H) {
+        self.color.render_hash().hash(state);
+        self.layer_paint.render_hash().hash(state);
     }
 
     // The part of `rect`, where the text draws from its top left corner at

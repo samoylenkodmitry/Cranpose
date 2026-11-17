@@ -9,7 +9,7 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use cranpose_core::collections::map::HashMap;
 use cranpose_render_common::{geometry::blur_reach, graph::quad_bounds, scene_store::SceneVersion};
-use cranpose_ui_graphics::{BlendMode, ImageSampling, Rect, RenderHash, TileMode};
+use cranpose_ui_graphics::{BlendMode, ImageSampling, Rect, TileMode};
 use web_time::Instant;
 
 use crate::{
@@ -169,7 +169,7 @@ fn hash_text_draw_for_cache<H: Hasher>(
     text_draw.text.render_hash().hash(state);
     text_draw.layout.id().hash(state);
     text_draw.style_hash.hash(state);
-    text_draw.color.render_hash().hash(state);
+    text_draw.hash_glyph_paint(state);
     hash_text_gradient_phase_for_cache(text_draw, raster_rect, state);
     text_draw.font_size.to_bits().hash(state);
     text_scale.to_bits().hash(state);

@@ -8,19 +8,16 @@ use cranpose_render_common::primitive_emit::resolve_clip;
 use cranpose_render_common::{
     Brush,
     graph::TextPrimitiveNode,
+    layer_paint::LayerPaint,
     layer_shadow::{ShadowLight, layer_shadow_geometry},
     layer_transform::{apply_layer_to_rect, layer_uniform_scale},
     primitive_emit::{
         DrawPrimitiveSink, ImageDrawParams, ShapeDrawParams, TextDrawParams, emit_draw_primitive,
     },
 };
-#[cfg(test)]
-use cranpose_ui::TextOverflow;
-#[cfg(test)]
-use cranpose_ui::measure_text;
-#[cfg(test)]
-use cranpose_ui::prepare_text_layout;
 use cranpose_ui::text::{AnnotatedString, TextDrawStyle, TextStyle, shared_plain_render_string};
+#[cfg(test)]
+use cranpose_ui::{TextOverflow, measure_text, prepare_text_layout};
 use cranpose_ui_graphics::{
     BlendMode, Color, DrawPrimitive, GraphicsLayer, LayerShape, Point, Recorded, Rect,
     RenderEffect, RoundedCornerShape, RuntimeShader, ShapeRecorder, TileMode,
@@ -182,7 +179,7 @@ fn expand_text_effect_rect(text_rect: Rect, stroke_padding: f32) -> Rect {
 
 fn gpu_text_material_for_style(
     text_style: &TextStyle,
-    fallback_color: Color,
+    (fallback_color, layer_paint): (Color, &LayerPaint),
     text_scale: f32,
 ) -> GpuTextMaterial {
     let scale = if text_scale.is_finite() && text_scale > 0.0 {
@@ -208,7 +205,7 @@ fn gpu_text_material_for_style(
     let alpha_multiplier = text_style.span_style.alpha.unwrap_or(1.0);
 
     GpuTextMaterial {
-        brush,
+        brush: layer_paint.brush(brush),
         alpha_multiplier,
         draw_mode,
     }
@@ -362,7 +359,7 @@ fn build_gpu_text_effect(
 fn gpu_text_effect_for_style(
     text_style: &TextStyle,
     text_rect: Rect,
-    fallback_color: Color,
+    fallback: (Color, &LayerPaint),
     text_scale: f32,
 ) -> Option<(RenderEffect, Rect)> {
     let uses_non_solid_brush = matches!(
@@ -381,7 +378,7 @@ fn gpu_text_effect_for_style(
         return None;
     }
 
-    let material = gpu_text_material_for_style(text_style, fallback_color, text_scale);
+    let material = gpu_text_material_for_style(text_style, fallback, text_scale);
     build_gpu_text_effect(&material, text_rect)
 }
 
@@ -400,7 +397,9 @@ fn text_for_gpu_mask(text: impl Into<AnnotatedString>) -> AnnotatedString {
     })
 }
 
-fn text_with_layer_transformed_span_paint(
+// `text` with its span colors on eight bits and its span gradients in the
+// geometry of `content_layer`. The materials apply the layer's paint.
+fn text_with_layer_placed_span_paint(
     text: &AnnotatedString,
     content_layer: &GraphicsLayer,
 ) -> AnnotatedString {
@@ -409,13 +408,11 @@ fn text_with_layer_transformed_span_paint(
     }
 
     text.map_span_styles(|span| {
-        span.color = span
-            .color
-            .map(|color| apply_layer_to_color(color, content_layer));
+        span.color = span.color.map(Color::srgb_8bit);
         span.brush = span
             .brush
             .take()
-            .map(|brush| apply_layer_to_brush(brush, content_layer));
+            .map(|brush| style::apply_layer_geometry_to_brush(brush, content_layer));
     })
 }
 
@@ -437,7 +434,7 @@ fn merged_span_style_for_range(
 fn gpu_text_material_batches_for_text(
     text: &AnnotatedString,
     text_style: &TextStyle,
-    fallback_color: Color,
+    fallback: (Color, &LayerPaint),
     text_scale: f32,
 ) -> Vec<GpuTextMaterialBatch> {
     let mut batches: Vec<GpuTextMaterialBatch> = Vec::new();
@@ -457,7 +454,7 @@ fn gpu_text_material_batches_for_text(
         let mut range_style = text_style.clone();
         range_style.span_style =
             merged_span_style_for_range(text, &text_style.span_style, start, end);
-        let material = gpu_text_material_for_style(&range_style, fallback_color, text_scale);
+        let material = gpu_text_material_for_style(&range_style, fallback, text_scale);
         if let Some(last_batch) = batches.last_mut()
             && last_batch.material == material
         {
@@ -552,23 +549,23 @@ impl TextStyleDrawSink for CompositorScene {
     }
 }
 
-// `text_rect` is the text's box after the layer's transform, and
-// `transformed_text_style` its style with the layer's paint applied.
+// `text_rect` is the text's box after the layer's transform.
+// `transformed_text_style` is its style in the layer's geometry, unpainted.
 fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
     sink: &mut S,
     node: &TextPrimitiveNode,
     placement: &TextPlacement<'_>,
     text_rect: Rect,
     transformed_text_style: &TextStyle,
-    fallback_color: Color,
+    fallback: (Color, &LayerPaint),
 ) -> bool {
     let text = &AnnotatedString::from(Arc::clone(&node.render_text));
     let text_scale = layer_uniform_scale(placement.layer);
-    let transformed_span_text = text_with_layer_transformed_span_paint(text, placement.layer);
+    let transformed_span_text = text_with_layer_placed_span_paint(text, placement.layer);
     let material_batches = gpu_text_material_batches_for_text(
         &transformed_span_text,
         transformed_text_style,
-        fallback_color,
+        fallback,
         text_scale,
     );
     if material_batches.is_empty() {
@@ -640,7 +637,6 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
 
     let text_color =
         resolve_text_color_without_gradient_fallback(text_style, Color(1.0, 1.0, 1.0, 1.0));
-    let transformed_text_color = apply_layer_to_color(text_color, content_layer);
     let transformed_text_style =
         if text_style.span_style.shadow.is_none() && text_style.span_style.brush.is_none() {
             Arc::clone(text_style)
@@ -651,7 +647,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
                 .span_style
                 .brush
                 .clone()
-                .map(|brush| apply_layer_to_brush(brush, content_layer));
+                .map(|brush| style::apply_layer_geometry_to_brush(brush, content_layer));
             Arc::new(transformed)
         };
 
@@ -675,6 +671,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
                 text: DrawnText::of(shadow_text, &shadow_text_style, node.paint().spread),
                 layout: layout.clone(),
                 color: shadow_color,
+                layer_paint: LayerPaint::NONE,
                 text_style: Arc::new(shadow_text_style),
                 style_hash: shadow_style_hash,
                 font_size,
@@ -692,7 +689,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         (
             transformed_text_rect,
             &transformed_text_style,
-            transformed_text_color,
+            (text_color.srgb_8bit(), &LayerPaint::of(content_layer)),
         ),
     );
 
@@ -701,14 +698,14 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
     });
 }
 
-// Pushes the glyphs of a text node in `style` over `text_rect`: through a
-// GPU effect for a gradient, in batches by material for spans that paint
-// their own way, or as one text draw.
+// Pushes the glyphs of a text node in `style` over `text_rect`, all under the
+// layer's paint: through a GPU effect for a gradient, in batches by material
+// for spans that paint their own way, or as one text draw.
 fn emit_text_glyph_draws<S: TextStyleDrawSink>(
     sink: &mut S,
     node: &TextPrimitiveNode,
     placement: &TextPlacement<'_>,
-    (text_rect, style, color): (Rect, &Arc<TextStyle>, Color),
+    (text_rect, style, fallback): (Rect, &Arc<TextStyle>, (Color, &LayerPaint)),
 ) {
     let text_clip = placement.clip;
     let text_scale = layer_uniform_scale(placement.layer);
@@ -717,17 +714,17 @@ fn emit_text_glyph_draws<S: TextStyleDrawSink>(
     let spans = node.render_text.span_styles();
     let has_span_foreground_overrides = spans_override_foreground(spans);
     if has_span_foreground_overrides
-        && push_span_gpu_text_material_draws(sink, node, placement, text_rect, style, color)
+        && push_span_gpu_text_material_draws(sink, node, placement, text_rect, style, fallback)
     {
         return;
     }
 
     if !has_span_foreground_overrides
         && let Some((effect, effect_rect)) =
-            gpu_text_effect_for_style(style, text_rect, color, text_scale)
+            gpu_text_effect_for_style(style, text_rect, fallback, text_scale)
     {
         if spans_override_foreground_color(spans)
-            && push_span_gpu_text_material_draws(sink, node, placement, text_rect, style, color)
+            && push_span_gpu_text_material_draws(sink, node, placement, text_rect, style, fallback)
         {
             return;
         }
@@ -750,7 +747,8 @@ fn emit_text_glyph_draws<S: TextStyleDrawSink>(
         snap_anchor: None,
         text: DrawnText::of(Arc::clone(&node.render_text), style, node.paint().spread),
         layout: node.layout.clone(),
-        color,
+        color: fallback.0,
+        layer_paint: fallback.1.clone(),
         text_style: Arc::clone(style),
         style_hash: style.render_hash(),
         font_size: node.font_size,
@@ -784,7 +782,8 @@ pub(crate) fn push_text_style_draws(
             snap_anchor: placement.snap_anchor,
             text: DrawnText::plain(Arc::clone(&node.render_text), paint),
             layout: node.layout.clone(),
-            color: apply_layer_to_color(paint.color, placement.layer),
+            color: paint.color.srgb_8bit(),
+            layer_paint: LayerPaint::of(placement.layer),
             text_style: Arc::clone(&node.text_style),
             style_hash: paint.style_hash,
             font_size: node.font_size,
@@ -963,6 +962,7 @@ pub(crate) fn push_draw_primitive(
                 text: DrawnText::of_laid_out(render_text, &params.text_style, &params.layout),
                 layout: params.layout,
                 color: params.color,
+                layer_paint: LayerPaint::NONE,
                 text_style: params.text_style,
                 style_hash: params.style_hash,
                 font_size: params.font_size,

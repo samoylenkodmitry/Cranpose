@@ -1,6 +1,8 @@
 use std::{rc::Rc, sync::Arc};
 
-use cranpose_render_common::{text_fonts::TextFonts, text_raster::GlyphInk};
+use cranpose_render_common::{
+    layer_paint::LayerPaint, text_fonts::TextFonts, text_raster::GlyphInk,
+};
 use cranpose_ui::{PreparedTextLayout, TextStyle};
 use cranpose_ui_graphics::{Color, Rect};
 
@@ -38,6 +40,7 @@ pub(crate) fn text_draw(
         layout: prepared.layout.clone(),
         ink: GlyphInk::Painted,
         color,
+        layer_paint: LayerPaint::NONE,
         text_style: Arc::new(style),
         font_size,
         scale: 1.0,

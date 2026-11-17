@@ -14,7 +14,7 @@ use cranpose_ui::{
 use cranpose_ui_graphics::{Point, whole};
 use smallvec::SmallVec;
 
-use crate::glyph_mask::GlyphRaster;
+use crate::{glyph_mask::GlyphRaster, layer_paint::LayerPaint, text_raster::TextRasterRequest};
 
 /// A text and the styles of its ranges.
 #[derive(Clone, Copy, Debug)]
@@ -134,6 +134,24 @@ impl SpanPaint {
         }
     }
 
+    // The paint with its brush and shadow under `layer_paint`.
+    fn painted(self, layer_paint: &LayerPaint) -> Self {
+        if !layer_paint.paints() {
+            return self;
+        }
+        Self {
+            brush: layer_paint.brush(self.brush),
+            shadow: self
+                .shadow
+                .map(|shadow| Shadow {
+                    color: layer_paint.color(shadow.color),
+                    ..shadow
+                })
+                .filter(|shadow| shadow.color.3 > 0.0),
+            ..self
+        }
+    }
+
     // The color of a solid paint, `None` for a gradient.
     pub(crate) fn solid_color(&self) -> Option<Color> {
         match self.brush {
@@ -184,14 +202,14 @@ pub(crate) struct SpanPaints {
 }
 
 impl SpanPaints {
-    // Holds the paints of `text` in `style`, a span's style over the text's.
-    // The caller's list fills in place: one built here would move out whole,
-    // as the visit borrows it.
-    pub(crate) fn fill(&mut self, text: StyledTextRef<'_>, style: &TextStyle, fallback: Color) {
+    // Holds the paints of `request`'s text in its style, a span's style over
+    // the text's, under the request's layer paint. The caller's list fills in
+    // place: one built here would move out whole, as the visit borrows it.
+    pub(crate) fn fill(&mut self, request: TextRasterRequest<'_>) {
         let paints = &mut self.paints;
         paints.clear();
-        visit_span_styles(text, style, |range, merged| {
-            let paint = SpanPaint::of(merged, fallback);
+        visit_span_styles(request.text, request.style, |range, merged| {
+            let paint = SpanPaint::of(merged, request.fallback_color).painted(request.layer_paint);
             match paints.last_mut() {
                 Some((last, last_paint)) if *last_paint == paint => last.end = range.end,
                 _ => paints.push((range, paint)),

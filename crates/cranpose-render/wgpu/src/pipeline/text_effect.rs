@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use cranpose_render_common::graph::TextPrimitiveNode;
+use cranpose_render_common::{graph::TextPrimitiveNode, layer_paint::LayerPaint};
 use cranpose_ui::{TextStyle, text::TextDrawStyle};
 use cranpose_ui_graphics::{BlendMode, Color, Rect, RenderEffect};
 
@@ -40,6 +40,7 @@ pub(super) fn push_text_effect<S: TextStyleDrawSink>(
         ),
         layout: node.layout.clone(),
         color,
+        layer_paint: LayerPaint::NONE,
         style_hash: style.render_hash(),
         text_style: style,
         font_size: node.font_size,

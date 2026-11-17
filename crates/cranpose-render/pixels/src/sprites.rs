@@ -20,8 +20,8 @@ use cranpose_render_common::{
     layer_shadow::{ShadowHole, ShadowRRect},
 };
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, FxHashMap, FxHasher, Point, Rect, StrokeCap, StrokeJoin, TileMode,
-    whole,
+    BlendMode, Brush, Color, FxHashMap, FxHasher, Point, Rect, RenderHash, StrokeCap, StrokeJoin,
+    TileMode, whole,
 };
 
 use crate::{
@@ -603,6 +603,7 @@ fn hash_text(hasher: &mut FxHasher, draw: &TextDraw) {
         layout,
         ink,
         color,
+        layer_paint,
         text_style,
         font_size,
         scale,
@@ -617,6 +618,7 @@ fn hash_text(hasher: &mut FxHasher, draw: &TextDraw) {
     hash_point(hasher, *snap_anchor);
     hasher.write_u64(text.render_hash());
     hash_color(hasher, *color);
+    hasher.write_u64(layer_paint.render_hash());
     hasher.write_u64(text_style.render_hash());
     hash_floats(hasher, &[*font_size, *scale]);
     hash_clip(hasher, *clip);

@@ -10,6 +10,7 @@ use cranpose_ui_graphics::{Point, Rect, whole};
 
 use crate::{
     glyph_mask::GlyphMaskCache,
+    layer_paint::LayerPaint,
     text_canvas::{CanvasPaint, PlacedMask, SolidInk, TextCanvas, TextPixelWindow, TextPixels},
     text_glyphs::{SpanPaint, SpanPaints, StyledTextRef, visit_placed_glyphs},
     text_shadow::shadow_blur_sigma,
@@ -31,7 +32,8 @@ pub enum GlyphInk {
 /// What to rasterize: `layout`, the lines of `text`, its top left corner at
 /// `origin` and its pixels cut to `rect`, both in device pixels, `scale` of
 /// them a layout pixel. Glyphs whose style names no color paint in
-/// `fallback_color`.
+/// `fallback_color`. Every resolved color of the glyphs and their shadows
+/// then takes `layer_paint`.
 #[derive(Clone, Copy)]
 pub struct TextRasterRequest<'a> {
     /// The lines and glyphs.
@@ -46,6 +48,8 @@ pub struct TextRasterRequest<'a> {
     pub style: &'a TextStyle,
     /// The color of text whose style names none.
     pub fallback_color: Color,
+    /// The paint of the text's layer, over every resolved color.
+    pub layer_paint: &'a LayerPaint,
     /// Device pixels per layout pixel.
     pub scale: f32,
     /// Whether the glyphs paint or only their shadows.
@@ -70,6 +74,7 @@ impl<'a> TextRasterRequest<'a> {
             origin: Point::new(rect.x, rect.y),
             style,
             fallback_color,
+            layer_paint: &LayerPaint::NONE,
             scale,
             ink: GlyphInk::Painted,
         }
@@ -78,6 +83,14 @@ impl<'a> TextRasterRequest<'a> {
     /// The request with the text's top left corner at `origin`.
     pub fn with_origin(self, origin: Point) -> Self {
         Self { origin, ..self }
+    }
+
+    /// The request with its colors under `layer_paint`.
+    pub fn with_layer_paint(self, layer_paint: &'a LayerPaint) -> Self {
+        Self {
+            layer_paint,
+            ..self
+        }
     }
 
     /// The request painting with `ink`.
@@ -122,7 +135,7 @@ pub fn rasterize_text(
         return None;
     }
     let mut paints = SpanPaints::default();
-    paints.fill(request.text, request.style, request.fallback_color);
+    paints.fill(request);
     let solid = request.ink == GlyphInk::Painted
         && paints.all(|paint| paint.solid_color().is_some() && paint.shadow.is_none());
     let width = whole::to_i32(whole::ceil(request.rect.width)).max(1);
@@ -150,7 +163,7 @@ pub fn paint_text(
         return true;
     }
     let mut paints = SpanPaints::default();
-    paints.fill(request.text, request.style, request.fallback_color);
+    paints.fill(request);
     if request.motion() != TextMotion::Static
         || request.ink == GlyphInk::Hidden
         || !paints.all(|paint| paint.solid_color().is_some() && paint.shadow.is_none())
