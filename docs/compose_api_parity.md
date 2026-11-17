@@ -613,6 +613,7 @@ Sampled against Compose's `androidx.compose.ui`/`foundation-layout`:
 | `LazyColumn`, `LazyRow` | `LazyColumn`, `LazyRow`; lower-level node functions also exist | Implemented; checked against current source |
 | `LazyListScope.stickyHeader` | `LazyListScope::sticky_header`, `sticky_header_keyed` | Implemented |
 | `LazyListState.animateScrollBy`, `animateScrollToItem` | `AnimateScroll::animate_scroll_by`, `animate_scroll_to_item` (a trait on `LazyListState`) | Implemented; a press on the list stops the animation |
+| `ScrollState.animateScrollTo`, `animateScrollBy` | `ScrollState::animate_scroll_to`, `animate_scroll_by` | Implemented; a spring with no animation spec argument. It stops a fling. A press, `scroll_to` or a new animation stops it where it is. |
 | `Popup`, `Dialog` | Same names, plus `PopupAnchored`/`PopupDismissable`/`PopupDismissableWhen`/`DialogWithScrim` variants | Implemented, plus extensions |
 | `AnimatedVisibility`, `Crossfade` | Same names | Implemented; the arguments differ, see **Animation** |
 | `Layout`, `SubcomposeLayout` | Same names | Implemented |

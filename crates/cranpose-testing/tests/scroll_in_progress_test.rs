@@ -24,6 +24,25 @@ const FRAME_NANOS: u64 = 16_000_000;
 
 type Robot = RobotTestRule<TestRenderer>;
 
+// `rows` rows, 40 points tall each, in a column that `scroll` scrolls.
+fn scrolling_rows(scroll: ScrollState, rows: usize) {
+    Column(
+        Modifier::empty()
+            .fill_max_size()
+            .vertical_scroll(scroll, false),
+        ColumnSpec::default(),
+        move || {
+            for _ in 0..rows {
+                Box(
+                    Modifier::empty().size(Size::new(200.0, 40.0)),
+                    BoxSpec::default(),
+                    || {},
+                );
+            }
+        },
+    );
+}
+
 // A column of `rows` rows, 40 points tall each, that scrolls in a 200 by 400
 // window.
 fn scrolling_column(rows: usize) -> (Robot, ScrollState) {
@@ -32,21 +51,7 @@ fn scrolling_column(rows: usize) -> (Robot, ScrollState) {
     let robot = create_headless_robot_test(200, 400, move || {
         let scroll = cranpose_ui::rememberScrollState!(0.0);
         *installed.borrow_mut() = Some(scroll);
-        Column(
-            Modifier::empty()
-                .fill_max_size()
-                .vertical_scroll(scroll, false),
-            ColumnSpec::default(),
-            move || {
-                for _ in 0..rows {
-                    Box(
-                        Modifier::empty().size(Size::new(200.0, 40.0)),
-                        BoxSpec::default(),
-                        || {},
-                    );
-                }
-            },
-        );
+        scrolling_rows(scroll, rows);
     });
     let scroll = (*captured.borrow()).expect("the column is composed");
     (robot, scroll)
@@ -206,6 +211,195 @@ fn scroll_to_stops_a_fling() {
         "the column stays where the jump put it"
     );
     assert!(!scroll.is_scroll_in_progress(), "nothing moves the column");
+}
+
+#[test]
+fn animate_scroll_to_springs_to_its_value() {
+    let (mut robot, scroll) = scrolling_column(40);
+    scroll.animate_scroll_to(500.0);
+    assert!(
+        scroll.is_scroll_in_progress(),
+        "the spring moves the column"
+    );
+
+    run_frames(&mut robot, 4);
+    let moving = scroll.value();
+    assert!(
+        moving > 0.0 && moving < 500.0,
+        "the spring takes frames: the column is at {moving} after four"
+    );
+    run_frames(&mut robot, 120);
+
+    assert_eq!(scroll.value(), 500.0, "the animation lands on its value");
+    assert!(!scroll.is_scroll_in_progress(), "nothing moves the column");
+}
+
+#[test]
+fn animate_scroll_to_stops_at_the_ends_of_the_content() {
+    let (mut robot, scroll) = scrolling_column(40);
+    let end = scroll.max_value();
+    assert_eq!(end, 1200.0, "40 rows of 40 points scroll in a 400 window");
+
+    scroll.animate_scroll_to(5000.0);
+    run_frames(&mut robot, 240);
+    assert_eq!(scroll.value(), end, "the end holds the column");
+
+    scroll.animate_scroll_to(-300.0);
+    run_frames(&mut robot, 240);
+    assert_eq!(scroll.value(), 0.0, "the start holds the column");
+}
+
+#[test]
+fn animate_scroll_by_moves_by_its_amount_and_stops_at_the_end() {
+    let (mut robot, scroll) = scrolling_column(40);
+
+    scroll.animate_scroll_by(300.0);
+    run_frames(&mut robot, 120);
+    assert_eq!(scroll.value(), 300.0, "it moved toward the end");
+
+    scroll.animate_scroll_by(-100.0);
+    run_frames(&mut robot, 120);
+    assert_eq!(scroll.value(), 200.0, "it moved toward the start");
+
+    scroll.animate_scroll_by(10_000.0);
+    run_frames(&mut robot, 240);
+    assert_eq!(scroll.value(), scroll.max_value(), "it stopped at the end");
+}
+
+#[test]
+fn scroll_to_stops_an_animated_scroll() {
+    let (mut robot, scroll) = scrolling_column(40);
+    scroll.animate_scroll_to(800.0);
+    run_frames(&mut robot, 4);
+    assert!(scroll.value() < 800.0, "the spring still moves the column");
+
+    scroll.scroll_to(100.0);
+    run_frames(&mut robot, 120);
+
+    assert_eq!(
+        scroll.value(),
+        100.0,
+        "the column stays where the jump put it"
+    );
+    assert!(!scroll.is_scroll_in_progress(), "nothing moves the column");
+}
+
+#[test]
+fn a_new_animation_stops_the_running_one() {
+    let (mut robot, scroll) = scrolling_column(40);
+    scroll.animate_scroll_to(1000.0);
+    run_frames(&mut robot, 4);
+
+    // A short hop ends before the animation it replaces would.
+    let from = scroll.value();
+    scroll.animate_scroll_by(10.0);
+    run_frames(&mut robot, 240);
+
+    assert_eq!(scroll.value(), from + 10.0, "only the new animation landed");
+    assert!(!scroll.is_scroll_in_progress(), "nothing moves the column");
+}
+
+#[test]
+fn a_press_stops_an_animated_scroll_where_it_is() {
+    let (mut robot, scroll) = scrolling_column(40);
+    scroll.animate_scroll_to(1000.0);
+    run_frames(&mut robot, 4);
+
+    robot.mouse_move(100.0, 200.0);
+    robot.mouse_down();
+    let held = scroll.value();
+    assert!(held > 0.0 && held < 1000.0, "the press caught it at {held}");
+    robot.mouse_up();
+    run_frames(&mut robot, 120);
+
+    assert_eq!(scroll.value(), held, "the column stays where the press was");
+    assert!(!scroll.is_scroll_in_progress(), "nothing moves the column");
+}
+
+#[test]
+fn an_animated_scroll_takes_the_column_from_a_fling() {
+    let (mut robot, scroll) = scrolling_column(400);
+    fling_toward_the_end(&mut robot);
+    assert!(scroll.is_scroll_in_progress(), "the fling moves the column");
+
+    // The animation moves the column toward the start from its first frame on.
+    scroll.animate_scroll_to(100.0);
+    for frame in 0..6 {
+        let before = scroll.value();
+        run_frames(&mut robot, 1);
+        assert!(
+            scroll.value() <= before,
+            "the fling no longer carries the column on (frame {frame}: {before} to {})",
+            scroll.value()
+        );
+    }
+    run_frames(&mut robot, 240);
+
+    assert_eq!(scroll.value(), 100.0, "the animation lands on its value");
+    assert!(!scroll.is_scroll_in_progress(), "nothing moves the column");
+}
+
+// A scrolling column's state and whether the column shows.
+#[derive(Clone, Copy)]
+struct Leaving {
+    scroll: ScrollState,
+    shown: MutableState<bool>,
+}
+
+// The state outlives its column: a column that leaves the screen during its
+// fling leaves the state at rest.
+#[test]
+fn a_column_that_leaves_during_its_fling_leaves_its_state_at_rest() {
+    let captured: Rc<Cell<Option<Leaving>>> = Rc::default();
+    let installed = Rc::clone(&captured);
+    let mut robot = create_headless_robot_test(200, 400, move || {
+        let scroll = cranpose_ui::rememberScrollState!(0.0);
+        let shown = rememberMutableStateOf(|| true);
+        installed.set(Some(Leaving { scroll, shown }));
+        if shown.get() {
+            scrolling_rows(scroll, 400);
+        }
+    });
+    let Leaving { scroll, shown } = captured.get().expect("the column is composed");
+    fling_toward_the_end(&mut robot);
+    assert!(scroll.is_scroll_in_progress(), "the fling moves the column");
+
+    shown.set(false);
+    run_frames(&mut robot, 2);
+    assert!(
+        !scroll.is_scroll_in_progress(),
+        "the fling ended with its column"
+    );
+}
+
+// The state leaves with its column: the frames after an animation that the
+// column's departure cuts short do not touch the released state.
+#[test]
+fn an_animation_ends_quietly_when_its_state_leaves_with_its_column() {
+    let captured: Rc<Cell<Option<Leaving>>> = Rc::default();
+    let installed = Rc::clone(&captured);
+    let mut robot = create_headless_robot_test(200, 400, move || {
+        let shown = rememberMutableStateOf(|| true);
+        if shown.get() {
+            let scroll = cranpose_ui::rememberScrollState!(0.0);
+            installed.set(Some(Leaving { scroll, shown }));
+            scrolling_rows(scroll, 40);
+        }
+    });
+    let Leaving { scroll, shown } = captured.get().expect("the column is composed");
+    scroll.animate_scroll_to(800.0);
+    run_frames(&mut robot, 4);
+    assert!(
+        scroll.is_scroll_in_progress(),
+        "the spring moves the column"
+    );
+
+    shown.set(false);
+    run_frames(&mut robot, 120);
+    assert!(
+        scroll.try_value().is_none(),
+        "the state left with its column"
+    );
 }
 
 // The state outlives its list: a list that leaves the screen during its fling
