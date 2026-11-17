@@ -8,7 +8,8 @@
 #
 #   steady_ledger.sh                     build this checkout, measure, compare;
 #                                        exit 1 when a value rises past its
-#                                        budget plus its spread
+#                                        budget plus its spread (and 2% of
+#                                        the budget for bytes)
 #   steady_ledger.sh --repeats N         measure N times; print the budget
 #                                        lines: each value's highest and spread
 #   steady_ledger.sh --ab BASE HEAD      build both commits from one source

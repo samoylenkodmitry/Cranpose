@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The verdicts of steady_ledger.sh's comparison: the nightly fails only when a
-# value rises past its budget plus its spread, or a row and its budget do not
-# match up. Also the sums of valgrind's allocator trace, which give the bytes
-# that `realloc` copies.
+# value rises past its budget plus its spread (and 2% of the budget for
+# copied bytes), or a row and its budget do not match up. Also the sums of
+# valgrind's allocator trace, which give the bytes that `realloc` copies.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,7 +50,9 @@ dashboard malloc 33.90"
 expect "values at their budgets pass" 0 "wall-t20 .* ok" "$at_budget"
 expect "a rise inside the spread passes" 0 "dashboard .* ok" "${at_budget/33.90/34.30}"
 expect "a rise past the spread fails" 1 "dashboard .* ROSE malloc" "${at_budget/33.90/34.50}"
-expect "a rise of copied bytes fails" 1 "wall-t20 .* ROSE copied" "${at_budget/31556/31567}"
+# Copied bytes have 2% of their budget on top of their spread: 31556 + 10 + 631.
+expect "copied bytes inside 2% past the spread pass" 0 "wall-t20 .* ok" "${at_budget/31556/32197}"
+expect "copied bytes past 2% beyond the spread fail" 1 "wall-t20 .* ROSE copied" "${at_budget/31556/32198}"
 expect "a group that rises fails" 1 "wall-t20-start .* ROSE group:node" "${at_budget/4.00/4.10}"
 expect "the start row prints its groups with their targets" 0 "node 4.00 \[1\]" "$at_budget"
 expect "a fall passes and names the value" 0 "wall-t20 .* fell malloc" \

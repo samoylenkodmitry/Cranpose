@@ -599,9 +599,10 @@ bench-app-check:
 # blocks left live and the bytes copied a steady frame of every bench layout,
 # and the still wall's start a layout node, against
 # scripts/perf/steady_ledger_budget.txt. It fails when a row rises past its
-# budget plus its spread. Linux with valgrind; nightly runs it. `--ab BASE
-# HEAD` prints the difference a row between two commits, `--host H` runs that
-# on H, `--repeats 3` measures the spread for the budget file.
+# budget plus its spread (and 2% for bytes). Linux with valgrind; nightly
+# runs it. `--ab BASE HEAD` prints the difference a row between two commits,
+# `--host H` runs that on H, `--repeats 3` measures the spread for the budget
+# file.
 steady-ledger *args:
     scripts/perf/steady_ledger.sh {{args}}
 
