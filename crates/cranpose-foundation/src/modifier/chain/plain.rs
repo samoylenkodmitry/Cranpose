@@ -341,7 +341,9 @@ impl<E: PlainElement> FnsOf<E> {
         update_invalidation: E::UPDATE_INVALIDATION,
         layout: E::LAYOUT,
         type_name: type_name::<E>,
-        equals: |a, b| E::from_words(a) == E::from_words(b),
+        // Equal words are an equal value, as Compose's data classes compare
+        // a NaN field; other words decode to tell the two zeros equal.
+        equals: |a, b| a == b || E::from_words(a) == E::from_words(b),
         inspector_name: |words| E::from_words(words).inspector_name(),
         inspector_properties: |words, inspector| {
             E::from_words(words).inspector_properties(inspector);
