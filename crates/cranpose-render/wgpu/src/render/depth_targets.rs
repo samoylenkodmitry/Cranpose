@@ -25,7 +25,7 @@ impl DepthTargets {
     ) -> wgpu::TextureView {
         let view = match self.interior.take(|(kept, _)| *kept == size) {
             Some((_, view)) => view,
-            None => transient_depth_target(device, ("Opaque interior depth", DEPTH_FORMAT), size),
+            None => transient_attachment(device, ("Opaque interior depth", DEPTH_FORMAT, 1), size),
         };
         self.interior
             .put((size, view.clone()), KEPT_INTERIOR_TARGETS, u64::MAX, |_| 0);
@@ -37,9 +37,9 @@ impl DepthTargets {
     pub(crate) fn scene(&mut self, device: &wgpu::Device, size: (u32, u32)) -> wgpu::TextureView {
         let view = match self.scene.take(|(kept, _)| *kept == size) {
             Some((_, view)) => view,
-            None => transient_depth_target(
+            None => transient_attachment(
                 device,
-                ("Scene depth and stencil", SCENE_DEPTH_FORMAT),
+                ("Scene depth and stencil", SCENE_DEPTH_FORMAT, 1),
                 size,
             ),
         };
@@ -53,11 +53,11 @@ impl DepthTargets {
     }
 }
 
-// A depth target of `format` and `size` a pass draws against and drops,
-// which a tiled GPU keeps in its tile memory.
-fn transient_depth_target(
+// A target of `format`, `samples` deep and of `size`, a pass draws into and
+// drops, which a tiled GPU keeps in its tile memory.
+pub(super) fn transient_attachment(
     device: &wgpu::Device,
-    (label, format): (&'static str, wgpu::TextureFormat),
+    (label, format, samples): (&'static str, wgpu::TextureFormat, u32),
     size: (u32, u32),
 ) -> wgpu::TextureView {
     device
@@ -69,7 +69,7 @@ fn transient_depth_target(
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
-            sample_count: 1,
+            sample_count: samples,
             dimension: wgpu::TextureDimension::D2,
             format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT

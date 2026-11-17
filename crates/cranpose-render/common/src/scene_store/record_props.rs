@@ -88,9 +88,9 @@ impl SceneStore {
     /// Sets the graphics layer of `id`; `None` reads as the default. A record
     /// that keeps one keeps its slot. A changed layer notes a property
     /// change.
-    pub fn set_graphics_layer(&mut self, id: RecordId, layer: Option<GraphicsLayer>) {
-        if self.graphics_layer(id) != layer.as_ref() {
-            self.write_graphics_layer(id, layer.as_ref());
+    pub fn set_graphics_layer(&mut self, id: RecordId, layer: Option<&GraphicsLayer>) {
+        if self.graphics_layer(id) != layer {
+            self.write_graphics_layer(id, layer);
             self.note_property_change(id);
         }
     }

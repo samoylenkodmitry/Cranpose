@@ -6,12 +6,12 @@ use std::{any::TypeId, cell::RefCell, rc::Rc};
 
 use super::super::{
     AnyModifierElement, DynModifierElement, ElementMaker, ModifierNode, NodeCapabilities, NodeHeld,
-    NodeMaker, PlainElement, PlainFns, PlainValue, Repr,
+    NodeMaker, PlainElement, PlainFns,
 };
 
 #[derive(Debug)]
 pub(super) enum EntryElement {
-    Kept(Rc<dyn AnyModifierElement>),
+    Kept(DynModifierElement),
     // The node keeps every value of the element: see
     // `ModifierNodeElement::FROM_NODE`.
     InNode(NodeHeld),
@@ -20,10 +20,10 @@ pub(super) enum EntryElement {
 impl EntryElement {
     // How an entry keeps `element`: by its node when the node holds every
     // value of it.
-    pub(super) fn new(element: &DynModifierElement, maker: &dyn NodeMaker) -> Self {
+    pub(super) fn new(element: DynModifierElement, maker: &dyn NodeMaker) -> Self {
         match maker.held_by_node() {
             Some(held) if element.key().is_none() => Self::InNode(held),
-            _ => Self::Kept(element.to_shared()),
+            _ => Self::Kept(element),
         }
     }
 
@@ -58,7 +58,7 @@ pub struct HeldElement<'a>(Held<'a>);
 
 #[derive(Clone, Copy)]
 enum Held<'a> {
-    Element(&'a Rc<dyn AnyModifierElement>),
+    Element(&'a DynModifierElement),
     Node {
         held: NodeHeld,
         node: &'a RefCell<dyn ModifierNode>,
@@ -78,13 +78,7 @@ impl<'a> HeldElement<'a> {
 
 impl<'a> From<&'a DynModifierElement> for HeldElement<'a> {
     fn from(element: &'a DynModifierElement) -> Self {
-        Self(match element.repr() {
-            Repr::Plain(value) => Held::Plain {
-                fns: value.fns(),
-                words: value.words(),
-            },
-            Repr::Shared(shared) => Held::Element(shared),
-        })
+        Self(Held::Element(element))
     }
 }
 
@@ -140,9 +134,7 @@ impl HeldElement<'_> {
     /// Whether `element` is this element itself, not only an equal one.
     pub fn is(&self, element: &DynModifierElement) -> bool {
         match self.0 {
-            Held::Element(held) => element
-                .shared()
-                .is_some_and(|shared| Rc::ptr_eq(held, shared)),
+            Held::Element(held) => Rc::ptr_eq(held, element),
             Held::Node { .. } | Held::Plain { .. } => false,
         }
     }
@@ -177,7 +169,7 @@ impl HeldElement<'_> {
     /// The element, made again from its node when the node holds it.
     pub fn to_element(&self) -> DynModifierElement {
         match self.0 {
-            Held::Element(element) => DynModifierElement::of_shared(Rc::clone(element)),
+            Held::Element(element) => Rc::clone(element),
             Held::Node { held, node, .. } => held.element(&*node.borrow()),
             Held::Plain { fns, words } => fns.element(words),
         }

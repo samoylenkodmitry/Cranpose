@@ -39,7 +39,7 @@ pub(super) fn wrap_backdrop_in_own_space(
         cache_policy: child.cache_policy,
         in_place: false,
         content,
-        mesh: child.mesh.take(),
+        mesh: std::mem::take(&mut child.mesh),
     };
     let mut inner = std::mem::replace(child, outer);
     let outer = child;

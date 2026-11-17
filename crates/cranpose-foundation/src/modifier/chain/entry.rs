@@ -36,7 +36,7 @@ pub(super) enum ModifierNodeEntry {
 
 impl ModifierNodeEntry {
     pub(super) fn of_node(
-        element: &DynModifierElement,
+        element: DynModifierElement,
         maker: &dyn NodeMaker,
         capabilities: NodeCapabilities,
     ) -> Self {

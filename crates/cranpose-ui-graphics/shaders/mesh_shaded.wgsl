@@ -23,6 +23,10 @@ struct ShadedUniforms {
 struct ShadedSurface {
     // The content's colour there, premultiplied.
     color: vec4<f32>,
+    // Where the point lies in the content: (0, 0) at its top left corner,
+    // (1, 1) at its bottom right. `content_color` reads the content at any
+    // such point.
+    uv: vec2<f32>,
     position: vec3<f32>,
     // The eye.
     eye: vec3<f32>,
@@ -69,6 +73,7 @@ fn mesh_shaded_vs(input: VertexInput) -> ShadedVaryings {
 fn shaded_surface(input: ShadedVaryings, color: vec4<f32>, visibility: f32) -> ShadedSurface {
     var surface: ShadedSurface;
     surface.color = color;
+    surface.uv = input.uv;
     surface.position = input.position;
     surface.eye = shaded.eye.xyz;
     surface.to_eye = normalize(shaded.eye.xyz - input.position);
@@ -83,31 +88,34 @@ fn shaded_surface(input: ShadedVaryings, color: vec4<f32>, visibility: f32) -> S
 
 @fragment
 fn mesh_shaded_fs(input: ShadedVaryings) -> @location(0) vec4<f32> {
+    let coverage = outline_coverage(input.uv);
     let color = content_color(input.uv);
     if (color.a < 1.0 / 255.0) {
         discard;
     }
-    return shade(shaded_surface(input, color, 1.0)) * mesh.params.x;
+    return shade(shaded_surface(input, color, 1.0)) * (mesh.params.x * coverage);
 }
 
 @fragment
 fn mesh_shaded_shadowed_fs(input: ShadedVaryings) -> @location(0) vec4<f32> {
+    let coverage = outline_coverage(input.uv);
     let color = content_color(input.uv);
     if (color.a < 1.0 / 255.0) {
         discard;
     }
     let visibility = shadow_visibility(input.light_position);
-    return shade(shaded_surface(input, color, visibility)) * mesh.params.x;
+    return shade(shaded_surface(input, color, visibility)) * (mesh.params.x * coverage);
 }
 
 // A shaded surface in a portal's space, which shows only beyond its
 // window's plane.
 @fragment
 fn mesh_shaded_portal_fs(input: ShadedVaryings) -> @location(0) vec4<f32> {
+    let coverage = outline_coverage(input.uv);
     let scene_position = (mesh.scene_from_model * vec4<f32>(input.position, 1.0)).xyz;
     let color = content_color(input.uv);
     if (before_window(scene_position) | (color.a < 1.0 / 255.0)) {
         discard;
     }
-    return shade(shaded_surface(input, color, 1.0)) * mesh.params.x;
+    return shade(shaded_surface(input, color, 1.0)) * (mesh.params.x * coverage);
 }

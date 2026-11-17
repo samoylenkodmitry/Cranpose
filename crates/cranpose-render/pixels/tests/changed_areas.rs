@@ -684,15 +684,13 @@ fn Surfaces(captured: Step) {
     let n = step.value();
     let plane = Arc::new(Mesh::plane());
     Box(
-        Modifier::empty().fill_max_size().scene3d(|| Scene3d {
-            camera: Camera::look_at(
+        Modifier::empty().fill_max_size().scene3d(|| {
+            Scene3d::new(Camera::look_at(
                 Vec3::new(0.0, 0.0, -400.0),
                 Vec3::ZERO,
                 Vec3::new(0.0, 1.0, 0.0),
                 400.0,
-            ),
-            light: None,
-            eye: None,
+            ))
         }),
         BoxSpec::default(),
         move || {
@@ -1764,7 +1762,7 @@ fn a_record_that_opens_a_space_alone_keeps_its_pixels() {
         assert!(!store.layer(root).has_space(), "no record holds a space");
         store.set_graphics_layer(
             record,
-            Some(GraphicsLayer {
+            Some(&GraphicsLayer {
                 alpha: FADED_ALPHA,
                 space: Some(Arc::new(LayerSpace::Transform(Mat4::IDENTITY))),
                 ..GraphicsLayer::default()
@@ -1791,7 +1789,7 @@ fn a_record_faded_alone_redraws() {
         let record = record_of_size(store, CLIP);
         store.set_graphics_layer(
             record,
-            Some(GraphicsLayer {
+            Some(&GraphicsLayer {
                 alpha: 0.5,
                 ..GraphicsLayer::default()
             }),

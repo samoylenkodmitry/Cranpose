@@ -16,7 +16,7 @@ const READERS: usize = 3;
 
 #[cranpose_ui::composable]
 fn Reader(slot: usize, index: usize, state: MutableState<u32>, log: Log) {
-    let _ = state.value();
+    let _: u32 = state.value();
     log.borrow_mut().push((slot, index));
 }
 

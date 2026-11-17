@@ -25,7 +25,7 @@ struct MeshUniforms {
     source_region: vec4<f32>,
     // x = the surface's alpha; y = 1 for a lit surface, 0 for an unlit one,
     // 2 for one that emits its colour, which neither light nor shadow
-    // changes.
+    // changes; z = 1 for a sheet whose outline is its texture's edge.
     params: vec4<f32>,
     // x = one shadow map texel in texture coordinates; y = the depth bias.
     shadow: vec4<f32>,
@@ -65,12 +65,27 @@ struct VertexInput {
 
 // The content's colour at `uv`, read half a texel in from its edge so a
 // surface that shares its texture never filters in a neighbour's texels.
+// The content has one level of detail, read explicitly, so a shader may
+// read it inside a branch too.
 fn content_color(uv: vec2<f32>) -> vec4<f32> {
     let size = vec2<f32>(textureDimensions(input_texture));
     let first = mesh.source_region.xy + vec2<f32>(0.5);
     let last = mesh.source_region.xy + mesh.source_region.zw - vec2<f32>(0.5);
     let texel = clamp(mesh.source_region.xy + uv * mesh.source_region.zw, first, last);
-    return textureSample(input_texture, input_sampler, texel / size);
+    return textureSampleLevel(input_texture, input_sampler, texel / size, 0.0);
+}
+
+// How much of the pixel at `uv` the surface covers: all of it, except along
+// the outline of a sheet whose outline is its texture's edge, where it is
+// the pixel's distance inside the edge, so the outline fades over a pixel
+// at any angle instead of stepping from pixel to pixel.
+fn outline_coverage(uv: vec2<f32>) -> f32 {
+    let pixel = fwidth(uv);
+    if (mesh.params.z < 0.5) {
+        return 1.0;
+    }
+    let inside = min(uv, vec2<f32>(1.0) - uv) / max(pixel, vec2<f32>(1.0e-6));
+    return clamp(min(inside.x, inside.y), 0.0, 1.0);
 }
 
 // Whether a point of a surface in a portal's space lies on the near side of

@@ -678,10 +678,11 @@ fn publish_space_now(applier: &MemoryApplier, store: &SceneStore) {
         if let Some(eye) = &tree.cells[0].scene.eye {
             eye.world.rebuild(|world| view.build_world(tree, world));
         }
+        // The owner of a layer drawn on several meshes places it.
         for seen in view
             .surfaces
             .iter()
-            .filter(|seen| seen.layer.has_origin_sinks())
+            .filter(|seen| seen.mesh == 0 && seen.layer.has_origin_sinks())
         {
             if let Some(content) = view.content_to_window(seen, to_window) {
                 publish_content_geometry(applier, seen.layer, content);
@@ -699,7 +700,7 @@ fn publish_content_geometry(
         read_node_data(applier, node_id, |data| {
             data.modifier_slices.publish_window_geometry(
                 Point::default(),
-                to_window,
+                Some(to_window),
                 data.layout_state.size(),
             );
         });

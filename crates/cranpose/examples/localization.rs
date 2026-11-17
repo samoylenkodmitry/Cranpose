@@ -43,7 +43,7 @@ fn LocalizationDemo(catalog: Catalog) {
                                         PreviewMode::Expanded => PreviewMode::Rtl,
                                         PreviewMode::Rtl => PreviewMode::None,
                                     };
-                                })
+                                });
                             },
                             || {
                                 Text(
@@ -66,8 +66,7 @@ fn DemoContent() {
     let count = rememberMutableStateOf(|| 1u32);
     let selected = rememberMutableStateOf(|| 0usize);
     let menu = rememberMutableStateOf(|| false);
-    let search =
-        remember(|| cranpose_foundation::text::TextFieldState::new("")).with(|state| *state);
+    let search = remember(|| TextFieldState::new("")).with(|state| *state);
     Text(
         tr!("Welcome, {name}!", name = "Ana", id = "welcome"),
         Modifier::empty(),
@@ -104,7 +103,7 @@ fn DemoContent() {
                 || {
                     GlassButtonLabel(tr!("Actions", id = "actions"), GlassButtonSpec::glass());
                 },
-            )
+            );
         },
         |scope| {
             scope.item(LiquidMenuItem::new(tr!("Save", id = "save")), || {});
@@ -116,8 +115,8 @@ fn DemoContent() {
         selected.value(),
         move |index| selected.set_value(index),
         |scope| {
-            scope.tab(liquid::icons::SEARCH, tr!("Files", id = "files-tab"));
-            scope.tab(liquid::icons::SEARCH, tr!("Settings", id = "settings-tab"));
+            scope.tab(icons::SEARCH, tr!("Files", id = "files-tab"));
+            scope.tab(icons::SEARCH, tr!("Settings", id = "settings-tab"));
         },
     );
 }

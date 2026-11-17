@@ -34,15 +34,13 @@ fn panel_shell() -> (AppShell<TestRenderer>, NodeId, Clicks) {
         move || {
             let sink = Rc::clone(&sink);
             let id = Box(
-                Modifier::empty().fill_max_size().scene3d(|| Scene3d {
-                    camera: Camera::look_at(
+                Modifier::empty().fill_max_size().scene3d(|| {
+                    Scene3d::new(Camera::look_at(
                         Vec3::new(160.0, 100.0, -600.0),
                         Vec3::new(160.0, 100.0, 0.0),
                         Vec3::new(0.0, 1.0, 0.0),
                         600.0,
-                    ),
-                    light: None,
-                    eye: None,
+                    ))
                 }),
                 BoxSpec::default(),
                 move || {

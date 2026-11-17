@@ -33,16 +33,19 @@ pub struct NodeMarks {
 // list keeps no more room than that for a walk that marked most nodes.
 const LISTED_SHARE: usize = 32;
 const MAX_LISTED: usize = 2048;
+// Below this many slots a walk lists none and a reset clears every slot: a
+// walk of a busy frame marks a large share of such an applier's nodes, and
+// its notes cost more than the clear.
+const MIN_LISTED: usize = 16_384;
 
-// The dense slots given a mark since the last reset: a reset clears those
-// alone, so its work follows the marks a walk set, not the applier's node
-// count. A walk that marks more than `room` slots stops the list, and the
-// reset clears every slot.
+// The dense slots given a mark since the last reset, while `room` is not 0: a
+// reset clears those alone, so its work follows the marks a walk set, not the
+// applier's node count. A `room` of 0, set by a reset of a small applier or by
+// a walk that marks more than `room` slots, makes the reset clear every slot.
 #[derive(Clone, Default)]
 struct MarkedSlots {
     slots: Vec<usize>,
     room: usize,
-    overflowed: bool,
 }
 
 impl MarkedSlots {
@@ -51,12 +54,12 @@ impl MarkedSlots {
         if self.slots.len() < self.room {
             self.slots.push(slot);
         } else {
-            self.overflowed = true;
+            self.room = 0;
         }
     }
 
     fn clear(&mut self, dense: &mut [u8]) {
-        if self.overflowed {
+        if self.room == 0 {
             dense.fill(0);
         } else {
             for &slot in &self.slots {
@@ -64,7 +67,6 @@ impl MarkedSlots {
             }
         }
         self.slots.clear();
-        self.overflowed = false;
     }
 }
 
@@ -76,7 +78,11 @@ impl NodeMarks {
         if self.dense.len() < nodes {
             self.dense.resize(nodes, 0);
         }
-        self.marked.room = (self.dense.len() / LISTED_SHARE).min(MAX_LISTED);
+        self.marked.room = if self.dense.len() < MIN_LISTED {
+            0
+        } else {
+            (self.dense.len() / LISTED_SHARE).min(MAX_LISTED)
+        };
         // A clear writes every control byte of the map, even of an empty one.
         if !self.elsewhere.is_empty() {
             self.elsewhere.clear();
@@ -152,7 +158,7 @@ impl NodeMarks {
         match place {
             MarkPlace::Dense(slot) if slot < self.dense.len() => {
                 let entry = &mut self.dense[slot];
-                if *entry == 0 {
+                if self.marked.room != 0 && *entry == 0 {
                     self.marked.note(slot);
                 }
                 entry

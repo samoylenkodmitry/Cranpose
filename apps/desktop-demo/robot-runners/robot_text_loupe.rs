@@ -1,5 +1,6 @@
 use crate::{robot_exit, text_fixture_style};
 
+use desktop_app::accent_field::AccentField;
 use std::{
     path::{Path, PathBuf},
     process::ExitCode,
@@ -8,7 +9,7 @@ use std::{
 };
 
 use cranpose::{
-    widgets::{BasicTextFieldOptions, BasicTextFieldWithOptions, Box as CBox, BoxSpec},
+    widgets::{Box as CBox, BoxSpec},
     AppLauncher, Color, Modifier, Size,
 };
 use cranpose_foundation::text::TextFieldState;
@@ -336,20 +337,14 @@ fn content(wrap_boundary: Arc<Mutex<Option<usize>>>) {
             );
             let state =
                 cranpose_core::remember(|| TextFieldState::new(TEXT)).with(TextFieldState::clone);
-            BasicTextFieldWithOptions(
+            AccentField(
                 state,
                 Modifier::empty()
                     .absolute_offset(FIELD_X, FIELD_Y)
                     .size(Size {
                         width: FIELD_WIDTH,
                         height: 120.0,
-                    }),
-                BasicTextFieldOptions {
-                    text_style: text_style(),
-                    cursor_color: ACCENT,
-                    ..BasicTextFieldOptions::default()
-                },
-            );
+                    }), (text_style(), ACCENT));
         },
     );
 }

@@ -6,7 +6,9 @@ use cranpose_core::{
     CompositionLocal, MutableState, NodeId, compositionLocalOf, mutableStateOf, remember,
 };
 use cranpose_macros::composable;
-use cranpose_ui_graphics::space::{EyePlace, EyePose, Light, Scene3d, Vec3, WorldSink};
+use cranpose_ui_graphics::space::{
+    EyePlace, EyePose, Light, Multisample, Scene3d, Vec3, WorldSink,
+};
 
 /// The eye of a window's 3D scene.
 ///
@@ -39,7 +41,8 @@ impl Eye {
     }
 
     /// The scene seen through the eye: its camera, with `focal_length`, in
-    /// the space it stands in, and `light`.
+    /// the space it stands in, and `light`, drawn with one sample in each
+    /// pixel.
     pub fn scene(&self, focal_length: f32, light: Option<Light>) -> Scene3d {
         let pose = self.pose.get();
         Scene3d {
@@ -49,6 +52,7 @@ impl Eye {
                 doorways: pose.doorways,
                 world: self.world.clone(),
             }),
+            multisample: Multisample::Off,
         }
     }
 

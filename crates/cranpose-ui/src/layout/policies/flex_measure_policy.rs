@@ -514,27 +514,75 @@ struct FlexLists {
     main_positions: Vec<f32>,
 }
 
+impl FlexLists {
+    // The heap bytes the lists hold.
+    fn bytes(&self) -> usize {
+        self.children.capacity() * size_of::<FlexChild>()
+            + (self.main_sizes.capacity() + self.main_positions.capacity()) * size_of::<f32>()
+    }
+}
+
 // The lists of a thread's rows and columns, kept between measures: one for
 // each row or column that measures at once, as deep as they nest, so each
 // nesting level takes back lists of its own size. Lists on the stack took
 // 548 bytes on the ESP32 at every nesting level a measure passes through,
 // eight children inline.
-pub(crate) struct SpareFlexLists(RefCell<Vec<FlexLists>>);
+pub(crate) struct SpareFlexLists(RefCell<Spares>);
+
+struct Spares {
+    // The last set given back is on top, for the next measure to take.
+    sets: Vec<FlexLists>,
+    // The heap bytes of the sets.
+    bytes: usize,
+}
+
+impl Spares {
+    // At most this many sets: the gauntlet nests columns 48 deep, the
+    // allocation test 65 rows and columns.
+    const SETS: usize = 128;
+    // At most this many bytes in the sets below the top one.
+    const IDLE_BYTES: usize = 64 * 1024;
+
+    // Keeps `lists` whole on top, so a row or column that measures again
+    // takes back lists of its own size, and drops the largest of the other
+    // sets while there are too many or they hold too many bytes.
+    fn keep(&mut self, lists: FlexLists) {
+        let top = lists.bytes();
+        self.bytes += top;
+        self.sets.push(lists);
+        while self.sets.len() > Self::SETS || self.bytes - top > Self::IDLE_BYTES {
+            let idle = &self.sets[..self.sets.len() - 1];
+            let Some(largest) = (0..idle.len()).max_by_key(|&at| idle[at].bytes()) else {
+                break;
+            };
+            self.bytes -= self.sets.remove(largest).bytes();
+        }
+    }
+
+    fn take(&mut self) -> Option<FlexLists> {
+        let lists = self.sets.pop()?;
+        self.bytes -= lists.bytes();
+        Some(lists)
+    }
+}
 
 impl SpareFlexLists {
     pub(crate) const fn new() -> Self {
-        Self(RefCell::new(Vec::new()))
+        Self(RefCell::new(Spares {
+            sets: Vec::new(),
+            bytes: 0,
+        }))
     }
 
     fn take() -> FlexLists {
-        thread_state::with(|state| state.spare_flex_lists.0.borrow_mut().pop()).unwrap_or_default()
+        thread_state::with(|state| state.spare_flex_lists.0.borrow_mut().take()).unwrap_or_default()
     }
 
     fn give(mut lists: FlexLists) {
         lists.children.clear();
         lists.main_sizes.clear();
         lists.main_positions.clear();
-        thread_state::with(|state| state.spare_flex_lists.0.borrow_mut().push(lists));
+        thread_state::with(|state| state.spare_flex_lists.0.borrow_mut().keep(lists));
     }
 }
 
