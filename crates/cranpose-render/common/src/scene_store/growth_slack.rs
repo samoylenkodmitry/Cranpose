@@ -3,7 +3,8 @@
 // again, so the trim gives back room past a quarter of the entries. With
 // more than half of the rows free, it cuts the free rows at the end, and the
 // free entries at the end of the other arrays with them, so a scene that
-// shrank gives back the room of its peak. The item spans move together once
+// shrank gives back the room of its peak; the row arrays keep room for a
+// sixteenth of their rows past the cut. The item spans move together once
 // free spans hold more than half of their room, and the shape chunks drop
 // the shapes no item draws. The kept recordings of nodes the store no longer
 // draws go, and the journal's logs give back their room. Free lists keep
@@ -98,10 +99,19 @@ fn cut_free_rows(store: &mut SceneStore) -> bool {
         store.generation_floor = store.generation_floor.max(last);
     }
     store.free_rows.trim_growth_slack();
-    store.tree.truncate(keep);
-    store.geo.truncate(keep);
-    store.warm.truncate(keep);
-    store.generations.truncate(keep);
-    store.facts.truncate_rows(keep);
+    cut_rows(&mut store.tree, keep);
+    cut_rows(&mut store.geo, keep);
+    cut_rows(&mut store.warm, keep);
+    cut_rows(&mut store.generations, keep);
+    store.facts.cut_rows(keep);
     true
+}
+
+// Cuts a row array to `keep` rows with room for a sixteenth of them more,
+// half the room that a trim leaves: a scene that shrank holds about the heap
+// of a scene built for the rows left, whose arrays fit their rows, and a
+// scene that grows by a little past the cut moves no row array.
+pub(super) fn cut_rows<T>(rows: &mut Vec<T>, keep: usize) {
+    rows.truncate(keep);
+    rows.shrink_to(keep + keep / 16);
 }
