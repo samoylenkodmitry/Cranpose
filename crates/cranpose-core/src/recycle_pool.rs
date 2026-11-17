@@ -1,16 +1,20 @@
 //! The recycled shells of one node type and what sizes their pool.
 
+use std::collections::VecDeque;
+
 use crate::{Node, NodeId, RecycleOrigin, RecycledNode};
 
 // The recycled shells of one node type, and what sizes its pool: the shells
 // warm from the last pass, the ones returned this pass by a node that came
 // warm or cold, the limit its nodes ask for, the warm count it keeps, the
 // shells this pass had to create fresh and a prototype to make more from.
+// Each list keeps its oldest shell first and drops it first: a ring, so a
+// full list drops one without moving the others.
 #[derive(Default)]
 pub(crate) struct RecyclePool {
-    pub(crate) warm: Vec<RecycledNode>,
-    pub(crate) returning: Vec<RecycledNode>,
-    cold: Vec<RecycledNode>,
+    pub(crate) warm: VecDeque<RecycledNode>,
+    pub(crate) returning: VecDeque<RecycledNode>,
+    cold: VecDeque<RecycledNode>,
     pub(crate) limit: Option<usize>,
     warm_target: Option<usize>,
     pub(crate) fresh_creations: usize,
@@ -42,18 +46,18 @@ impl RecyclePool {
         } else {
             &mut self.cold
         };
-        pool.push(recycled);
+        pool.push_back(recycled);
         drop_oldest_past(pool, self.limit);
     }
 
     pub(crate) fn push_warm(&mut self, mut recycled: RecycledNode) {
         recycled.set_origin(RecycleOrigin::Warm);
-        self.warm.push(recycled);
+        self.warm.push_back(recycled);
         drop_oldest_past(&mut self.warm, self.limit);
     }
 
     pub(crate) fn take(&mut self) -> Option<RecycledNode> {
-        self.returning.pop().or_else(|| self.warm.pop())
+        self.returning.pop_back().or_else(|| self.warm.pop_back())
     }
 
     fn warm_target_limit(&self) -> usize {
@@ -107,19 +111,11 @@ impl RecyclePool {
         }
     }
 
-    fn trim_warm_to(&mut self, target: usize) {
-        let removable = self.warm.len().saturating_sub(target);
-        let dropped: Vec<_> = self.warm.drain(0..removable).collect();
-        drop(dropped);
-    }
-
     fn compact_warm(&mut self) {
         if self.warm.capacity() <= self.warm.len().saturating_mul(4).max(64) {
             return;
         }
-        let mut compacted = Vec::with_capacity(self.warm.len());
-        compacted.append(&mut self.warm);
-        self.warm = compacted;
+        self.warm.shrink_to_fit();
     }
 
     // At the end of an apply pass: the returned shells join the warm ones,
@@ -138,7 +134,7 @@ impl RecyclePool {
             let split_at = cold.len().saturating_sub(promote);
             for mut recycled in cold.split_off(split_at) {
                 recycled.set_origin(RecycleOrigin::Warm);
-                self.warm.push(recycled);
+                self.warm.push_back(recycled);
             }
         }
         drop(cold);
@@ -152,18 +148,17 @@ impl RecyclePool {
         }
         let target = self.update_warm_target(needed);
         self.replenish_warm(target, next_stable_id);
-        self.trim_warm_to(target);
+        drop_oldest_past(&mut self.warm, Some(target));
         self.compact_warm();
     }
 }
 
-// Drops the oldest shells of `pool` past `limit`.
-fn drop_oldest_past(pool: &mut Vec<RecycledNode>, limit: Option<usize>) {
+// Drops the oldest shells of `pool` past `limit`, oldest first.
+fn drop_oldest_past(pool: &mut VecDeque<RecycledNode>, limit: Option<usize>) {
     if let Some(limit) = limit
         && pool.len() > limit
     {
         let excess = pool.len() - limit;
-        let dropped: Vec<_> = pool.drain(0..excess).collect();
-        drop(dropped);
+        pool.drain(..excess);
     }
 }

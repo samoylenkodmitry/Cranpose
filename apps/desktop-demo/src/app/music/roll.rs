@@ -218,7 +218,7 @@ fn FollowClock(list_state: LazyListState, performance: Performance) {
     SideEffect(move || {
         // A finger on the column, or a turn of the wheel the column has not
         // laid out yet, is the hand taking the clock: a place put here would
-        // undo it. The pushes of a fling the hand let go of are undone.
+        // undo it. A put stops the fling of a hand that let go.
         let wheel = !list_state.is_scroll_in_progress() && list_state.peek_scroll_delta() != 0.0;
         if performance.is_dragged() || list_state.is_dragged() || wheel {
             return;

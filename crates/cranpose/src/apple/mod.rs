@@ -13,6 +13,23 @@ pub(crate) mod audio_session;
     )
 ))]
 pub(crate) mod camera;
+#[cfg(all(
+    feature = "device-auth",
+    feature = "ios",
+    feature = "renderer-wgpu",
+    target_os = "ios"
+))]
+pub(crate) mod device_auth;
+#[cfg(any(
+    test,
+    all(
+        feature = "device-auth",
+        feature = "ios",
+        feature = "renderer-wgpu",
+        target_os = "ios"
+    )
+))]
+pub(crate) mod device_auth_codes;
 #[cfg(any(
     all(
         feature = "media-backend",

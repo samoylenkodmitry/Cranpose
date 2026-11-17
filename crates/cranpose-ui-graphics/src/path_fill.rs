@@ -103,9 +103,9 @@ impl Trapezoid {
 /// nearer end past either end, so a steep edge does not shade the column
 /// past its end. The shape stage's `trapezoid_edge_distance` is the same.
 fn edge_distance(point: Point, a: Point, b: Point, side: f32) -> f32 {
-    let (dx, dy) = (b.x - a.x, b.y - a.y);
-    let extent = (dx * dx + dy * dy).sqrt();
-    let (along_x, along_y) = (dx / extent, dy / extent);
+    let edge = b - a;
+    let extent = edge.distance();
+    let (along_x, along_y) = (edge.x / extent, edge.y / extent);
     let (offset_x, offset_y) = (point.x - a.x, point.y - a.y);
     let across = (offset_y * along_x - offset_x * along_y) * side;
     let t = offset_x * along_x + offset_y * along_y;
@@ -113,7 +113,7 @@ fn edge_distance(point: Point, a: Point, b: Point, side: f32) -> f32 {
         return across;
     }
     let end = if t < 0.0 { a } else { b };
-    let distance = ((point.x - end.x).powi(2) + (point.y - end.y).powi(2)).sqrt();
+    let distance = (point - end).distance();
     if across < 0.0 {
         -distance
     } else if across > 0.0 {

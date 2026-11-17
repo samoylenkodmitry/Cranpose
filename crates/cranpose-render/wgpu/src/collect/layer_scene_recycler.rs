@@ -30,8 +30,11 @@ impl LayerSceneRecycler {
     }
 
     pub(crate) fn recycle(&mut self, mut scene: Box<LayerScene>) {
-        while let Some(child) = scene.children.pop() {
-            self.recycle(child.content);
+        // Each child gives up its content and drops the rest where it is
+        // read, so no child lives on through the call that recycles the
+        // content.
+        while let Some(content) = scene.children.pop().map(|child| child.content) {
+            self.recycle(content);
         }
         scene.scene.settle_room();
         scene.scene.clear();

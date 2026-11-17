@@ -10,7 +10,7 @@ use cranpose_ui::{
     Box, BoxSpec, Column, ColumnSpec, Constraints, IntrinsicSize, Layout, MeasureResult, Modifier,
     Row, RowSpec, Size,
 };
-use cranpose_ui_layout::{Measurable, MeasurePolicy, MeasureScope, VerticalAlignment};
+use cranpose_ui_layout::{Measurables, MeasurePolicy, MeasureScope, VerticalAlignment};
 
 fn tagged(modifier: Modifier, label: &'static str) -> Modifier {
     modifier.semantics(move |config| {
@@ -124,13 +124,11 @@ impl PartialEq for HalfAsTall {
     }
 }
 
-type Measurables = [Box<dyn Measurable>];
-
 impl MeasurePolicy for HalfAsTall {
     fn measure(
         &self,
         _: &dyn MeasureScope,
-        _: &Measurables,
+        _: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         self.measures.set(self.measures.get() + 1);
@@ -143,19 +141,19 @@ impl MeasurePolicy for HalfAsTall {
         MeasureResult::new(Size::new(width, height), Vec::new())
     }
 
-    fn min_intrinsic_width(&self, _: &Measurables, height: f32) -> f32 {
+    fn min_intrinsic_width(&self, _: Measurables<'_>, height: f32) -> f32 {
         height * 2.0
     }
 
-    fn max_intrinsic_width(&self, _: &Measurables, height: f32) -> f32 {
+    fn max_intrinsic_width(&self, _: Measurables<'_>, height: f32) -> f32 {
         height * 2.0
     }
 
-    fn min_intrinsic_height(&self, _: &Measurables, width: f32) -> f32 {
+    fn min_intrinsic_height(&self, _: Measurables<'_>, width: f32) -> f32 {
         width / 2.0
     }
 
-    fn max_intrinsic_height(&self, _: &Measurables, width: f32) -> f32 {
+    fn max_intrinsic_height(&self, _: Measurables<'_>, width: f32) -> f32 {
         width / 2.0
     }
 }
@@ -335,7 +333,7 @@ impl MeasurePolicy for Stretchy {
     fn measure(
         &self,
         _: &dyn MeasureScope,
-        _: &Measurables,
+        _: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         let width = if constraints.max_width.is_finite() {
@@ -347,19 +345,19 @@ impl MeasurePolicy for Stretchy {
         MeasureResult::new(Size::new(width, height), Vec::new())
     }
 
-    fn min_intrinsic_width(&self, _: &Measurables, _: f32) -> f32 {
+    fn min_intrinsic_width(&self, _: Measurables<'_>, _: f32) -> f32 {
         10.0
     }
 
-    fn max_intrinsic_width(&self, _: &Measurables, _: f32) -> f32 {
+    fn max_intrinsic_width(&self, _: Measurables<'_>, _: f32) -> f32 {
         100.0
     }
 
-    fn min_intrinsic_height(&self, _: &Measurables, _: f32) -> f32 {
+    fn min_intrinsic_height(&self, _: Measurables<'_>, _: f32) -> f32 {
         10.0
     }
 
-    fn max_intrinsic_height(&self, _: &Measurables, _: f32) -> f32 {
+    fn max_intrinsic_height(&self, _: Measurables<'_>, _: f32) -> f32 {
         10.0
     }
 }

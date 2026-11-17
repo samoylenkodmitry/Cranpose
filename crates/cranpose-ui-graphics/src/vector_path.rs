@@ -14,7 +14,7 @@
 
 use thiserror::Error;
 
-use crate::geometry::{Point, Rect};
+use crate::{geometry::Rect, point::Point};
 
 /// Maximum recursion depth for adaptive curve flattening.
 const MAX_FLATTEN_DEPTH: u32 = 12;

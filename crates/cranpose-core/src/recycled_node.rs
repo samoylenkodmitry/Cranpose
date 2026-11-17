@@ -19,14 +19,10 @@ pub struct RecycledNode {
 }
 
 impl RecycledNode {
-    /// A removed node as a pool shell: the fresh box it rehouses into, or
-    /// the node itself cleared in place when it offers none. A rehoused
-    /// node is dropped as it is, so it is not cleared first.
+    /// A removed node as a pool shell: the node cleared where it lies, so it
+    /// keeps its box and takes no new one.
     pub(crate) fn new(stable_id: NodeId, mut node: Box<dyn Node>, origin: RecycleOrigin) -> Self {
-        let node = node.rehouse_for_recycle().unwrap_or_else(|| {
-            node.prepare_for_recycle();
-            node
-        });
+        node.prepare_for_recycle();
         Self {
             stable_id,
             node,

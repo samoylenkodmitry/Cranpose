@@ -2,30 +2,48 @@ use std::{ops::Range, sync::Arc};
 
 use crate::{
     glyph_id::GlyphId,
+    index_range::widen,
     shaped_glyphs::{BreakBefore, GlyphOffset, ShapedGlyph, ShapedGlyphs},
 };
 
 // The glyphs of a layout, with where the first draw from the pen when any
 // draws off it, as `ShapedGlyphs` holds them; the copies of a layout and a
 // relayout that adds no glyphs share them.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct LaidGlyphs {
     glyphs: Glyphs,
     offsets: Option<Arc<[GlyphOffset]>>,
 }
 
+impl PartialEq for LaidGlyphs {
+    fn eq(&self, other: &Self) -> bool {
+        self.all() == other.all() && self.offsets == other.offsets
+    }
+}
+
 // A layout's glyphs: in eight bytes each when every one fits them, as the
 // glyphs of all but the widest fonts do.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 enum Glyphs {
-    Packed(Arc<[PackedGlyph]>),
+    // The first `len` glyphs of `room`, which holds more when the layout
+    // took the room of more glyphs, as a counter's number one digit shorter.
+    Packed { room: Arc<[PackedGlyph]>, len: u32 },
     Full(Arc<[ShapedGlyph]>),
 }
 
 impl Default for Glyphs {
     fn default() -> Self {
-        Self::Packed(Arc::default())
+        Self::Packed {
+            room: Arc::default(),
+            len: 0,
+        }
     }
+}
+
+// Whether glyphs `count` long take a room `room` long: one as long, or one
+// at most twice as long, so a short text keeps no long text's room.
+fn takes_room(room: usize, count: usize) -> bool {
+    count <= room && room <= count.saturating_mul(2)
 }
 
 // A glyph whose id fits 16 bits and whose advance fits 15.
@@ -47,20 +65,22 @@ impl PackedGlyph {
         usize::try_from(self.cluster).unwrap_or(usize::MAX)
     }
 
-    // `glyph` in eight bytes, its id and advance cut to their low bits, and
-    // whether they fit them. No branch, so a layout's glyphs pack in one
-    // pass.
-    fn pack(glyph: &ShapedGlyph) -> (Self, bool) {
-        let id = glyph.id().0;
+    // Whether `glyph`'s id fits 16 bits and its advance 15. No branch, so a
+    // layout's glyphs are checked in one pass.
+    fn fits(glyph: &ShapedGlyph) -> bool {
         let advance = glyph.advance.cast_unsigned();
-        let fits = (id >> 16 == 0) & (advance.wrapping_add(1 << 14) >> 15 == 0);
-        let packed = Self {
-            id: (id & 0xFFFF) as u16,
+        (glyph.id().0 >> 16 == 0) & (advance.wrapping_add(1 << 14) >> 15 == 0)
+    }
+
+    // `glyph` in eight bytes, its id and advance cut to their low bits.
+    fn pack(glyph: &ShapedGlyph) -> Self {
+        let advance = glyph.advance.cast_unsigned();
+        Self {
+            id: (glyph.id().0 & 0xFFFF) as u16,
             advance: (((advance & 0x7FFF) as u16) << 1).cast_signed()
                 | i16::from(glyph.unsafe_to_break()),
             cluster: glyph.cluster,
-        };
-        (packed, fits)
+        }
     }
 
     fn unpack(self) -> ShapedGlyph {
@@ -79,7 +99,7 @@ impl PackedGlyph {
 }
 
 // Some of a layout's glyphs, as it keeps them.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) enum RunGlyphs<'a> {
     Packed(&'a [PackedGlyph]),
     Full(&'a [ShapedGlyph]),
@@ -113,23 +133,16 @@ impl<'a> RunGlyphs<'a> {
 }
 
 impl LaidGlyphs {
-    // Keeps `shaped`.
+    // Keeps `shaped`, in eight bytes a glyph when every one fits them.
     pub(crate) fn new(shaped: &ShapedGlyphs) -> Self {
         let offsets = shaped.offsets();
-        let mut fits = true;
-        // Collected from an iterator of known length, in one allocation.
-        let packed: Arc<[PackedGlyph]> = shaped
-            .iter()
-            .map(|glyph| {
-                let (packed, fit) = PackedGlyph::pack(glyph);
-                fits &= fit;
-                packed
-            })
-            .collect();
-        let glyphs = if fits {
-            Glyphs::Packed(packed)
-        } else {
-            Glyphs::Full(Arc::from(&shaped[..]))
+        let glyphs = match u32::try_from(shaped.len()) {
+            // Collected from an iterator of known length, in one allocation.
+            Ok(len) if shaped.iter().all(PackedGlyph::fits) => Glyphs::Packed {
+                room: shaped.iter().map(PackedGlyph::pack).collect(),
+                len,
+            },
+            _ => Glyphs::Full(Arc::from(&shaped[..])),
         };
         Self {
             glyphs,
@@ -140,26 +153,30 @@ impl LaidGlyphs {
         }
     }
 
-    // Keeps `shaped` in the storage of `spare` when nothing else holds that,
-    // it holds as many glyphs and every glyph packs and draws at its pen, as
-    // a counter's text keeps its length from one number to the next.
+    // Keeps `shaped` in the room of `spare` when nothing else holds that,
+    // the room takes the glyphs and every glyph packs and draws at its pen,
+    // as a counter's text keeps its room from one number to the next.
     pub(crate) fn new_in(shaped: &ShapedGlyphs, spare: Self) -> Self {
-        if let Glyphs::Packed(mut packed) = spare.glyphs
-            && packed.len() == shaped.len()
+        if let Glyphs::Packed { mut room, .. } = spare.glyphs
+            && takes_room(room.len(), shaped.len())
+            && let Ok(len) = u32::try_from(shaped.len())
             && shaped
                 .offsets()
                 .iter()
                 .all(|offset| *offset == GlyphOffset::default())
-            && let Some(slots) = Arc::get_mut(&mut packed)
+            && let Some(slots) = Arc::get_mut(&mut room)
         {
+            // One pass packs the glyphs and checks them: glyphs that do not
+            // all fit leave the room, which costs no allocation, for new
+            // storage of their own.
             let mut fits = true;
-            for (slot, glyph) in slots.iter_mut().zip(shaped.iter()) {
-                let (glyph, fit) = PackedGlyph::pack(glyph);
-                (*slot, fits) = (glyph, fits & fit);
+            for (slot, glyph) in slots[..shaped.len()].iter_mut().zip(shaped.iter()) {
+                fits &= PackedGlyph::fits(glyph);
+                *slot = PackedGlyph::pack(glyph);
             }
             if fits {
                 return Self {
-                    glyphs: Glyphs::Packed(packed),
+                    glyphs: Glyphs::Packed { room, len },
                     offsets: None,
                 };
             }
@@ -178,7 +195,7 @@ impl LaidGlyphs {
 
     fn all(&self) -> RunGlyphs<'_> {
         match &self.glyphs {
-            Glyphs::Packed(glyphs) => RunGlyphs::Packed(glyphs),
+            Glyphs::Packed { room, len } => RunGlyphs::Packed(&room[..widen(*len)]),
             Glyphs::Full(glyphs) => RunGlyphs::Full(glyphs),
         }
     }

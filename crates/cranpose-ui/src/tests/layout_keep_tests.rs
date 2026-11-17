@@ -7,7 +7,7 @@ use cranpose_core::{Composition, MemoryApplier, MutableState, NodeId, location_k
 use cranpose_foundation::lazy::LazyListScope;
 use cranpose_macros::composable;
 use cranpose_ui_layout::{
-    Constraints, IntrinsicSize, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
+    Constraints, IntrinsicSize, Measurables, MeasurePolicy, MeasureResult, MeasureScope, Placement,
 };
 
 use crate::{
@@ -194,7 +194,7 @@ impl MeasurePolicy for IntrinsicReader {
     fn measure(
         &self,
         _scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         _constraints: Constraints,
     ) -> MeasureResult {
         let Some(child) = measurables.first() else {
@@ -217,19 +217,19 @@ impl MeasurePolicy for IntrinsicReader {
         )
     }
 
-    fn min_intrinsic_width(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
+    fn min_intrinsic_width(&self, _: Measurables<'_>, _: f32) -> f32 {
         30.0
     }
 
-    fn max_intrinsic_width(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
+    fn max_intrinsic_width(&self, _: Measurables<'_>, _: f32) -> f32 {
         30.0
     }
 
-    fn min_intrinsic_height(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
+    fn min_intrinsic_height(&self, _: Measurables<'_>, _: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_height(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
+    fn max_intrinsic_height(&self, _: Measurables<'_>, _: f32) -> f32 {
         0.0
     }
 }
@@ -307,6 +307,47 @@ fn SameSizeRow(tick: MutableState<usize>, row: usize) {
         RowSpec::default(),
         move || {
             Text(label.clone(), Modifier::empty(), TextStyle::default());
+        },
+    );
+}
+
+// Rows of eleven spacings and boxes of three alignments, which move every
+// frame: more policies than a thread keeps to share, so the nodes share a
+// policy, drop it and make it again as the frames go.
+#[composable]
+fn SpacedRowsScreen(tick: MutableState<usize>) {
+    Column(
+        Modifier::empty().fill_max_width(),
+        ColumnSpec::default(),
+        move || {
+            for row in 0..12 {
+                let step = tick.get() + row;
+                let spacing = (step % 11) as f32;
+                let alignment = [
+                    Alignment::TOP_START,
+                    Alignment::CENTER,
+                    Alignment::CENTER_END,
+                ][step % 3];
+                Row(
+                    Modifier::empty(),
+                    RowSpec::new().horizontal_arrangement(LinearArrangement::spaced_by(spacing)),
+                    move || {
+                        for _ in 0..3 {
+                            Box(
+                                Modifier::empty().size_points(10.0, 12.0),
+                                BoxSpec::new().content_alignment(alignment),
+                                || {
+                                    Box(
+                                        Modifier::empty().size_points(4.0, 4.0),
+                                        BoxSpec::default(),
+                                        || {},
+                                    );
+                                },
+                            );
+                        }
+                    },
+                );
+            }
         },
     );
 }
@@ -468,6 +509,43 @@ fn incremental_layout_matches_a_fresh_composition() {
 #[test]
 fn incremental_lazy_list_layout_matches_a_fresh_composition() {
     assert_incremental_layout_matches_fresh_compositions(KeptListScreen);
+}
+
+#[test]
+fn rows_and_boxes_that_share_their_policies_match_a_fresh_composition() {
+    assert_incremental_layout_matches_fresh_compositions(SpacedRowsScreen);
+}
+
+// A fresh composition shares the policies of the same thread too, so this
+// test checks each node's place against its own arrangement.
+#[test]
+fn rows_and_boxes_that_share_their_policies_place_by_their_own() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let (mut composition, tick, root) = compose(SpacedRowsScreen, 0);
+    for frame in 0..24 {
+        tick.set(frame);
+        while composition.process_invalid_scopes().expect("recomposition") {}
+        let rects = layout(&mut composition, root);
+        let x = |index: usize| f32::from_bits(rects[index][0]);
+        for row in 0..12 {
+            let step = frame + row;
+            // The column, then each row and its three boxes, each with its dot.
+            let first = 2 + row * 7;
+            for column in 0..3 {
+                let boxed = first + column * 2;
+                assert_eq!(
+                    x(boxed) - x(first),
+                    column as f32 * (10.0 + (step % 11) as f32),
+                    "frame {frame}: row {row} spaces box {column} by its arrangement"
+                );
+                assert_eq!(
+                    x(boxed + 1) - x(boxed),
+                    [0.0, 3.0, 6.0][step % 3],
+                    "frame {frame}: box {column} of row {row} aligns its dot by its own"
+                );
+            }
+        }
+    }
 }
 
 #[test]

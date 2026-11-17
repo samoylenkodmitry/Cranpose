@@ -11,8 +11,8 @@ mod layout_node_data;
 mod layout_runtime_state;
 mod live_layout_node;
 mod measure_telemetry;
-mod measured_spare;
 mod modifier_chain_measure;
+mod placed_children;
 mod placed_root_measurements;
 /// Measure policies behind the built-in layout widgets such as `Box`, `Row` and `Column`.
 pub mod policies;
@@ -33,7 +33,7 @@ use cranpose_foundation::{
     InvalidationKind, ModifierNodeContext, SemanticsConfiguration, SemanticsWidgetRole,
 };
 use cranpose_ui_graphics::ProjectiveTransform;
-use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget};
+use cranpose_ui_layout::{AlignmentLines, Constraints, Measurables, MeasurePolicy};
 pub(crate) use frame_layout_arena::FrameLayoutArena;
 use frame_layout_arena::VecPools;
 pub(crate) use layout_child_measure_state::LayoutChildMeasureState;
@@ -41,7 +41,7 @@ use layout_child_measure_state::{ChildPass, inherited_alignment_lines, read_cell
 use layout_node_data::{role_from_modifier_slices, snapshot_node_data};
 pub(crate) use layout_runtime_state::LayoutRuntimeState;
 use live_layout_node::{LiveLayoutNode, read_live_layout_node};
-use measured_spare::MeasuredSpare;
+use placed_children::PlacedChildren;
 use placed_root_measurements::PlacedRootMeasurements;
 pub use semantics_tree::{
     SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsPlacement, SemanticsRole,
@@ -55,7 +55,6 @@ use web_time::Instant;
 use self::core::{HorizontalAlignment, VerticalAlignment};
 use self::{
     coordinator_chain::CoordinatorFrame,
-    core::Measurable,
     measure_telemetry::{
         LayoutStages, layout_measure_telemetry_threshold_ms, log_layout_measure_telemetry,
         log_node_measure_telemetry,
@@ -357,7 +356,7 @@ impl LayoutEngine for MemoryApplier {
 /// Result of running the measure pass for a Compose layout tree.
 #[derive(Debug, Clone)]
 pub struct LayoutMeasurements {
-    root: Rc<MeasuredNode>,
+    root: MeasuredNode,
     // Boxed: a frame that builds neither tree moves a few words, not the
     // hundreds of bytes the trees take inline.
     semantics: Option<Box<SemanticsTree>>,
@@ -366,7 +365,7 @@ pub struct LayoutMeasurements {
 
 impl LayoutMeasurements {
     fn new(
-        root: Rc<MeasuredNode>,
+        root: MeasuredNode,
         semantics: Option<SemanticsTree>,
         layout_tree: Option<LayoutTree>,
     ) -> Self {
@@ -828,7 +827,7 @@ pub fn measure_layout_with_options(
         };
         let semantics = if options.collect_semantics {
             let semantics_tree = if let Some(layout_tree) = layout_tree.as_ref() {
-                clear_semantics_dirty_flags(&mut applier_ref, root, &measured)?;
+                clear_semantics_dirty_flags(&mut applier_ref, root)?;
                 build_semantics_tree_from_layout_tree(layout_tree)
             } else {
                 build_semantics_tree_from_live_nodes(&mut applier_ref, root, &measured)?
@@ -944,7 +943,7 @@ impl Drop for LayoutRuntimeFrameBindingCleanup<'_> {
 }
 
 enum LayoutNodeVisit<'a> {
-    Cached(Rc<MeasuredNode>),
+    Cached(MeasuredNode),
     /// Only nodes below this one changed: its measurement holds unless a
     /// changed child measures differently.
     Keep(KeptNode),
@@ -954,7 +953,7 @@ enum LayoutNodeVisit<'a> {
 /// A node whose measurement may hold, with the parts of it the keep reads
 /// and writes, so the keep needs no lookup of the node.
 struct KeptNode {
-    measured: Rc<MeasuredNode>,
+    measured: MeasuredNode,
     parts: Rc<LayoutParts>,
     /// Whether a child that measures to another size leaves the node as it
     /// is.
@@ -964,7 +963,7 @@ struct KeptNode {
 /// A kept measurement after the walk over its changed children: `resized`
 /// when one of them measured to another size that the node ignores.
 struct KeptChildren {
-    measured: Rc<MeasuredNode>,
+    measured: MeasuredNode,
     resized: bool,
 }
 
@@ -1019,7 +1018,6 @@ struct LayoutNodeMeasure<'a> {
     parts: Rc<LayoutParts>,
     chain: ModifierChainInputs,
     pools: VecPools<'a>,
-    spare: MeasuredSpare,
 }
 
 #[expect(
@@ -1062,7 +1060,7 @@ impl LayoutBuilderState {
         self: &Rc<Self>,
         node_id: NodeId,
         constraints: Constraints,
-    ) -> Result<(&'static str, Rc<MeasuredNode>), NodeError> {
+    ) -> Result<(&'static str, MeasuredNode), NodeError> {
         self.clear_subcompose_placed(node_id);
         if let Some(cached) = self.subcompose_measurement_to_keep(node_id, constraints)
             && let Some(kept) = self.keep_subcompose_measurement(node_id, constraints, &cached)?
@@ -1074,15 +1072,7 @@ impl LayoutBuilderState {
                 self.store_subcompose_measurement(node_id, constraints, &measured);
                 ("subcompose", measured)
             }
-            None => (
-                "fallback",
-                Rc::new(MeasuredNode::new(
-                    Size::default(),
-                    Point { x: 0.0, y: 0.0 },
-                    Point::default(),
-                    Vec::new(),
-                )),
-            ),
+            None => ("fallback", MeasuredNode::default()),
         })
     }
 
@@ -1093,7 +1083,7 @@ impl LayoutBuilderState {
         &self,
         node_id: NodeId,
         constraints: Constraints,
-    ) -> Option<Rc<MeasuredNode>> {
+    ) -> Option<MeasuredNode> {
         let mut applier = self.applier.try_borrow_typed().ok()?;
         applier
             .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
@@ -1119,8 +1109,8 @@ impl LayoutBuilderState {
         self: &Rc<Self>,
         node_id: NodeId,
         constraints: Constraints,
-        cached: &Rc<MeasuredNode>,
-    ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
+        cached: &MeasuredNode,
+    ) -> Result<Option<MeasuredNode>, NodeError> {
         let kept = self.remeasure_changed_children(
             node_id,
             cached,
@@ -1133,8 +1123,7 @@ impl LayoutBuilderState {
         };
         self.with_applier_result(|applier| {
             applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-                node.cache()
-                    .store_measurement(constraints, Rc::clone(&kept));
+                node.cache().store_measurement(constraints, kept);
                 node.clear_needs_layout();
             })
         })?;
@@ -1200,7 +1189,7 @@ impl LayoutBuilderState {
         self: &Rc<Self>,
         node_id: NodeId,
         constraints: Constraints,
-    ) -> Result<Rc<MeasuredNode>, NodeError> {
+    ) -> Result<MeasuredNode, NodeError> {
         let Some(threshold_ms) = self.measure_telemetry_ms else {
             return self
                 .measure_node_untimed(node_id, constraints)
@@ -1217,10 +1206,22 @@ impl LayoutBuilderState {
         node_id: NodeId,
         constraints: Constraints,
         threshold_ms: f64,
-    ) -> Result<Rc<MeasuredNode>, NodeError> {
+    ) -> Result<MeasuredNode, NodeError> {
         let start = Instant::now();
         let (kind, measured) = self.measure_node_untimed(node_id, constraints)?;
-        log_node_measure_telemetry(kind, node_id, constraints, &measured, (threshold_ms, start));
+        let children = || {
+            self.with_applier_result(
+                |applier| Ok(PlacedChildren::of(applier, node_id).len(applier)),
+            )
+            .unwrap_or_default()
+        };
+        log_node_measure_telemetry(
+            kind,
+            node_id,
+            constraints,
+            (&measured, children),
+            (threshold_ms, start),
+        );
         Ok(measured)
     }
 
@@ -1229,7 +1230,7 @@ impl LayoutBuilderState {
         self: &Rc<Self>,
         node_id: NodeId,
         constraints: Constraints,
-    ) -> Result<(&'static str, Rc<MeasuredNode>), NodeError> {
+    ) -> Result<(&'static str, MeasuredNode), NodeError> {
         if let Some(measured) = self.measure_layout_node(node_id, constraints)? {
             return Ok(("layout", measured));
         }
@@ -1240,8 +1241,8 @@ impl LayoutBuilderState {
         self: &Rc<Self>,
         node_id: NodeId,
         constraints: Constraints,
-    ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
-        let (node_handle, resolved_modifiers, spare) = {
+    ) -> Result<Option<MeasuredNode>, NodeError> {
+        let (node_handle, resolved_modifiers) = {
             let Ok(mut applier) = self.applier.try_borrow_typed() else {
                 return Ok(None);
             };
@@ -1256,8 +1257,8 @@ impl LayoutBuilderState {
                 let resolved_modifiers = handle
                     .resolved_modifiers()
                     .on_device_grid(subcompose.density().density());
-                let spare = MeasuredSpare::take(subcompose.cache());
-                (handle, resolved_modifiers, spare)
+                subcompose.cache().clear_measurement();
+                (handle, resolved_modifiers)
             } else {
                 return Ok(None);
             }
@@ -1319,11 +1320,6 @@ impl LayoutBuilderState {
             constraints.max_height,
         );
 
-        let MeasuredSpare {
-            node: spare,
-            mut children,
-        } = spare;
-        children.reserve_exact(placements.len());
         let mut alignment_lines = AlignmentLines::default();
         let mut measured_children_by_id = measured_children.borrow_mut();
 
@@ -1379,14 +1375,9 @@ impl LayoutBuilderState {
             if let Some(applier) = applier.as_mut() {
                 let _ = read_live_layout_node(applier, placement.node_id, |node| {
                     node.place(retained, node_id, &self.context);
+                    node.keep_in_parent(MeasuredChild::new(child, policy_position));
                 });
             }
-
-            children.push(MeasuredChild::new(
-                placement.node_id,
-                child,
-                policy_position,
-            ));
         }
         drop(applier);
 
@@ -1394,13 +1385,12 @@ impl LayoutBuilderState {
         node_handle.recycle_placement_scratch(placements);
 
         Ok(Some(
-            MeasuredNode::new(Size { width, height }, offset, Point::default(), children)
+            MeasuredNode::new(Size { width, height }, offset, Point::default())
                 .with_alignment_lines(
                     alignment_lines
                         .with_overrides(explicit_lines.translated(padding.top))
                         .translated(offset.y),
-                )
-                .into_rc(spare),
+                ),
         ))
     }
 
@@ -1408,7 +1398,7 @@ impl LayoutBuilderState {
         self: &Rc<Self>,
         node_id: NodeId,
         constraints: Constraints,
-    ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
+    ) -> Result<Option<MeasuredNode>, NodeError> {
         let mut keep = true;
         let (mut applier, measure) = loop {
             let Ok(mut applier) = self.applier.try_borrow_typed() else {
@@ -1434,7 +1424,6 @@ impl LayoutBuilderState {
             parts,
             chain,
             mut pools,
-            spare,
         } = measure;
 
         let _frame_binding_cleanup = LayoutRuntimeFrameBindingCleanup {
@@ -1469,31 +1458,24 @@ impl LayoutBuilderState {
             return Err(err);
         }
 
-        let MeasuredSpare {
-            node: spare,
-            mut children,
-        } = spare;
-        runtime_state.measured_children(
+        runtime_state.place_measured_children(
             &pools.placements,
             &pools.placement_indices,
             measurement.content_offset,
-            &mut children,
         );
         let measured = MeasuredNode::new(
             measurement.size,
             measurement.offset,
             measurement.content_offset,
-            children,
         )
         .with_alignment_lines(measurement.alignment_lines)
-        .with_window_root(measurement.window_root)
-        .into_rc(spare);
+        .with_window_root(measurement.window_root);
 
         // The node's parts hold all its measure writes: no lookup of it.
         let cache = parts.cache();
         cache.store_held_measurement(
             constraints,
-            Rc::clone(&measured),
+            measured,
             measurement.hold,
             measurement.ignores_child_sizes,
         );
@@ -1577,7 +1559,7 @@ impl LayoutBuilderState {
         &self,
         node: &LayoutNode,
         constraints: Constraints,
-    ) -> Option<Rc<MeasuredNode>> {
+    ) -> Option<MeasuredNode> {
         if node.needs_measure() || node.needs_layout() || node.is_virtual() {
             return None;
         }
@@ -1598,7 +1580,7 @@ impl LayoutBuilderState {
         node_id: NodeId,
         constraints: Constraints,
         node: KeptNode,
-    ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
+    ) -> Result<Option<MeasuredNode>, NodeError> {
         let KeptNode {
             measured,
             parts,
@@ -1621,9 +1603,9 @@ impl LayoutBuilderState {
         };
         let cache = parts.cache();
         if resized {
-            cache.store_resized_measurement(constraints, Rc::clone(&kept));
+            cache.store_resized_measurement(constraints, kept);
         } else {
-            cache.store_measurement(constraints, Rc::clone(&kept));
+            cache.store_measurement(constraints, kept);
         }
         cache.clear_layout_dirt();
         Ok(Some(kept))
@@ -1638,20 +1620,29 @@ impl LayoutBuilderState {
     fn remeasure_changed_children(
         self: &Rc<Self>,
         node_id: NodeId,
-        cached: &Rc<MeasuredNode>,
+        cached: &MeasuredNode,
         ignores_child_sizes: bool,
         mut change: impl FnMut(NodeId) -> Result<ChildChange, NodeError>,
         mut remeasured: impl FnMut(NodeId),
     ) -> Result<Option<KeptChildren>, NodeError> {
         let mut resized = false;
-        for previous in &cached.children {
-            let child = match change(previous.node_id)? {
+        let placed =
+            self.with_applier_result(|applier| Ok(PlacedChildren::of(applier, node_id)))?;
+        let mut index = 0;
+        while let Some((child_id, previous)) =
+            self.with_applier_result(|applier| placed.get(applier, index))?
+        {
+            index += 1;
+            let Some(previous) = previous else {
+                continue;
+            };
+            let child = match change(child_id)? {
                 ChildChange::Unchanged => continue,
                 ChildChange::Refuse => return Ok(None),
                 ChildChange::Changed(child) => child,
             };
-            let measured = self.measure_node(previous.node_id, child.constraints)?;
-            remeasured(previous.node_id);
+            let measured = self.measure_node(child_id, child.constraints)?;
+            remeasured(child_id);
             let now = ForParent::of(&measured);
             if !previous.for_parent.same_as(&now) {
                 if !(ignores_child_sizes && previous.for_parent.same_but_size(&now)) {
@@ -1660,11 +1651,11 @@ impl LayoutBuilderState {
                 resized = true;
             }
             if child.placed {
-                self.place_where_it_was(node_id, previous.node_id);
+                self.place_where_it_was(node_id, child_id);
             }
         }
         Ok(Some(KeptChildren {
-            measured: Rc::clone(cached),
+            measured: *cached,
             resized,
         }))
     }
@@ -1718,14 +1709,13 @@ impl LayoutBuilderState {
         &self,
         node_id: NodeId,
         constraints: Constraints,
-        measured: &Rc<MeasuredNode>,
+        measured: &MeasuredNode,
     ) {
         let Ok(mut applier) = self.applier.try_borrow_typed() else {
             return;
         };
         let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-            node.cache()
-                .store_measurement(constraints, Rc::clone(measured));
+            node.cache().store_measurement(constraints, *measured);
         });
     }
 
@@ -1749,7 +1739,7 @@ impl LayoutBuilderState {
         node.clear_placed(&self.context);
         if keep && let Some(measured) = self.measurement_to_keep(node, constraints) {
             return LayoutNodeVisit::Keep(KeptNode {
-                ignores_child_sizes: node.cache().ignores_child_sizes_of(&measured),
+                ignores_child_sizes: node.cache().ignores_child_sizes(),
                 measured,
                 parts: Rc::clone(node.layout_parts()),
             });
@@ -1764,7 +1754,7 @@ impl LayoutBuilderState {
             return LayoutNodeVisit::Cached(cached);
         }
 
-        let spare = MeasuredSpare::take(cache);
+        cache.clear_measurement();
         let parts = Rc::clone(node.layout_parts());
         let chain = parts.runtime_state().borrow_mut().bind_node(node);
         let mut pools = VecPools::acquire(&self.frame_arena);
@@ -1773,29 +1763,26 @@ impl LayoutBuilderState {
             parts,
             chain,
             pools,
-            spare,
         })
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(crate) struct MeasuredNode {
     size: Size,
     offset: Point,
     content_offset: Point,
     alignment_lines: AlignmentLines,
-    children: Vec<MeasuredChild>,
     window_root: bool,
 }
 
 impl MeasuredNode {
-    fn new(size: Size, offset: Point, content_offset: Point, children: Vec<MeasuredChild>) -> Self {
+    fn new(size: Size, offset: Point, content_offset: Point) -> Self {
         Self {
             size,
             offset,
             content_offset,
             alignment_lines: AlignmentLines::default(),
-            children,
             window_root: false,
         }
     }
@@ -1829,36 +1816,21 @@ impl MeasuredNode {
     pub(crate) fn size(&self) -> Size {
         self.size
     }
-
-    /// The measurement in `spare`'s memory, or in a new allocation when
-    /// there is no spare.
-    fn into_rc(self, spare: Option<Rc<Self>>) -> Rc<Self> {
-        let Some(mut spare) = spare else {
-            return Rc::new(self);
-        };
-        match Rc::get_mut(&mut spare) {
-            Some(slot) => *slot = self,
-            None => return Rc::new(self),
-        }
-        spare
-    }
 }
 
-/// What a parent's measurement keeps of a child: which child, where the
-/// policy placed it, and what of the child's measurement the policy read.
-/// The measurement itself stays with the child's cache, its one holder, so
-/// the child's next measure can fill it in place.
-#[derive(Debug, Clone, Copy)]
+/// What a parent's last measure kept of a child: where the policy placed
+/// it, and what of the child's measurement the policy read. It sits in the
+/// child's record, as a node has one parent; the measurement itself stays
+/// with the child's cache, so the child's next measure can fill it in place.
+#[derive(Debug, Clone, Copy, Default)]
 struct MeasuredChild {
-    node_id: NodeId,
     offset: Point,
     for_parent: ForParent,
 }
 
 impl MeasuredChild {
-    fn new(node_id: NodeId, measured: &MeasuredNode, offset: Point) -> Self {
+    fn new(measured: &MeasuredNode, offset: Point) -> Self {
         Self {
-            node_id,
             offset,
             for_parent: ForParent::of(measured),
         }
@@ -1867,7 +1839,7 @@ impl MeasuredChild {
 
 /// What a parent's policy reads of a child's measurement: the size and the
 /// baselines, and the offset it places the child by.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 struct ForParent {
     size: Size,
     offset: Point,
@@ -1900,7 +1872,7 @@ impl ForParent {
 /// The intrinsic size `kind` names, of a measure policy over `measurables`.
 fn policy_intrinsic(
     policy: &dyn MeasurePolicy,
-    measurables: &[Box<dyn Measurable>],
+    measurables: Measurables<'_>,
     kind: IntrinsicKind,
 ) -> f32 {
     match kind {
@@ -1911,54 +1883,9 @@ fn policy_intrinsic(
     }
 }
 
-// A child's parts take the place its parent's policy gives the child.
-impl PlaceTarget for LayoutParts {
-    fn place(&self, x: f32, y: f32) {
-        let internal_offset = read_cell(&self.record().measured, |measured| {
-            measured.as_ref().map_or_default(|measured| measured.offset)
-        });
-        self.place_retained(Point {
-            x: x + internal_offset.x,
-            y: y + internal_offset.y,
-        });
-    }
-}
-
-/// Runs `visit` on the measurement `child` holds in its cache, or on a leaf
-/// of no size for a child that holds none, as a node of another kind
-/// measures.
-fn visit_child<R>(
-    applier: &mut MemoryApplier,
-    child: &MeasuredChild,
-    visit: impl FnOnce(&mut MemoryApplier, NodeId, &MeasuredNode) -> R,
-) -> R {
-    let held = applier.get_mut(child.node_id).ok().and_then(|node| {
-        let any = node.as_any_mut();
-        if let Some(layout) = any.downcast_ref::<LayoutNode>() {
-            return layout.cache().held_measurement();
-        }
-        any.downcast_ref::<SubcomposeLayoutNode>()
-            .and_then(|subcompose| subcompose.cache().held_measurement())
-    });
-    match held {
-        Some(held) => visit(applier, child.node_id, &held),
-        None => visit(
-            applier,
-            child.node_id,
-            &MeasuredNode::new(
-                Size::default(),
-                Point::default(),
-                Point::default(),
-                Vec::new(),
-            ),
-        ),
-    }
-}
-
 fn clear_semantics_dirty_flags(
     applier: &mut MemoryApplier,
     node_id: NodeId,
-    node: &MeasuredNode,
 ) -> Result<(), NodeError> {
     match applier.with_node::<LayoutNode, _>(node_id, |layout| {
         layout.clear_needs_semantics();
@@ -1976,11 +1903,9 @@ fn clear_semantics_dirty_flags(
         Err(err) => return Err(err),
     }
 
-    for child in &node.children {
-        visit_child(applier, child, clear_semantics_dirty_flags)?;
-    }
-
-    Ok(())
+    PlacedChildren::of(applier, node_id).visit(applier, |applier, child, _, _| {
+        clear_semantics_dirty_flags(applier, child)
+    })
 }
 
 fn build_semantics_tree_from_live_nodes(
@@ -2104,12 +2029,17 @@ fn build_semantics_node_from_live_nodes(
             Err(err) => return Err(err),
         };
 
-    let mut children = Vec::with_capacity(node.children.len());
-    for child in &node.children {
-        children.push(visit_child(applier, child, |applier, child_id, child| {
-            build_semantics_node_from_live_nodes(applier, child_id, child, Some(content))
-        })?);
-    }
+    let placed = PlacedChildren::of(applier, node_id);
+    let mut children = Vec::with_capacity(placed.len(applier));
+    placed.visit(applier, |applier, child_id, _, child| {
+        children.push(build_semantics_node_from_live_nodes(
+            applier,
+            child_id,
+            child,
+            Some(content),
+        )?);
+        Ok(())
+    })?;
 
     Ok(SemanticsNode {
         placement,
@@ -2187,19 +2117,25 @@ fn build_layout_tree(
         };
         let (data, window_transform) =
             snapshot_node_data(applier, node_id, top_left, node.size, parent_transform)?;
-        let mut children = Vec::with_capacity(node.children.len());
-        for child in &node.children {
-            if crate::modifier::is_window_root(applier, child.node_id) {
-                continue;
+        let placed = PlacedChildren::of(applier, node_id);
+        let mut children = Vec::with_capacity(placed.len(applier));
+        placed.visit(applier, |applier, child_id, offset, child| {
+            if crate::modifier::is_window_root(applier, child_id) {
+                return Ok(());
             }
             let child_origin = Point {
-                x: top_left.x + child.offset.x,
-                y: top_left.y + child.offset.y,
+                x: top_left.x + offset.x,
+                y: top_left.y + offset.y,
             };
-            children.push(visit_child(applier, child, |applier, child_id, child| {
-                place(applier, child_id, child, child_origin, window_transform)
-            })?);
-        }
+            children.push(place(
+                applier,
+                child_id,
+                child,
+                child_origin,
+                window_transform,
+            )?);
+            Ok(())
+        })?;
         Ok(LayoutBox {
             node_generation: applier.node_generation(node_id),
             ..LayoutBox::new(node_id, rect, node.content_offset, data, children)

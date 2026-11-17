@@ -8,10 +8,12 @@ use std::{
 
 use cranpose_core::{MemoryApplier, Node, NodeError, NodeId, NodeIdCell, PackedU64};
 use cranpose_ui_graphics::shared_sort::sort_positions;
-use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, Placement};
+use cranpose_ui_layout::{
+    AlignmentLines, Constraints, Measurable, Measurables, MeasurePolicy, Placement,
+};
 
 use super::{
-    LayoutBuilderState, LayoutRuntimeState, MeasuredChild, MeasuredNode, core::Measurable,
+    LayoutBuilderState, LayoutRuntimeState, MeasuredChild, MeasuredNode,
     layout_child_measurable::LayoutChildMeasurable,
 };
 use crate::{
@@ -216,7 +218,10 @@ pub(crate) struct LayoutChildMeasureState {
     pub(super) measured_constraints: Cell<Option<Constraints>>,
     // Whether the parent's last measure read the child's intrinsic sizes.
     pub(super) read_intrinsics: Cell<bool>,
-    pub(super) measured: Cell<Option<Rc<MeasuredNode>>>,
+    pub(super) measured: Cell<Option<MeasuredNode>>,
+    // What the parent's last measure kept of the child, `None` when it did
+    // not measure the child.
+    pub(super) in_parent: Cell<Option<MeasuredChild>>,
     pub(super) last_position: Cell<Option<Point>>,
     // The child's z index, as the record last placed it or, at a bind that
     // read the child, found it.
@@ -236,6 +241,7 @@ impl Default for LayoutChildMeasureState {
             measured_constraints: Cell::new(None),
             read_intrinsics: Cell::new(false),
             measured: Cell::new(None),
+            in_parent: Cell::new(None),
             last_position: Cell::new(None),
             placed_z_index: Cell::new(0.0),
         }
@@ -335,6 +341,7 @@ impl LayoutChildMeasureState {
         self.note_z_index(0.0);
         self.frame.borrow_mut().take();
         self.measured.take();
+        self.in_parent.set(None);
         self.last_position.set(None);
         self.measured_constraints.set(None);
         self.read_intrinsics.set(false);
@@ -431,14 +438,10 @@ impl LayoutParts {
         record.with_builder(|builder| f(self.layout_state(), &builder.context));
     }
 
-    // Places the child where its parent's placement says. A policy that
-    // placed its placeable there in this pass, as one that places its
-    // placeables does, left only the z index to set.
+    // Places the child where its parent's placement says.
     pub(super) fn place_at(&self, position: Point, z_index: f32) {
         let record = self.record();
-        if record.last_position.get() != Some(position) {
-            self.place_retained(position);
-        }
+        self.place_retained(position);
         if record.placed_z_index.get().to_bits() != z_index.to_bits() {
             record.note_z_index(z_index);
             self.layout_state()
@@ -480,7 +483,7 @@ impl LayoutParts {
         }
     }
 
-    fn perform_measure(&self, constraints: Constraints) -> Result<Rc<MeasuredNode>, NodeError> {
+    fn perform_measure(&self, constraints: Constraints) -> Result<MeasuredNode, NodeError> {
         let record = self.record();
         let builder = record.builder().ok_or_else(|| NodeError::MissingContext {
             id: record.child_id(),
@@ -489,7 +492,7 @@ impl LayoutParts {
         builder.measure_node(record.child_id(), constraints)
     }
 
-    pub(super) fn measure_cached(&self, constraints: Constraints) -> Option<Rc<MeasuredNode>> {
+    pub(super) fn measure_cached(&self, constraints: Constraints) -> Option<MeasuredNode> {
         let record = self.record();
         let measures = record.measures();
         if measures {
@@ -513,7 +516,7 @@ impl LayoutParts {
         match self.perform_measure(constraints) {
             Ok(measured) => {
                 record.force_remeasure.set(false);
-                cache.store_measurement(constraints, Rc::clone(&measured));
+                cache.store_measurement(constraints, measured);
                 Some(measured)
             }
             Err(err) => {
@@ -529,16 +532,16 @@ impl LayoutParts {
     reason = "a node's children records in their file"
 )]
 impl LayoutRuntimeState {
-    pub(super) fn child_states(&self) -> &[Rc<LayoutParts>] {
+    pub(super) fn child_states(&self) -> &[LayoutChildMeasurable] {
         self.children
             .as_deref()
-            .map_or(&[], |children| children.states.as_slice())
+            .map_or(&[], |children| children.list.as_slice())
     }
 
-    pub(super) fn child_measurables(&self) -> &[Box<dyn Measurable>] {
+    pub(super) fn child_measurables(&self) -> Measurables<'_> {
         self.children
             .as_deref()
-            .map_or(&[], |children| children.measurables.as_slice())
+            .map_or_else(Measurables::empty, |children| Measurables::new(children))
     }
 
     // Binds the children's frame of the node `parent` to `builder` for a
@@ -574,19 +577,19 @@ impl LayoutRuntimeState {
             .map(|err| *err)
     }
 
-    // Puts the children the last measure measured into `measured_children`.
-    pub(super) fn measured_children(
+    // Places the children the last measure measured and notes in each
+    // child's record what the measure kept of it; a child it did not
+    // measure keeps nothing.
+    pub(super) fn place_measured_children(
         &self,
         placements: &[Placement],
         placement_indices: &[usize],
         content_offset: Point,
-        measured_children: &mut Vec<MeasuredChild>,
     ) {
-        let child_states = self.child_states();
-        measured_children.reserve_exact(child_states.len());
-        for (index, child) in child_states.iter().enumerate() {
+        for (index, child) in self.child_states().iter().enumerate() {
             let record = child.record();
             let Some(measured) = record.measured.take() else {
+                record.in_parent.set(None);
                 continue;
             };
             let child_id = record.child_id();
@@ -599,20 +602,19 @@ impl LayoutRuntimeState {
             if let Some(placement) = placement {
                 child.place_at(position, placement.z_index);
             }
-            measured_children.push(MeasuredChild::new(
-                child_id,
+            record.in_parent.set(Some(MeasuredChild::new(
                 &measured,
                 Point {
                     x: content_offset.x + base_position.x,
                     y: content_offset.y + base_position.y,
                 },
-            ));
+            )));
         }
     }
 }
 
 pub(super) fn inherited_alignment_lines(
-    child_states: &[Rc<LayoutParts>],
+    child_states: &[LayoutChildMeasurable],
     placements: &[Placement],
     placement_indices: &mut Vec<usize>,
 ) -> AlignmentLines {
@@ -666,21 +668,19 @@ pub(super) fn placement_for_child<'a>(
 }
 
 // What a node keeps for measuring its children, in their order: the parts
-// of each child, which hold the node's record of it.
+// of each child, which hold the node's record of it and which the node's
+// measure policy measures.
 pub(super) struct LayoutChildren {
-    states: Vec<Rc<LayoutParts>>,
-    measurables: Vec<Box<dyn Measurable>>,
+    list: Vec<LayoutChildMeasurable>,
     frame: Rc<LayoutChildFrame>,
 }
 
 impl LayoutChildren {
     // Room for exactly `count` children, where growth would make room for
-    // four in each of the two lists. Children added later grow the lists
-    // as usual.
+    // four. Children added later grow the list as usual.
     fn with_capacity(count: usize, parent_parts: &Rc<LayoutParts>) -> Self {
         Self {
-            states: Vec::with_capacity(count),
-            measurables: Vec::with_capacity(count),
+            list: Vec::with_capacity(count),
             frame: Rc::new(LayoutChildFrame::new(Rc::downgrade(parent_parts))),
         }
     }
@@ -694,7 +694,7 @@ impl LayoutChildren {
         child_id: NodeId,
         pass: &LayoutBuilderState,
     ) -> bool {
-        self.states.get(position).is_some_and(|child| {
+        self.list.get(position).is_some_and(|child| {
             child.record().node_id.get() == Some(child_id)
                 && child.rebind_unchanged(&self.frame, pass)
         })
@@ -709,7 +709,7 @@ impl LayoutChildren {
         pass: &LayoutBuilderState,
     ) {
         let here = self
-            .states
+            .list
             .get(position)
             .is_some_and(|child| Rc::ptr_eq(child, binding.parts));
         if !here {
@@ -724,7 +724,7 @@ impl LayoutChildren {
     // keeps every child.
     #[inline]
     fn truncate(&mut self, len: usize) {
-        if len < self.states.len() {
+        if len < self.list.len() {
             self.release_from(len);
         }
     }
@@ -733,33 +733,42 @@ impl LayoutChildren {
     // holds starts over.
     #[inline(never)]
     fn release_from(&mut self, len: usize) {
-        for child in &self.states[len..] {
+        for child in &self.list[len..] {
             if child.record().is_of(&self.frame) {
                 child.record().release();
             }
         }
-        self.states.truncate(len);
-        self.measurables.truncate(len);
+        self.list.truncate(len);
     }
 
     // Puts `parts`, a child's, at `position`: from further on, where the
     // child was, or as a new entry.
     #[inline(never)]
     fn bind_at(&mut self, position: usize, parts: &Rc<LayoutParts>) {
-        let from = match self.states[position..]
+        let from = match self.list[position..]
             .iter()
             .position(|child| Rc::ptr_eq(child, parts))
         {
             Some(offset) => position + offset,
             None => {
-                self.states.push(Rc::clone(parts));
-                self.measurables
-                    .push(Box::new(LayoutChildMeasurable::new(Rc::clone(parts))));
-                self.states.len() - 1
+                self.list.push(LayoutChildMeasurable::new(Rc::clone(parts)));
+                self.list.len() - 1
             }
         };
-        self.states.swap(position, from);
-        self.measurables.swap(position, from);
+        self.list.swap(position, from);
+    }
+}
+
+// The node's measure policy measures the children in their order. The
+// trait goes by its path: imported, its `get` would answer for the slice's
+// `get` on `self.list` in this file.
+impl cranpose_ui_layout::MeasurableList for LayoutChildren {
+    fn len(&self) -> usize {
+        self.list.len()
+    }
+
+    fn get(&self, index: usize) -> Option<&dyn Measurable> {
+        self.list.get(index).map(|child| child as &dyn Measurable)
     }
 }
 

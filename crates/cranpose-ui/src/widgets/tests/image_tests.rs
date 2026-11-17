@@ -580,7 +580,9 @@ fn measure_image(intrinsic: Size, constraints: Constraints) -> Size {
         intrinsic_size: intrinsic,
     };
     let scope = crate::density::DensityMeasureScope::new(crate::density::Density::default());
-    policy.measure(&scope, &[], constraints).size
+    policy
+        .measure(&scope, Measurables::empty(), constraints)
+        .size
 }
 
 #[test]

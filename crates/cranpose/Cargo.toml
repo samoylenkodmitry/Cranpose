@@ -239,6 +239,13 @@ storekit = ["dep:cranpose-storekit"]
 # bring. Android reads the declared sensor without it, and elsewhere it
 # compiles away.
 heart-rate = ["dep:objc2-health-kit"]
+# Asking the owner of an iPhone to unlock with Face ID, Touch ID or the
+# passcode, behind `cranpose_services::authenticate_device_owner`. Off by
+# default because it links LocalAuthentication. Face ID needs the sentence
+# that `cranpose_capabilities::Use::device_auth` puts in the Info.plist as
+# `NSFaceIDUsageDescription`. Android needs only that declaration, and
+# elsewhere it compiles away.
+device-auth = ["dep:objc2-local-authentication"]
 # Messages and streams between an iPhone app and the same app on its Apple
 # Watch through WatchConnectivity, behind `cranpose_services::wearable`. On
 # Android the Gradle service "wearable" brings the Wear OS link instead.
@@ -740,6 +747,13 @@ objc2-media-player = { version = "0.3.2", default-features = false, optional = t
     "MPRemoteCommand",
     "MPRemoteCommandCenter",
     "MPRemoteCommandEvent",
+] }
+# The device unlock (`apple::device_auth`), under `device-auth`.
+objc2-local-authentication = { version = "0.3.2", default-features = false, optional = true, features = [
+    "std",
+    "block2",
+    "LAContext",
+    "LAError",
 ] }
 
 [target.'cfg(target_os = "watchos")'.dependencies]

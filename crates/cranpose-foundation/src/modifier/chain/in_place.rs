@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use super::{
     DynModifierElement, ElementMaker, EntryElement, ModifierNodeContext, ModifierNodeEntry,
     request_update_auto_invalidations,
@@ -63,7 +61,7 @@ pub(super) fn update_entry_in_place(
             };
             if !same_element || element.requires_update() {
                 maker.update_node(&mut *node.borrow_mut());
-                *held = EntryElement::new(Rc::clone(element), maker);
+                *held = EntryElement::new(element, maker);
                 request_update_auto_invalidations(&**element, context, capabilities);
                 node.borrow()
                     .for_each_delegate(&mut |_| outcome = InPlace::Relink);

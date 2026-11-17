@@ -2,7 +2,8 @@ use std::{cell::Cell, rc::Rc};
 
 use cranpose_core::NodeId;
 use cranpose_foundation::{
-    DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
+    DelegatableNode, DynModifierElement, ModifierNode, ModifierNodeElement, NodeCapabilities,
+    NodeState,
 };
 use cranpose_ui_graphics::{
     BlurredEdgeTreatment, Brush, ColorFilter, CutDirection, Dp, DrawPrimitive,
@@ -11,8 +12,8 @@ use cranpose_ui_graphics::{
 
 use super::{
     Alignment, BlendMode, Color, CompositingStrategy, DimensionConstraint, DpOffset, DrawCommand,
-    DynModifierElement, EdgeInsets, GlassMaterial, GraphicsLayer, HorizontalAlignment, LayerShape,
-    Modifier, ModifierChainHandle, Point, RenderEffect, RoundedCornerShape, RuntimeShader,
+    EdgeInsets, GlassMaterial, GraphicsLayer, HorizontalAlignment, LayerShape, Modifier,
+    ModifierChainHandle, Point, RenderEffect, RoundedCornerShape, RuntimeShader,
     SemanticsConfiguration, Shadow, Size, TransformOrigin, VerticalAlignment,
     collect_slices_from_modifier, inspector_metadata, modifier_element,
 };
@@ -263,7 +264,7 @@ fn modifiers_joined_in_any_grouping_or_from_shared_chains_are_equal() {
         test_fingerprint_element(11, NodeCapabilities::DRAW, false),
         test_fingerprint_element(12, NodeCapabilities::SEMANTICS, false),
     ];
-    let one = |index: usize| Modifier::from_dyn_element(Rc::clone(&elements[index]));
+    let one = |index: usize| Modifier::from_dyn_element(elements[index].clone());
 
     let left = one(0).then(one(1)).then(one(2));
     let right = one(0).then(one(1).then(one(2)));
@@ -2121,13 +2122,7 @@ fn modifiers_without_inspector_metadata_carry_no_inspector_list() {
         .then(Modifier::with_element(TestDelegatingElement));
     for modifier in [&first, &joined] {
         assert!(
-            matches!(
-                modifier.kind,
-                super::ModifierKind::Single {
-                    inspector: None,
-                    ..
-                }
-            ),
+            modifier.inspector().is_none(),
             "an empty inspector list costs an allocation on every modifier"
         );
     }

@@ -15,6 +15,7 @@ use cranpose_core::{MutableState, NodeId, RuntimeCell, StateId, collections::map
 use cranpose_macros::composable;
 
 use super::diagnostics;
+use crate::{RunningScroll, ScrollId, ScrollStop};
 
 mod scroll_position;
 
@@ -114,9 +115,8 @@ pub type LazySettlePolicy = Rc<dyn Fn(f32, f32) -> f32>;
 struct LazyListStateInner {
     scroll_to_be_consumed: f32,
     settle_policy: Option<LazySettlePolicy>,
-    /// The id of the running scroll animation and how to stop it.
-    scroll_animation: Option<(u64, Rc<dyn Fn()>)>,
-    next_scroll_animation: u64,
+    /// The scroll that moves the list now and how to stop it.
+    running_scroll: RunningScroll,
     /// Whether the scroll modifier's drag, fling or settle moves the list.
     gesture_scrolling: bool,
     /// The first visible item and its offset where the scroll in progress
@@ -214,8 +214,7 @@ impl LazyListState {
             inner: RuntimeCell::new(RefCell::new(LazyListStateInner {
                 scroll_to_be_consumed: 0.0,
                 settle_policy: None,
-                scroll_animation: None,
-                next_scroll_animation: 1,
+                running_scroll: RunningScroll::default(),
                 gesture_scrolling: false,
                 scroll_start: None,
                 pending_scroll_to_index: None,
@@ -408,47 +407,39 @@ impl LazyListState {
             .flatten()
     }
 
-    /// Registers a scroll animation, which `stop` stops, in place of the one
-    /// running, which it stops, and returns the new one's id. A press on the
-    /// list stops it too.
-    pub fn start_scroll_animation(&self, stop: Rc<dyn Fn()>) -> u64 {
-        let Some((id, previous)) = self.inner.try_with(|cell| {
-            let mut inner = cell.borrow_mut();
-            let id = inner.next_scroll_animation;
-            inner.next_scroll_animation += 1;
-            (id, inner.scroll_animation.replace((id, stop)))
-        }) else {
-            return 0;
-        };
-        if let Some((_, stop)) = previous {
-            stop();
+    /// Makes the scroll that `stop` stops the running scroll of the list.
+    /// The scroll that ran before stops. The running scroll is an animation
+    /// that the app starts or a motion after a drag. A press on the list
+    /// stops it. [`Self::scroll_to_item`] and [`Self::stop_scroll_animation`]
+    /// stop it too. Returns its id, or `None` once the slot that held this
+    /// state was released.
+    pub fn start_scroll_animation(&self, stop: impl FnOnce() + 'static) -> Option<ScrollId> {
+        let (id, previous) = self
+            .inner
+            .try_with(|cell| cell.borrow_mut().running_scroll.start(stop))?;
+        if let Some(previous) = previous {
+            previous.run();
         }
         self.refresh_scroll_in_progress();
-        id
+        Some(id)
     }
 
-    /// Forgets the scroll animation `id` once it ended on its own.
-    pub fn end_scroll_animation(&self, id: u64) {
-        let _ = self.inner.try_with(|cell| {
-            let mut inner = cell.borrow_mut();
-            if inner
-                .scroll_animation
-                .as_ref()
-                .is_some_and(|(running, _)| *running == id)
-            {
-                inner.scroll_animation = None;
-            }
-        });
+    /// Forgets the scroll `id` once it ended on its own.
+    pub fn end_scroll_animation(&self, id: ScrollId) {
+        let _ = self
+            .inner
+            .try_with(|cell| cell.borrow_mut().running_scroll.end(id));
         self.refresh_scroll_in_progress();
     }
 
-    /// Stops the running scroll animation, and returns whether one ran.
+    /// Stops the running scroll and returns whether one ran. The running
+    /// scroll is an animation or a motion after a drag.
     pub fn stop_scroll_animation(&self) -> bool {
         let running = self
             .inner
-            .try_with(|cell| cell.borrow_mut().scroll_animation.take())
+            .try_with(|cell| cell.borrow_mut().running_scroll.take())
             .flatten();
-        let stopped = running.map(|(_, stop)| stop()).is_some();
+        let stopped = running.map(ScrollStop::run).is_some();
         self.refresh_scroll_in_progress();
         stopped
     }
@@ -502,7 +493,7 @@ impl LazyListState {
         }
         let Some(moving) = self.inner.try_with(|cell| {
             let inner = cell.borrow();
-            inner.gesture_scrolling || inner.scroll_animation.is_some()
+            inner.gesture_scrolling || inner.running_scroll.is_running()
         }) else {
             return;
         };
@@ -517,6 +508,7 @@ impl LazyListState {
     }
 
     /// Puts the item at `index` at the edge of the start content padding.
+    /// It stops the running scroll first, as Compose's `scrollToItem` does.
     ///
     /// # Arguments
     /// * `index` - The index of the item to scroll to
@@ -525,6 +517,7 @@ impl LazyListState {
         if !self.inner.is_alive() {
             return;
         }
+        self.stop_scroll_animation();
         if diagnostics::telemetry_enabled() {
             log::warn!(
                 "[lazy-measure-telemetry] scroll_to_item request index={index} offset={scroll_offset:.2}"
@@ -1025,9 +1018,9 @@ impl LazyListState {
     }
 
     /// Runs the invalidation callbacks `cell` holds, from a copy of the
-    /// list: a callback may register or remove callbacks.
+    /// list: a callback may register or remove callbacks. A list has one or two.
     fn run_invalidate_callbacks(cell: &RefCell<LazyListStateInner>) {
-        let callbacks: Vec<_> = cell
+        let callbacks: smallvec::SmallVec<[_; 2]> = cell
             .borrow()
             .invalidate_callbacks
             .iter()

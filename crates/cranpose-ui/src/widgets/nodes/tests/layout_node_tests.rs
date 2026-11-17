@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use cranpose_core::Node;
 use cranpose_ui_graphics::Size as GeometrySize;
-use cranpose_ui_layout::{Constraints, Measurable, MeasureResult, MeasureScope};
+use cranpose_ui_layout::{Constraints, Measurables, MeasureResult, MeasureScope};
 
 use super::*;
 use crate::{
@@ -29,7 +29,7 @@ impl MeasurePolicy for TestMeasurePolicy {
     fn measure(
         &self,
         _scope: &dyn MeasureScope,
-        _measurables: &[Box<dyn Measurable>],
+        _measurables: Measurables<'_>,
         _constraints: Constraints,
     ) -> MeasureResult {
         MeasureResult::new(
@@ -41,19 +41,19 @@ impl MeasurePolicy for TestMeasurePolicy {
         )
     }
 
-    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn min_intrinsic_width(&self, _measurables: Measurables<'_>, _height: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn max_intrinsic_width(&self, _measurables: Measurables<'_>, _height: f32) -> f32 {
         0.0
     }
 
-    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+    fn min_intrinsic_height(&self, _measurables: Measurables<'_>, _width: f32) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+    fn max_intrinsic_height(&self, _measurables: Measurables<'_>, _width: f32) -> f32 {
         0.0
     }
 }
@@ -591,4 +591,23 @@ fn a_node_its_pass_clears_and_never_places_is_left_unplaced() {
         vec![NodeId(7)],
         "placing a node an earlier pass left unplaced reports it, where it was or not"
     );
+}
+
+// A removed slot container's shell shares the pool of the layout nodes: a
+// node an emit fills from it is a plain node, as a node made new is.
+#[test]
+fn a_filled_shell_of_a_virtual_node_is_a_plain_node() {
+    let mut shell = LayoutNode::new_virtual();
+    shell.prepare_for_recycle();
+    assert!(shell.is_virtual(), "a shell keeps the kind of its node");
+    shell.fill(
+        &Modifier::empty(),
+        Rc::new(TestMeasurePolicy),
+        LayoutEnvironment::default(),
+    );
+    let made = fresh_node();
+    assert!(!shell.is_virtual());
+    assert_eq!(shell.needs_semantics(), made.needs_semantics());
+    assert_eq!(shell.needs_redraw(), made.needs_redraw());
+    assert_eq!(shell.needs_measure(), made.needs_measure());
 }

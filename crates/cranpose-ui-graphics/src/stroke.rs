@@ -579,10 +579,10 @@ impl LineGeometry {
     /// in. A segment of no length points along +X, so its round or square
     /// cap still draws a dot.
     pub fn frame(&self) -> LineFrame {
-        let (dx, dy) = (self.end.x - self.start.x, self.end.y - self.start.y);
-        let length = (dx * dx + dy * dy).sqrt();
+        let delta = self.end - self.start;
+        let length = delta.distance();
         let direction = if length > 0.0 {
-            Point::new(dx / length, dy / length)
+            Point::new(delta.x / length, delta.y / length)
         } else {
             Point::new(1.0, 0.0)
         };

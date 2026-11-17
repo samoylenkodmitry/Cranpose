@@ -1,11 +1,7 @@
 //! A brush laid over the rect it fills, for the colors of many points.
 
 use crate::{
-    brush::Brush,
-    color::Color,
-    geometry::{Point, Rect},
-    render_effect::TileMode,
-    whole,
+    brush::Brush, color::Color, geometry::Rect, point::Point, render_effect::TileMode, whole,
 };
 
 /// A [`Brush`] laid over the rect it fills: the color of each point is the

@@ -1567,7 +1567,7 @@ impl GpuRenderer {
     ) -> Result<(), String> {
         let (width, height) = viewport;
         let (output_mode, output_view, image) = (output.mode, output.view, output.image);
-        self.frame_damages.note(packet.frame_id, packet.damage);
+        self.frame_damages.note(packet.frame_id, &packet.damage);
         let cancel_reason = if packet.renderer_epoch != self.renderer_epoch {
             Some(CancelReason::RendererEpoch)
         } else if packet.surface_epoch != surface_epoch {

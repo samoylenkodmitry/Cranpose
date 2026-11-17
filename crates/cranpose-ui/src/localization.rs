@@ -188,7 +188,7 @@ pub(crate) fn apply_shared_text_locale(
         }
         let mut made = crate::text::TextStyle::clone(&style);
         made.span_style.locale_list = Some(locales.clone());
-        let made = crate::text_modifier_node::shared_text_style(made);
+        let made = crate::text_modifier_node::shared_text_style(&made);
         std::sync::Arc::clone(&localized.keep((style, locales, made)).2)
     })
 }

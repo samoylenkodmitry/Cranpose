@@ -39,7 +39,21 @@ impl TransparentObserverMutableSnapshot {
         write_observer: Option<WriteObserver>,
         parent: Option<Weak<Self>>,
     ) -> Rc<Self> {
-        let fresh = Self {
+        // A recycled snapshot is set up again field by field: building a new
+        // value and moving it in copies it whole.
+        if let Some(mut recycled) = recycled
+            && let Some(target) = Rc::get_mut(&mut recycled)
+        {
+            target
+                .state
+                .restart_unpinned(id, invalid, read_observer, write_observer);
+            target.parent = parent;
+            *target.nested_count.get_mut() = 0;
+            *target.applied.get_mut() = false;
+            *target.reusable.get_mut() = true;
+            return recycled;
+        }
+        Rc::new(Self {
             state: SnapshotState::new_with_pinning(
                 id,
                 invalid,
@@ -52,15 +66,7 @@ impl TransparentObserverMutableSnapshot {
             nested_count: Cell::new(0),
             applied: Cell::new(false),
             reusable: Cell::new(true),
-        };
-        if let Some(mut recycled) = recycled
-            && let Some(target) = Rc::get_mut(&mut recycled)
-        {
-            *target = fresh;
-            recycled
-        } else {
-            Rc::new(fresh)
-        }
+        })
     }
 
     /// Check if this snapshot can be reused for observer changes.

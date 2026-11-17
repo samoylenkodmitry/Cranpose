@@ -8,7 +8,7 @@ use cranpose_render_common::{
 };
 use cranpose_ui::{BoxWithConstraints, Layout};
 use cranpose_ui_layout::{
-    Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
+    Constraints, Measurables, MeasurePolicy, MeasureResult, MeasureScope, Placement,
 };
 
 use super::*;
@@ -100,7 +100,7 @@ impl MeasurePolicy for PeekPolicy {
     fn measure(
         &self,
         _scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::with_capacity(measurables.len());
@@ -128,19 +128,19 @@ impl MeasurePolicy for PeekPolicy {
         )
     }
 
-    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+    fn min_intrinsic_width(&self, _measurables: Measurables<'_>, _height: f32) -> f32 {
         100.0
     }
 
-    fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+    fn max_intrinsic_width(&self, measurables: Measurables<'_>, height: f32) -> f32 {
         self.min_intrinsic_width(measurables, height)
     }
 
-    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+    fn min_intrinsic_height(&self, _measurables: Measurables<'_>, _width: f32) -> f32 {
         40.0
     }
 
-    fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+    fn max_intrinsic_height(&self, measurables: Measurables<'_>, width: f32) -> f32 {
         self.min_intrinsic_height(measurables, width)
     }
 }

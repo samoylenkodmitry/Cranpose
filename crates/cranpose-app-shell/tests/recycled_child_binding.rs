@@ -10,7 +10,7 @@ use cranpose_macros::composable;
 use cranpose_ui::{Column, ColumnSpec, Layout, Modifier};
 use cranpose_ui_graphics::Size;
 use cranpose_ui_layout::{
-    Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
+    Constraints, Measurables, MeasurePolicy, MeasureResult, MeasureScope, Placement,
 };
 
 mod support;
@@ -42,7 +42,7 @@ impl MeasurePolicy for Policy {
     fn measure(
         &self,
         _scope: &dyn MeasureScope,
-        measurables: &[Box<dyn Measurable>],
+        measurables: Measurables<'_>,
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
@@ -54,7 +54,6 @@ impl MeasurePolicy for Policy {
             Self::Gate { open } => {
                 if open {
                     let child = measurables[0].measure(constraints);
-                    child.place(0.0, 0.0);
                     placements.push(Placement::new(child.node_id(), 0.0, 0.0, 0.0));
                 }
                 Size {
@@ -66,19 +65,19 @@ impl MeasurePolicy for Policy {
         MeasureResult::new(size, placements)
     }
 
-    fn min_intrinsic_width(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
+    fn min_intrinsic_width(&self, _: Measurables<'_>, _: f32) -> f32 {
         self.intrinsic_size().width
     }
 
-    fn max_intrinsic_width(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
+    fn max_intrinsic_width(&self, _: Measurables<'_>, _: f32) -> f32 {
         self.intrinsic_size().width
     }
 
-    fn min_intrinsic_height(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
+    fn min_intrinsic_height(&self, _: Measurables<'_>, _: f32) -> f32 {
         self.intrinsic_size().height
     }
 
-    fn max_intrinsic_height(&self, _: &[Box<dyn Measurable>], _: f32) -> f32 {
+    fn max_intrinsic_height(&self, _: Measurables<'_>, _: f32) -> f32 {
         self.intrinsic_size().height
     }
 }
