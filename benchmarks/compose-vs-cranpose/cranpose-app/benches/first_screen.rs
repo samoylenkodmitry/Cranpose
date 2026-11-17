@@ -16,67 +16,31 @@
 //! `--toggle-collect=*first_screen*` counts the start alone and
 //! `--toggle-collect=*steady_frames*` the frames after it.
 
-use std::{
-    alloc::System,
-    hint::black_box,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{alloc::System, hint::black_box, sync::Arc, time::Instant};
 
 use cranpose::{launch_args_from_command_line, set_platform_launch_args};
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
-use perf_compare::PerfCompareApp;
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
+
+#[path = "support/desktop_window.rs"]
+mod desktop_window;
+
+use desktop_window::{DesktopWindow, arg, arg_or};
 
 #[global_allocator]
 static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
-const FRAME: Duration = Duration::from_nanos(16_666_667);
-const FACES: [&[u8]; 3] = [
-    include_bytes!("../../fonts/Roboto-Regular.ttf"),
-    include_bytes!("../../fonts/Roboto-Medium.ttf"),
-    include_bytes!("../../fonts/Roboto-Bold.ttf"),
-];
-
-fn arg(name: &str) -> Option<String> {
-    let prefix = format!("--{name}=");
-    std::env::args().find_map(|arg| arg.strip_prefix(&prefix).map(str::to_owned))
-}
-
-fn arg_or<T: std::str::FromStr>(name: &str, default: T) -> T {
-    arg(name)
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
-}
-
-fn frame(shell: &mut AppShell<WgpuRenderer>, (width, height): (u32, u32)) {
-    shell.update_after_exact_interval(FRAME);
-    let renderer = shell.renderer();
-    if let Some(packet) = renderer.build_frame_packet_for_tests(width, height) {
-        renderer.return_held_packet_for_tests(packet);
-    }
+#[inline(never)]
+fn first_screen(window: DesktopWindow) -> AppShell<WgpuRenderer> {
+    window.start()
 }
 
 #[inline(never)]
-fn first_screen(size: (u32, u32), viewport: (f32, f32), density: f32) -> AppShell<WgpuRenderer> {
-    let mut shell = AppShell::new_with_size_and_density(
-        WgpuRenderer::new(&FACES),
-        cranpose_core::location_key(file!(), line!(), column!()),
-        PerfCompareApp,
-        size,
-        viewport,
-        density,
-    );
-    frame(&mut shell, size);
-    shell
-}
-
-#[inline(never)]
-fn steady_frames(shell: &mut AppShell<WgpuRenderer>, size: (u32, u32), frames: usize) {
+fn steady_frames(shell: &mut AppShell<WgpuRenderer>, window: DesktopWindow, frames: usize) {
     for index in 0..frames {
         let start = Instant::now();
-        frame(shell, size);
+        window.frame(shell);
         println!(
             "frame {} {:.2} ms",
             index + 1,
@@ -95,15 +59,10 @@ fn main() {
         [format!("--scenario={screen}"), format!("--tier={tier}")],
         false,
     )));
-    let (width, height) = perf_data::DESKTOP_WINDOW;
-    let viewport = (width as f32, height as f32);
-    let size = (
-        (viewport.0 * density).round() as u32,
-        (viewport.1 * density).round() as u32,
-    );
+    let window = DesktopWindow::new(density);
     let region = Region::new(GLOBAL);
     let start = Instant::now();
-    let mut shell = first_screen(size, viewport, density);
+    let mut shell = first_screen(window);
     let elapsed = start.elapsed();
     let stats = region.change();
     println!(
@@ -112,7 +71,7 @@ fn main() {
         stats.allocations + stats.reallocations,
         stats.bytes_allocated
     );
-    steady_frames(&mut shell, size, frames);
+    steady_frames(&mut shell, window, frames);
     black_box(&mut shell);
     // The shell's teardown is no part of a start.
     std::mem::forget(shell);
