@@ -17,7 +17,7 @@ use cranpose_ui::{
     StrokeCap,
 };
 
-use super::stage::stage_camera;
+use super::{stage::stage_camera, whole};
 
 // On the sheet, per pixel of height above it, how far a shadow lands from
 // what casts it: the sun is low in the upper left.
@@ -38,6 +38,10 @@ const LEAF: Color = Color(0.0, 0.0, 0.0, 1.0);
 struct Seeded(u32);
 
 impl Seeded {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the unit fraction narrows to the f32 the tree grows with"
+    )]
     fn next(&mut self) -> f32 {
         self.0 = self.0.wrapping_add(0x6D2B_79F5);
         let mut t = self.0;
@@ -144,11 +148,11 @@ impl Grower {
         depth: u32,
     ) {
         let unit = self.unit;
-        let segments = ((length / 0.022).round() as usize).max(5);
+        let segments = whole::count((length / 0.022).round()).max(5);
         let step = length / segments as f32;
         let mut bend = self.random.between(-0.4, 0.4) / segments as f32 * 2.0;
         let mut side = if self.random.next() < 0.5 { 1.0 } else { -1.0 };
-        let leaf_every = ((growth.gap / step).round() as usize).max(1);
+        let leaf_every = whole::count((growth.gap / step).round()).max(1);
         let (mut at, mut angle) = (from, angle);
         for i in 0..segments {
             let share = (i + 1) as f32 / segments as f32;

@@ -47,11 +47,12 @@ fn bent_grid() -> Mesh {
             uvs.push([content.x / PANEL.width, content.y / PANEL.height]);
         }
     }
+    let stride = u32::try_from(columns + 1).expect("a small grid");
     let mut indices = Vec::with_capacity(columns * rows * 6);
     for row in 0..rows {
         for column in 0..columns {
-            let top_left = (row * (columns + 1) + column) as u32;
-            let bottom_left = top_left + columns as u32 + 1;
+            let top_left = u32::try_from(row * (columns + 1) + column).expect("a small grid");
+            let bottom_left = top_left + stride;
             indices.extend([
                 top_left,
                 bottom_left,

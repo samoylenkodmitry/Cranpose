@@ -27,6 +27,7 @@ use super::{
     stage::{SceneStage, STAGE_LIGHT},
     stamp::{stamp_paper, Lift, Stamp, StampLayout, CREAM, INK, MARKER},
     stamp_art::STAMP_TABS,
+    whole,
 };
 use crate::app::demo_tab::local_active_tab;
 
@@ -154,8 +155,8 @@ impl SheetLayout {
                 name_size: (board.name * u).max(10.0),
                 hole: board.hole * u,
                 holes: (
-                    (stamp.width / hole_pitch).round() as u32,
-                    (stamp.height / hole_pitch).round() as u32,
+                    whole::count((stamp.width / hole_pitch).round()),
+                    whole::count((stamp.height / hole_pitch).round()),
                 ),
             },
             grid,
@@ -338,7 +339,7 @@ fn draw_sheet(scope: &mut dyn cranpose_ui::DrawScope, layout: SheetLayout) {
     paper.line_to(Point::new(0.0, sheet.height));
     paper.close();
     let (across, down) = layout.stamp.holes;
-    let holes = (across * layout.columns as u32, down * layout.rows as u32);
+    let holes = (across * layout.columns, down * layout.rows);
     perforated(
         &mut paper,
         grid,

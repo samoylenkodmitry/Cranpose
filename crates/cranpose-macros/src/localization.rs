@@ -72,6 +72,10 @@ impl Parse for CatalogInput {
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a macro reads the manifest directory of the crate it expands in"
+)]
 fn absolute_path(path: &LitStr) -> syn::Result<PathBuf> {
     let root = env::var_os("CARGO_MANIFEST_DIR")
         .ok_or_else(|| syn::Error::new(path.span(), "CARGO_MANIFEST_DIR is unavailable"))?;

@@ -10,7 +10,7 @@ use cranpose_ui::{
     Point, Size,
 };
 
-use super::walk::ease;
+use super::{grid_mesh, walk::ease};
 
 // The sag is smooth, so a coarse grid follows it.
 const SHEET_COLUMNS: usize = 64;
@@ -89,23 +89,13 @@ impl Sheet {
                 })
             })
             .collect();
-        let corner = |column: usize, row: usize| (row * columns + column) as u32;
-        let indices = (0..SHEET_ROWS)
-            .flat_map(|row| {
-                (0..SHEET_COLUMNS).flat_map(move |column| {
-                    let (a, b) = (corner(column, row), corner(column + 1, row));
-                    let (c, d) = (corner(column, row + 1), corner(column + 1, row + 1));
-                    [a, c, b, b, c, d]
-                })
-            })
-            .collect();
         Self {
             size,
             depth,
             made: None,
             uvs,
             normals: vec![[0.0, 0.0, -1.0]; columns * rows],
-            indices,
+            indices: grid_mesh::quads(columns, rows),
         }
     }
 

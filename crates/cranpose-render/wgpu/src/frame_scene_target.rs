@@ -159,6 +159,11 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         }
         let (left, top, width, height) = scene_scissor(scene, None, page)?;
         // A pixel more than the scene's size holds it at any offset.
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "an extent and the scale are lengths, and the page's size clamps what the saturating cast gives"
+        )]
         let fit = |extent: f32, page: u32| ((extent * pass.scale).ceil() as u32 + 1).min(page);
         let size = (
             fit(scene.rect.width, page.size.0),

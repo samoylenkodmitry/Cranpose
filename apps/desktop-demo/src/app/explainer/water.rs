@@ -9,8 +9,10 @@
 use cranpose_ui::{space::Mesh, Point, Size};
 
 use super::{
+    grid_mesh,
     ripples::{Disturbance, Ripples},
     swell::{Swell, SwellGrid},
+    whole,
 };
 
 // The grid's cell, in pixels, unless the stage is so large that this
@@ -68,16 +70,17 @@ impl Water {
     pub(super) fn new(shape: PoolShape) -> Self {
         let size = shape.size;
         let cell = CELL.max((size.width * size.height / MOST_POINTS).sqrt());
-        let columns = (size.width / cell).ceil() as usize + 1;
-        let rows = (size.height / cell).ceil() as usize + 1;
+        let columns = whole::count((size.width / cell).ceil()) + 1;
+        let rows = whole::count((size.height / cell).ceil()) + 1;
         let swell = Swell::new();
         let mut grid = SwellGrid::default();
         swell.lay_grid(&mut grid, (columns, rows), cell, shape.look);
         let mut indices = Vec::with_capacity((columns - 1) * (rows - 1) * 6);
+        let stride = grid_mesh::vertex(columns);
         for row in 0..rows - 1 {
             for column in 0..columns - 1 {
-                let top_left = (row * columns + column) as u32;
-                let bottom_left = top_left + columns as u32;
+                let top_left = grid_mesh::vertex(row * columns + column);
+                let bottom_left = top_left + stride;
                 // Diagonals alternate, so the bend has no grain.
                 if (row + column) % 2 == 0 {
                     indices.extend([

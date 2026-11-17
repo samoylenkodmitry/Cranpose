@@ -8,6 +8,8 @@ use cranpose_ui::{
     Size,
 };
 
+use super::{grid_mesh, whole};
+
 // Steps of the simulation each second. Frames take as many steps as fit.
 const STEPS_PER_SECOND: f32 = 120.0;
 // The most steps one frame takes: a frame that comes late does not stall
@@ -48,19 +50,19 @@ pub(super) struct ClothHang {
 
 impl ClothHang {
     // The hang's numbers bit for bit: equal bits make the same cloth.
-    pub(super) fn bits(&self) -> [u32; 10] {
-        [
-            self.content.width.to_bits(),
-            self.content.height.to_bits(),
-            self.top_left.x.to_bits(),
-            self.top_left.y.to_bits(),
-            self.top_left.z.to_bits(),
-            self.wall.to_bits(),
-            self.span.to_bits(),
-            self.clips as u32,
-            self.columns as u32,
-            self.rows as u32,
-        ]
+    pub(super) fn bits(&self) -> ([u32; 7], [usize; 3]) {
+        (
+            [
+                self.content.width.to_bits(),
+                self.content.height.to_bits(),
+                self.top_left.x.to_bits(),
+                self.top_left.y.to_bits(),
+                self.top_left.z.to_bits(),
+                self.wall.to_bits(),
+                self.span.to_bits(),
+            ],
+            [self.clips, self.columns, self.rows],
+        )
     }
 }
 
@@ -236,7 +238,7 @@ impl Cloth {
 // The springs between the cloth's points: along each row and column, across
 // each cell and over every second point, which resists bending.
 fn links((columns, rows): (usize, usize), (rest_x, rest_y): (f32, f32)) -> Vec<Link> {
-    let index = |column: usize, row: usize| (row * columns + column) as u32;
+    let index = |column: usize, row: usize| grid_mesh::vertex(row * columns + column);
     let mut links = Vec::new();
     let mut link = |a: (usize, usize), b: (usize, usize), rest: f32, stiffness: f32| {
         links.push(Link {
@@ -303,22 +305,7 @@ fn fine_grid(columns: usize, rows: usize) -> (Vec<[f32; 2]>, Vec<u32>) {
             ]);
         }
     }
-    let mut indices = Vec::with_capacity((fine_columns - 1) * (fine_rows - 1) * 6);
-    for row in 0..fine_rows - 1 {
-        for column in 0..fine_columns - 1 {
-            let top_left = (row * fine_columns + column) as u32;
-            let bottom_left = top_left + fine_columns as u32;
-            indices.extend([
-                top_left,
-                bottom_left,
-                top_left + 1,
-                top_left + 1,
-                bottom_left,
-                bottom_left + 1,
-            ]);
-        }
-    }
-    (uvs, indices)
+    (uvs, grid_mesh::quads(fine_columns, fine_rows))
 }
 
 // The columns of the top row the clips hold, evenly spread from the first
@@ -327,7 +314,7 @@ fn clip_columns(hang: &ClothHang) -> Vec<usize> {
     (0..hang.clips)
         .map(|clip| {
             let share = clip as f32 / (hang.clips - 1) as f32;
-            (share * (hang.columns - 1) as f32).round() as usize
+            whole::count((share * (hang.columns - 1) as f32).round())
         })
         .collect()
 }
@@ -371,16 +358,18 @@ fn fine_size(columns: usize, rows: usize) -> (usize, usize) {
 fn spline_at(points: &[Vec3], stride: usize, at: f32) -> Vec3 {
     let count = points.len().div_ceil(stride);
     let last = count as isize - 1;
+    let point_at =
+        |index: isize| points[usize::try_from(index).expect("a point of the curve") * stride];
     let point = |index: isize| -> Vec3 {
         if index < 0 {
-            points[0] * 2.0 - points[(-index) as usize * stride]
+            points[0] * 2.0 - point_at(-index)
         } else if index > last {
-            points[last as usize * stride] * 2.0 - points[(2 * last - index) as usize * stride]
+            point_at(last) * 2.0 - point_at(2 * last - index)
         } else {
-            points[index as usize * stride]
+            point_at(index)
         }
     };
-    let base = (at.floor() as isize).min(last);
+    let base = whole::offset(at.floor()).min(last);
     let t = at - base as f32;
     let (t2, t3) = (t * t, t * t * t);
     let weights = [

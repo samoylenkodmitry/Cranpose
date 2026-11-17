@@ -31,16 +31,14 @@ pub fn generate_android_locale_config(manifest: &Path) -> Result<String, String>
 pub fn update_ios_localizations(plist: &str, manifest: &Path) -> Result<String, String> {
     let languages = load_locale_manifest(manifest)?;
     let key = "<key>CFBundleLocalizations</key>";
-    let start = plist
-        .find(key)
+    let (head, after_key) = plist
+        .split_once(key)
         .ok_or("Info.plist has no CFBundleLocalizations key")?;
-    let array_start = plist[start + key.len()..]
-        .find("<array>")
-        .map(|offset| start + key.len() + offset)
+    let (between, array_and_tail) = after_key
+        .split_once("<array>")
         .ok_or("CFBundleLocalizations has no array")?;
-    let array_end = plist[array_start..]
-        .find("</array>")
-        .map(|offset| array_start + offset + "</array>".len())
+    let (_, tail) = array_and_tail
+        .split_once("</array>")
         .ok_or("CFBundleLocalizations array is not closed")?;
     let mut array = String::from("<array>\n");
     for language in languages {
@@ -48,9 +46,11 @@ pub fn update_ios_localizations(plist: &str, manifest: &Path) -> Result<String, 
     }
     array.push_str("\t</array>");
     let mut output = String::with_capacity(plist.len() + array.len());
-    output.push_str(&plist[..array_start]);
+    output.push_str(head);
+    output.push_str(key);
+    output.push_str(between);
     output.push_str(&array);
-    output.push_str(&plist[array_end..]);
+    output.push_str(tail);
     Ok(output)
 }
 

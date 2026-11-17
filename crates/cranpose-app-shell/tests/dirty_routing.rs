@@ -76,7 +76,7 @@ fn Screen(show_window: Rc<RefCell<Option<MutableState<bool>>>>, window: Rc<TestW
     Box(modifier, BoxSpec::default(), || Pane());
 }
 
-fn first_window(entries: Vec<WindowRootEntry>) -> NodeId {
+fn first_window(entries: &[WindowRootEntry]) -> NodeId {
     entries.first().expect("the window root is attached").node
 }
 
@@ -93,7 +93,7 @@ fn dirty_routing_tracks_a_window_root_that_detaches_and_attaches_again() {
             move || Screen(Rc::clone(&show_window), Rc::clone(&window))
         },
     );
-    let root = first_window(shell.window_roots());
+    let root = first_window(&shell.window_roots());
     shell.add_window_surface(root, HitRenderer::default(), (200, 100), (200.0, 100.0));
     shell.update();
     assert!(
@@ -125,7 +125,7 @@ fn dirty_routing_tracks_a_window_root_that_detaches_and_attaches_again() {
 
     show.set(true);
     shell.update();
-    assert_eq!(first_window(shell.window_roots()), root);
+    assert_eq!(first_window(&shell.window_roots()), root);
     assert!(
         !shell
             .surface(RootId::Window(root))

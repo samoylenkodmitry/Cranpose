@@ -49,6 +49,10 @@ pub(super) struct Swell {
 }
 
 // A number from 0 to 1 that stays with `i`.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the fraction narrows to the f32 the tables keep"
+)]
 fn seeded(i: usize) -> f32 {
     let x = ((i as f64) * 127.1 + 311.7).sin() * 43_758.545_3;
     (x - x.floor()) as f32
@@ -163,21 +167,23 @@ impl Swell {
         let mut crest = String::new();
         for wave in &self.waves {
             let (dx, dy) = wave.direction;
-            let _ = writeln!(
+            writeln!(
                 travel,
                 "    vec4<f32>({:.7}, {:.7}, {:.7}, {:.7}),",
                 dx * wave.number,
                 dy * wave.number,
                 wave.speed,
                 wave.phase
-            );
-            let _ = writeln!(
+            )
+            .expect("a String takes every write");
+            writeln!(
                 crest,
                 "    vec4<f32>({:.7}, {:.7}, {:.1}, 0.0),",
                 dx * wave.slope,
                 dy * wave.slope,
                 wave.gusty
-            );
+            )
+            .expect("a String takes every write");
         }
         format!(
             "const SWELL_WAVES: u32 = {WAVES}u;\n\

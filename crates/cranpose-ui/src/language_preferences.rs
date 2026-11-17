@@ -158,10 +158,10 @@ pub fn ProvideLanguagePreferences(
         }
     });
     let _observed = state.get().revision;
-    let translator = rememberKeyed(
-        (application.clone(), application.revision()),
-        |(application, _)| application.translator(),
-    );
+    let revision = application.revision();
+    let translator = rememberKeyed((application, revision), |(application, _)| {
+        application.translator()
+    });
     CompositionLocalProvider([local_localization().provides(Some(controller))], || {
         ProvideTranslator(translator, content);
     });

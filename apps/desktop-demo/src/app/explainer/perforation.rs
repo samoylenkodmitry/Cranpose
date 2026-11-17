@@ -5,6 +5,8 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 
 use cranpose_ui::{Path, Point, Rect};
 
+use super::whole;
+
 // The way a perforated outline runs. The holes bite into the paper on the
 // right of the way: a clockwise outline is a stamp's own edge; a
 // counter-clockwise one inside a larger outline is the edge of the hole a
@@ -20,7 +22,7 @@ pub(super) enum Winding {
 pub(super) fn perforated(
     path: &mut Path,
     rect: Rect,
-    (across, down): (u32, u32),
+    (across, down): (usize, usize),
     radius: f32,
     winding: Winding,
 ) {
@@ -34,11 +36,9 @@ pub(super) fn perforated(
     for side in 0..4 {
         let (from, to) = (corners[side], corners[(side + 1) % 4]);
         let next = corners[(side + 2) % 4];
-        let holes = if from.1 == to.1 { across } else { down }.max(1);
-        let along = Point::new(
-            (to.0 - from.0) / holes as f32,
-            (to.1 - from.1) / holes as f32,
-        );
+        let rise = to.1 - from.1;
+        let holes = if rise == 0.0 { across } else { down }.max(1);
+        let along = Point::new((to.0 - from.0) / holes as f32, rise / holes as f32);
         let step = (along.x * along.x + along.y * along.y).sqrt().max(1.0e-3);
         let way = Point::new(along.x / step, along.y / step);
         if !started {
@@ -77,7 +77,7 @@ fn bite(path: &mut Path, centre: Point, radius: f32, (incoming, outgoing): (Poin
     while end >= start {
         end -= TAU;
     }
-    let pieces = ((start - end) / FRAC_PI_2).ceil().max(1.0) as u32;
+    let pieces = whole::count(((start - end) / FRAC_PI_2).ceil()).max(1);
     let sweep = (end - start) / pieces as f32;
     let handle = 4.0 / 3.0 * (sweep / 4.0).tan() * radius;
     let at = |angle: f32| {
