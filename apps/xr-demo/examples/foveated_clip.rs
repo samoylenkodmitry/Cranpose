@@ -60,7 +60,7 @@ impl Foveation {
             let padded = (optimized / 32.0).ceil() * 32.0;
             f.center_size[i] = center;
             f.center_shift[i] = shift;
-            f.padded[i] = padded as u32;
+            f.padded[i] = whole(padded);
             f.eye_size_ratio[i] = optimized / padded;
         }
         f
@@ -92,6 +92,24 @@ impl Foveation {
 }
 
 // The test picture at the point `view` of the full view, as red, green and blue.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a padded size is a positive whole number of pixels"
+)]
+fn whole(pixels: f32) -> u32 {
+    pixels as u32
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a channel value lies from 0 to 255"
+)]
+fn byte(value: f32) -> u8 {
+    value.round() as u8
+}
+
 fn picture(view: [f32; 2]) -> [f32; 3] {
     if view.iter().any(|v| !(0.0..=1.0).contains(v)) {
         return [0.0; 3];
@@ -146,7 +164,7 @@ fn frame(f: &Foveation) -> Vec<u8> {
                     }
                 }
                 let at = (py * 2 * w + eye * w + px) * 3;
-                bytes[at..at + 3].copy_from_slice(&sum.map(|v| v.round() as u8));
+                bytes[at..at + 3].copy_from_slice(&sum.map(byte));
             }
         }
     }
@@ -179,6 +197,9 @@ fn main() {
         input.write_all(&bytes).expect("ffmpeg takes the frame");
     }
     drop(input);
-    assert!(encoder.wait().expect("ffmpeg ends").success());
+    assert!(
+        encoder.wait().expect("ffmpeg ends").success(),
+        "ffmpeg encodes the clip"
+    );
     println!("wrote {OUTPUT}: {width}x{height}");
 }

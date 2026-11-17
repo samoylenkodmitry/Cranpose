@@ -90,10 +90,12 @@ fn play(decoder: &mut VideoDecoder, stop: &AtomicBool) {
                 log::warn!("xr demo: foveated picture {index} dropped: {error}");
             }
             index += 1;
-            thread::sleep(
-                (started + step * u32::try_from(index).unwrap_or(u32::MAX))
-                    .saturating_duration_since(Instant::now()),
-            );
+            let due = started + step * u32::try_from(index).unwrap_or(u32::MAX);
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the clip's own thread paces its pictures; no frame loop waits on it"
+            )]
+            thread::sleep(due.saturating_duration_since(Instant::now()));
             if stop.load(Ordering::Relaxed) {
                 return;
             }

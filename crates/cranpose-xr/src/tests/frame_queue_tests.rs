@@ -1,9 +1,7 @@
 use super::*;
 
-const MS: Duration = Duration::from_millis(1);
-
 fn at(milliseconds: u64) -> Duration {
-    MS * milliseconds as u32
+    Duration::from_millis(milliseconds)
 }
 
 #[test]

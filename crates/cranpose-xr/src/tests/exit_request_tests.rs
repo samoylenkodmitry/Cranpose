@@ -4,7 +4,7 @@ use super::*;
 
 #[test]
 fn an_exit_request_ends_the_session_once_and_stays_until_the_host_closed() {
-    let _ = take_exit_request();
+    take_exit_request();
     let mut exit = ExitRequest::default();
     assert_eq!(exit.poll(true), ExitStep::Wait, "the app asked for nothing");
     assert!(!leave(|| panic!("no request, so nothing to close")));
@@ -23,5 +23,5 @@ fn an_exit_request_ends_the_session_once_and_stays_until_the_host_closed() {
     // A request with no session ends the app at once
     request_exit();
     assert_eq!(ExitRequest::default().poll(false), ExitStep::Leave);
-    let _ = take_exit_request();
+    take_exit_request();
 }

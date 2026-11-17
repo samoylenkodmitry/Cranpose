@@ -51,7 +51,7 @@ pub(crate) fn leave(finish: impl FnOnce() -> bool) -> bool {
     }
     let landed = finish();
     if landed {
-        let _ = take_exit_request();
+        take_exit_request();
     }
     landed
 }
