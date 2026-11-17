@@ -11,26 +11,26 @@ use std::{
 use smallvec::{SmallVec, smallvec};
 
 use crate::{
-    RecomposeScope, RecomposeScopeInner, RuntimeHandle, ScopeId, StateId,
+    RuntimeHandle, ScopeId, StateId,
     collections::map::HashMap,
-    debug_trace::debug_record_scope_invalidation,
     runtime,
     snapshot_id_set::{SnapshotId, SnapshotIdSet},
     snapshot_v2::{
         AnySnapshot, GlobalSnapshot, advance_global_snapshot, allocate_record_id, current_snapshot,
     },
-    with_current_composer_opt,
 };
 
 mod derived_state;
 mod readable_record;
 mod record_chain;
 mod snapshot_state_list;
+mod state_watchers;
 
 pub(crate) use derived_state::DerivedState;
 use readable_record::{ReadNotice, StateReadFailure, readable_record_for_active_snapshot};
 pub(crate) use record_chain::RecordChain;
 pub use snapshot_state_list::SnapshotStateList;
+use state_watchers::{StateWatchers, register_current_state_scope};
 
 pub(crate) const PREEXISTING_SNAPSHOT_ID: SnapshotId = SnapshotId(1);
 
@@ -968,15 +968,6 @@ pub(crate) struct MutableStateInner<T: Clone + 'static> {
     watchers: StateWatchers,
 }
 
-// The scopes that read a state and the runtime they recompose in, whatever
-// the state's value type, so that registering a reader and invalidating the
-// readers are compiled once for every state type.
-struct StateWatchers {
-    scopes: RefCell<HashMap<ScopeId, Weak<RecomposeScopeInner>>>,
-    runtime: RuntimeHandle,
-    state_id: Cell<Option<StateId>>,
-}
-
 fn notify_subscriber_callbacks(callbacks: &RefCell<Vec<Rc<dyn Fn()>>>) {
     let registered = callbacks.borrow().len();
     for index in 0..registered {
@@ -984,14 +975,6 @@ fn notify_subscriber_callbacks(callbacks: &RefCell<Vec<Rc<dyn Fn()>>>) {
         if let Some(callback) = callback {
             callback();
         }
-    }
-}
-
-fn shrink_watchers_if_sparse(watchers: &mut HashMap<ScopeId, Weak<RecomposeScopeInner>>) {
-    let len = watchers.len();
-    let capacity = watchers.capacity();
-    if capacity > len.saturating_mul(4).max(32) {
-        watchers.shrink_to_fit();
     }
 }
 
@@ -1058,129 +1041,11 @@ impl<T: Clone + 'static> MutableStateInner<T> {
     }
 }
 
-impl StateWatchers {
-    /// Adds `scope` to the state's watchers, saying whether it was new and
-    /// whether the state thereby gained its first subscriber.
-    ///
-    /// Dead watchers still count as subscribers until pruned. They are
-    /// pruned whenever no live one is left, so a reader arriving after every
-    /// earlier one died still makes the state newly subscribed, and
-    /// otherwise only when the map is full, before the insert would grow
-    /// it: a state read by thousands of scopes, such as the density, must
-    /// not scan them all for every new reader.
-    fn register_scope(&self, subscribers: &Subscribers, scope: &RecomposeScope) -> (bool, bool) {
-        let mut watchers = self.scopes.borrow_mut();
-        let id = scope.id();
-        match watchers.get(&id) {
-            Some(existing) if existing.strong_count() > 0 => return (false, false),
-            Some(_) => {
-                watchers.remove(&id);
-                subscribers.remove_scope_observers(1);
-            }
-            None => {}
-        }
-        let any_live = watchers.values().any(|watcher| watcher.strong_count() > 0);
-        if !any_live || watchers.len() >= watchers.capacity() {
-            let before = watchers.len();
-            watchers.retain(|_, watcher| watcher.strong_count() > 0);
-            subscribers.remove_scope_observers(before - watchers.len());
-        }
-        watchers.insert(id, scope.downgrade());
-        drop(watchers);
-        (true, subscribers.add_scope_observer())
-    }
-
-    fn has_subscribers(&self, subscribers: &Subscribers) -> bool {
-        let mut watchers = self.scopes.borrow_mut();
-        let before = watchers.len();
-        watchers.retain(|_, existing| existing.upgrade().is_some());
-        subscribers.remove_scope_observers(before - watchers.len());
-        subscribers.has_subscribers()
-    }
-
-    fn forget_scope(&self, subscribers: &Subscribers, scope_id: ScopeId) {
-        let mut watchers = self.scopes.borrow_mut();
-        let removed = watchers.remove(&scope_id).is_some();
-        if removed {
-            shrink_watchers_if_sparse(&mut watchers);
-        }
-        drop(watchers);
-        subscribers.remove_scope_observers(usize::from(removed));
-    }
-
-    fn unregister_scope(&self, subscribers: &Subscribers, scope_id: ScopeId) {
-        let mut watchers = self.scopes.borrow_mut();
-        let removed = if watchers
-            .get(&scope_id)
-            .is_some_and(|weak| weak.upgrade().is_none())
-        {
-            watchers.remove(&scope_id);
-            shrink_watchers_if_sparse(&mut watchers);
-            true
-        } else {
-            false
-        };
-        drop(watchers);
-        subscribers.remove_scope_observers(usize::from(removed));
-    }
-
-    // Invalidates the live scopes that read the state, whose value type is
-    // named `type_name`, and drops the dead ones.
-    fn invalidate(&self, subscribers: &Subscribers, type_name: &'static str) {
-        // A state has few watchers: their copy stays inline.
-        let (watchers, removed_count): (SmallVec<[RecomposeScope; 4]>, usize) = {
-            let mut watchers = self.scopes.borrow_mut();
-            let before = watchers.len();
-            let mut live = SmallVec::new();
-            watchers.retain(|_, scope| {
-                if let Some(inner) = scope.upgrade() {
-                    live.push(RecomposeScope { inner });
-                    true
-                } else {
-                    false
-                }
-            });
-            let removed_count = before - watchers.len();
-            shrink_watchers_if_sparse(&mut watchers);
-            (live, removed_count)
-        };
-        subscribers.remove_scope_observers(removed_count);
-
-        for watcher in watchers {
-            debug_record_scope_invalidation(watcher.id(), self.state_id.get(), type_name);
-            if let Some(state_id) = self.state_id.get() {
-                watcher.invalidate_from_state(state_id);
-            } else {
-                watcher.invalidate();
-            }
-        }
-    }
-}
-
 impl<T: Clone + 'static> Drop for MutableStateInner<T> {
     fn drop(&mut self) {
         self.state
             .subscribers
             .remove_scope_observers(self.watchers.scopes.get_mut().len());
-    }
-}
-
-// Out of line, one function for every state type: each read of a state
-// registers its reader here.
-#[inline(never)]
-fn register_current_state_scope(watchers: &StateWatchers, subscribers: &Subscribers) {
-    let state_id = watchers.state_id.get();
-    let Some(Some((scope, read))) =
-        with_current_composer_opt(|composer| composer.note_state_read(state_id))
-    else {
-        return;
-    };
-    let (registered, became_subscribed) = watchers.register_scope(subscribers, &scope);
-    if let (crate::ScopeRead::NotReading, true, Some(state_id)) = (read, registered, state_id) {
-        scope.record_state_subscription(state_id);
-    }
-    if became_subscribed {
-        subscribers.notify_subscribers();
     }
 }
 
@@ -1641,7 +1506,7 @@ impl<T: Clone + 'static> MutableState<T> {
     }
 
     #[cfg(test)]
-    pub(crate) fn subscribe_scope_for_test(&self, scope: &RecomposeScope) {
+    pub(crate) fn subscribe_scope_for_test(&self, scope: &crate::RecomposeScope) {
         self.as_state().subscribe_scope_for_test(scope);
     }
 }
@@ -1701,7 +1566,7 @@ impl<T: Clone + 'static> Deref for OwnedMutableState<T> {
 
 #[cfg(test)]
 impl<T: Clone + 'static> State<T> {
-    pub(crate) fn subscribe_scope_for_test(&self, scope: &RecomposeScope) {
+    pub(crate) fn subscribe_scope_for_test(&self, scope: &crate::RecomposeScope) {
         self.with_inner(|inner| {
             let (registered, became_subscribed) = inner
                 .watchers
