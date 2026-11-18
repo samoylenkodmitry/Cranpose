@@ -41,6 +41,7 @@ mod time_picker;
 mod toggle;
 mod tooltip;
 mod vibrancy;
+mod wheel;
 
 pub use activity_indicator::{LiquidActivityIndicator, LiquidActivityIndicatorSize};
 pub use bottom_sheet::{LiquidModalBottomSheet, LiquidSheetState, rememberLiquidSheetState};
