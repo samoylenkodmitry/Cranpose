@@ -282,20 +282,14 @@ fn retained_slot_activation_checks_child_identity_order_and_length() {
                 .activate_exact_retained_slot_with_known_children(SlotId::new(99), expected)
                 .expect("retained slot activates")
             {
-                RetainedSlotChildren::Clean => (
-                    expected
-                        .iter()
-                        .map(|&id| SubcomposeChild::new(id))
-                        .collect(),
-                    true,
-                ),
+                RetainedSlotChildren::Clean => (expected.iter().copied().collect(), true),
                 RetainedSlotChildren::Remeasure {
                     children,
                     children_match,
                 } => (children, children_match),
             },
             None => (
-                scope.subcompose(SlotId::new(99), (), || {
+                scope.subcompose_roots(SlotId::new(99), (), || {
                     cranpose_core::with_current_composer(|composer| {
                         composer.emit_node(|| DummyNode);
                         composer.emit_node(|| DummyNode);
@@ -304,14 +298,9 @@ fn retained_slot_activation_checks_child_identity_order_and_length() {
                 true,
             ),
         };
-        assert!(children.iter().all(|child| child.size() == Size::default()));
-        observed_for_policy.borrow_mut().push((
-            children
-                .iter()
-                .map(SubcomposeChild::node_id)
-                .collect::<Vec<_>>(),
-            matches,
-        ));
+        observed_for_policy
+            .borrow_mut()
+            .push((children.to_vec(), matches));
         scope.layout(0.0, 0.0, Vec::new())
     });
     let node_id = applier.create(Box::new(SubcomposeLayoutNode::new(

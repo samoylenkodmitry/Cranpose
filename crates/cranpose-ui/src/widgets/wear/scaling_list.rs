@@ -1481,7 +1481,7 @@ fn compose_and_measure_item(
     let identity = item.key.map(|_| key.to_slot_id());
     scope.update_content_type(slot_id, item.content_type);
     let content = Rc::clone(&item.content);
-    let children: Vec<SubcomposeChild> = scope.subcompose(slot_id, (), move || {
+    let children = scope.subcompose_roots(slot_id, (), move || {
         let content = Rc::clone(&content);
         crate::lazy_item::ProvideLazyItemKey(identity, || {
             WearScalingItem(Modifier::empty(), transform.clone(), strategy, move || {
@@ -1493,7 +1493,7 @@ fn compose_and_measure_item(
     let mut roots = Vec::with_capacity(children.len());
     let mut stacked = 0.0f32;
     for child in children {
-        let placeable = scope.measure(child, child_constraints);
+        let placeable = scope.measure(SubcomposeChild::new(child), child_constraints);
         roots.push((placeable.node_id(), stacked, placeable.width()));
         stacked += placeable.height();
     }

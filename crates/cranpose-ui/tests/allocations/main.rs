@@ -6,9 +6,10 @@ use cranpose_animation::{
     AnimationSpec, RepeatMode, StartOffset, infiniteRepeatable, rememberInfiniteTransition,
 };
 use cranpose_core::{mutableStateOf, remember};
+use cranpose_foundation::lazy::{LazyItems, LazyListScope, rememberLazyListState};
 use cranpose_ui::{
-    Constraints, Layout, MeasureLayoutOptions, MeasureResult, MemoryHeadroom, Modifier,
-    TestComposition, Text, TextLayoutOptions, TextStyle, measure_layout,
+    Constraints, Layout, LazyColumn, LazyColumnSpec, MeasureLayoutOptions, MeasureResult,
+    MemoryHeadroom, Modifier, TestComposition, Text, TextLayoutOptions, TextStyle, measure_layout,
     measure_layout_with_options, prepare_text_layout, run_test_composition, set_memory_headroom,
     text::AnnotatedString,
     widgets::{
@@ -34,6 +35,10 @@ static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 const PASSES: usize = 10;
 // The allocations of a pass that lays a long paragraph out at a new width.
 const LONG_PARAGRAPH_ALLOCATIONS: usize = 10;
+// The allocations of a lazy row measured again at a new width: its root
+// measurements, and what a debug build allocates to compose its kept slot
+// again for the check of `SubcomposeMeasureScope::subcompose`.
+const LAZY_ROW_ALLOCATIONS: f64 = 12.0;
 
 // Rows of 10 points as tall as their parent is wide.
 fn rows(count: usize) {
@@ -275,6 +280,36 @@ fn remeasuring_a_row_allocates_nothing() {
     let per_row = many.saturating_sub(few) as f64 / 100.0;
     println!("allocations per remeasured row: {per_row}");
     assert!(per_row == 0.0, "{per_row} allocations per remeasured row");
+}
+
+// Allocations per pass of a lazy column `visible` rows tall, at a new width
+// each pass, so each visible row measures again from the slot it keeps.
+fn lazy_remeasure_allocations(visible: usize) -> usize {
+    pass_allocations(run_test_composition(move || {
+        LazyColumn(
+            Modifier::empty()
+                .fill_max_width()
+                .height(10.0 * visible as f32),
+            rememberLazyListState(),
+            LazyColumnSpec::default(),
+            |scope| {
+                scope.items(LazyItems::new(1_000), |_| rows(1));
+            },
+        );
+    }))
+}
+
+// A lazy column measured at a new width composes none of its rows again:
+// a row that keeps its slot measures again with no list of its roots.
+fn remeasuring_lazy_rows_allocates_no_root_lists() {
+    let few = lazy_remeasure_allocations(10);
+    let many = lazy_remeasure_allocations(40);
+    let per_row = many.saturating_sub(few) as f64 / 30.0;
+    println!("allocations per remeasured lazy row: {per_row}");
+    assert!(
+        per_row <= LAZY_ROW_ALLOCATIONS,
+        "{per_row} allocations per remeasured lazy row"
+    );
 }
 
 // Places its children one under another, last first when `reversed`.
@@ -689,6 +724,7 @@ fn a_thread_that_held_a_composition_frees_its_memory_at_exit() {
 fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     a_first_measure_allocates_at_most_one_per_row();
     remeasuring_a_row_allocates_nothing();
+    remeasuring_lazy_rows_allocates_no_root_lists();
     remeasuring_deeply_nested_rows_and_columns_allocates_nothing_more();
     wide_nested_columns_leave_a_bounded_set_of_lists();
     remeasuring_a_wide_column_allocates_nothing_more();

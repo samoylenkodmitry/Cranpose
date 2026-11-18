@@ -9,7 +9,8 @@ use cranpose_core::{
 };
 use cranpose_foundation::{
     InvalidationKind, ModifierInvalidation, ModifierInvalidations, NodeCapabilities,
-    SemanticsConfiguration, lazy::LazyItemRoots,
+    SemanticsConfiguration,
+    lazy::{LazyItemRoots, SmallNodeVec},
 };
 pub use cranpose_ui_layout::{Constraints, MeasureResult, Placement};
 use smallvec::SmallVec;
@@ -27,22 +28,16 @@ use crate::{
 
 mod measure_scratch;
 mod retained_measure_scope;
+mod retained_slot_children;
 mod subcompose_child;
 
 pub(crate) use measure_scratch::MeasureScratch;
 pub(crate) use retained_measure_scope::RetainedMeasureScope;
+pub(crate) use retained_slot_children::RetainedSlotChildren;
 pub(crate) use subcompose_child::SubcomposeChild;
 
 fn subcompose_telemetry_enabled() -> bool {
     cranpose_core::DIAGNOSTICS.subcompose_telemetry.is_set()
-}
-
-pub(crate) enum RetainedSlotChildren {
-    Clean,
-    Remeasure {
-        children: Vec<SubcomposeChild>,
-        children_match: bool,
-    },
 }
 
 pub(crate) type SubcomposePlaceable = cranpose_ui_layout::Placeable;
@@ -146,24 +141,7 @@ pub struct SubcomposeMeasureScopeImpl<'a> {
     scratch: MeasureScratch,
     pending_commands_applied: bool,
     #[cfg(debug_assertions)]
-    shadow_stash: Option<(Vec<NodeId>, Vec<NodeId>)>,
-}
-
-/// Activates `slot_id`'s retained composition in `state` for this pass and
-/// hangs its slot hosts under `root_id`; returns the hosts.
-fn activate_slot_hosts<'s>(
-    state: &'s mut SubcomposeState,
-    composer: &Composer,
-    root_id: NodeId,
-    slot_id: SlotId,
-) -> Option<&'s [NodeId]> {
-    let virtual_node_ids = state.activate_current_active_slot(slot_id)?;
-    for &virtual_node_id in virtual_node_ids {
-        let _ = composer.with_node_mut::<LayoutNode, _>(virtual_node_id, |node| {
-            node.set_parent(root_id);
-        });
-    }
-    Some(virtual_node_ids)
+    shadow_stash: Option<(Vec<NodeId>, SmallNodeVec)>,
 }
 
 fn record_clean_slot_skip() {
@@ -283,7 +261,7 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         true
     }
 
-    fn perform_subcompose<Content>(&mut self, slot_id: SlotId, content: Content) -> Vec<NodeId>
+    fn perform_subcompose<Content>(&mut self, slot_id: SlotId, content: Content) -> SmallNodeVec
     where
         Content: FnMut() + 'static,
     {
@@ -330,7 +308,7 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         slot_id: SlotId,
         virtual_node_id: NodeId,
         content: Content,
-    ) -> Vec<NodeId>
+    ) -> SmallNodeVec
     where
         Content: FnMut() + 'static,
     {
@@ -361,129 +339,10 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
             .register_active(slot_id, &[virtual_node_id], &scopes);
         self.state.mark_slot_composed_current(slot_id, owner_epoch);
 
-        self.composer.get_node_children(virtual_node_id).to_vec()
-    }
-
-    /// Whether `slot_id`'s retained composition is clean and its nodes are
-    /// in place, so the pass may keep it without composing it.
-    fn clean_slot_ready(&mut self, slot_id: SlotId) -> bool {
-        !self.state.has_pending_precompositions(slot_id)
-            && self
-                .state
-                .slot_content_generation_current(slot_id, self.owner_chain_deactivation_epoch())
-            && self.ensure_pending_commands_applied()
-    }
-
-    /// Keeps `slot_id`'s composition for this pass as
-    /// [`SubcomposeMeasureScope::subcompose`] does with a clean slot of
-    /// `key`, without collecting its children. False when the slot needs a
-    /// compose, which `subcompose` runs.
-    pub(crate) fn keep_clean_retained_slot<K: PartialEq + 'static>(
-        &mut self,
-        slot_id: SlotId,
-        key: &K,
-    ) -> bool {
-        let kept = self.state.retained_capture_key_matches(slot_id, key)
-            && self.clean_slot_ready(slot_id)
-            && activate_slot_hosts(&mut *self.state, &self.composer, self.root_id, slot_id)
-                .is_some();
-        if kept {
-            record_clean_slot_skip();
-        }
-        kept
-    }
-
-    fn activate_clean_retained_slot(&mut self, slot_id: SlotId) -> Option<Vec<NodeId>> {
-        if !self.clean_slot_ready(slot_id) {
-            return None;
-        }
-        let virtual_node_ids =
-            activate_slot_hosts(&mut *self.state, &self.composer, self.root_id, slot_id)?;
-
-        let mut children = Vec::new();
-        for virtual_node_id in virtual_node_ids {
-            children.extend(self.composer.get_node_children(*virtual_node_id));
-        }
-        record_clean_slot_skip();
-
-        #[cfg(debug_assertions)]
-        {
-            self.shadow_stash = Some((virtual_node_ids.to_vec(), children.clone()));
-        }
-
-        Some(children)
-    }
-
-    #[cfg(debug_assertions)]
-    fn shadow_verify_clean_slot<Content>(&mut self, slot_id: SlotId, content: Content)
-    where
-        Content: FnMut() + 'static,
-    {
-        let Some((virtual_node_ids, skipped_children)) = self.shadow_stash.take() else {
-            return;
-        };
-        if virtual_node_ids.len() != 1 {
-            return;
-        }
-        let composed = self.compose_into_slot(slot_id, virtual_node_ids[0], content);
-        assert!(
-            composed == skipped_children,
-            "clean-slot skip diverged for slot {slot_id:?}: recomposing produced root \
-             children {composed:?} but the retained slot held {skipped_children:?}. The slot content \
-             read a value that changed between measure passes without any \
-             invalidation path — make that value reactive state, or part of \
-             the subcompose capture key",
-        );
-    }
-
-    pub(crate) fn activate_exact_retained_slot_with_known_children(
-        &mut self,
-        slot_id: SlotId,
-        known_children: &[NodeId],
-    ) -> Option<RetainedSlotChildren> {
-        if !self.ensure_pending_commands_applied() {
-            return None;
-        }
-
-        let activation = self.state.activate_exact_slot(slot_id)?;
-        for &virtual_node_id in activation.nodes {
-            if activation.was_recycled {
-                let _ = self
-                    .composer
-                    .with_node_mut::<LayoutNode, _>(virtual_node_id, |node| {
-                        node.set_parent(self.root_id);
-                    });
-            }
-        }
-
-        let mut expected = known_children.iter().copied();
-        let mut children_match = true;
-        let mut needs_relayout = false;
-        for &virtual_node_id in activation.nodes {
-            self.composer
-                .visit_node_children(virtual_node_id, |child, child_needs_relayout| {
-                    children_match &= expected.next() == Some(child);
-                    needs_relayout |= child_needs_relayout;
-                });
-        }
-        children_match &= expected.next().is_none();
-        if children_match && !needs_relayout {
-            return Some(RetainedSlotChildren::Clean);
-        }
-
-        let mut children = Vec::with_capacity(known_children.len());
-        for &virtual_node_id in activation.nodes {
-            children.extend(
-                self.composer
-                    .get_node_children(virtual_node_id)
-                    .into_iter()
-                    .map(SubcomposeChild::new),
-            );
-        }
-        Some(RetainedSlotChildren::Remeasure {
-            children,
-            children_match,
-        })
+        self.composer
+            .get_node_children(virtual_node_id)
+            .into_iter()
+            .collect()
     }
 }
 
@@ -533,16 +392,10 @@ impl SubcomposeMeasureScope for SubcomposeMeasureScopeImpl<'_> {
         K: PartialEq + 'static,
         Content: FnMut() + 'static,
     {
-        if self.state.retained_capture_key_matches(slot_id, &key)
-            && let Some(children) = self.activate_clean_retained_slot(slot_id)
-        {
-            #[cfg(debug_assertions)]
-            self.shadow_verify_clean_slot(slot_id, content);
-            return children.into_iter().map(SubcomposeChild::new).collect();
-        }
-        self.state.store_retained_capture_key(slot_id, key);
-        let nodes = self.perform_subcompose(slot_id, content);
-        nodes.into_iter().map(SubcomposeChild::new).collect()
+        self.subcompose_roots(slot_id, key, content)
+            .into_iter()
+            .map(SubcomposeChild::new)
+            .collect()
     }
 
     fn measure(&mut self, child: SubcomposeChild, constraints: Constraints) -> SubcomposePlaceable {
@@ -650,21 +503,20 @@ impl SubcomposeMeasureScopeImpl<'_> {
 
     pub(crate) fn measure_retained(
         &mut self,
-        child: SubcomposeChild,
+        node_id: NodeId,
         constraints: Constraints,
     ) -> (SubcomposePlaceable, Option<MeasuredNode>) {
-        let placeable = self.measure(child, constraints);
-        let retained = (self.retained_measure_lookup)(child.node_id());
+        let placeable = self.measure(SubcomposeChild::new(node_id), constraints);
+        let retained = (self.retained_measure_lookup)(node_id);
         (placeable, retained)
     }
 
-    pub(crate) fn children_need_relayout(&mut self, children: &[SubcomposeChild]) -> bool {
+    pub(crate) fn children_need_relayout(&mut self, children: &[NodeId]) -> bool {
         if !self.ensure_pending_commands_applied() {
             return true;
         }
 
-        self.composer
-            .nodes_need_relayout(children.iter().map(SubcomposeChild::node_id))
+        self.composer.nodes_need_relayout(children.iter().copied())
     }
 }
 
