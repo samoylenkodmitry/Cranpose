@@ -8,6 +8,8 @@ mod checkbox;
 mod chip;
 mod color_well;
 mod content_scope;
+mod content_unavailable_view;
+mod control_group;
 mod control_lens;
 mod control_material;
 mod control_motion;
@@ -57,6 +59,8 @@ pub use card::{Card, LiquidCard, LiquidListRow, LiquidListRowSpec, LiquidListSec
 pub use checkbox::{LiquidCheckbox, LiquidRadioButton, LiquidTriStateCheckbox};
 pub use chip::{LiquidActionChip, LiquidChip};
 pub use color_well::LiquidColorWell;
+pub use content_unavailable_view::LiquidContentUnavailableView;
+pub use control_group::{LiquidControlGroup, LiquidControlGroupScope};
 pub use date_picker::{
     CalendarDate, LiquidDatePicker, LiquidDatePickerState, days_in_month,
     rememberLiquidDatePickerState,

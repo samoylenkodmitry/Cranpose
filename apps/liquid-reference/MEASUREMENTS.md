@@ -466,3 +466,9 @@ The native accessibility tree gives the time picker's wheels. The picker is 320 
 | 12 hours, dark checkerboard | | 0.597 |
 
 The remainder is glyph shape: the reference binary's font differs from native at these sizes, and Liquid's lens text sits 2/3 point below native's.
+
+## Control group and content-unavailable view, 2026-11-18
+
+SwiftUI's `ControlGroup` outside a toolbar draws one capsule 32 points tall in the tertiary fill (12% light, 24% dark), split into equal parts with no divider. Each label sits centered in its part, in the label color, at 13 points: its width and cap height are 0.889 of the same label at 15. `LiquidControlGroup` matches its text positions to the pixel; its states differ by 0.18 to 0.28.
+
+`ContentUnavailableView` sets its title and description in the 20 point title 3 size at the regular weight, the title in the label color and the description centered in the secondary label color, then its actions 89/3 points under the description. Its borderless action reads at 15 points in the accent color. The title's cap top sits at y 406 and the action's at 485.67 in a view 320 points wide centered in the safe area. `LiquidContentUnavailableView` places the action to the pixel; each line is about 3% wider than native, as the reference binary keeps the spacing of optical size 17. Its states differ by 0.88 to 2.55.

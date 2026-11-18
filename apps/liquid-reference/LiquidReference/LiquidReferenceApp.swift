@@ -239,6 +239,21 @@ private struct ReferenceControl: View {
         case "color-well":
             ColorPicker("Color", selection: .constant(ReferenceChoices.colors[selection % ReferenceChoices.colors.count]))
                 .labelsHidden().accessibilityIdentifier("reference-color-well")
+        case "unavailable":
+            ContentUnavailableView {
+                Text("No Photos")
+            } description: {
+                Text("Photos you take appear here.")
+            } actions: {
+                Button("Take Photo") {}
+            }
+            .frame(width: 320).accessibilityIdentifier("reference-unavailable")
+        case "control-group":
+            ControlGroup {
+                Button("Previous") {}
+                Button("Next") {}
+            }
+            .frame(width: 300).accessibilityIdentifier("reference-control-group")
         case "page-control":
             ReferencePageControl(page: selection).frame(width: 300, height: 28)
                 .accessibilityIdentifier("reference-page-control")

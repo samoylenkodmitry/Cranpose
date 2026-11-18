@@ -246,6 +246,8 @@ class NativeControlTests: ReferenceUITests {
     func testTimeWheel12() { captureStates("time-12", values: ["0"]) }
     func testPopUp() { captureStates("pop-up", values: ["0", "3"]) }
     func testColorWell() { captureStates("color-well", values: ["0", "1"]) }
+    func testContentUnavailable() { captureStates("unavailable", values: ["0"]) }
+    func testControlGroup() { captureStates("control-group", values: ["0"]) }
 
     private func captureStates(_ component: String, values: [String]) {
         for scheme in ["light", "dark"] {
