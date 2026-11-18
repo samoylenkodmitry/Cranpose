@@ -1,4 +1,5 @@
 use super::*;
+use crate::widgets::menu_morph::{MENU_GROW_DELAY, MENU_VERTICAL_REBOUND_END, menu_source_shape};
 
 #[test]
 fn a_scope_keeps_actions_with_their_items() {
@@ -65,7 +66,9 @@ fn menu_geometry_keeps_the_source_cluster_horizontal_before_card_growth() {
         height: 104.0,
         radius: 32.0,
     };
-    let pose = |appear| menu_morph_geometry(true, appear, anchor, &absorbed, target).primary;
+    let pose = |appear| {
+        menu_morph_geometry(MenuMotion::Opening, appear, anchor, &absorbed, target).primary
+    };
 
     let initial = pose(0.0);
     assert_eq!((initial.width, initial.height), (44.0, 44.0));
@@ -139,8 +142,8 @@ fn menu_body_uses_the_shared_vertical_rebound_path() {
 
     let source = menu_source_shape(anchor, &absorbed, target);
     for appear in [0.199_019, 0.296_780, 0.412_956, 0.539_174] {
-        let geometry = menu_morph_geometry(true, appear, anchor, &absorbed, target);
-        let phase = menu_geometry_phase(true, appear);
+        let geometry = menu_morph_geometry(MenuMotion::Opening, appear, anchor, &absorbed, target);
+        let phase = menu_geometry_phase(MenuMotion::Opening, appear);
         let descent = smoothstep(0.10, 0.90, phase.path);
         let interpolated_y = source.center_y + (target.center_y - source.center_y) * descent;
         let expected_y = interpolated_y + menu_vertical_rebound(phase.path);
@@ -156,7 +159,7 @@ fn menu_body_uses_the_shared_vertical_rebound_path() {
 
 #[test]
 fn menu_close_reverses_through_a_smooth_oval() {
-    let phase = menu_geometry_phase(false, 0.6);
+    let phase = menu_geometry_phase(MenuMotion::Closing, 0.6);
     assert!(
         phase.width > 0.80,
         "the close must retain its broad body at mid-flight: {phase:?}"
@@ -166,11 +169,11 @@ fn menu_close_reverses_through_a_smooth_oval() {
         "the close must pass back through the wide oval in physical dimensions: {phase:?}"
     );
     assert!(
-        menu_content_progress(false, 0.6, 1.0) > 0.75,
+        menu_content_progress(MenuMotion::Closing, 0.6, 1.0) > 0.75,
         "content must remain coherent through the initial deflation"
     );
-    assert_eq!(menu_content_progress(false, 0.2, 1.0), 0.0);
-    let rounded_volume = menu_geometry_phase(false, 0.21);
+    assert_eq!(menu_content_progress(MenuMotion::Closing, 0.2, 1.0), 0.0);
+    let rounded_volume = menu_geometry_phase(MenuMotion::Closing, 0.21);
     assert!(
         rounded_volume.width > 0.35,
         "the terminal body must contract continuously into the anchor: {rounded_volume:?}"
@@ -184,17 +187,17 @@ fn menu_close_reverses_through_a_smooth_oval() {
 
 #[test]
 fn menu_content_materializes_early_and_is_sharp_by_settle() {
-    let birth = menu_content_progress(true, 0.35, 0.25);
+    let birth = menu_content_progress(MenuMotion::Opening, 0.35, 0.25);
     assert!(
         birth > 0.02 && birth < 0.08,
         "rows must begin as a faint smudge after the blank birth phase: {birth}"
     );
-    let mid = menu_content_progress(true, 0.55, 0.55);
+    let mid = menu_content_progress(MenuMotion::Opening, 0.55, 0.55);
     assert!(
         (0.55..0.70).contains(&mid),
         "rows must remain visibly soft at mid-flight: {mid}"
     );
-    let settle = menu_content_progress(true, 1.0, 0.92);
+    let settle = menu_content_progress(MenuMotion::Opening, 1.0, 0.92);
     assert!(
         settle > 0.99,
         "rows must be effectively sharp when the shape settles: {settle}"
@@ -213,13 +216,13 @@ fn menu_content_materializes_early_and_is_sharp_by_settle() {
 
 #[test]
 fn menu_surface_motion_is_smooth_and_capture_cadence_independent() {
-    let merged = menu_surface_phase(true, 0.14, 0.0);
+    let merged = menu_surface_phase(MenuMotion::Opening, 0.14, 0.0);
     assert_eq!(merged.anchor_presence, 0.0);
     assert_eq!(merged.glue, 0.0);
-    let recoil = menu_surface_phase(true, 0.275, 0.0);
+    let recoil = menu_surface_phase(MenuMotion::Opening, 0.275, 0.0);
     assert_eq!(recoil.glue, 0.0);
 
-    let early = menu_surface_phase(true, 0.40, 0.25);
+    let early = menu_surface_phase(MenuMotion::Opening, 0.40, 0.25);
     assert!(
         early.anchor_presence == 0.0,
         "the primary alone owns the anchor recoil: {early:?}"
@@ -227,9 +230,9 @@ fn menu_surface_motion_is_smooth_and_capture_cadence_independent() {
     assert_eq!(early.glue, 0.0);
     assert!(early.wobble <= 0.10);
     assert!(early.bulge <= 0.40);
-    assert_eq!(early, menu_surface_phase(true, 0.40, 0.25));
+    assert_eq!(early, menu_surface_phase(MenuMotion::Opening, 0.40, 0.25));
 
-    let closing = menu_surface_phase(false, 0.6, 0.68);
+    let closing = menu_surface_phase(MenuMotion::Closing, 0.6, 0.68);
     assert_eq!(closing.anchor_presence, 0.0);
     assert_eq!(closing.glue, 0.0);
     assert!(closing.wobble <= 0.05);
