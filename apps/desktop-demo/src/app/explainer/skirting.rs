@@ -48,7 +48,9 @@ fn paint(room: Room) -> Material {
     let mut params = [0.0; Shaded::PARAMS];
     params[..3].copy_from_slice(&room.lamp_colour());
     Material::Shaded(Shaded {
-        shader: Arc::clone(SHADER.get_or_init(|| Arc::from(include_str!("skirting.wgsl")))),
+        shader: Arc::clone(
+            SHADER.get_or_init(|| Arc::from(cranpose_ui::include_wgsl!("skirting.wgsl"))),
+        ),
         params,
     })
 }

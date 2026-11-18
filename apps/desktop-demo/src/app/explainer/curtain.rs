@@ -296,10 +296,7 @@ fn brass() -> Material {
     MATERIAL
         .get_or_init(|| {
             Material::Shaded(Shaded {
-                shader: Arc::from(concat!(
-                    include_str!("studio.wgsl"),
-                    include_str!("brass.wgsl")
-                )),
+                shader: Arc::from(cranpose_ui::include_wgsl!("studio.wgsl", "brass.wgsl")),
                 params: [0.0; Shaded::PARAMS],
             })
         })
@@ -318,10 +315,10 @@ fn silk(soak: f32, content: Size) -> Material {
         params[first..first + 3].copy_from_slice(&[color.0, color.1, color.2]);
     }
     let shader = SHADER.get_or_init(|| {
-        Arc::from(concat!(
-            include_str!("studio.wgsl"),
-            include_str!("noise.wgsl"),
-            include_str!("silk.wgsl")
+        Arc::from(cranpose_ui::include_wgsl!(
+            "studio.wgsl",
+            "noise.wgsl",
+            "silk.wgsl"
         ))
     });
     Material::Shaded(Shaded {

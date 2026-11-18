@@ -31,7 +31,7 @@ const OPENINGS: Openings = Openings {
     bare: 0.45,
     glass: 0.30,
 };
-const PLATE_WGSL: &str = concat!(include_str!("noise.wgsl"), include_str!("plate.wgsl"));
+const PLATE_WGSL: &str = cranpose_ui::include_wgsl!("noise.wgsl", "plate.wgsl");
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Cuts {

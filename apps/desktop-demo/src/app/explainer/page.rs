@@ -48,7 +48,7 @@ const SELECTION: Color = Color(1.0, 0.0, 1.0, 1.0);
 const REPOSITORY_URL: &str = "https://github.com/samoylenkodmitry/Cranpose";
 const SOURCE_URL: &str =
     "https://github.com/samoylenkodmitry/Cranpose/tree/main/apps/desktop-demo/src/app/explainer";
-const COTTON_WGSL: &str = concat!(include_str!("noise.wgsl"), include_str!("cotton.wgsl"));
+const COTTON_WGSL: &str = cranpose_ui::include_wgsl!("noise.wgsl", "cotton.wgsl");
 // The type's scale at either end of the size slider.
 const SMALLEST_TYPE: f32 = 0.7;
 const LARGEST_TYPE: f32 = 1.3;

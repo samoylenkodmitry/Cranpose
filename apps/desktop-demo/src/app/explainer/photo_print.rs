@@ -18,11 +18,7 @@ use super::{
 };
 
 const LABEL_INK: Color = Color(0.03, 0.035, 0.07, 1.0);
-const PRINT_WGSL: &str = concat!(
-    include_str!("noise.wgsl"),
-    include_str!("sheet_paper.wgsl"),
-    include_str!("print.wgsl")
-);
+const PRINT_WGSL: &str = cranpose_ui::include_wgsl!("noise.wgsl", "sheet_paper.wgsl", "print.wgsl");
 
 // How much of the print shows `progress` along the walk.
 pub(super) fn print_shows(progress: f32) -> f32 {

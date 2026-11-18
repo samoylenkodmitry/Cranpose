@@ -368,7 +368,9 @@ impl SrgbEncoder {
         let device = &gpu.device;
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("external frame encode"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("external_frames_encode.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                cranpose_macros::include_wgsl!("external_frames_encode.wgsl").into(),
+            ),
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("external frame encode"),

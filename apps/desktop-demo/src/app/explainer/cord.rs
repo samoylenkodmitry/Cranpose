@@ -28,11 +28,7 @@ use super::{
 };
 
 const BEAD: Color = Color(1.0, 0.36, 0.08, 1.0);
-const CORD_WGSL: &str = concat!(
-    include_str!("noise.wgsl"),
-    include_str!("sheet_paper.wgsl"),
-    include_str!("cord.wgsl")
-);
+const CORD_WGSL: &str = cranpose_ui::include_wgsl!("noise.wgsl", "sheet_paper.wgsl", "cord.wgsl");
 // Points along the cord on each copy, and through the air.
 const ALONG: usize = 24;
 const AIR: usize = 44;

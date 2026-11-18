@@ -478,7 +478,7 @@ fn part_material() -> Material {
             Material::Shaded(Shaded {
                 shader: Arc::from(format!(
                     "{SHADING_WGSL}{}",
-                    include_str!("controls_part.wgsl")
+                    cranpose_ui::include_wgsl!("controls_part.wgsl")
                 )),
                 params,
             })

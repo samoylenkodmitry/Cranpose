@@ -34,7 +34,7 @@ use crate::app::demo_tab::local_active_tab;
 // How many window heights the section takes.
 pub(super) const STAMPS_PAGES: f32 = 1.0;
 const MARIGOLD: Color = Color(0.961, 0.722, 0.18, 1.0);
-const MARIGOLD_WGSL: &str = concat!(include_str!("noise.wgsl"), include_str!("marigold.wgsl"));
+const MARIGOLD_WGSL: &str = cranpose_ui::include_wgsl!("noise.wgsl", "marigold.wgsl");
 // How deep the sheet lies in front of the ground.
 const SHEET_DEPTH: f32 = -6.0;
 // Stamps that never lie quite flat, so the sheet reads as loose paper.

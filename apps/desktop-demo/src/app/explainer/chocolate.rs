@@ -19,7 +19,7 @@ use super::{
 // first copy, the headline on the second, and the wide shadow falls from
 // the third.
 const SIGMAS: [f32; 3] = [1.3, 6.5, 12.0];
-const CHOCOLATE_WGSL: &str = include_str!("chocolate.wgsl");
+const CHOCOLATE_WGSL: &str = cranpose_ui::include_wgsl!("chocolate.wgsl");
 // A scene draws its shaded surfaces after its other ones, far to near. A
 // surface over the shaded plaster wall is shaded too, so its translucent
 // shadow lies over the wall and not over the empty page.

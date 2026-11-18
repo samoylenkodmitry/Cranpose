@@ -16,6 +16,7 @@ mod geometry_and_modifiers;
 mod graphics_layer_backdrop_integration;
 mod grid;
 mod held_modifier_elements;
+mod include_wgsl;
 mod inline_widgets;
 mod inspector_and_insets;
 mod kept_modifiers;
