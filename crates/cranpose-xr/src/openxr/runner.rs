@@ -92,6 +92,8 @@ struct Immersive {
     xr_session: XrSession,
     gpu: GpuContext,
     _graphics: Graphics,
+    // The panels of the frame, read anew at each frame into the same storage
+    panels: Vec<PanelSlot>,
 }
 
 impl Immersive {
@@ -152,6 +154,7 @@ impl Immersive {
             xr_session,
             gpu,
             _graphics: graphics,
+            panels: Vec::new(),
         })
     }
 
@@ -176,7 +179,8 @@ impl Immersive {
                 .max(0)
                 .cast_unsigned(),
         );
-        let (events, cursor) = self.pointer.update(aims, time, &self.space.panels());
+        self.space.panels_into(&mut self.panels);
+        let (events, cursor) = self.pointer.update(aims, time, &self.panels);
         send(&mut self.guest, events);
         for gesture in self.pointer.surface_events() {
             self.space.deliver_to_surface(gesture);
@@ -186,32 +190,49 @@ impl Immersive {
             self.space.carry(step);
         }
         self.follow_environment();
-        if shown {
-            self.layers
-                .draw(&mut self.guest, &self.gpu, &self.xr_session, &self.space)?;
-        }
-        let mut panels = self.space.panels();
-        if shown {
-            self.streams
-                .update(&self.xr_session, &self.space, self.headset.display_time());
-        } else {
-            self.streams.skip(&self.space);
-        }
-        self.surfaces.sync(&self.xr_session, &self.space, &panels);
-        if shown {
-            self.end_with_layers(frame.predicted_display_time, &mut panels)?;
-        } else {
-            self.xr_session.end_frame(
-                frame.predicted_display_time,
-                std::iter::empty(),
-                std::iter::empty(),
-                std::iter::empty(),
-            )?;
-        }
+        let mut panels = std::mem::take(&mut self.panels);
+        let presented = self.present(frame.predicted_display_time, shown, &mut panels);
+        self.panels = panels;
+        presented?;
         if let Err(error) = self.gpu.device.poll(wgpu::PollType::Poll) {
             log::warn!("cranpose xr: device poll: {error}");
         }
         Ok(())
+    }
+
+    // Draws the panels that changed and ends the frame with the layers. `panels` takes the
+    // panels after the draw: the draw composes, and their parts are where it drew them.
+    fn present(
+        &mut self,
+        display_time: xr::Time,
+        shown: bool,
+        panels: &mut Vec<PanelSlot>,
+    ) -> Result<(), String> {
+        if shown {
+            self.layers.draw(
+                &mut self.guest,
+                &self.gpu,
+                &self.xr_session,
+                &self.space,
+                panels,
+            )?;
+            self.streams
+                .update(&self.xr_session, &self.space, self.headset.display_time());
+        } else {
+            self.space.panels_into(panels);
+            self.streams.skip(&self.space);
+        }
+        self.surfaces.sync(&self.xr_session, &self.space, panels);
+        if shown {
+            self.end_with_layers(display_time, panels)
+        } else {
+            self.xr_session.end_frame(
+                display_time,
+                std::iter::empty(),
+                std::iter::empty(),
+                std::iter::empty(),
+            )
+        }
     }
 
     // Ends the frame with the layers of the streamed scenes, the panels and the surfaces. The
