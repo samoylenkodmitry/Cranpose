@@ -73,8 +73,9 @@ fn pump(frames: DecodedFrames, shown: MutableState<Option<Painter>>) {
     use crate::player_surface_intake::pump_with;
 
     pump_with(frames, shown, |frames, presenter| {
+        // A picture that is not shown drops, and the last one stays on the screen
         if let Some(frame) = frames.latest_frame() {
-            presenter.present(frame, None);
+            presenter.present(frame, None).unwrap_or_default();
         }
     });
 }

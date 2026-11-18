@@ -49,14 +49,18 @@ impl FramePresenter {
     /// the picture's top left corner, which is the corner of [`VideoFrame::crop`]. It scales as
     /// the whole picture does: the box shows `part` at the size that `content_scale` gives it.
     ///
-    /// Returns `false`, and keeps the picture that was shown, when the frame is not shown: the
-    /// platform or the renderer cannot import the picture, the GPU holds too many pictures that
-    /// the window has not drawn, or `part` is empty or reaches outside the picture. The frame
-    /// drops in each case.
-    pub fn present(&mut self, frame: VideoFrame, part: Option<CropRect>) -> bool {
+    /// Returns an error, and keeps the picture that was shown, when the frame is not shown. The
+    /// frame drops in each case.
+    pub fn present(
+        &mut self,
+        frame: VideoFrame,
+        part: Option<CropRect>,
+    ) -> Result<(), PresentError> {
         let crop = frame.crop();
         let region = match part {
-            Some(part) if !inside(part, (crop.width, crop.height)) => return false,
+            Some(part) if !inside(part, (crop.width, crop.height)) => {
+                return Err(PresentError::PartOutside);
+            }
             Some(part) => Some(Rect {
                 x: part.x as f32,
                 y: part.y as f32,
@@ -66,15 +70,27 @@ impl FramePresenter {
             None => None,
         };
         let Some(bitmap) = self.converter.as_mut().and_then(|c| c.convert(frame)) else {
-            return false;
+            return Err(PresentError::NotImported);
         };
         let painter = match region {
             Some(region) => BitmapRegionPainter(bitmap, region, ImageSampling::Linear),
             None => Painter::from_bitmap(bitmap),
         };
         self.shown.set(Some(painter));
-        true
+        Ok(())
     }
+}
+
+/// Why [`FramePresenter::present`] did not show a frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PresentError {
+    /// The part to show is empty or reaches outside the picture.
+    #[error("the part to show is empty or reaches outside the picture")]
+    PartOutside,
+    /// The platform or the renderer cannot import the picture, or the GPU holds too many
+    /// pictures that the window has not drawn.
+    #[error("the picture could not be imported for drawing")]
+    NotImported,
 }
 
 // Whether `part` is not empty and lies in a picture of `picture` pixels.

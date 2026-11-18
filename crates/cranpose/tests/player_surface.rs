@@ -6,8 +6,8 @@ use std::{
 
 use cranpose::{
     AccessUnit, AppLauncher, CropRect, DecodedFrames, DecoderConfig, DecoderOutput, PlayerSurface,
-    PlayerSurfaceIntake, VideoCodec, VideoDecoder, embedded_view::EmbeddedView, prelude::*,
-    split_access_units,
+    PlayerSurfaceIntake, PresentError, VideoCodec, VideoDecoder, embedded_view::EmbeddedView,
+    prelude::*, split_access_units,
 };
 
 use crate::gpu_support::{draw_settled, pixel};
@@ -283,7 +283,7 @@ fn a_surface_shows_the_part_that_its_intake_presents() {
         ],
         12,
     );
-    assert_eq!(*results.borrow(), [true]);
+    assert_eq!(*results.borrow(), [Ok(())]);
 }
 
 #[test]
@@ -318,7 +318,7 @@ fn a_surface_refuses_a_part_that_reaches_outside_the_picture() {
     player.feed();
     // The surface draws nothing, so the frame that takes the picture has nothing to show
     assert!(!player.view.draw(&mut player.pixels).expect("frame"));
-    assert_eq!(*results.borrow(), [false]);
+    assert_eq!(*results.borrow(), [Err(PresentError::PartOutside)]);
 }
 
 #[test]

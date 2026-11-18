@@ -75,7 +75,7 @@ impl Flat {
             }
         }
         if let Some((frame, part)) = newest {
-            if presenter.present(frame, Some(part)) {
+            if presenter.present(frame, Some(part)).is_ok() {
                 counts.shown += 1;
             } else {
                 counts.skipped += 1;

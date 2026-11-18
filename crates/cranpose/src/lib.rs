@@ -248,7 +248,7 @@ pub use cranpose_services::*;
 pub use cranpose_ui::*;
 pub use player_surface::PlayerSurface;
 #[cfg(not(target_arch = "wasm32"))]
-pub use player_surface_intake::{FramePresenter, PlayerSurfaceIntake};
+pub use player_surface_intake::{FramePresenter, PlayerSurfaceIntake, PresentError};
 
 static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
