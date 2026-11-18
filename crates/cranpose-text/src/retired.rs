@@ -12,11 +12,17 @@ const LONGEST: usize = 128;
 /// flight, may still hold it, kept for the texts that change next: a text
 /// that shows another string every frame, as a ticker's does, takes what it
 /// gave up a frame or two before once nothing holds it, and allocates
-/// nothing. The pool keeps at most its bound, the oldest going first, and
-/// empties at rest.
+/// nothing. The pool keeps about what texts gave up in its recent passes,
+/// at most its bound, the oldest going first, and empties at rest.
 #[derive(Debug)]
 pub struct Retired<T> {
     items: VecDeque<T>,
+    // How many items were kept when the current span of recent passes began,
+    // less those taken or pushed out since: as many leave from the front
+    // when the span ends.
+    old: usize,
+    // The passes since the span began.
+    passes: u64,
     bound: usize,
 }
 
@@ -25,6 +31,8 @@ impl<T> Retired<T> {
     pub const fn new(bound: usize) -> Self {
         Self {
             items: VecDeque::new(),
+            old: 0,
+            passes: 0,
             bound,
         }
     }
@@ -33,6 +41,7 @@ impl<T> Retired<T> {
     pub fn retire(&mut self, item: T) {
         if self.items.len() == self.bound {
             self.items.pop_front();
+            self.old = self.old.saturating_sub(1);
         }
         self.items.push_back(item);
     }
@@ -43,6 +52,7 @@ impl<T> Retired<T> {
         for _ in 0..LOOKS.min(self.items.len()) {
             let mut item = self.items.pop_front()?;
             if free(&mut item) {
+                self.old = self.old.saturating_sub(1);
                 return Some(item);
             }
             self.items.push_back(item);
@@ -50,9 +60,23 @@ impl<T> Retired<T> {
         None
     }
 
+    /// Begins a pass. Each `recent` passes, as many items leave from the
+    /// front as were kept `recent` passes before and not taken since, so
+    /// the pool keeps as many items as texts gave up in its last `recent`
+    /// passes, and in the passes of a span at most twice that.
+    pub fn begin_pass(&mut self, recent: u64) {
+        self.passes += 1;
+        if self.passes >= recent {
+            self.passes = 0;
+            let old = self.old.min(self.items.len());
+            self.items.drain(..old);
+            self.old = self.items.len();
+        }
+    }
+
     /// Drops the kept items and the room they took: the texts rest.
     pub fn clear(&mut self) {
-        self.items = VecDeque::new();
+        *self = Self::new(self.bound);
     }
 }
 

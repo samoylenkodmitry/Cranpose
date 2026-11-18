@@ -146,6 +146,7 @@ impl TextLayouter {
             body.clear();
             self.shape(input, resolver, None, &mut body.faces);
             let width = self.fill(input, resolver, None, body);
+            body.give_back_room();
             (width, self.shaper.take_ink_reach())
         });
     }
