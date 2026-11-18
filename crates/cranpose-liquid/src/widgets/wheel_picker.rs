@@ -7,7 +7,7 @@ use cranpose_ui::{
     widgets::{Box, BoxSpec},
 };
 
-use super::wheel::{PICKER_HEIGHT, Wheel, draw_band, wheel_value};
+use super::wheel::{PICKER_HEIGHT, Wheel, WheelAlign, draw_band, wheel_value};
 use crate::theme::liquid_colors;
 
 /// A wheel of `options` that rests with `selected` in the band at its
@@ -55,6 +55,7 @@ pub fn LiquidWheelPicker(
                 list,
                 Rc::clone(&labels),
                 Some(label.clone()),
+                WheelAlign::Center,
             );
         },
     );
