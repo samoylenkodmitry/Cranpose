@@ -67,6 +67,18 @@ impl<T> Slab<T> {
         self.entries[index] = Some(value);
     }
 
+    // The entry at `index`, while one is there.
+    pub(crate) fn get(&self, index: usize) -> Option<&T> {
+        self.entries.get(index)?.as_ref()
+    }
+
+    // The index the next `insert` puts its value at.
+    pub(crate) fn vacant(&self) -> usize {
+        self.free
+            .last()
+            .map_or(self.entries.len(), |&index| index as usize)
+    }
+
     pub(crate) fn values(&self) -> impl Iterator<Item = &T> {
         self.entries.iter().flatten()
     }
