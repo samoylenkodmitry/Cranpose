@@ -94,8 +94,9 @@ pub(crate) struct UiThreadState {
     pub(crate) clip_to_bounds: OnceCell<Modifier>,
     pub(crate) empty_slices: OnceCell<Rc<ModifierNodeSlices>>,
     // Where a node with no slices of its own collects its chain, to learn
-    // whether the chain gives any.
-    pub(crate) spare_slices: Cell<Option<ModifierNodeSlices>>,
+    // whether the chain gives any: a block nothing else holds, which a chain
+    // that gives slices takes as it is.
+    pub(crate) spare_slices: Cell<Option<Rc<ModifierNodeSlices>>>,
     pub(crate) empty_measure_policy: OnceCell<Rc<dyn MeasurePolicy>>,
     pub(crate) recent_policies: RecentPolicies,
     // The parts every layout node shell of the thread shares.

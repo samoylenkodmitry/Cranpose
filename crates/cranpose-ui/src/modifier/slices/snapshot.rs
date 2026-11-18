@@ -95,15 +95,18 @@ impl SlicesSnapshot {
             }
         } else {
             // A chain that gives no slices allocates none: it collects into
-            // the thread's spare, which a chain that gives some takes.
-            let spare = crate::thread_state::with(|state| state.spare_slices.take());
-            let mut slices = spare.unwrap_or_default();
-            collect_modifier_slices_into(chain, &mut slices, parts, density);
-            snapshot = if slices.is_empty() {
-                crate::thread_state::with(|state| state.spare_slices.set(Some(slices)));
-                None
+            // the thread's spare block, which a chain that gives some takes
+            // whole, with no move of the slices out of it.
+            let mut block =
+                crate::thread_state::with(|state| state.spare_slices.take()).unwrap_or_default();
+            // Nothing else holds the spare, so this lends it in place.
+            let slices = Rc::make_mut(&mut block);
+            collect_modifier_slices_into(chain, slices, parts, density);
+            snapshot = if !slices.is_empty() {
+                Some(block)
             } else {
-                Some(Rc::new(slices))
+                crate::thread_state::with(|state| state.spare_slices.set(Some(block)));
+                None
             };
         }
         self.0.set(snapshot);
@@ -387,11 +390,15 @@ fn collect_draw_node(
     }
 
     if let Some(commands) = as_kind::<DrawCommandNode>(any, kind) {
-        slices.draw_commands.extend(
-            commands
-                .observed_commands(site.modifier_index)
-                .map(|command| placed_draw_command(command, site)),
-        );
+        let commands = commands.observed_commands(site.modifier_index);
+        slices.draw_commands.reserve(commands.size_hint().0);
+        // Pushed from a fold, which keeps the walk over the commands inline
+        // where the list's `extend` would call it for each one.
+        commands.for_each(|command| {
+            slices
+                .draw_commands
+                .push(placed_draw_command(command, site));
+        });
     }
 
     if let Some(draw_node) = node.as_draw_node() {
