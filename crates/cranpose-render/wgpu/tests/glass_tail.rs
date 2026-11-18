@@ -3,12 +3,11 @@
 // as with the general one, and where materials do not fold, whose general
 // pipeline leaves the tail out.
 
-use cranpose_app_shell::AppShell;
 use cranpose_liquid::{
     Glass, GlassDynamics, GlassMorph, GlassTail, GlassTailEdge, LiquidModifierExt, LiquidShape,
     LiquidTheme, LiquidThemeSpec,
 };
-use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot, WgpuRenderer};
+use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot};
 use cranpose_ui_graphics::Brush;
 use support::page::*;
 
@@ -97,24 +96,6 @@ fn PlainCardPage() {
     PopoverPage(false);
 }
 
-const SETTLE: std::time::Duration = std::time::Duration::from_secs(30);
-
-// The frame once every glass draw uses the pipeline it asked for.
-fn settled(shell: &mut AppShell<WgpuRenderer>) -> (CapturedFrame, RenderStatsSnapshot) {
-    let deadline = std::time::Instant::now() + SETTLE;
-    loop {
-        let (frame, stats) = support::warm_shell_frame(shell, FRAME_WIDTH, FRAME_HEIGHT);
-        if stats.shader_pipeline_fallback_draws == 0 {
-            return (frame, stats);
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the glass pipelines never finished compiling"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-}
-
 fn capture(
     page: fn(),
     toggle: Option<&'static str>,
@@ -129,15 +110,23 @@ fn capture(
     if let Some(toggle) = toggle {
         cranpose_core::debug_toggles::set_debug_toggle(toggle, Some("1"));
     }
-    let frame = settled(&mut shell);
+    let frame = support::settle(|| {
+        let (frame, stats) = support::warm_shell_frame(&mut shell, FRAME_WIDTH, FRAME_HEIGHT);
+        (stats, (frame, stats))
+    });
     if let Some(toggle) = toggle {
         cranpose_core::debug_toggles::set_debug_toggle(toggle, None);
     }
     Some(frame)
 }
 
-fn pixel(frame: &CapturedFrame, x: f32, y: f32) -> [u8; 4] {
-    let index = (y as usize * FRAME_WIDTH as usize + x as usize) * 4;
+// The tail's centre line and the card's bottom edge in whole pixels of the
+// capture, which draws one pixel a dp.
+const CENTER_X: usize = 180;
+const EDGE_Y: usize = 192;
+
+fn pixel(frame: &CapturedFrame, x: usize, y: usize) -> [u8; 4] {
+    let index = (y * FRAME_WIDTH as usize + x) * 4;
     frame.pixels[index..index + 4]
         .try_into()
         .expect("four channels")
@@ -149,28 +138,28 @@ fn a_glass_tail_covers_its_point_and_leaves_the_backdrop_beside_and_past_it() {
         return;
     };
     let (plain, _) = capture(PlainCardPage, None).expect("headless WGPU init failed mid-suite");
-    let center = NODE[0] + NODE[2] * 0.5;
-    let edge = NODE[1] + CARD_HEIGHT;
-    for depth in [3.0, 6.0, 9.0] {
+    for depth in [3, 6, 9] {
+        let y = EDGE_Y + depth;
         assert_ne!(
-            pixel(&tailed, center, edge + depth),
-            pixel(&plain, center, edge + depth),
+            pixel(&tailed, CENTER_X, y),
+            pixel(&plain, CENTER_X, y),
             "the tail covers its centre line {depth} dp past the card"
         );
-        let half_width = TAIL_HEIGHT + 0.83 - depth;
-        for side in [-1.0, 1.0] {
-            let beside = center + side * (half_width + 3.0);
+        // The slope stands 13.83 dp from the centre at the edge; 3 dp beyond it.
+        let beside = 14 - depth + 3;
+        for x in [CENTER_X - beside, CENTER_X + beside] {
             assert_eq!(
-                pixel(&tailed, beside, edge + depth),
-                pixel(&plain, beside, edge + depth),
+                pixel(&tailed, x, y),
+                pixel(&plain, x, y),
                 "the tail leaves the backdrop 3 dp beside its slope, {depth} dp past the card"
             );
         }
     }
-    for past in [2.0, 6.0] {
+    for past in [2, 6] {
+        let y = EDGE_Y + 13 + past;
         assert_eq!(
-            pixel(&tailed, center, edge + TAIL_HEIGHT + past),
-            pixel(&plain, center, edge + TAIL_HEIGHT + past),
+            pixel(&tailed, CENTER_X, y),
+            pixel(&plain, CENTER_X, y),
             "the tail ends at its tip"
         );
     }
