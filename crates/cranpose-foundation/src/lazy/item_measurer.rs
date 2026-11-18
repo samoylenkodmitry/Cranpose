@@ -142,12 +142,7 @@ where
             && effective_first_index > 0
             && !visible_items.is_empty()
         {
-            let placed_before = self.keep_beyond_before(
-                effective_first_index,
-                visible_items[0].offset,
-                start_time,
-            )?;
-            drop(visible_items.splice(..0, placed_before));
+            self.keep_beyond_before(visible_items, effective_first_index, start_time)?;
         }
 
         let viewport_filled =
@@ -291,14 +286,17 @@ where
         Ok(())
     }
 
+    // Places the items kept before the first of `items`, the item at
+    // `first_index`, at the start of `items`.
     fn keep_beyond_before(
         &mut self,
+        items: &mut Vec<LazyListMeasuredItem>,
         first_index: usize,
-        first_offset: f32,
         start_time: Instant,
-    ) -> Result<Vec<LazyListMeasuredItem>, S::Refusal> {
+    ) -> Result<(), S::Refusal> {
         let before_count = self.beyond_bounds_item_count.min(first_index);
-        let mut placed = Vec::new();
+        let first_offset = items[0].offset;
+        let placed = items.len();
         let mut before_offset = first_offset;
         // An item before the viewport is as far past its edge as its end.
         let mut distance = (self.config.spacing - first_offset).max(0.0);
@@ -319,12 +317,18 @@ where
                     before_offset -= extent;
                     distance += extent;
                     item.offset = before_offset;
-                    placed.push(item);
+                    items.push(item);
                 }
             }
         }
-        placed.reverse();
-        Ok(placed)
+        // The items before come in last, nearest first. Turned whole, the
+        // list holds them first, then the items it held, in reverse.
+        let before = items.len() - placed;
+        if before > 0 {
+            items.reverse();
+            items[before..].reverse();
+        }
+        Ok(())
     }
 
     fn estimated_measure_capacity(
