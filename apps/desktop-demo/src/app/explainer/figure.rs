@@ -25,6 +25,10 @@ use super::{
 // Straight pieces in the print's curve.
 pub(super) const PROFILE_SEGMENTS: usize = 112;
 const PROFILE_POINTS: usize = PROFILE_SEGMENTS + 1;
+// The farthest the board's foot goes back along the table, in units: where
+// a stage of 16 by 10 puts it. A taller stage would take it past where the
+// table turns up into the wall, and the window's light after it.
+const FARTHEST_BACK: f32 = 1500.0;
 
 // When things happen along the walk.
 pub(super) mod timeline {
@@ -41,7 +45,7 @@ pub(super) mod timeline {
 // Where everything stands once the camera has pulled back, worked out
 // backwards from the picture wanted: the print at a chosen size low in the
 // free part of the stage, the board as far back as it goes while it still
-// fits under that part's top edge.
+// fits under that part's top edge, up to `FARTHEST_BACK`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Plan {
     pub u: f32,
@@ -100,7 +104,7 @@ impl Plan {
         // The board's foot goes back along the table until its top would
         // leave the free part of the stage.
         let scale_at = |back: f32| cam_dist / (cam_dist - (table_y * sin - back * cos + shift_z));
-        let (mut low, mut high) = (0.0f32, 5000.0 * u);
+        let (mut low, mut high) = (0.0f32, FARTHEST_BACK * u);
         for _ in 0..40 {
             let back = (low + high) * 0.5;
             let scale = scale_at(back);
