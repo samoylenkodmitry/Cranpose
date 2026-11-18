@@ -7,7 +7,7 @@ use cranpose_core::ProvidedValue;
 use cranpose_foundation::DynModifierElement;
 use smallvec::SmallVec;
 
-use super::{InspectorMetadata, Modifier};
+use super::{InspectorMetadata, Modifier, spare_lists};
 
 fn inspector_slice(inspector: &Option<Rc<Vec<InspectorMetadata>>>) -> &[InspectorMetadata] {
     inspector_slice_of(inspector.as_ref())
@@ -51,24 +51,29 @@ pub(super) struct ManyElements {
 impl ManyElements {
     // `first` followed by `more`. Elements move into the joined chain;
     // only those another modifier also holds are copied.
-    fn joined(first: ModifierKind, more: ModifierKind) -> Rc<Self> {
-        // A new chain starts empty in its allocation, so its elements land
-        // there and the list never moves.
-        let (mut chain, first) = match first {
+    fn joined(first: ModifierKind, more: ModifierKind) -> SharedElements {
+        // A new chain starts empty in its block, so its elements land there
+        // and the list never moves.
+        let (mut chain, mut first) = match first {
             ModifierKind::Many(chain) => (chain, ModifierKind::Empty),
-            first => (Rc::default(), first),
+            first => (SharedElements::spare(), first),
         };
-        if let Some(owned) = Rc::get_mut(&mut chain) {
-            owned.push(first);
-            owned.push(more);
-            return chain;
+        loop {
+            if let Some(owned) = chain.get_mut() {
+                owned.push(first);
+                owned.push(more);
+                return chain;
+            }
+            // A list another modifier holds too: its elements go as copies
+            // into a block of their own.
+            first = ModifierKind::Many(std::mem::replace(&mut chain, SharedElements::spare()));
         }
-        // Only a list another modifier holds too comes here, and `first` is
-        // empty then.
-        let mut copy = Self::default();
-        copy.append(chain);
-        copy.push(more);
-        Rc::new(copy)
+    }
+
+    // Empties the list for the next use of its block. Its elements drop
+    // here, where the block's drop would have dropped them.
+    pub(super) fn clear(&mut self) {
+        *self = Self::default();
     }
 
     // Takes in the elements of `more` after its own. Always inline, with the
@@ -83,7 +88,7 @@ impl ManyElements {
                 self.provides_composition_locals |= element.provides_composition_locals();
                 self.elements.push(element);
             }
-            ModifierKind::Many(shared) => self.append(shared),
+            ModifierKind::Many(shared) => self.append(&shared),
         }
     }
 
@@ -91,7 +96,7 @@ impl ManyElements {
     // a plain element's copy is its value, and one way to take them in keeps
     // the code of the join small.
     #[inline(never)]
-    fn append(&mut self, shared: Rc<Self>) {
+    fn append(&mut self, shared: &Self) {
         self.provides_composition_locals |= shared.provides_composition_locals;
         if shared.inspector.is_some() {
             self.inspector = merged_inspector(
@@ -112,7 +117,7 @@ pub(super) enum ModifierKind {
     // A lone element without inspector metadata, as each link of a builder
     // chain starts out: a plain element takes no allocation.
     One(DynModifierElement),
-    Many(Rc<ManyElements>),
+    Many(SharedElements),
 }
 
 impl ModifierKind {
@@ -120,8 +125,48 @@ impl ModifierKind {
     pub(super) fn shares_storage(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::One(a), Self::One(b)) => a.is(b),
-            (Self::Many(a), Self::Many(b)) => Rc::ptr_eq(a, b),
+            (Self::Many(a), Self::Many(b)) => Rc::ptr_eq(&a.0, &b.0),
             _ => false,
+        }
+    }
+}
+
+// The block of a list that modifiers share. When its last holder lets it
+// go, the list empties and the block goes to the thread's spare blocks, for
+// the next list the thread makes.
+#[derive(Clone)]
+pub(super) struct SharedElements(Rc<ManyElements>);
+
+impl SharedElements {
+    fn new(list: ManyElements) -> Self {
+        Self(Rc::new(list))
+    }
+
+    // An empty block from the thread's spares, or a new one.
+    fn spare() -> Self {
+        Self(spare_lists::take().unwrap_or_default())
+    }
+
+    // The list, while this is its only holder.
+    fn get_mut(&mut self) -> Option<&mut ManyElements> {
+        Rc::get_mut(&mut self.0)
+    }
+}
+
+impl std::ops::Deref for SharedElements {
+    type Target = ManyElements;
+
+    fn deref(&self) -> &ManyElements {
+        &self.0
+    }
+}
+
+impl Drop for SharedElements {
+    fn drop(&mut self) {
+        // The test stays inline: a holder that lets go of a block others
+        // keep makes no call.
+        if Rc::strong_count(&self.0) == 1 {
+            spare_lists::give_back(&mut self.0);
         }
     }
 }
@@ -157,7 +202,7 @@ impl Modifier {
                 Some(element) => ModifierKind::One(element),
                 None => ModifierKind::Empty,
             },
-            (_, inspector) => ModifierKind::Many(Rc::new(ManyElements {
+            (_, inspector) => ModifierKind::Many(SharedElements::new(ManyElements {
                 provides_composition_locals: elements
                     .iter()
                     .any(DynModifierElement::provides_composition_locals),
@@ -232,7 +277,7 @@ impl Modifier {
             }
             ModifierKind::Many(shared) => {
                 let mut chain = ManyElements::default();
-                chain.append(shared);
+                chain.append(&shared);
                 chain
             }
         };
@@ -240,7 +285,7 @@ impl Modifier {
         list.push(metadata);
         chain.inspector = Some(Rc::new(list));
         Self {
-            kind: ModifierKind::Many(Rc::new(chain)),
+            kind: ModifierKind::Many(SharedElements::new(chain)),
         }
     }
 

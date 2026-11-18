@@ -40,6 +40,7 @@ mod semantics;
 mod shadow;
 mod size;
 mod slices;
+mod spare_lists;
 mod toggleable;
 mod weight;
 mod window_root;
@@ -97,6 +98,7 @@ pub use slices::{
     ModifierNodeSlices, ModifierNodeSlicesDebugStats, SliceTextRef, collect_modifier_slices,
     collect_slices_from_modifier,
 };
+pub(crate) use spare_lists::SpareLists;
 pub use window_root::{
     WindowRootDescriptor, WindowRootElement, WindowRootEntry, WindowRootNode, WindowRootRegistry,
     WindowRootRoutingScratch, is_window_root, nearest_window_root, nearest_window_roots,
