@@ -21,6 +21,10 @@ const CURSOR_DOT: f32 = 12.0;
 /// panel draws as a box of its size.
 ///
 /// Inside a [`SpatialCurvedRow`](crate::SpatialCurvedRow) the panel is bent around the viewer.
+///
+/// The modifier's [`movable`](SubspaceModifier::movable) and
+/// [`resizable`](SubspaceModifier::resizable) let the user carry and resize the panel with a
+/// controller. The content lays out at the size that the modifier gives.
 #[composable]
 pub fn SpatialPanel(modifier: SubspaceModifier, content: impl FnMut() + 'static) {
     let size = modifier.size_or(DEFAULT_PANEL_SIZE);
@@ -56,6 +60,7 @@ fn PlacedPanel(
     space.place(panel, size, origin, pose);
     let id = panel.id;
     space.set_move_policy(id, modifier.move_policy());
+    space.set_resizable(id, modifier.resize());
     space.set_shape(id, shape);
     DisposableEffect(id, move |_| {
         DisposableEffectResult::new(move || space.remove(id))

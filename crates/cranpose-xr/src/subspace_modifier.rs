@@ -1,6 +1,6 @@
 //! The size, place and turn of a spatial composable.
 
-use crate::{MovePolicy, Pose, pose::turn_degrees};
+use crate::{MovePolicy, Pose, ResizeLimits, ResizePolicy, pose::turn_degrees};
 
 /// Meters in one dp. In a subspace one dp is a millimeter, so a panel of 800 by 500 dp is 80 by
 /// 50 centimeters.
@@ -25,6 +25,7 @@ pub struct SubspaceModifier {
     offset: [f32; 3],
     orientation: [f32; 4],
     move_policy: Option<MovePolicy>,
+    resize: Option<(ResizeLimits, ResizePolicy)>,
 }
 
 impl Default for SubspaceModifier {
@@ -41,6 +42,7 @@ impl SubspaceModifier {
             offset: [0.0; 3],
             orientation: [0.0, 0.0, 0.0, 1.0],
             move_policy: None,
+            resize: None,
         }
     }
 
@@ -102,6 +104,34 @@ impl SubspaceModifier {
     // What the content does when the user carries it, or `None` for content that stays.
     pub(crate) fn move_policy(&self) -> Option<&MovePolicy> {
         self.move_policy.as_ref()
+    }
+
+    /// Lets the user resize the content with a controller. A handle at the content's bottom right
+    /// corner grabs it. The content's center stays where it is, and `policy` receives each size
+    /// that the user gives. The app owns the size: the callback sets the state that feeds
+    /// [`size`](Self::size). Jetpack XR's `resizable` with its default limits.
+    ///
+    /// Jetpack XR's `enabled` has no counterpart: an app that does not want the handle leaves the
+    /// modifier out. A panel inside a [`SpatialCurvedRow`](crate::SpatialCurvedRow) has no
+    /// handle. Only a headset shows it.
+    pub fn resizable(self, policy: ResizePolicy) -> Self {
+        self.resizable_with(ResizeLimits::new(), policy)
+    }
+
+    /// Lets the user resize the content as [`resizable`](Self::resizable) does, within `limits`:
+    /// a smallest and a largest size, and whether the proportions stay. Jetpack XR's `resizable`
+    /// with its `minimumSize`, `maximumSize` and `maintainAspectRatio`.
+    pub fn resizable_with(mut self, limits: ResizeLimits, policy: ResizePolicy) -> Self {
+        self.resize = Some((limits, policy));
+        self
+    }
+
+    // The limits and the callback of a resize that the user makes, or `None` for content whose
+    // size stays.
+    pub(crate) fn resize(&self) -> Option<(ResizeLimits, &ResizePolicy)> {
+        self.resize
+            .as_ref()
+            .map(|(limits, policy)| (*limits, policy))
     }
 
     /// The size in dp, with `fallback` for what the modifier leaves out.

@@ -9,9 +9,11 @@ use cranpose_testing::{
 
 use super::*;
 use crate::{
-    MovePolicy, Pose, SpatialExternalSurface, SpatialMoveEvent, SpatialMoveEventType, SpatialPanel,
-    StereoMode, SubspaceModifier,
-    space::{SUBSPACE_ORIGIN, Shape, Space, local_space},
+    MovePolicy, Pose, ResizeLimits, ResizePolicy, SpatialExternalSurface, SpatialMoveEvent,
+    SpatialMoveEventType, SpatialPanel, SpatialResizeEvent, SpatialResizeEventType, StereoMode,
+    SubspaceModifier,
+    handle::HandleKind,
+    space::{Mobility, SUBSPACE_ORIGIN, Shape, Space, local_space},
 };
 
 // A panel of 800 by 500 dp a meter ahead, at the atlas's top.
@@ -22,6 +24,8 @@ const PANEL: PanelSlot = PanelSlot {
     pose: Pose::at([0.0, 0.0, -1.0]),
     mobility: Mobility::Fixed,
     shape: Shape::Flat,
+    resize: None,
+    room: [800.0, 500.0],
 };
 
 // A panel of 200 by 100 dp behind the first one and below it in the atlas.
@@ -32,6 +36,8 @@ const BEHIND: PanelSlot = PanelSlot {
     pose: Pose::at([0.0, 0.0, -2.0]),
     mobility: Mobility::Fixed,
     shape: Shape::Flat,
+    resize: None,
+    room: [200.0, 100.0],
 };
 
 // A controller at `x` meters that points straight ahead, turned right by `yaw` degrees.
@@ -299,7 +305,7 @@ fn a_pull_on_a_handle_carries_the_panel() {
     let mut frames = Frames::default();
     let (events, _) = frames.update([None, at_handle(0.0, 0.0)], &[movable]);
     assert!(events.is_empty());
-    assert_eq!(frames.pointer.handle(), Some(1));
+    assert_eq!(frames.pointer.handle(), Some((1, HandleKind::Move)));
     frames.update([None, at_handle(0.0, 1.0)], &[movable]);
     assert_eq!(
         frames.pointer.moves(),
@@ -346,7 +352,7 @@ fn a_pull_on_a_handle_from_behind_the_panel_carries_it() {
     let behind = |trigger: f32| aim_at([0.1, 0.3, -3.0], center, trigger);
     let mut frames = Frames::default();
     frames.update([None, behind(0.0)], &[MOVABLE]);
-    assert_eq!(frames.pointer.handle(), Some(1));
+    assert_eq!(frames.pointer.handle(), Some((1, HandleKind::Move)));
     frames.update([None, behind(1.0)], &[MOVABLE]);
     assert_eq!(
         frames.pointer.moves(),
@@ -383,6 +389,217 @@ fn a_pull_just_above_the_bottom_edge_of_a_movable_panel_presses() {
     assert!(frames.pointer.moves().is_empty());
 }
 
+// A resizable `PANEL` with no limits: its corner handle stands 0.44 meters to the right of its
+// center and 0.29 meters below it.
+const RESIZABLE: PanelSlot = PanelSlot {
+    resize: Some(ResizeLimits::new()),
+    ..PANEL
+};
+
+// A controller at the origin that points `shift` meters to the right and up of the middle of the
+// corner handle of `slot`'s panel, with its trigger pulled by `trigger`.
+fn corner_aim(slot: &PanelSlot, shift: [f32; 2], trigger: f32) -> Option<Aim> {
+    let [x, y, z] = crate::resize::corner_center(slot);
+    aim_at([0.0; 3], [x + shift[0], y + shift[1], z], trigger)
+}
+
+// Holds `aim` for three seconds, long enough for the filter of the ray to settle on it. Returns
+// the resize steps of the frames.
+fn hold(frames: &mut Frames, panel: PanelSlot, aim: Option<Aim>) -> Vec<PanelResize> {
+    let mut steps = Vec::new();
+    for _ in 0..300 {
+        frames.update([None, aim], &[panel]);
+        steps.extend_from_slice(frames.pointer.resizes());
+    }
+    steps
+}
+
+fn resizing(size: [f32; 2]) -> PanelResize {
+    PanelResize {
+        panel: 1,
+        event_type: SpatialResizeEventType::Resizing,
+        size,
+    }
+}
+
+#[test]
+fn a_pull_on_the_corner_handle_resizes_the_panel_and_reports_each_size() {
+    let panel = RESIZABLE;
+    let mut frames = Frames::default();
+    let (events, _) = frames.update([None, corner_aim(&panel, [0.0; 2], 0.0)], &[panel]);
+    assert!(events.is_empty());
+    assert_eq!(frames.pointer.handle(), Some((1, HandleKind::Resize)));
+
+    let (events, _) = frames.update([None, corner_aim(&panel, [0.0; 2], 1.0)], &[panel]);
+    assert!(events.is_empty(), "the handle takes the pull");
+    assert_eq!(
+        frames.pointer.resizes(),
+        [PanelResize {
+            panel: 1,
+            event_type: SpatialResizeEventType::Start,
+            size: [800.0, 500.0],
+        }]
+    );
+    assert!(frames.pointer.moves().is_empty());
+
+    // The corner moves 10 cm to the right and 5 cm down: each side moves, and the center stays
+    let steps = hold(&mut frames, panel, corner_aim(&panel, [0.1, -0.05], 1.0));
+    assert!(steps.len() > 1, "the sizes follow the ray");
+    assert_eq!(steps.last(), Some(&resizing([1000.0, 600.0])));
+    assert!(
+        steps.windows(2).all(|pair| {
+            let [before, after] = [pair[0].size, pair[1].size];
+            after[0] >= before[0]
+                && after[1] >= before[1]
+                && after[0] + after[1] > before[0] + before[1]
+        }),
+        "each step is a new size that grows: {steps:?}"
+    );
+    assert!(
+        steps
+            .iter()
+            .all(|step| step.event_type == SpatialResizeEventType::Resizing)
+    );
+    assert!(frames.pointer.moves().is_empty(), "the center stays");
+
+    frames.update([None, corner_aim(&panel, [0.1, -0.05], 0.0)], &[panel]);
+    assert_eq!(
+        frames.pointer.resizes(),
+        [PanelResize {
+            event_type: SpatialResizeEventType::End,
+            ..resizing([1000.0, 600.0])
+        }]
+    );
+}
+
+#[test]
+fn a_resize_stays_within_the_limits() {
+    let limits = ResizeLimits::new()
+        .minimum_size(400.0, 250.0)
+        .maximum_size(1000.0, 600.0);
+    let panel = PanelSlot {
+        resize: Some(limits),
+        ..PANEL
+    };
+    let mut frames = Frames::default();
+    frames.update([None, corner_aim(&panel, [0.0; 2], 0.0)], &[panel]);
+    frames.update([None, corner_aim(&panel, [0.0; 2], 1.0)], &[panel]);
+    let larger = hold(&mut frames, panel, corner_aim(&panel, [0.5, -0.4], 1.0));
+    assert_eq!(larger.last(), Some(&resizing([1000.0, 600.0])));
+    let smaller = hold(&mut frames, panel, corner_aim(&panel, [-0.9, 0.9], 1.0));
+    assert_eq!(smaller.last(), Some(&resizing([400.0, 250.0])));
+    assert!(
+        larger.iter().chain(&smaller).all(|step| {
+            (400.0..=1000.0).contains(&step.size[0]) && (250.0..=600.0).contains(&step.size[1])
+        }),
+        "no step leaves the limits"
+    );
+}
+
+#[test]
+fn a_resize_that_maintains_the_aspect_ratio_keeps_the_ratio_of_the_start() {
+    let limits = ResizeLimits::new()
+        .maximum_size(1200.0, 700.0)
+        .maintain_aspect_ratio(true);
+    let panel = PanelSlot {
+        resize: Some(limits),
+        ..PANEL
+    };
+    let mut frames = Frames::default();
+    frames.update([None, corner_aim(&panel, [0.0; 2], 0.0)], &[panel]);
+    frames.update([None, corner_aim(&panel, [0.0; 2], 1.0)], &[panel]);
+    // A drag to the right alone still grows the height
+    let steps = hold(&mut frames, panel, corner_aim(&panel, [0.1, 0.0], 1.0));
+    assert_eq!(steps.last(), Some(&resizing([944.0, 590.0])));
+    // The corner goes far past the maximum, which the height reaches first
+    let steps = hold(&mut frames, panel, corner_aim(&panel, [0.8, -0.8], 1.0));
+    assert_eq!(steps.last(), Some(&resizing([1120.0, 700.0])));
+    assert!(
+        steps
+            .iter()
+            .all(|step| (step.size[0] / step.size[1] - 1.6).abs() < 0.01),
+        "every step keeps the ratio of 800 to 500: {steps:?}"
+    );
+}
+
+#[test]
+fn a_pull_on_the_panel_next_to_the_corner_handle_still_presses() {
+    let panel = RESIZABLE;
+    // The panel's own bottom right corner is at (0.4, -0.25): the handle stands beyond it
+    for target in [[0.399, -0.249], [0.3, -0.2]] {
+        let aim = |trigger: f32| aim_at([0.0; 3], [target[0], target[1], -1.0], trigger);
+        let mut frames = Frames::default();
+        frames.update([None, aim(0.0)], &[panel]);
+        assert_eq!(frames.pointer.handle(), None, "{target:?}");
+        let (events, _) = frames.update([None, aim(1.0)], &[panel]);
+        assert!(events.contains(&Gesture::Press), "{target:?}: {events:?}");
+        assert!(frames.pointer.resizes().is_empty(), "{target:?}");
+    }
+}
+
+#[test]
+fn a_pull_beside_the_corner_handle_neither_resizes_nor_presses() {
+    let panel = RESIZABLE;
+    // 10 cm to the right of the handle, off the panel
+    let aim = |trigger: f32| corner_aim(&panel, [0.1, 0.0], trigger);
+    let mut frames = Frames::default();
+    frames.update([None, aim(0.0)], &[panel]);
+    assert_eq!(frames.pointer.handle(), None);
+    let (events, _) = frames.update([None, aim(1.0)], &[panel]);
+    assert!(events.is_empty());
+    assert!(frames.pointer.resizes().is_empty());
+}
+
+#[test]
+fn a_lost_controller_ends_the_resize_at_its_last_size() {
+    let panel = RESIZABLE;
+    let mut frames = Frames::default();
+    frames.update([None, corner_aim(&panel, [0.0; 2], 0.0)], &[panel]);
+    frames.update([None, corner_aim(&panel, [0.0; 2], 1.0)], &[panel]);
+    hold(&mut frames, panel, corner_aim(&panel, [0.05, -0.05], 1.0));
+    frames.update([None, None], &[panel]);
+    assert_eq!(
+        frames.pointer.resizes(),
+        [PanelResize {
+            event_type: SpatialResizeEventType::End,
+            ..resizing([900.0, 600.0])
+        }]
+    );
+}
+
+#[test]
+fn a_panel_that_moves_and_resizes_has_a_handle_for_each() {
+    let both = PanelSlot {
+        mobility: Mobility::Movable,
+        ..RESIZABLE
+    };
+    let mut frames = Frames::default();
+    frames.update([None, handle_aim(&both, 0.0, 0.0)], &[both]);
+    assert_eq!(frames.pointer.handle(), Some((1, HandleKind::Move)));
+    frames.update([None, handle_aim(&both, 0.0, 1.0)], &[both]);
+    assert_eq!(frames.pointer.moves().len(), 1);
+    assert!(frames.pointer.resizes().is_empty());
+
+    // The ray's filter lags a jump from one handle to the other, so the other grab starts anew
+    let mut frames = Frames::default();
+    frames.update([None, corner_aim(&both, [0.0; 2], 0.0)], &[both]);
+    assert_eq!(frames.pointer.handle(), Some((1, HandleKind::Resize)));
+    frames.update([None, corner_aim(&both, [0.0; 2], 1.0)], &[both]);
+    assert_eq!(frames.pointer.resizes().len(), 1);
+    assert!(frames.pointer.moves().is_empty());
+}
+
+#[test]
+fn a_panel_on_a_curve_has_no_corner_handle() {
+    let curved = PanelSlot {
+        shape: Shape::Curved { radius: 1.0 },
+        ..RESIZABLE
+    };
+    let mut frames = Frames::default();
+    frames.update([None, corner_aim(&RESIZABLE, [0.0; 2], 0.0)], &[curved]);
+    assert_eq!(frames.pointer.handle(), None);
+}
+
 #[test]
 fn a_ray_moves_the_pointer_along_the_curve_of_a_curved_panel() {
     // A meter-wide circle around the controller: 20 degrees are 349 mm of arc, where a flat
@@ -410,6 +627,8 @@ fn a_surface_stops_the_ray_and_takes_no_pointer_events() {
         pose: Pose::at([0.0, 0.0, -0.5]),
         mobility: Mobility::Fixed,
         shape: Shape::Flat,
+        resize: None,
+        room: [400.0, 300.0],
     };
     let mut frames = Frames::default();
     let panels = [PANEL, video];
@@ -527,6 +746,75 @@ fn a_custom_policy_leaves_the_pose_to_the_app() {
         start,
         "the modifier still places the panel"
     );
+}
+
+// The user grabs the corner handle, drags it 10 cm to the right and 5 cm down and lets go, as the
+// frame loop of the headset runs it. The ray's filter settles during the 3 s of the drag.
+fn resize_right(space: &Space) {
+    let mut pointer = Pointer::default();
+    let frames = [([0.0, 0.0], 0.0), ([0.0, 0.0], 1.0)]
+        .into_iter()
+        .chain((0..300).map(|_| ([0.1, -0.05], 1.0)))
+        .chain([([0.1, -0.05], 0.0)]);
+    for (frame, (shift, trigger)) in frames.enumerate() {
+        let aim = corner_aim(&space.panels()[0], shift, trigger);
+        let time = Duration::from_millis(10 * frame as u64);
+        pointer.update([None, aim], time, &space.panels());
+        for step in pointer.resizes() {
+            space.resize(step);
+        }
+    }
+}
+
+#[test]
+fn a_resized_panel_tells_the_app_each_size_and_leaves_the_size_to_it() {
+    let events = Rc::new(RefCell::new(Vec::<SpatialResizeEvent>::new()));
+    let heard = Rc::clone(&events);
+    let policy = ResizePolicy::custom(move |event| heard.borrow_mut().push(event));
+    let (_robot, space) = headset(SubspaceModifier::new().size(400.0, 300.0).resizable(policy));
+    resize_right(&space);
+
+    let events = events.borrow();
+    let [start, resizing @ .., end] = events.as_slice() else {
+        panic!("a resize has a start, steps and an end: {events:?}");
+    };
+    assert_eq!(start.event_type, SpatialResizeEventType::Start);
+    assert_eq!(start.size, [400.0, 300.0]);
+    assert!(!resizing.is_empty());
+    assert!(
+        resizing
+            .iter()
+            .all(|event| event.event_type == SpatialResizeEventType::Resizing)
+    );
+    assert_eq!(end.event_type, SpatialResizeEventType::End);
+    assert_eq!(end.size, [600.0, 400.0]);
+    assert_eq!(resizing.last().map(|event| event.size), Some(end.size));
+    assert_eq!(
+        space.panels()[0].size(),
+        [400.0, 300.0],
+        "the modifier still sizes the panel"
+    );
+}
+
+#[test]
+fn a_resizable_surface_reports_its_sizes_like_a_panel() {
+    let events = Rc::new(RefCell::new(Vec::<SpatialResizeEvent>::new()));
+    let heard = Rc::clone(&events);
+    let limits = ResizeLimits::new().maintain_aspect_ratio(true);
+    let modifier = SubspaceModifier::new().size(400.0, 300.0).resizable_with(
+        limits,
+        ResizePolicy::custom(move |event| heard.borrow_mut().push(event)),
+    );
+    let (_robot, space) = surface_headset(modifier, &Rc::default());
+    resize_right(&space);
+
+    let events = events.borrow();
+    assert_eq!(events.first().map(|event| event.size), Some([400.0, 300.0]));
+    // The drag to the right and down is nearest to 4:3 along its own line
+    let last = events.last().expect("the resize ends");
+    assert_eq!(last.event_type, SpatialResizeEventType::End);
+    assert!((last.size[0] / last.size[1] - 4.0 / 3.0).abs() < 0.01);
+    assert!(last.size[0] > 400.0);
 }
 
 // A pointer event of a surface as the test sees it: its kind, its place in dp and whether the

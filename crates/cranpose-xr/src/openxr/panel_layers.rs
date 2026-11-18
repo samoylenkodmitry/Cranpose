@@ -24,9 +24,19 @@ use crate::{
 // image close to one to one.
 pub(crate) const DENSITY: f32 = 1.5;
 
+// How many pixels beyond a panel's size a copy takes from the atlas when the panel's image is
+// larger than the panel. They are the atlas's empty margin, so the pixels of the image next to
+// the panel's rectangle are clear, and the compositor's filter at the rectangle's edge finds no
+// leftover of a larger size.
+const PAD: u32 = 2;
+
 struct PanelImage {
     id: u64,
+    // The swapchain's size in pixels: the panel's room
     size: (u32, u32),
+    // The size in pixels of the panel's picture in the swapchain's images, from their top left
+    // corner. It is the whole image unless the panel is in a resize.
+    content: (u32, u32),
     swapchain: xr::Swapchain<Api>,
     textures: Vec<wgpu::Texture>,
     // Whether the swapchain has an image to show
@@ -96,13 +106,13 @@ impl PanelLayers {
         Some(match slot.shape {
             Shape::Flat => Layer::Quad(QuadLayer {
                 swapchain: &image.swapchain,
-                source: LayerSource::Drawn(image.size),
+                source: LayerSource::Drawn(image.content),
                 pose: slot.pose,
                 size,
             }),
             Shape::Curved { radius } => Layer::Cylinder(CylinderLayer {
                 swapchain: &image.swapchain,
-                image_size: image.size,
+                image_size: image.content,
                 pose: slot.pose,
                 radius,
                 size,
@@ -159,8 +169,17 @@ impl PanelLayers {
                 // The atlas grows to hold the panel by the next frame
                 continue;
             }
-            let index = self.image_for(slot.id, size, gpu, xr_session)?;
+            // The image holds the panel's room, which is larger than the panel while the user
+            // resizes it, so that the swapchain is made once for each step of growth
+            let [room_width, room_height] = slot.room.map(|dp| (dp * DENSITY).round() as u32);
+            let room = (room_width.max(size.0), room_height.max(size.1));
+            let copied = (
+                (size.0 + PAD).min(room.0).min(atlas.width() - x),
+                (size.1 + PAD).min(room.1).min(atlas.height() - y),
+            );
+            let index = self.image_for(slot.id, room, gpu, xr_session)?;
             let image = &mut self.images[index];
+            image.content = size;
             let next = image
                 .swapchain
                 .acquire_image()
@@ -175,8 +194,8 @@ impl PanelLayers {
                 source,
                 image.textures[next as usize].as_image_copy(),
                 wgpu::Extent3d {
-                    width: size.0,
-                    height: size.1,
+                    width: copied.0,
+                    height: copied.1,
                     depth_or_array_layers: 1,
                 },
             );
@@ -195,7 +214,7 @@ impl PanelLayers {
         Ok(())
     }
 
-    // The index of the panel's image, made anew when the panel is new or its size changed.
+    // The index of the panel's image, made anew when the panel is new or its room changed.
     fn image_for(
         &mut self,
         id: u64,
@@ -242,6 +261,7 @@ impl PanelLayers {
         let image = PanelImage {
             id,
             size,
+            content: size,
             swapchain,
             textures,
             shown: false,

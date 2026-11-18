@@ -48,6 +48,8 @@ mod frame_effects;
 #[cfg(any(test, all(headset, target_os = "android")))]
 mod frame_queue;
 mod hand;
+#[cfg(any(test, headset))]
+mod handle;
 mod haptics;
 mod headset_properties;
 mod interaction_profile;
@@ -59,6 +61,10 @@ mod pose;
 mod ray;
 mod recenter;
 mod render_viewpoint;
+#[cfg(any(test, headset))]
+mod resize;
+mod resize_limits;
+mod resize_policy;
 mod space;
 mod spatial_capabilities;
 mod spatial_curved_row;
@@ -67,6 +73,7 @@ mod spatial_external_surface;
 mod spatial_frame_effect;
 mod spatial_move_event;
 mod spatial_panel;
+mod spatial_resize_event;
 mod stereo_mode;
 mod stream_source;
 mod stream_stats;
@@ -111,6 +118,8 @@ pub use pose::Pose;
 pub use ray::{PanelHit, Ray};
 pub use recenter::Recenter;
 pub use render_viewpoint::RenderViewpoint;
+pub use resize_limits::ResizeLimits;
+pub use resize_policy::ResizePolicy;
 #[cfg(desktop_run)]
 pub use run_error::RunError;
 pub use spatial_capabilities::{SpatialCapabilities, local_spatial_capabilities};
@@ -120,6 +129,7 @@ pub use spatial_external_surface::{SpatialExternalSurface, SpatialExternalSurfac
 pub use spatial_frame_effect::SpatialFrameEffect;
 pub use spatial_move_event::{SpatialMoveEvent, SpatialMoveEventType};
 pub use spatial_panel::SpatialPanel;
+pub use spatial_resize_event::{SpatialResizeEvent, SpatialResizeEventType};
 pub use stereo_mode::StereoMode;
 pub use stream_stats::{StreamCounts, StreamStats};
 pub use streamed_scene::StreamedScene;

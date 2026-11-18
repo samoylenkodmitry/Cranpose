@@ -8,7 +8,10 @@ use cranpose_testing::{
 };
 
 use super::*;
-use crate::{SpatialPanel, SubspaceModifier};
+use crate::{
+    ResizeLimits, ResizePolicy, SpatialPanel, SpatialResizeEventType, SubspaceModifier,
+    space::PanelResize,
+};
 
 fn with_space(test: impl FnOnce(Space)) {
     cranpose_testing::run_test_composition(|_| test(Space::new()));
@@ -415,5 +418,95 @@ fn a_carried_panel_keeps_the_pose_the_user_gave() {
         );
         assert_eq!(space.panels()[0].pose, carried);
         assert_eq!(space.panels()[0].atlas, [0.0, 0.0, 400.0, 320.0]);
+    });
+}
+
+// Two panels of 400 by 300 dp and 300 by 200 dp in the atlas, the first of which the user may
+// resize.
+fn resizable_pair(space: &Space) -> (Panel, Panel) {
+    let (first, second) = (space.new_panel(), space.new_panel());
+    space.place(first, [400.0, 300.0], Pose::IDENTITY, Pose::IDENTITY);
+    space.place(second, [300.0, 200.0], Pose::IDENTITY, Pose::IDENTITY);
+    let policy = ResizePolicy::custom(|_| {});
+    space.set_resizable(first.id, Some((ResizeLimits::new(), &policy)));
+    (first, second)
+}
+
+fn resize_step(panel: Panel, event_type: SpatialResizeEventType, size: [f32; 2]) -> PanelResize {
+    PanelResize {
+        panel: panel.id,
+        event_type,
+        size,
+    }
+}
+
+#[test]
+fn a_panel_in_a_resize_holds_its_room_in_steps_and_settles_at_the_release() {
+    with_space(|space| {
+        let (first, second) = resizable_pair(&space);
+        let step = |event_type, size| resize_step(first, event_type, size);
+        space.resize(&step(SpatialResizeEventType::Start, [400.0, 300.0]));
+        assert_eq!(part(&space, second.id)[1], 308.0, "the grab stacks nothing");
+
+        // The app applies a size that grows by a dp in each frame, as a drag does
+        let mut tops = vec![part(&space, second.id)[1]];
+        let mut atlases = vec![space.atlas_size()];
+        for grown in 1..=200_u16 {
+            let size = [400.0 + f32::from(grown), 300.0 + f32::from(grown)];
+            space.resize(&step(SpatialResizeEventType::Resizing, size));
+            space.place(first, size, Pose::IDENTITY, Pose::IDENTITY);
+            assert_eq!(part(&space, first.id)[2..], size, "the panel has its size");
+            let (top, atlas) = (part(&space, second.id)[1], space.atlas_size());
+            if tops.last() != Some(&top) {
+                tops.push(top);
+            }
+            if atlases.last() != Some(&atlas) {
+                atlases.push(atlas);
+            }
+        }
+        // 200 dp of growth in each direction stack the panels and make the atlas anew at the two
+        // steps of the height and the two of the width, not at each of the 200 frames
+        assert_eq!(tops, [308.0, 392.0, 520.0]);
+        assert_eq!(atlases.len(), 4, "{atlases:?}");
+        assert_eq!(space.panels()[0].room, [640.0, 512.0]);
+
+        space.resize(&step(SpatialResizeEventType::End, [600.0, 500.0]));
+        assert_eq!(space.panels()[0].room, [600.0, 500.0], "the room settles");
+        assert_eq!(part(&space, second.id)[1], 508.0);
+        assert_eq!(space.atlas_size(), [600.0, 708.0]);
+    });
+}
+
+#[test]
+fn a_panel_that_shrinks_in_a_resize_keeps_its_room_until_the_release() {
+    with_space(|space| {
+        let (first, second) = resizable_pair(&space);
+        let step = |event_type, size| resize_step(first, event_type, size);
+        space.resize(&step(SpatialResizeEventType::Start, [400.0, 300.0]));
+        space.place(first, [200.0, 100.0], Pose::IDENTITY, Pose::IDENTITY);
+        assert_eq!(part(&space, second.id)[1], 308.0);
+        assert_eq!(space.panels()[0].room, [400.0, 300.0]);
+        // The release settles even when the content places the panel at the same size again
+        space.resize(&step(SpatialResizeEventType::End, [200.0, 100.0]));
+        assert_eq!(part(&space, second.id)[1], 108.0);
+        assert_eq!(space.panels()[0].room, [200.0, 100.0]);
+    });
+}
+
+#[test]
+fn a_panel_that_stops_being_resizable_in_a_resize_settles() {
+    with_space(|space| {
+        let (first, second) = resizable_pair(&space);
+        space.resize(&resize_step(
+            first,
+            SpatialResizeEventType::Start,
+            [400.0, 300.0],
+        ));
+        space.place(first, [500.0, 400.0], Pose::IDENTITY, Pose::IDENTITY);
+        assert_eq!(space.panels()[0].room, [512.0, 512.0]);
+        space.set_resizable(first.id, None);
+        assert_eq!(space.panels()[0].room, [500.0, 400.0]);
+        assert_eq!(part(&space, second.id)[1], 408.0);
+        assert_eq!(space.panels()[0].resize, None);
     });
 }
