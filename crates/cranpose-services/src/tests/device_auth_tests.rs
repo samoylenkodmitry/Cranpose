@@ -4,7 +4,7 @@ use std::{
 };
 
 use super::*;
-use crate::registry::test_service_guard;
+use crate::{LifecycleState, advance_lifecycle, registry::test_service_guard};
 
 // A platform that records the prompts it was asked for and answers when a
 // test says so.
@@ -45,13 +45,21 @@ impl DeviceAuthenticator for Platform {
     }
 }
 
+// The locks of the services and of the lifecycle, held for a test, with the
+// application in the foreground.
+fn in_front() -> impl Sized {
+    let guards = (test_service_guard(), crate::host::tests::test_lock());
+    crate::dispatch_lifecycle_state(LifecycleState::Resumed);
+    guards
+}
+
 fn poll(future: &mut DeviceAuthFuture) -> Poll<DeviceAuthOutcome> {
     Pin::new(future).poll(&mut Context::from_waker(Waker::noop()))
 }
 
 #[test]
 fn without_a_backend_nothing_unlocks() {
-    let _guard = test_service_guard();
+    let _guard = in_front();
     assert_eq!(
         device_auth_availability(),
         DeviceAuthAvailability::Unsupported
@@ -65,7 +73,7 @@ fn without_a_backend_nothing_unlocks() {
 
 #[test]
 fn the_backend_says_what_the_device_can_ask_with() {
-    let _guard = test_service_guard();
+    let _guard = in_front();
     set_platform_device_authenticator(Some(Platform::new(DeviceAuthAvailability::Biometric)));
     assert_eq!(
         device_auth_availability(),
@@ -77,7 +85,7 @@ fn the_backend_says_what_the_device_can_ask_with() {
 
 #[test]
 fn the_future_ends_with_the_answer_of_the_prompt() {
-    let _guard = test_service_guard();
+    let _guard = in_front();
     let platform = Platform::new(DeviceAuthAvailability::Biometric);
     set_platform_device_authenticator(Some(Arc::clone(&platform) as Arc<dyn DeviceAuthenticator>));
     let mut future = authenticate_device_owner("Open the history");
@@ -90,7 +98,7 @@ fn the_future_ends_with_the_answer_of_the_prompt() {
 
 #[test]
 fn a_second_call_waits_for_the_open_prompt() {
-    let _guard = test_service_guard();
+    let _guard = in_front();
     let platform = Platform::new(DeviceAuthAvailability::Credential);
     set_platform_device_authenticator(Some(Arc::clone(&platform) as Arc<dyn DeviceAuthenticator>));
     let mut first = authenticate_device_owner("Open the history");
@@ -108,7 +116,7 @@ fn a_second_call_waits_for_the_open_prompt() {
 
 #[test]
 fn an_answer_for_a_closed_prompt_changes_nothing() {
-    let _guard = test_service_guard();
+    let _guard = in_front();
     let platform = Platform::new(DeviceAuthAvailability::Biometric);
     set_platform_device_authenticator(Some(Arc::clone(&platform) as Arc<dyn DeviceAuthenticator>));
     let mut first = authenticate_device_owner("Open the history");
@@ -125,7 +133,7 @@ fn an_answer_for_a_closed_prompt_changes_nothing() {
 
 #[test]
 fn a_prompt_that_cannot_open_ends_at_once() {
-    let _guard = test_service_guard();
+    let _guard = in_front();
     set_platform_device_authenticator(Some(Arc::new(Platform {
         availability: DeviceAuthAvailability::NoScreenLock,
         prompts: AtomicUsize::new(0),
@@ -140,7 +148,7 @@ fn a_prompt_that_cannot_open_ends_at_once() {
 
 #[test]
 fn an_empty_reason_shows_no_prompt() {
-    let _guard = test_service_guard();
+    let _guard = in_front();
     let platform = Platform::new(DeviceAuthAvailability::Biometric);
     set_platform_device_authenticator(Some(Arc::clone(&platform) as Arc<dyn DeviceAuthenticator>));
     assert_eq!(
@@ -152,7 +160,7 @@ fn an_empty_reason_shows_no_prompt() {
 
 #[test]
 fn removing_the_backend_ends_the_open_prompt() {
-    let _guard = test_service_guard();
+    let _guard = in_front();
     set_platform_device_authenticator(Some(Platform::new(DeviceAuthAvailability::Biometric)));
     let mut future = authenticate_device_owner("Open the history");
     assert_eq!(poll(&mut future), Poll::Pending);
@@ -174,7 +182,7 @@ impl std::task::Wake for Wakes {
 
 #[test]
 fn an_answer_from_another_thread_wakes_the_future() {
-    let _guard = test_service_guard();
+    let _guard = in_front();
     let platform = Platform::new(DeviceAuthAvailability::Biometric);
     set_platform_device_authenticator(Some(Arc::clone(&platform) as Arc<dyn DeviceAuthenticator>));
     let mut future = authenticate_device_owner("Open the history");
@@ -191,4 +199,60 @@ fn an_answer_from_another_thread_wakes_the_future() {
         Pin::new(&mut future).poll(&mut context),
         Poll::Ready(DeviceAuthOutcome::Unlocked)
     );
+}
+
+#[test]
+fn a_prompt_asked_out_of_the_foreground_opens_when_the_app_resumes() {
+    let _guard = in_front();
+    let platform = Platform::new(DeviceAuthAvailability::Biometric);
+    set_platform_device_authenticator(Some(Arc::clone(&platform) as Arc<dyn DeviceAuthenticator>));
+    let prompts = || platform.prompts.load(Ordering::SeqCst);
+
+    // An app asks as it launches, before the platform puts it in front.
+    crate::dispatch_lifecycle_state(LifecycleState::Created);
+    let mut launch = authenticate_device_owner("Open the history");
+    assert_eq!(prompts(), 0);
+    advance_lifecycle(LifecycleState::Resumed);
+    assert_eq!(prompts(), 1);
+    assert_eq!(poll(&mut launch), Poll::Pending);
+    finish_device_auth(platform.last_request(), DeviceAuthOutcome::Unlocked);
+    assert_eq!(poll(&mut launch), Poll::Ready(DeviceAuthOutcome::Unlocked));
+
+    // An app that asks as it leaves the screen, and again while it is away,
+    // gets one prompt on its return. A visible app out of the foreground
+    // still waits.
+    advance_lifecycle(LifecycleState::Stopped);
+    let mut leaving = authenticate_device_owner("Open the history");
+    let mut away = authenticate_device_owner("Open the history");
+    advance_lifecycle(LifecycleState::Started);
+    assert_eq!(prompts(), 1);
+    advance_lifecycle(LifecycleState::Resumed);
+    assert_eq!(prompts(), 2);
+    finish_device_auth(platform.last_request(), DeviceAuthOutcome::Unlocked);
+    assert_eq!(poll(&mut leaving), Poll::Ready(DeviceAuthOutcome::Unlocked));
+    assert_eq!(poll(&mut away), Poll::Ready(DeviceAuthOutcome::Unlocked));
+
+    // Removing the backend ends a waiting prompt, and the return then
+    // shows nothing.
+    advance_lifecycle(LifecycleState::Stopped);
+    let mut removed = authenticate_device_owner("Open the history");
+    set_platform_device_authenticator(None);
+    assert_eq!(
+        poll(&mut removed),
+        Poll::Ready(DeviceAuthOutcome::Unavailable)
+    );
+    set_platform_device_authenticator(Some(Arc::clone(&platform) as Arc<dyn DeviceAuthenticator>));
+    advance_lifecycle(LifecycleState::Resumed);
+    assert_eq!(prompts(), 2);
+
+    // A prompt whose screen dropped every future before the return does not
+    // open over another screen, and the next call opens its own.
+    advance_lifecycle(LifecycleState::Stopped);
+    drop(authenticate_device_owner("Open the history"));
+    advance_lifecycle(LifecycleState::Resumed);
+    assert_eq!(prompts(), 2);
+    let mut next = authenticate_device_owner("Open the history");
+    assert_eq!(prompts(), 3);
+    finish_device_auth(platform.last_request(), DeviceAuthOutcome::Cancelled);
+    assert_eq!(poll(&mut next), Poll::Ready(DeviceAuthOutcome::Cancelled));
 }

@@ -113,7 +113,9 @@ async fn unlock() -> bool {
 
 `DeviceAuthAvailability::NoScreenLock` means the person has to set a screen
 lock first. A call while a prompt is open shows no second prompt and gets the
-open one's outcome. Android 10 and newer show `BiometricPrompt` with the screen
+open one's outcome. The prompt opens only while the application is in the
+foreground. A call made during launch or as the application leaves the screen
+waits. Its prompt opens when the application resumes. Android 10 and newer show `BiometricPrompt` with the screen
 lock allowed, and Android 9 and older the confirm-credential screen. iOS
 evaluates `LAPolicy::DeviceOwnerAuthentication`. Desktop systems, watches and
 the web report `Unsupported`, and their prompts end with `Unavailable`.
