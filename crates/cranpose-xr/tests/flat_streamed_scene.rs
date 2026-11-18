@@ -186,6 +186,10 @@ impl Scene {
 
 // Draws as a host does that honors the view's frame schedule: again while the shell asks for a
 // frame.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test waits for the pipelines that a frame left out, and a poll is the way to see them"
+)]
 fn draw_settled(view: &mut EmbeddedView, pixels: &mut Vec<u8>) {
     view.draw(pixels).expect("frame");
     let deadline = Instant::now() + Duration::from_secs(30);
