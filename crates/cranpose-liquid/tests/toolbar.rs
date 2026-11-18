@@ -3,41 +3,31 @@
 // and bottom, 12 points apart; adjacent icons share one capsule and a text
 // item between them splits it; flexible spaces share the free room.
 
-use std::{cell::RefCell, rc::Rc};
+use std::rc::Rc;
 
 use cranpose_liquid::prelude::*;
-use cranpose_testing::{create_headless_robot_test, robot_assertions::assert_approx_eq};
+use cranpose_testing::robot_assertions::assert_approx_eq;
 use cranpose_ui::{
     Alignment, Modifier, SemanticsWidgetRole,
     widgets::{Box, BoxSpec},
 };
 
-use crate::reader::{Robot, node, tap_node};
-
-type Log = Rc<RefCell<Vec<&'static str>>>;
+use crate::reader::{Log, Robot, liquid_screen, node, tap_node};
 
 // A toolbar at the bottom of a 400 by 800 window, built by `items`, which
 // records each tap in the log.
 fn toolbar(items: fn(&LiquidToolbarScope, &Log)) -> (Robot, Log) {
-    let log: Log = Rc::default();
-    let record = Rc::clone(&log);
-    let mut robot = create_headless_robot_test(400, 800, move || {
-        let record = Rc::clone(&record);
-        LiquidTheme(LiquidThemeSpec::default(), move || {
-            let record = Rc::clone(&record);
-            Box(
-                Modifier::empty().fill_max_size(),
-                BoxSpec::default().content_alignment(Alignment::BOTTOM_START),
-                move || {
-                    let record = Rc::clone(&record);
-                    LiquidToolbar(Modifier::empty(), move |scope| items(scope, &record));
-                },
-            );
-        });
-    });
-    robot.shell_mut().set_semantics_enabled(true);
-    robot.wait_for_idle();
-    (robot, log)
+    liquid_screen(move |log| {
+        let record = Rc::clone(log);
+        Box(
+            Modifier::empty().fill_max_size(),
+            BoxSpec::default().content_alignment(Alignment::BOTTOM_START),
+            move || {
+                let record = Rc::clone(&record);
+                LiquidToolbar(Modifier::empty(), move |scope| items(scope, &record));
+            },
+        );
+    })
 }
 
 fn record(log: &Log, name: &'static str) -> impl Fn() + 'static {

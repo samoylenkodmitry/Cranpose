@@ -281,6 +281,8 @@ private struct ReferenceControl: View {
                 .accessibilityIdentifier("reference-page-control")
         case "toolbar":
             ReferenceToolbar(variant: selection).ignoresSafeArea()
+        case "swipe-actions":
+            ReferenceSwipeRow().frame(width: 300, height: 44).accessibilityIdentifier("reference-swipe-actions")
         default:
             Text("Unknown reference control: \(component)")
         }
@@ -413,6 +415,51 @@ private struct ReferenceToolbar: UIViewControllerRepresentable {
         return navigation
     }
     func updateUIViewController(_ uiViewController: UINavigationController, context: Context) {}
+}
+
+// A list row with Flag and a destructive Delete at its trailing edge and Pin
+// at its leading edge. A full swipe only opens the row, so a test's drag
+// shows the actions instead of running one.
+private struct ReferenceSwipeRow: UIViewRepresentable {
+    final class Coordinator: NSObject, UITableViewDataSource, UITableViewDelegate {
+        func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 1 }
+        func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+            cell.textLabel?.text = "Content"
+            cell.backgroundColor = .clear
+            return cell
+        }
+        func tableView(
+            _ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath
+        ) -> UISwipeActionsConfiguration? {
+            let delete = UIContextualAction(style: .destructive, title: "Delete") { _, _, done in done(false) }
+            let flag = UIContextualAction(style: .normal, title: "Flag") { _, _, done in done(false) }
+            flag.backgroundColor = .systemOrange
+            let configuration = UISwipeActionsConfiguration(actions: [delete, flag])
+            configuration.performsFirstActionWithFullSwipe = false
+            return configuration
+        }
+        func tableView(
+            _ tableView: UITableView, leadingSwipeActionsConfigurationForRowAt indexPath: IndexPath
+        ) -> UISwipeActionsConfiguration? {
+            let pin = UIContextualAction(style: .normal, title: "Pin") { _, _, done in done(false) }
+            pin.backgroundColor = .systemBlue
+            let configuration = UISwipeActionsConfiguration(actions: [pin])
+            configuration.performsFirstActionWithFullSwipe = false
+            return configuration
+        }
+    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeUIView(context: Context) -> UITableView {
+        let table = UITableView(frame: .zero, style: .plain)
+        table.dataSource = context.coordinator
+        table.delegate = context.coordinator
+        table.rowHeight = 44
+        table.isScrollEnabled = false
+        table.backgroundColor = .clear
+        return table
+    }
+    func updateUIView(_ uiView: UITableView, context: Context) {}
 }
 
 private struct ReferenceListRow: UIViewRepresentable {

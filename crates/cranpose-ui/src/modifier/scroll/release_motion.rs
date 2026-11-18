@@ -76,11 +76,24 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         } else {
             adjusted_velocity
         };
-        let start_fling = start_fling && adjusted_velocity.abs() > MIN_FLING_VELOCITY;
-        let fling_velocity = -adjusted_velocity;
+        self.start_release_motion(was_dragging || interrupted, start_fling, adjusted_velocity);
+        gesture_owned
+    }
+
+    // Starts what follows a release at `velocity` toward the target: the
+    // target's own settle, the overscroll's, the settle policy's, a fling,
+    // or nothing. `moved` says a drag or an interrupted motion came first.
+    fn start_release_motion(&self, moved: bool, start_fling: bool, velocity: f32) {
+        // A target that rests on anchors of its own settles the release.
+        if moved && self.scroll_target.settle_release(velocity) {
+            self.motion_context.set_active(false);
+            return;
+        }
+        let start_fling = start_fling && velocity.abs() > MIN_FLING_VELOCITY;
+        let fling_velocity = -velocity;
         let has_overscroll = self.overscroll.offset().abs() > 0.001;
 
-        let settle_target = (was_dragging || interrupted)
+        let settle_target = moved
             .then(|| self.settle_target(start_fling, fling_velocity))
             .flatten();
 
@@ -93,8 +106,6 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         } else {
             self.motion_context.set_active(false);
         }
-
-        gesture_owned
     }
 
     /// Where the target's settle policy moves the rest of a release, if it

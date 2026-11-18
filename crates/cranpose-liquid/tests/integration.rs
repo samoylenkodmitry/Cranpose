@@ -17,6 +17,7 @@ mod segmented_style;
 mod selection_controls;
 mod snackbar_host;
 mod standard_controls;
+mod swipe_actions;
 mod tab_bar_appearance;
 mod tab_label_extents;
 mod time_picker;

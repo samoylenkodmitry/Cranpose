@@ -11,15 +11,16 @@ use cranpose_foundation::{
 use cranpose_ui_layout::Axis;
 
 mod drag_gesture;
+mod draggable;
 mod release_motion;
 mod scroll_target;
-use drag_gesture::{DragGesture, drag_gesture_input, nested_drag_gesture_input};
+use drag_gesture::{DragGesture, nested_drag_gesture_input};
 use scroll_target::{NestedTarget, ScrollTarget};
 
 use super::{Modifier, Point, PointerEvent, PointerEventKind, inspector_metadata};
 use crate::{
     bring_into_view_spec::current_bring_into_view_spec,
-    draggable::{DraggableState, ScrollableState},
+    draggable::ScrollableState,
     fling_animation::{
         FlingAnimation, MIN_FLING_VELOCITY, SettleAnimation, SpringParams, fling_rest_position,
     },
@@ -32,8 +33,7 @@ use crate::{
     scroll_semantics::lazy_scroll_semantics,
 };
 
-/// Returns the velocity of the last fling that started in the current app context, in dp per
-/// second.
+/// The velocity of the last fling that started in the current app context, in dp per second.
 #[cfg(feature = "test-helpers")]
 pub fn last_fling_velocity() -> f32 {
     crate::render_state::debug_last_fling_velocity()
@@ -1019,21 +1019,6 @@ impl Modifier {
         ))
     }
 
-    /// Drags along `axis`, reporting each delta to `state`.
-    ///
-    /// The gesture is the one the scroll containers run — touch slop before a
-    /// drag begins, axis locking so a mostly-vertical drag never steals a
-    /// horizontal one, the primary pointer only, and yielding to whoever
-    /// consumed the event first — so a dragged control and a scrolled list feel
-    /// the same under a finger. Unlike a scroll, a release does not fling: a
-    /// control the user placed stays where it was let go.
-    ///
-    /// Deltas are logical pixels, positive to the right for [`Axis::Horizontal`]
-    /// and downwards for [`Axis::Vertical`].
-    pub fn draggable(self, axis: Axis, state: DraggableState) -> Self {
-        self.then(draggable_impl(axis, state, None))
-    }
-
     /// Scrolls content with custom placement along `axis`.
     ///
     /// Supplies drag, wheel and inertial scrolling without translating or
@@ -1058,20 +1043,6 @@ impl Modifier {
                 guard: None,
             },
         ))
-    }
-
-    /// Drags along `axis` only while `guard` says so.
-    ///
-    /// The guard is asked per event, so a control can stop accepting a drag
-    /// half way through one and the gesture ends rather than being applied to
-    /// a control that has since been disabled.
-    pub fn draggable_guarded(
-        self,
-        axis: Axis,
-        state: DraggableState,
-        guard: impl Fn() -> bool + 'static,
-    ) -> Self {
-        self.then(draggable_impl(axis, state, Some(Rc::new(guard))))
     }
 }
 
@@ -1212,25 +1183,4 @@ fn lazy_scroll_impl(
             reverse_scrolling,
             content_padding,
         ))
-}
-
-fn draggable_impl(
-    axis: Axis,
-    state: DraggableState,
-    guard: Option<Rc<dyn Fn() -> bool>>,
-) -> Modifier {
-    let identity = state.identity();
-    drag_gesture_input(
-        (identity, axis),
-        DragGesture {
-            target: state,
-            axis,
-            reverse_input: false,
-            motion_context: scroll_motion_context_for_key(ScrollMotionContextKey::Draggable {
-                state_identity: identity,
-                axis,
-            }),
-            guard,
-        },
-    )
 }

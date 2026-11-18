@@ -5,6 +5,7 @@ use cranpose_foundation::{ScrollId, lazy::LazyListState};
 use cranpose_ui_layout::Axis;
 
 use crate::{
+    anchored_draggable::AnchoredDraggableState,
     draggable::{DraggableState, ScrollableState},
     nested_scroll::NestedScrollSource,
     scroll::{ScrollSettlePolicy, ScrollState},
@@ -55,6 +56,13 @@ pub(super) trait ScrollTarget: Clone {
     fn pre_fling(&self, velocity: f32) -> f32 {
         let _ = velocity;
         0.0
+    }
+
+    // Settles the release of a drag at `velocity`, in content units per
+    // second, on the target's own rest positions, and returns whether it
+    // did. The scroll's fling and settle then stay out.
+    fn settle_release(&self, _velocity: f32) -> bool {
+        false
     }
 
     // Makes the motion that `stop` stops the target's running scroll. A jump
@@ -127,6 +135,10 @@ impl<S: ScrollTarget> ScrollTarget for NestedTarget<S> {
 
     fn set_dragging(&self, dragging: bool) {
         self.target.set_dragging(dragging);
+    }
+
+    fn settle_release(&self, velocity: f32) -> bool {
+        self.target.settle_release(velocity)
     }
 
     fn stop_animation(&self) -> bool {
@@ -275,6 +287,35 @@ impl ScrollTarget for DraggableState {
 
     fn set_dragging(&self, dragging: bool) {
         Self::set_dragging(self, dragging);
+    }
+}
+
+impl<T: Copy + PartialEq + 'static> ScrollTarget for AnchoredDraggableState<T> {
+    fn apply_delta(&self, delta: f32) -> f32 {
+        self.dispatch_raw_delta(delta)
+    }
+
+    fn apply_fling_delta(&self, delta: f32) -> f32 {
+        self.dispatch_raw_delta(delta)
+    }
+
+    fn invalidate(&self) {}
+
+    fn current_offset(&self) -> f32 {
+        self.offset_non_reactive().unwrap_or(0.0)
+    }
+
+    fn set_dragging(&self, dragging: bool) {
+        Self::set_dragging(self, dragging);
+    }
+
+    fn stop_animation(&self) -> bool {
+        Self::stop_animation(self)
+    }
+
+    fn settle_release(&self, velocity: f32) -> bool {
+        Self::settle_release(self, velocity);
+        true
     }
 }
 

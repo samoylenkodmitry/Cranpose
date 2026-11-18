@@ -5,10 +5,8 @@
 use std::{cell::Cell, rc::Rc};
 
 use cranpose_liquid::prelude::*;
-use cranpose_testing::{
-    RobotTestRule, TestRenderer, create_headless_robot_test, robot_assertions::find_semantics_node,
-};
-use cranpose_ui::{Box, BoxSpec, Column, ColumnSpec, Modifier, ScrollState, SemanticsNode, Size};
+use cranpose_testing::{RobotTestRule, TestRenderer, create_headless_robot_test};
+use cranpose_ui::{Box, BoxSpec, Column, ColumnSpec, Modifier, ScrollState, Size};
 
 struct Screen {
     robot: RobotTestRule<TestRenderer>,
@@ -92,22 +90,7 @@ fn a_screen_reader_refreshes_through_the_named_action() {
     let mut screen = screen();
     screen.robot.shell_mut().set_semantics_enabled(true);
     screen.robot.wait_for_idle();
-    let refresh = |node: &SemanticsNode| {
-        node.details()
-            .custom_actions
-            .iter()
-            .find(|action| action.label == "Refresh")
-            .cloned()
-    };
-    let tree = screen
-        .robot
-        .shell_mut()
-        .semantics_tree()
-        .expect("semantics");
-    let action = find_semantics_node(tree.root(), &|node| refresh(node).is_some())
-        .and_then(refresh)
-        .expect("the box offers a Refresh action");
-    action.invoke();
+    crate::reader::custom_action(&mut screen.robot, "Refresh").invoke();
     screen.robot.wait_for_idle();
     assert_eq!(screen.refreshes.get(), 1);
 }
