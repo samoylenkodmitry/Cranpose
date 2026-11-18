@@ -390,6 +390,10 @@ impl MemoryApplier {
     /// [`IDLE_PASSES`](crate::collections::pass_aged::IDLE_PASSES) frames, and lets the oldest of
     /// the rest go. A pool whose frames ask for no node of its type keeps none. A shell calls it
     /// at the end of each frame.
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "each pool ends its frame on its own, so the order of the pools does not matter"
+    )]
     pub fn end_recycle_frame(&mut self) {
         for pool in self.state.recycle_pools.values_mut() {
             pool.end_frame();
@@ -398,6 +402,10 @@ impl MemoryApplier {
 
     /// Lets every pooled recycled node go, and the room the pools took: the tree rests, and its
     /// next nodes come fresh. A shell calls it when it trims at rest.
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "each pool lets its nodes go on its own, so the order of the pools does not matter"
+    )]
     pub fn trim_recycled_nodes(&mut self) {
         for pool in self.state.recycle_pools.values_mut() {
             pool.rest();
