@@ -7,8 +7,11 @@ use cranpose::CropRect;
 use crate::{FieldOfView, FoveatedEncoding, Pose};
 
 #[cfg_attr(
-    not(any(test, all(headset, target_os = "android"))),
-    expect(dead_code, reason = "the headset backend uses it")
+    all(target_arch = "wasm32", not(test)),
+    expect(
+        dead_code,
+        reason = "a web page has no decoder, so no flat scene reads it"
+    )
 )]
 // An angle at or beyond this many radians from the view's direction has no picture plane.
 const MAX_ANGLE: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
@@ -50,8 +53,11 @@ pub struct StreamedViews {
 
 impl StreamedViews {
     #[cfg_attr(
-        not(any(test, all(headset, target_os = "android"))),
-        expect(dead_code, reason = "the headset backend calls it")
+        all(target_arch = "wasm32", not(test)),
+        expect(
+            dead_code,
+            reason = "a web page has no decoder, so no flat scene reads it"
+        )
     )]
     // The views with unit orientations, if the headset's compositor can show them: the poses are
     // finite, the fields of view are proper, and each rectangle lies inside a picture of
@@ -67,8 +73,11 @@ impl StreamedViews {
 
 impl StreamedView {
     #[cfg_attr(
-        not(any(test, all(headset, target_os = "android"))),
-        expect(dead_code, reason = "the headset backend calls it")
+        all(target_arch = "wasm32", not(test)),
+        expect(
+            dead_code,
+            reason = "a web page has no decoder, so no flat scene reads it"
+        )
     )]
     fn checked(mut self, picture: (u32, u32)) -> Result<Self, &'static str> {
         if !self.pose.position.iter().all(|v| v.is_finite()) {

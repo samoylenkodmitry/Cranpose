@@ -75,4 +75,5 @@ libc = { version = "0.2", optional = true }
 windows-sys = { version = "0.61", optional = true, features = ["Win32_System_Performance"] }
 
 [dev-dependencies]
+cranpose = { workspace = true, features = ["renderer-wgpu", "embedded-default-font"] }
 cranpose-testing = { path = "../cranpose-testing" }

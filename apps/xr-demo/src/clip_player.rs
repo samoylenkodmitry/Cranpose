@@ -57,6 +57,18 @@ impl ClipPlayer {
         ))
     }
 
+    // Makes the frames decoder alone, for a window that has no surface to decode into. Returns
+    // the player and the decoder's frames.
+    #[cfg(not(target_os = "android"))]
+    pub(crate) fn start_frames() -> Result<(Self, DecodedFrames), DecoderError> {
+        let decoder = decoder(VideoCodec::H264, DecoderOutput::Frames { depth: DEPTH })?;
+        let frames = decoder.frames();
+        Ok((
+            Self::spawn(vec![decoder], frames.clone(), frames.clone()),
+            frames,
+        ))
+    }
+
     fn spawn(decoders: Vec<VideoDecoder>, reports: DecodedFrames, stats: DecodedFrames) -> Self {
         Self {
             _thread: FeedThread::spawn("clip-player", move |stop| {

@@ -58,7 +58,8 @@ Cranpose developers too:
   on the surface.
 - `StreamedScene(frames, views, stats)`: frames that another machine rendered, shown as a projection
   layer. Jetpack XR has no such composable. It has no `Spatial` prefix, because it is not placed
-  in a `Subspace`: it fills the viewer's view.
+  in a `Subspace`: it fills the viewer's view. Outside a headset it fills its box in the layout
+  with the left eye's picture of the newest frame.
 - `SpatialCurvedRow(modifier, curve_radius) { ... }`: panels bent around the viewer at
   `curve_radius` dp. Each panel is a cylinder layer, and a controller's ray follows its curve.
   A runtime without `XR_KHR_composition_layer_cylinder` shows the panels flat.
@@ -428,6 +429,26 @@ second in the demo, and the headset runs at 120 Hz. With a second scene that unw
 picture of two 640 by 720 pixel eyes, both scenes together cost 0.45 ms of CPU and 0.08 ms of GPU
 for each frame on average, and the foveated shader compiled in 14 ms when its first frame came. The `stream-costs` feature of `cranpose-xr`
 times the passes and logs the costs once a second. Without it the passes run with no timing.
+
+
+### Outside a headset
+
+Without a headset, `StreamedScene` composes `PlayerSurfaceIntake` of `cranpose`, which has the box,
+the content scale, the converter and the GPU context of `PlayerSurface`. `PlayerSurface` takes the
+newest picture of the decoder. `PlayerSurfaceIntake` calls an `intake` closure each time the decoder
+has pictures. The closure takes the pictures with `DecodedFrames::next_frame` and gives the one to
+show to `FramePresenter::present(frame, part)`, which converts it on the GPU and shows `part` of it
+through a `BitmapRegionPainter`. No GPU pass is added: the region crops the picture where `Image`
+draws it. `present` returns `false` when the platform cannot import the picture, when the GPU holds
+too many pictures or when `part` lies outside the picture.
+
+The scene's closure follows `Stream::intake` of the headset backend. It asks `views` for each frame
+in the order of the stream, checks the views with the headset's checks and takes the rectangle of the
+left eye. The newest accepted frame shows. Each other frame counts as skipped. `StreamStats` gets
+`shown` for a frame that `present` took, and `repeated` stays 0: the shell draws a frame of the window
+when something changes, and a callback that counted the frames of the window would keep the shell
+drawing at the display's rate. A foveated picture shows as the host encoded it, because the unwarp is
+a pass of the headset backend, and the log says so once.
 
 ## Crates
 

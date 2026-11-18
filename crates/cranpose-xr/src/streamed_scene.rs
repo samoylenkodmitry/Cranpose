@@ -4,6 +4,8 @@ use std::rc::Rc;
 
 use cranpose::{DecodedFrames, prelude::*};
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::flat_stream::FlatStream;
 use crate::{StreamStats, StreamedViews, space::local_space, stream_source::StreamSource};
 
 /// A scene that another machine renders for both eyes, streams to the headset and a
@@ -31,7 +33,23 @@ use crate::{StreamStats, StreamedViews, space::local_space, stream_source::Strea
 /// the newest decoded frame. Frames with views that the compositor cannot show are dropped, and
 /// the log says why. `stats` receives how many frames the scene showed, skipped and repeated.
 ///
-/// Outside a headset the composable shows nothing.
+/// Outside a headset, in a desktop window or on the screen of a phone or a tablet, the scene
+/// fills the box that the layout gives it. It shows the left eye's picture of the newest decoded
+/// frame, scaled as [`ContentScale::Fit`](cranpose::ContentScale::Fit) scales it, and shows that
+/// picture again while no newer frame comes. It takes the left eye's rectangle from the frame's
+/// views and ignores their poses, their fields of view and their target display time. It skips a
+/// frame whose views are refused, as the headset does. The headset's compositor unwarps a
+/// foveated picture. A flat scene has no unwarp, so it shows such a picture as the host encoded
+/// it and logs that once. A host that streams to a flat viewer must not foveate. The decoder's
+/// `depth` must be at least 6 there, as for [`PlayerSurface`](cranpose::PlayerSurface), which
+/// draws the pictures. The scene draws nothing where the platform has no decoder or no GPU import
+/// for its frames, and counts each frame that it takes as skipped.
+///
+/// Outside a headset, `stats` counts a frame as shown when the scene hands it to the renderer. It
+/// counts a frame as skipped when a newer frame replaced it, when the views refused it or when no
+/// GPU import was possible. A window draws a frame only when something on it changes, and the
+/// system shows the window's last frame again by itself. The scene sees no repeat, so `repeated`
+/// stays 0.
 #[composable]
 pub fn StreamedScene(
     frames: DecodedFrames,
@@ -39,6 +57,8 @@ pub fn StreamedScene(
     stats: StreamStats,
 ) {
     let Some(space) = local_space().current() else {
+        #[cfg(not(target_arch = "wasm32"))]
+        FlatStream(frames, views, stats);
         return;
     };
     let id = remember({

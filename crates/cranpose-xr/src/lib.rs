@@ -8,6 +8,7 @@
 //! A [`SpatialExternalSurface`] gives the app a surface that a hardware video decoder or a camera
 //! writes into. The compositor shows its pictures as a layer with no copy. A [`StreamedScene`]
 //! shows frames that another machine rendered, from the head pose that each was rendered for.
+//! Outside a headset it shows the left eye's picture of the newest frame in the layout.
 //!
 //! A [`SpatialFrameEffect`] gives an app the headset's state in each frame: the head, the eyes,
 //! the controllers and the recenter event, as an [`XrFrame`]. [`Haptics`] plays vibrations on the
@@ -33,6 +34,8 @@ mod depth_order;
 #[cfg(any(test, headset))]
 mod exit_request;
 mod field_of_view;
+#[cfg(not(target_arch = "wasm32"))]
+mod flat_stream;
 mod follow_mode;
 mod follow_origin;
 mod following_subspace;
