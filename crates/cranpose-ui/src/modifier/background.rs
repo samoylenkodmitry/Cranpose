@@ -8,7 +8,7 @@ impl Modifier {
     ///
     /// Example: `Modifier::empty().background(Color::rgb(1.0, 0.0, 0.0))`
     pub fn background(self, color: Color) -> Self {
-        let modifier = Self::from_dyn_element(plain_element(BackgroundElement::new(color)))
+        let modifier = Self::from_dyn_element(plain_element(&BackgroundElement::new(color)))
             .with_inspector_metadata(background_metadata(color));
         self.then(modifier)
     }
@@ -18,7 +18,7 @@ impl Modifier {
     /// Example: `Modifier::empty().rounded_corners(8.0)`
     pub fn rounded_corners(self, radius: f32) -> Self {
         let shape = RoundedCornerShape::uniform(radius);
-        let modifier = Self::from_dyn_element(plain_element(CornerShapeElement::new(shape)));
+        let modifier = Self::from_dyn_element(plain_element(&CornerShapeElement::new(shape)));
         self.then(modifier)
     }
 
@@ -26,7 +26,7 @@ impl Modifier {
     ///
     /// Example: `Modifier::empty().rounded_corner_shape(shape)`
     pub fn rounded_corner_shape(self, shape: RoundedCornerShape) -> Self {
-        let modifier = Self::from_dyn_element(plain_element(CornerShapeElement::new(shape)));
+        let modifier = Self::from_dyn_element(plain_element(&CornerShapeElement::new(shape)));
         self.then(modifier)
     }
 }

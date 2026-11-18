@@ -5,7 +5,7 @@
 //! receiver and arguments and each argument is a constant. Rebuilt on each
 //! recomposition, it costs an allocation an element, and the node it goes to
 //! compares it element by element with the one it holds and drops it. The
-//! macro keeps such a chain in the thread's table of constants instead,
+//! macro keeps such a chain in the thread's table of kept modifiers instead,
 //! under a key of its source position: the first run builds it, later runs
 //! hand out the same chain, which the node finds equal by identity. A chain
 //! whose head reads a variable keeps its constant tail the same way and
@@ -76,10 +76,16 @@ const MIN_KEPT_TAIL: usize = 2;
 
 /// Keeps each modifier chain of constants in `block`, closures included,
 /// and the constant tail of each chain that starts with other builders, in
-/// the thread's table of constants. Nested items keep nothing.
-pub(crate) fn keep_constant_modifiers(core_path: &TokenStream2, block: &mut syn::Block) {
+/// the thread's table of kept modifiers in the crate that `ui_path` names.
+/// Nested items keep nothing.
+pub(crate) fn keep_constant_modifiers(
+    core_path: &TokenStream2,
+    ui_path: &TokenStream2,
+    block: &mut syn::Block,
+) {
     let mut keeper = Keeper {
         core_path,
+        ui_path,
         next_index: 0,
     };
     keeper.visit_block_mut(block);
@@ -87,6 +93,7 @@ pub(crate) fn keep_constant_modifiers(core_path: &TokenStream2, block: &mut syn:
 
 struct Keeper<'a> {
     core_path: &'a TokenStream2,
+    ui_path: &'a TokenStream2,
     next_index: u32,
 }
 
@@ -96,9 +103,10 @@ impl Keeper<'_> {
         let index = self.next_index;
         self.next_index += 1;
         let core_path = self.core_path;
+        let ui_path = self.ui_path;
         let key = syn::Ident::new("__CRANPOSE_CONSTANT_KEY", Span::mixed_site());
         syn::parse_quote! {
-            #core_path::__constant(
+            #ui_path::__kept_modifier(
                 {
                     const #key: #core_path::Key =
                         #core_path::constant_value_key(file!(), line!(), column!(), #index);

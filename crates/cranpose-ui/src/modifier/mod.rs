@@ -22,6 +22,7 @@ mod fill;
 pub(crate) mod focus;
 mod focus_ring;
 mod graphics_layer;
+mod kept_modifier;
 mod key_input;
 mod layout_data;
 mod local;
@@ -75,6 +76,8 @@ use elements::ModifierKind;
 pub(crate) use focus::FocusRequesterElement;
 pub use focus::{FocusDirection, FocusRequestError, FocusRequester};
 pub use graphics_layer::GlassMaterial;
+pub use kept_modifier::__kept_modifier;
+pub(crate) use kept_modifier::KeptModifiers;
 pub use key_input::KeyEventRoute;
 pub(crate) use local::{
     ModifierLocalAncestorResolver, ModifierLocalSource, ModifierLocalToken, ResolvedModifierLocal,
@@ -280,7 +283,7 @@ impl Modifier {
         let modifier = crate::thread_state::with(|state| {
             state
                 .clip_to_bounds
-                .get_or_init(|| Self::from_dyn_element(plain_element(ClipToBoundsElement)))
+                .get_or_init(|| Self::from_dyn_element(plain_element(&ClipToBoundsElement)))
                 .clone()
         });
         let modifier =

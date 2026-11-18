@@ -24,7 +24,7 @@ impl Modifier {
     ///
     /// Example: `Modifier::empty().offset(10.0, 20.0)`
     pub fn offset(self, x: f32, y: f32) -> Self {
-        let modifier = Self::from_dyn_element(plain_element(OffsetElement::new(x, y, true)))
+        let modifier = Self::from_dyn_element(plain_element(&OffsetElement::new(x, y, true)))
             .with_inspector_metadata(inspector_metadata("offset", move |info| {
                 info.add_offset_components("offsetX", "offsetY", Point { x, y });
             }));
@@ -39,7 +39,7 @@ impl Modifier {
     ///
     /// Example: `Modifier::empty().absolute_offset(10.0, 20.0)`
     pub fn absolute_offset(self, x: f32, y: f32) -> Self {
-        let modifier = Self::from_dyn_element(plain_element(OffsetElement::new(x, y, false)))
+        let modifier = Self::from_dyn_element(plain_element(&OffsetElement::new(x, y, false)))
             .with_inspector_metadata(inspector_metadata("absoluteOffset", move |info| {
                 info.add_offset_components("absoluteOffsetX", "absoluteOffsetY", Point { x, y });
             }));
@@ -60,7 +60,7 @@ impl Modifier {
     ///
     /// Example: `Modifier::empty().offset_fraction(0.0, -0.5)`
     pub fn offset_fraction(self, x_fraction: f32, y_fraction: f32) -> Self {
-        let modifier = Self::from_dyn_element(plain_element(FractionalOffsetElement::new(
+        let modifier = Self::from_dyn_element(plain_element(&FractionalOffsetElement::new(
             x_fraction, y_fraction,
         )))
         .with_inspector_metadata(inspector_metadata("offsetFraction", move |info| {

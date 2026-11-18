@@ -222,6 +222,8 @@ pub use memory_headroom::{current_memory_headroom, set_memory_headroom};
 pub use modal::{
     ModalRegistration, clear_modals, dispatch_modal_back, local_modal_depth, modal_depth,
 };
+#[doc(hidden)]
+pub use modifier::__kept_modifier;
 pub use modifier::{
     BlendMode, Brush, Color, CompositingStrategy, CornerRadii, DpOffset, DragAndDropEvent,
     DragAndDropOutcome, DragAndDropPayload, DragAndDropPoint, DragAndDropSource,

@@ -282,6 +282,23 @@ fn core_crate_path() -> TokenStream2 {
     }
 }
 
+/// The path of the crate that holds `Modifier`: the facade, which re-exports
+/// it, or cranpose-ui. `None` in a crate that has neither, where no chain is
+/// kept.
+fn ui_crate_path() -> Option<TokenStream2> {
+    let (package, found) = ["cranpose", "cranpose-ui"]
+        .into_iter()
+        .find_map(|package| crate_name(package).ok().map(|found| (package, found)))?;
+    // Both libraries take their own name with `extern crate self`, so the
+    // name serves in the library, its examples and its doctests alike.
+    let name = match found {
+        FoundCrate::Itself => package.replace('-', "_"),
+        FoundCrate::Name(name) => name,
+    };
+    let ident = Ident::new(&name, Span::call_site());
+    Some(quote!(#ident))
+}
+
 /// The key of a slot the expansion takes: a constant of the call site, or
 /// under hot reload, where a patch moves call sites, the caller's location
 /// as a call computes it.
@@ -776,8 +793,8 @@ fn inject_groups(core_path: &TokenStream2, func: &mut ItemFn) {
     );
     // A hot patch keeps the slots of unchanged code, so a kept chain whose
     // constants it edits would stay as it was.
-    if !hot_reload {
-        constant_modifiers::keep_constant_modifiers(core_path, &mut func.block);
+    if !hot_reload && let Some(ui_path) = ui_crate_path() {
+        constant_modifiers::keep_constant_modifiers(core_path, &ui_path, &mut func.block);
     }
     if hot_reload {
         let end = func.block.brace_token.span.close();

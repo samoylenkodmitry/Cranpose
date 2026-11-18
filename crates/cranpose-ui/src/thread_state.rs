@@ -15,7 +15,7 @@ use crate::{
     announce::Announcement,
     environment_locals::EnvironmentLocals,
     layout::policies::SpareFlexLists,
-    modifier::{Modifier, ModifierNodeSlices},
+    modifier::{KeptModifiers, Modifier, ModifierNodeSlices},
     render_state::{AppContext, AppContextId},
     selection_container::RegistrarInner,
     text::{draw_scope_text::DrawnTextStyles, shared_plain_text::SharedPlainText},
@@ -103,6 +103,7 @@ pub(crate) struct UiThreadState {
     pub(crate) node_densities: RefCell<[Option<Rc<crate::density::Density>>; 2]>,
     pub(crate) draw_text_measurer: OnceCell<Rc<dyn DrawTextMeasurer>>,
     pub(crate) spare_flex_lists: SpareFlexLists,
+    pub(crate) kept_modifiers: KeptModifiers,
 }
 
 impl UiThreadState {
@@ -133,6 +134,7 @@ impl UiThreadState {
             node_densities: RefCell::new([None, None]),
             draw_text_measurer: OnceCell::new(),
             spare_flex_lists: SpareFlexLists::new(),
+            kept_modifiers: RefCell::new(Vec::new()),
         }
     }
 }

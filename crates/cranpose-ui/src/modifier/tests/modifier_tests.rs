@@ -2137,7 +2137,7 @@ fn modifiers_without_inspector_metadata_carry_no_inspector_list() {
 #[test]
 fn plain_elements_compare_as_compose_data_classes() {
     let padding = |value: f32| {
-        cranpose_foundation::plain_element(crate::modifier_nodes::PaddingElement::new(
+        cranpose_foundation::plain_element(&crate::modifier_nodes::PaddingElement::new(
             EdgeInsets::uniform(value),
         ))
     };

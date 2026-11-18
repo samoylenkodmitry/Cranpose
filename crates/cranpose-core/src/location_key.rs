@@ -1,7 +1,6 @@
 use std::{
-    any::{Any, TypeId},
+    any::TypeId,
     hash::{Hash, Hasher},
-    rc::Rc,
     sync::OnceLock,
 };
 
@@ -346,71 +345,4 @@ pub const fn constant_value_key(file: &str, line: u32, column: u32, index: u32) 
     hash = fnv1a_location_key_bytes(hash, &[0xfc]);
     hash = fnv1a_location_key_bytes(hash, &index.to_le_bytes());
     Key(avalanche_location_key(hash))
-}
-
-/// Slots of the per-thread table of constant values, as a power of two.
-const CONSTANT_SLOTS: usize = 128;
-
-/// The value `make` gives, for an expression `#[composable]` found to give
-/// the same value every time it runs, such as a modifier chain of
-/// constants: `key` names the expression. The thread keeps the value it
-/// made last for `key` in a table of [`CONSTANT_SLOTS`] slots, so the
-/// expression is made again only when another expression took its slot.
-/// It needs no composition: the expression may sit in a closure that runs
-/// in an event handler, an effect or another thread.
-#[doc(hidden)]
-pub fn __constant<T: Clone + 'static>(key: Key, make: impl FnOnce() -> T) -> T {
-    if let Some(value) = kept_copy::<T>(key) {
-        return value;
-    }
-    let value = make();
-    keep_value(key, &value);
-    value
-}
-
-// A copy of the value kept for `key`, if it is a `T`. Out of line, once a
-// type: `__constant` has an instance for each call site, as each passes its
-// own closure, so the lookup, the downcast and the copy here would otherwise
-// repeat in every one.
-#[inline(never)]
-fn kept_copy<T: Clone + 'static>(key: Key) -> Option<T> {
-    kept_constant(key)?.downcast_ref::<T>().cloned()
-}
-
-// Keeps a copy of `value` for `key`. Out of line, once a type: it runs once
-// a kept value, and inlined it would take code in every caller.
-#[inline(never)]
-fn keep_value<T: Clone + 'static>(key: Key, value: &T) {
-    keep_constant(key, Rc::new(value.clone()));
-}
-
-// The slot of `key` in the table of constants, found here and not in the
-// generic functions, whose instances would each hold the mask.
-fn constant_slot(key: Key) -> usize {
-    (key.0 as usize) & (CONSTANT_SLOTS - 1)
-}
-
-// The value kept for `key`, outside `kept_copy` so its types make no thread
-// state access each.
-fn kept_constant(key: Key) -> Option<Rc<dyn Any>> {
-    thread_state::try_runtimes(|state| {
-        let constants = state.constants.try_borrow().ok()?;
-        let (kept_key, value) = constants.get(constant_slot(key))?.as_ref()?;
-        (*kept_key == key).then(|| Rc::clone(value))
-    })
-    .flatten()
-}
-
-fn keep_constant(key: Key, stored: Rc<dyn Any>) {
-    thread_state::try_runtimes(|state| {
-        let Ok(mut constants) = state.constants.try_borrow_mut() else {
-            return;
-        };
-        if constants.is_empty() {
-            constants.resize_with(CONSTANT_SLOTS, || None);
-        }
-        if let Some(entry) = constants.get_mut(constant_slot(key)) {
-            *entry = Some((key, stored));
-        }
-    });
 }

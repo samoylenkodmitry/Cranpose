@@ -11,11 +11,11 @@ fn fill_modifier(
     if fraction == 1.0 {
         crate::thread_state::with(|state| {
             full(state)
-                .get_or_init(|| Modifier::from_dyn_element(plain_element(element(1.0))))
+                .get_or_init(|| Modifier::from_dyn_element(plain_element(&element(1.0))))
                 .clone()
         })
     } else {
-        Modifier::from_dyn_element(plain_element(element(fraction)))
+        Modifier::from_dyn_element(plain_element(&element(fraction)))
     }
 }
 

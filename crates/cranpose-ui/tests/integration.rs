@@ -18,6 +18,7 @@ mod grid;
 mod held_modifier_elements;
 mod inline_widgets;
 mod inspector_and_insets;
+mod kept_modifiers;
 mod lazy_content_padding;
 mod lazy_memory_headroom;
 mod lazy_retained_many_roots;
