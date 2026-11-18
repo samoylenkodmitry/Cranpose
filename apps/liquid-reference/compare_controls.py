@@ -11,6 +11,11 @@ from PIL import Image, ImageChops
 VISIBLE_DIFFERENCE = 8
 
 
+# The native popover of each `confirmation` source value grown by 45 points,
+# and kept below the status bar.
+CONFIRMATION_REGIONS = {"0": (36, 199, 366, 474), "1": (23, 60, 366, 315), "2": (36, 587, 379, 840)}
+
+
 def read_cases(directory):
     manifest = json.loads((directory / "manifest.json").read_text())
     cases = {}
@@ -75,8 +80,8 @@ def compare(native, cranpose, output, native_extra=(), cranpose_extra=(), prefix
             elif name.startswith("control-nav-bar-"):
                 region = (0, 60, 402, 250)
             elif name.startswith("control-confirmation-"):
-                # The popover sits above or beside its source anywhere on the screen.
-                region = (0, 60, 402, 840)
+                # Native's popover frame for each source, with 45 points for the shadow.
+                region = CONFIRMATION_REGIONS[name.rsplit("-", 1)[1]]
             else:
                 region = (0, 317, 402, 587)
             crop = tuple(round(coordinate * scale) for coordinate in region)
