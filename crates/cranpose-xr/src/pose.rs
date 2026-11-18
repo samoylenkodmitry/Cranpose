@@ -75,6 +75,18 @@ pub(crate) fn turn_degrees(pitch: f32, yaw: f32, roll: f32) -> [f32; 4] {
     )
 }
 
+// A forward axis whose level part is shorter than this is too steep to give a heading: about 6
+// degrees from the vertical.
+const STEEP: f32 = 0.1;
+
+// The turn about the vertical axis, in degrees, that takes the direction straight ahead (-z) to
+// where `pose` points, seen from above. `None` while `pose` points nearly straight up or down.
+pub(crate) fn heading_degrees(pose: &Pose) -> Option<f32> {
+    let ahead = pose.rotate([0.0, 0.0, -1.0]);
+    let level = ahead[0].hypot(ahead[2]);
+    (level >= STEEP).then(|| (-ahead[0]).atan2(-ahead[2]).to_degrees())
+}
+
 // The unit quaternion x, y, z, w of the turn that takes the x, y and z axes to `x`, `y` and
 // `z`, which are unit vectors at right angles with `x` cross `y` equal to `z`.
 #[cfg(any(test, headset))]

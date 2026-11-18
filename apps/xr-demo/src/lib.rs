@@ -1,6 +1,7 @@
 // A Cranpose app for headsets. In a Meta Quest its panels stand in the room, and a controller's
 // trigger presses the buttons: one counts, the other shows or hides the room around the panels.
-// A strip above them is bent around the viewer. On the desktop the panels draw flat, and a panel
+// A strip above them is bent around the viewer. A ball above the left controller shows or hides
+// the strip when the right controller's ray presses it. On the desktop the panels draw flat, and a panel
 // plays two clips through the platform's decoder and a player surface.
 
 use std::{
@@ -12,9 +13,10 @@ use std::{
 use cranpose::{CropRect, DecodedFrames, prelude::*};
 use cranpose_ui::text::FontWeight;
 use cranpose_xr::{
-    FieldOfView, Pose, SpatialCurvedRow, SpatialExternalSurface, SpatialPanel, StereoMode,
-    StreamStats, StreamedScene, StreamedView, StreamedViews, Subspace, SubspaceModifier,
-    local_headset_properties, local_spatial_capabilities, local_spatial_environment,
+    FieldOfView, FollowMode, FollowTarget, FollowingSubspace, Hand, Pose, SpatialCurvedRow,
+    SpatialExternalSurface, SpatialPanel, StereoMode, StreamStats, StreamedScene, StreamedView,
+    StreamedViews, Subspace, SubspaceModifier, local_headset_properties,
+    local_spatial_capabilities, local_spatial_environment,
 };
 #[cfg(not(target_os = "android"))]
 use player_demo::Clips;
@@ -33,6 +35,9 @@ use pattern_writer::{PatternWriter, Split};
 
 cranpose::app_capabilities!();
 
+// The ball's diameter in dp, which are millimeters.
+const BALL: f32 = 40.0;
+
 // The app: a panel with a counter, a smaller panel to the right and a 16:9 video surface to the
 // left, both turned toward the viewer, and a strip above them that is bent around the viewer.
 // The hardware decoder plays a clip into the video surface, and the same clip's frames go to a
@@ -42,6 +47,7 @@ cranpose::app_capabilities!();
 #[composable]
 pub fn XrDemo() {
     let presses = rememberMutableStateOf(|| 0_u32);
+    let strip_shown = rememberMutableStateOf(|| true);
     let readout = rememberMutableStateOf(Readout::default);
     let clock = remember(HeadsetClock::default).with(Clone::clone);
     let logs = remember(StreamLogs::default).with(Clone::clone);
@@ -81,9 +87,52 @@ pub fn XrDemo() {
             Split::TopBottom,
         );
         CounterPanel(presses);
-        CurvedStrip();
+        if strip_shown.get() {
+            CurvedStrip();
+        }
         PressesPanel(presses, readout);
     });
+    ControllerBall(strip_shown);
+}
+
+// A ball of 4 cm that floats 10 cm above the left controller, upright wherever the hand tilts.
+// The right controller's ray presses it to show or hide the curved strip. The left ray passes
+// through it. It stays while the panels are hidden, so it brings them back. A window has no
+// controller and no ball.
+#[composable]
+fn ControllerBall(strip_shown: MutableState<bool>) {
+    if !local_spatial_capabilities()
+        .current()
+        .is_spatial_ui_enabled()
+    {
+        return;
+    }
+    FollowingSubspace(
+        FollowTarget::Controller(Hand::Left, FollowMode::Tight),
+        move || {
+            SpatialPanel(
+                SubspaceModifier::new()
+                    .size(BALL, BALL)
+                    .offset(0.0, 100.0, 0.0),
+                move || {
+                    let color = if strip_shown.get() {
+                        Color(0.2, 0.6, 0.45, 1.0)
+                    } else {
+                        Color(0.45, 0.45, 0.5, 1.0)
+                    };
+                    Box(
+                        Modifier::empty()
+                            .fill_max_size()
+                            .background(color)
+                            .rounded_corners(BALL / 2.0)
+                            .clickable(move |_| strip_shown.set(!strip_shown.get())),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+        },
+    );
 }
 
 // A label 2 cm in front of the video surface, at its upper left. The compositor draws it over the

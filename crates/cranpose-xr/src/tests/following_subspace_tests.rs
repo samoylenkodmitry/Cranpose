@@ -8,10 +8,10 @@ use cranpose_testing::{
 };
 
 use crate::{
-    FollowMode, FollowTarget, FollowingSubspace, Pose, Recenter, SpatialMoveEventType,
+    FollowMode, FollowTarget, FollowingSubspace, Hand, Pose, Recenter, SpatialMoveEventType,
     SpatialPanel, SubspaceModifier,
     pose::turn_degrees,
-    space::{PanelMove, SUBSPACE_ORIGIN, Space, local_space},
+    space::{PanelMove, Ride, SUBSPACE_ORIGIN, Space, local_space},
 };
 
 // A headset with a following subspace that holds a movable panel, and a second one that an app shows
@@ -54,6 +54,11 @@ fn headset() -> Headset {
 }
 
 impl Headset {
+    // Tells the space where the head is, with no controller tracked.
+    fn track(&self, head: Option<Pose>, time: Duration, recenter: Option<Recenter>) {
+        self.space.track(head, [None, None], time, recenter);
+    }
+
     // The poses of the panels in the room, after the composition caught up.
     fn poses(&mut self) -> Vec<Pose> {
         self.robot.wait_for_idle();
@@ -90,14 +95,12 @@ fn a_following_subspace_stands_in_front_of_the_head_and_again_after_a_recenter()
 
     // The first tracked frame puts the panel a meter ahead of the head, turned to face it
     let first_head = head([2.0, 1.5, 3.0], 90.0);
-    headset.space.track_head(Some(first_head), seconds(1), None);
+    headset.track(Some(first_head), seconds(1), None);
     let ahead_of_first = head([1.0, 1.5, 3.0], 90.0);
     assert!(same(&headset.poses()[0], &ahead_of_first));
 
     // The head moves, and the panel stays: it is static
-    headset
-        .space
-        .track_head(Some(head([0.0, 1.6, 0.0], 0.0)), seconds(2), None);
+    headset.track(Some(head([0.0, 1.6, 0.0], 0.0)), seconds(2), None);
     assert!(same(&headset.poses()[0], &ahead_of_first));
 
     // A subspace that composes later stands ahead of the head as it is then
@@ -113,11 +116,9 @@ fn a_following_subspace_stands_in_front_of_the_head_and_again_after_a_recenter()
         change_time: seconds(3),
         pose_in_previous_space: None,
     };
-    headset
-        .space
-        .track_head(Some(third_head), seconds(2), Some(recenter));
+    headset.track(Some(third_head), seconds(2), Some(recenter));
     assert!(same(&headset.poses()[0], &ahead_of_first));
-    headset.space.track_head(Some(third_head), seconds(3), None);
+    headset.track(Some(third_head), seconds(3), None);
     let ahead_of_third = head([1.5, 1.0, 0.5], -90.0);
     let poses = headset.poses();
     assert!(same(&poses[0], &ahead_of_third));
@@ -137,9 +138,196 @@ fn a_following_subspace_stands_in_front_of_the_head_and_again_after_a_recenter()
         change_time: seconds(4),
         pose_in_previous_space: None,
     };
-    headset
-        .space
-        .track_head(Some(first_head), seconds(4), Some(again));
+    headset.track(Some(first_head), seconds(4), Some(again));
     let relative = ahead_of_third.inverse().then(&carried);
     assert!(same(&headset.poses()[0], &ahead_of_first.then(&relative)));
+}
+
+// A headset whose app puts a ball of `diameter` dp 10 cm above the origin of a subspace that
+// follows `target`.
+struct Ball {
+    robot: RobotTestRule<TestRenderer>,
+    space: Space,
+    diameter: MutableState<f32>,
+}
+
+fn ball(target: FollowTarget) -> Ball {
+    let held = Rc::new(RefCell::new(None));
+    let keep = Rc::clone(&held);
+    let robot = create_headless_robot_test(500, 400, move || {
+        let space = remember(Space::new).with(Clone::clone);
+        let diameter = rememberMutableStateOf(|| 40.0);
+        keep.replace(Some((space.clone(), diameter)));
+        CompositionLocalProvider([local_space().provides(Some(space))], move || {
+            FollowingSubspace(target, move || {
+                let size = diameter.get();
+                SpatialPanel(
+                    SubspaceModifier::new()
+                        .size(size, size)
+                        .offset(0.0, 100.0, 0.0),
+                    || {},
+                );
+            });
+        });
+    });
+    let (space, diameter) = held.take().expect("the content composed");
+    Ball {
+        robot,
+        space,
+        diameter,
+    }
+}
+
+impl Ball {
+    // The ball as the frame sees it, with no composition between the tracking and the read.
+    fn slot(&self) -> crate::space::PanelSlot {
+        self.space.panels()[0]
+    }
+
+    // Tells the space where the controllers are in a frame at `time`.
+    fn track(&self, controllers: [Option<Pose>; 2], time: Duration) {
+        self.space.track(None, controllers, time, None);
+    }
+}
+
+// A controller at `position` that points up by `pitch` degrees, is turned left by `yaw` and
+// rolled by `roll`.
+fn controller(position: [f32; 3], pitch: f32, yaw: f32, roll: f32) -> Pose {
+    Pose {
+        position,
+        orientation: turn_degrees(pitch, yaw, roll),
+    }
+}
+
+// Whether the ball stands at `position` and turned left by `yaw` degrees only.
+fn upright_at(slot: &crate::space::PanelSlot, position: [f32; 3], yaw: f32) -> bool {
+    same(&slot.pose, &head(position, yaw))
+}
+
+#[test]
+fn a_subspace_follows_its_controller_in_every_frame_and_stays_upright() {
+    let mut ball = ball(FollowTarget::Controller(Hand::Left, FollowMode::Tight));
+    // The runtime does not track the controller: the ball shows nowhere
+    ball.robot.wait_for_idle();
+    assert_eq!(ball.slot().ride, Ride::Hidden);
+
+    // The controller is tilted and rolled. The ball stands 10 cm straight above it and turns
+    // with its heading only. The read comes right after the tracking: a frame hit-tests the
+    // panels before it composes.
+    let tilted = controller([0.3, 1.0, -0.4], 50.0, 30.0, 20.0);
+    ball.track([Some(tilted), None], seconds(1));
+    assert_eq!(ball.slot().ride, Ride::On(Hand::Left));
+    assert!(upright_at(&ball.slot(), [0.3, 1.1, -0.4], 30.0));
+
+    // Each frame moves it again
+    for (frame, (position, pitch, yaw, roll)) in [
+        ([-0.2, 1.3, -0.6], -20.0, -45.0, -10.0),
+        ([0.0, 0.8, 0.1], 70.0, 120.0, 90.0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let moved = controller(position, pitch, yaw, roll);
+        ball.track([Some(moved), None], seconds(2 + frame as u64));
+        let up = [position[0], position[1] + 0.1, position[2]];
+        assert!(upright_at(&ball.slot(), up, yaw));
+    }
+
+    // A composition of the ball, here because its size changed, keeps it at the controller
+    ball.diameter.set(50.0);
+    ball.robot.wait_for_idle();
+    assert_eq!(ball.space.panels()[0].size(), [50.0, 50.0]);
+    assert!(upright_at(&ball.slot(), [0.0, 0.9, 0.1], 120.0));
+
+    // The other hand's controller does not move it
+    ball.track(
+        [
+            Some(controller([0.0, 0.8, 0.1], 70.0, 120.0, 90.0)),
+            Some(controller([5.0, 5.0, 5.0], 0.0, 0.0, 0.0)),
+        ],
+        seconds(5),
+    );
+    assert!(upright_at(&ball.slot(), [0.0, 0.9, 0.1], 120.0));
+
+    // The runtime loses the controller and finds it again
+    ball.track([None, None], seconds(6));
+    assert_eq!(ball.slot().ride, Ride::Hidden);
+    ball.track([Some(tilted), None], seconds(7));
+    assert_eq!(ball.slot().ride, Ride::On(Hand::Left));
+    assert!(upright_at(&ball.slot(), [0.3, 1.1, -0.4], 30.0));
+}
+
+#[test]
+fn a_controller_that_points_straight_up_keeps_the_heading_that_it_had() {
+    let ball = ball(FollowTarget::Controller(Hand::Right, FollowMode::Tight));
+    ball.track(
+        [None, Some(controller([0.0, 1.0, 0.0], 0.0, 60.0, 0.0))],
+        seconds(1),
+    );
+    assert!(upright_at(&ball.slot(), [0.0, 1.1, 0.0], 60.0));
+    ball.track(
+        [None, Some(controller([0.0, 1.2, 0.0], 90.0, 60.0, 0.0))],
+        seconds(2),
+    );
+    assert!(upright_at(&ball.slot(), [0.0, 1.3, 0.0], 60.0));
+}
+
+#[test]
+fn a_snap_subspace_of_a_controller_places_once_and_stays_when_the_controller_is_lost() {
+    let ball = ball(FollowTarget::Controller(Hand::Left, FollowMode::Snap));
+    assert_eq!(ball.slot().ride, Ride::Hidden);
+    ball.track(
+        [Some(controller([0.5, 1.0, -0.5], 10.0, 90.0, 0.0)), None],
+        seconds(1),
+    );
+    assert!(upright_at(&ball.slot(), [0.5, 1.1, -0.5], 90.0));
+    ball.track(
+        [Some(controller([2.0, 1.0, -0.5], 0.0, 0.0, 0.0)), None],
+        seconds(2),
+    );
+    assert!(upright_at(&ball.slot(), [0.5, 1.1, -0.5], 90.0));
+    ball.track([None, None], seconds(3));
+    assert!(upright_at(&ball.slot(), [0.5, 1.1, -0.5], 90.0));
+    assert_eq!(ball.slot().ride, Ride::On(Hand::Left));
+
+    // A recenter places it again, at the first frame that tracks the controller from its time
+    let recenter = Recenter {
+        change_time: seconds(4),
+        pose_in_previous_space: None,
+    };
+    ball.space
+        .track(None, [None, None], seconds(3), Some(recenter));
+    assert!(upright_at(&ball.slot(), [0.5, 1.1, -0.5], 90.0));
+    ball.track(
+        [Some(controller([1.0, 1.0, 1.0], 0.0, 0.0, 0.0)), None],
+        seconds(4),
+    );
+    assert!(upright_at(&ball.slot(), [1.0, 1.1, 1.0], 0.0));
+}
+
+#[test]
+fn a_tight_subspace_of_the_view_follows_the_head_in_every_frame() {
+    let ball = ball(FollowTarget::View(FollowMode::Tight));
+    // Until the head is tracked the ball stands where a subspace puts it
+    assert!(same(
+        &ball.slot().pose,
+        &SUBSPACE_ORIGIN.then(&Pose::at([0.0, 0.1, 0.0]))
+    ));
+    assert_eq!(ball.slot().ride, Ride::Free);
+    for (frame, (position, yaw)) in [([2.0, 1.5, 3.0], 90.0), ([0.0, 1.6, 0.0], 0.0)]
+        .into_iter()
+        .enumerate()
+    {
+        ball.space.track(
+            Some(head(position, yaw)),
+            [None, None],
+            seconds(1 + frame as u64),
+            None,
+        );
+        let ahead = head(position, yaw).then(&Pose::at([0.0, 0.0, -1.0]));
+        assert!(same(
+            &ball.slot().pose,
+            &ahead.then(&Pose::at([0.0, 0.1, 0.0]))
+        ));
+    }
 }

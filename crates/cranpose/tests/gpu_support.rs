@@ -43,3 +43,50 @@ pub(crate) fn draw_settled(view: &mut EmbeddedView, pixels: &mut Vec<u8>) -> boo
     }
     drew
 }
+
+// The pixels of `texture`, four bytes each, as the GPU holds them.
+pub(crate) fn read_texture(gpu: &GpuContext, texture: &wgpu::Texture) -> Vec<u8> {
+    let (width, height) = (texture.width(), texture.height());
+    let row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: u64::from(row * height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    gpu.queue.submit([encoder.finish()]);
+    let slice = buffer.slice(..);
+    slice.map_async(wgpu::MapMode::Read, |result| result.expect("map"));
+    gpu.device
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        })
+        .expect("poll");
+    let mapped = slice.get_mapped_range().expect("mapped range");
+    let bytes: &[u8] = &mapped;
+    bytes
+        .chunks_exact(row as usize)
+        .flat_map(|line| &line[..(width * 4) as usize])
+        .copied()
+        .collect()
+}

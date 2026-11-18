@@ -22,6 +22,7 @@ const PANEL: PanelSlot = PanelSlot {
     pose: Pose::at([0.0, 0.0, -1.0]),
     mobility: Mobility::Fixed,
     shape: Shape::Flat,
+    ride: Ride::Free,
 };
 
 // A panel of 200 by 100 dp behind the first one and below it in the atlas.
@@ -32,6 +33,7 @@ const BEHIND: PanelSlot = PanelSlot {
     pose: Pose::at([0.0, 0.0, -2.0]),
     mobility: Mobility::Fixed,
     shape: Shape::Flat,
+    ride: Ride::Free,
 };
 
 // A controller at `x` meters that points straight ahead, turned right by `yaw` degrees.
@@ -410,6 +412,7 @@ fn a_surface_stops_the_ray_and_takes_no_pointer_events() {
         pose: Pose::at([0.0, 0.0, -0.5]),
         mobility: Mobility::Fixed,
         shape: Shape::Flat,
+        ride: Ride::Free,
     };
     let mut frames = Frames::default();
     let panels = [PANEL, video];
@@ -635,4 +638,64 @@ fn a_movable_surface_is_carried_and_reports_its_pose_like_a_panel() {
     assert!((events[3].pose.position[0] - 0.1).abs() < 1e-4);
     let carried = space.panels()[0].pose;
     assert!((carried.position[0] - 0.1).abs() < 1e-4);
+}
+
+// A ball of 40 by 40 dp at the controllers' height, half a meter ahead of `PANEL`, which `ride`
+// places.
+fn ball(ride: Ride) -> PanelSlot {
+    PanelSlot {
+        id: 3,
+        atlas: [0.0, 1000.0, 40.0, 40.0],
+        pose: Pose::at([0.0, 0.0, -0.5]),
+        ride,
+        ..PANEL
+    }
+}
+
+#[test]
+fn a_controllers_own_ray_ignores_the_panels_that_ride_it() {
+    let panels = [ball(Ride::On(Side::Left)), PANEL];
+    let mut frames = Frames::default();
+    // The left ray passes through the ball above the left controller and meets the panel behind it
+    let (events, cursor) = frames.update([aim(0.0, 0.0, 0.0), None], &panels);
+    assert_eq!(cursor.map(|cursor| cursor.panel), Some(1));
+    assert_eq!(events, [Gesture::Move { x: 400.0, y: 250.0 }]);
+    assert!(
+        frames.pointer.beams()[0].is_some_and(|beam| (beam.length - 1.0).abs() < 1e-4),
+        "the ray ends at the panel behind the ball"
+    );
+    let (events, _) = frames.update([aim(0.0, 0.0, 1.0), None], &panels);
+    assert_eq!(events, [Gesture::Press]);
+
+    // The right ray hits the ball and presses it as it does any panel
+    let mut frames = Frames::default();
+    let (_, cursor) = frames.update([None, aim(0.0, 0.0, 0.0)], &panels);
+    assert_eq!(cursor.map(|cursor| cursor.panel), Some(3));
+    assert!(
+        frames.pointer.beams()[1].is_some_and(|beam| (beam.length - 0.5).abs() < 1e-4),
+        "the ray ends at the ball"
+    );
+    let (events, cursor) = frames.update([None, aim(0.0, 0.0, 1.0)], &panels);
+    assert_eq!(events, [Gesture::Press]);
+    assert!(cursor.is_some_and(|cursor| cursor.pressed && cursor.panel == 3));
+}
+
+#[test]
+fn a_ball_of_the_right_controller_is_out_of_reach_of_the_right_ray_only() {
+    let panels = [ball(Ride::On(Side::Right)), PANEL];
+    let mut frames = Frames::default();
+    let (_, cursor) = frames.update([None, aim(0.0, 0.0, 0.0)], &panels);
+    assert_eq!(cursor.map(|cursor| cursor.panel), Some(1));
+    let (_, cursor) = frames.update([aim(0.0, 0.0, 0.0), None], &panels);
+    assert_eq!(cursor.map(|cursor| cursor.panel), Some(3));
+}
+
+#[test]
+fn a_hidden_panel_takes_no_hits_from_either_ray() {
+    let panels = [ball(Ride::Hidden), PANEL];
+    let mut frames = Frames::default();
+    for aims in [[aim(0.0, 0.0, 0.0), None], [None, aim(0.0, 0.0, 0.0)]] {
+        let (_, cursor) = frames.update(aims, &panels);
+        assert_eq!(cursor.map(|cursor| cursor.panel), Some(1));
+    }
 }
