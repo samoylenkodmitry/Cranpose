@@ -38,10 +38,11 @@ pub(crate) enum Control {
     Group,
     Alert,
     Confirmation,
+    Toolbar,
 }
 
 // The names shared with the native app's `REFERENCE_COMPONENT`.
-const NAMES: [(&str, Control); 30] = [
+const NAMES: [(&str, Control); 31] = [
     ("slider", Control::Slider),
     ("toggle", Control::Toggle),
     ("segmented", Control::Segmented),
@@ -72,6 +73,7 @@ const NAMES: [(&str, Control); 30] = [
     ("control-group", Control::Group),
     ("alert", Control::Alert),
     ("confirmation", Control::Confirmation),
+    ("toolbar", Control::Toolbar),
 ];
 
 impl Control {
@@ -122,7 +124,7 @@ pub(crate) fn LiquidControlReference(
                     Box(
                         Modifier::empty().fill_max_size().offset(
                             0.0,
-                            if control == Control::NavBar {
+                            if matches!(control, Control::NavBar | Control::Toolbar) {
                                 0.0
                             } else {
                                 (insets.top - insets.bottom) * 0.5
@@ -131,11 +133,14 @@ pub(crate) fn LiquidControlReference(
                         BoxSpec::default().content_alignment(Alignment::CENTER),
                         move || ControlContent(control, initial, activations),
                     );
-                    Text(
-                        format!("Activations: {}", activations.get()),
-                        Modifier::empty().offset(150.0, 800.0),
-                        liquid_typography().caption1,
-                    );
+                    // The toolbar's capsules sit where the count would.
+                    if control != Control::Toolbar {
+                        Text(
+                            format!("Activations: {}", activations.get()),
+                            Modifier::empty().offset(150.0, 800.0),
+                            liquid_typography().caption1,
+                        );
+                    }
                     if std::env::var("REFERENCE_RECORDING").as_deref() == Ok("1") {
                         super::liquid_tab_reference::RecordingOverlay();
                     }
@@ -168,6 +173,7 @@ fn ControlContent(control: Control, initial: f32, activations: cranpose::Mutable
             ReferenceContainer(control);
         }
         Control::Confirmation => ReferenceConfirmation(initial as usize),
+        Control::Toolbar => ReferenceToolbar(initial as usize),
         _ => ReferenceSurface(control, initial, activations),
     }
 }
@@ -542,3 +548,43 @@ fn ReferenceMenu(grouped: bool) {
 #[cfg(test)]
 #[path = "tests/liquid_control_reference_tests.rs"]
 mod tests;
+
+// The native toolbar variants: 0 a lone item and a pair at the far end, 1 a
+// lone item and a prominent one, 2 a pair of icons and a lone one, 3 three
+// icons, then a text item beside an icon.
+#[composable]
+fn ReferenceToolbar(variant: usize) {
+    Box(
+        Modifier::empty().fill_max_size(),
+        BoxSpec::default().content_alignment(Alignment::BOTTOM_START),
+        move || {
+            LiquidToolbar(Modifier::empty(), move |toolbar| match variant {
+                1 => {
+                    toolbar.button("Edit", || {});
+                    toolbar.flexible_space();
+                    toolbar.prominent_button("Done", || {});
+                }
+                2 => {
+                    toolbar.icon_button(icons::SHARE, "Share", || {});
+                    toolbar.icon_button(icons::TRASH, "Delete", || {});
+                    toolbar.flexible_space();
+                    toolbar.icon_button(icons::PLUS, "Add", || {});
+                }
+                3 => {
+                    toolbar.icon_button(icons::SHARE, "Share", || {});
+                    toolbar.icon_button(icons::TRASH, "Delete", || {});
+                    toolbar.icon_button(icons::FOLDER, "Move", || {});
+                    toolbar.flexible_space();
+                    toolbar.button("Edit", || {});
+                    toolbar.icon_button(icons::PLUS, "Add", || {});
+                }
+                _ => {
+                    toolbar.button("Edit", || {});
+                    toolbar.flexible_space();
+                    toolbar.button("Share", || {});
+                    toolbar.button("Delete", || {});
+                }
+            });
+        },
+    );
+}

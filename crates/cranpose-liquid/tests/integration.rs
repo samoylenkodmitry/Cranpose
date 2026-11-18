@@ -20,6 +20,7 @@ mod standard_controls;
 mod tab_bar_appearance;
 mod tab_label_extents;
 mod time_picker;
+mod toolbar;
 mod tooltip;
 mod wheel_picker;
 mod widget_composition;

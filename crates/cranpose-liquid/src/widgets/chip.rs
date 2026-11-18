@@ -89,6 +89,7 @@ pub fn LiquidChip(
             config.content_description = Some(description.as_str().to_owned());
         }),
         GlassButtonSpec::prominent().with_size(GlassButtonSize::Small),
+        GlassButtonSize::Small.metrics(),
         HapticFeedback::Selection,
         Some(tint_progress),
         on_click,

@@ -254,6 +254,7 @@ class NativeControlTests: ReferenceUITests {
     func testConfirmationDialog() { captureStates("confirmation", values: ["0", "1", "2"]) }
     func testContentUnavailable() { captureStates("unavailable", values: ["0"]) }
     func testControlGroup() { captureStates("control-group", values: ["0"]) }
+    func testToolbar() { captureStates("toolbar", values: ["0", "1", "2", "3"]) }
 
     private func captureStates(_ component: String, values: [String]) {
         for scheme in ["light", "dark"] {

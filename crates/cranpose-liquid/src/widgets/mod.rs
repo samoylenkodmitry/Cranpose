@@ -48,6 +48,7 @@ mod tab_lighting;
 mod text_field;
 mod time_picker;
 mod toggle;
+mod toolbar;
 mod tooltip;
 mod vibrancy;
 mod wheel;
@@ -107,6 +108,7 @@ pub use tab_bar::{
 pub use text_field::LiquidTextField;
 pub use time_picker::{LiquidTimePicker, LiquidTimePickerState, rememberLiquidTimePickerState};
 pub use toggle::LiquidToggle;
+pub use toolbar::{LiquidToolbar, LiquidToolbarScope};
 pub use tooltip::LiquidTooltipBox;
 pub use wheel_picker::LiquidWheelPicker;
 
