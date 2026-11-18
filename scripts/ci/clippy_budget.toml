@@ -3,7 +3,7 @@
 # a lint to `[workspace.lints]` in Cargo.toml once its count reaches zero.
 
 [lints]
-"clippy::cast_possible_truncation" = 955
+"clippy::cast_possible_truncation" = 953
 "clippy::cast_sign_loss" = 509
 "clippy::disallowed_methods" = 161
 "clippy::float_cmp" = 147

@@ -31,6 +31,10 @@ pub fn __kept_modifier(key: Key, make: impl FnOnce() -> Modifier) -> Modifier {
     modifier
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the slot is the low bits of the key"
+)]
 fn slot(key: Key) -> usize {
     (key.0 as usize) & (SLOTS - 1)
 }
