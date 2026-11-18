@@ -373,7 +373,7 @@ impl SelectionRegistrar {
     }
 
     /// Every text of the container in reading order, joined by line breaks:
-    /// what select all and copy put on the clipboard.
+    /// the string whose ranges [`select`](Self::select) takes.
     pub fn text(&self) -> String {
         let order = self.reading_order();
         let selectables = self.inner.selectables.borrow();
