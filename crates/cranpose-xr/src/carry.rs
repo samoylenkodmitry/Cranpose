@@ -5,7 +5,7 @@ use crate::{
     pose::turn_degrees,
     space::PanelSlot,
     subspace_modifier::METERS_PER_DP,
-    vector::{add, dot, sub},
+    vector::{cross, dot, sub},
 };
 
 // The space between the bottom edge of a panel and its handle, in meters.
@@ -15,7 +15,7 @@ const HANDLE_GAP: f32 = 0.02;
 pub(crate) const HANDLE_RADIUS: f32 = 0.02;
 
 // How far from the handle a ray still grabs it, in meters. The margin stays under the gap, so
-// the grab does not reach the panel's bottom edge, and a press on that edge still presses.
+// the grab does not reach the panel's bottom edge. A press on that edge still presses.
 const HANDLE_MARGIN: f32 = 0.015;
 
 // The nearest and the farthest a carried panel gets from the controller, in meters.
@@ -30,7 +30,7 @@ const LEVEL_SNAP: f32 = 4.0;
 pub(crate) fn handle_center(slot: &PanelSlot) -> [f32; 3] {
     let height = slot.size()[1] * METERS_PER_DP;
     let below = [0.0, -(height / 2.0 + HANDLE_GAP + HANDLE_RADIUS), 0.0];
-    add(slot.pose.position, slot.pose.rotate(below))
+    slot.pose.then(&Pose::at(below)).position
 }
 
 // The distance along `ray` to the handle under `slot`'s panel, if the ray comes within the margin
@@ -98,14 +98,6 @@ impl Carry {
 }
 
 fn level(pose: Pose) -> Pose {
-    let cross = |a: [f32; 3], b: [f32; 3]| {
-        [
-            a[1] * b[2] - a[2] * b[1],
-            a[2] * b[0] - a[0] * b[2],
-            a[0] * b[1] - a[1] * b[0],
-        ]
-    };
-    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     let normal = pose.rotate([0.0, 0.0, 1.0]);
     let across = (normal[0] * normal[0] + normal[2] * normal[2]).sqrt();
     // A panel that faces straight up or down has no level.

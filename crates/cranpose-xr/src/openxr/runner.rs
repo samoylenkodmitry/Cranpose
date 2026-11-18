@@ -260,9 +260,9 @@ impl Immersive {
                 .chain(surfaces.layers(slot).map(Layer::Quad))
                 .chain(handles.layer(slot, active, head_position).map(Layer::Quad))
         });
-        let rays = head
-            .iter()
-            .flat_map(|head| self.rays.layers(&beams, head.position));
+        let rays = head_position
+            .into_iter()
+            .flat_map(|head| self.rays.layers(&beams, head));
         self.xr_session
             .end_frame(display_time, self.streams.layers(), shown, rays)
     }
