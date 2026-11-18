@@ -15,7 +15,7 @@ use super::{plate::Openings, room::Room};
 const FLOOR_DEPTH: f32 = 0.62;
 // The lamp's radius against the stage's height: the penumbra on the floor.
 const LAMP_RADIUS: f32 = 0.019;
-const FLOOR_WGSL: &str = concat!(include_str!("noise.wgsl"), include_str!("floor.wgsl"));
+const FLOOR_WGSL: &str = cranpose_ui::include_wgsl!("noise.wgsl", "floor.wgsl");
 
 // The floor as a mesh of the plate's picture, lit by the lamp through the
 // plate, whose openings are as opaque as `openings` says.

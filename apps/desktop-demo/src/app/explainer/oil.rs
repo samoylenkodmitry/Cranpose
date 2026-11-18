@@ -34,8 +34,8 @@ pub(super) const SELECTION: Color = Color(0.0, 0.0, 1.0, 1.0);
 pub(super) const SLAB: Color = Color(0.2, 0.2, 0.2, 1.0);
 pub(super) const LABEL: Color = Color(0.1, 0.1, 0.1, 1.0);
 
-const BAKE_WGSL: &str = concat!(include_str!("noise.wgsl"), include_str!("oil_bake.wgsl"));
-const LIGHT_WGSL: &str = concat!(include_str!("noise.wgsl"), include_str!("oil_light.wgsl"));
+const BAKE_WGSL: &str = cranpose_ui::include_wgsl!("noise.wgsl", "oil_bake.wgsl");
+const LIGHT_WGSL: &str = cranpose_ui::include_wgsl!("noise.wgsl", "oil_light.wgsl");
 
 // Where things stand on the painted page, in its unit u, and how the
 // button looks.

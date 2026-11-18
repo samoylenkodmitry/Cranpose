@@ -24,11 +24,8 @@ const LEDGE: Color = Color(0.56, 0.38, 0.21, 1.0);
 const STAMP: Color = Color(0.16, 0.08, 0.03, 1.0);
 // How thick the board is.
 const THICKNESS: f32 = 14.0;
-const FACE_WGSL: &str = concat!(
-    include_str!("noise.wgsl"),
-    include_str!("sheet_paper.wgsl"),
-    include_str!("board_face.wgsl")
-);
+const FACE_WGSL: &str =
+    cranpose_ui::include_wgsl!("noise.wgsl", "sheet_paper.wgsl", "board_face.wgsl");
 
 // When the view finder's corners close in round the sheet.
 const FINDER_IN: (f32, f32) = (0.222, 0.25);

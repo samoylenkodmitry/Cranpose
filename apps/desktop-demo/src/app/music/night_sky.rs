@@ -27,7 +27,7 @@ fn window_wgsl() -> Arc<str> {
     Arc::clone(SOURCE.get_or_init(|| {
         Arc::from(format!(
             "{RUNTIME_SHADER_PRELUDE_WGSL}{}",
-            include_str!("rain_window.wgsl")
+            cranpose_ui::include_wgsl!("rain_window.wgsl")
         ))
     }))
 }

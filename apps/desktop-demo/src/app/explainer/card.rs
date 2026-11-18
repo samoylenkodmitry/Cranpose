@@ -24,7 +24,7 @@ const EDGE: Color = Color(0.66, 0.66, 0.68, 1.0);
 const MARKER: Color = Color(1.0, 0.45, 0.40, 1.0);
 // How thick the board is.
 const THICKNESS: f32 = 5.0;
-const PAPER_WGSL: &str = concat!(include_str!("noise.wgsl"), include_str!("paper.wgsl"));
+const PAPER_WGSL: &str = cranpose_ui::include_wgsl!("noise.wgsl", "paper.wgsl");
 
 // A card `card` big whose face stands `depth` deep, printed in `ink`,
 // moved `slide()` across from where it is laid out.

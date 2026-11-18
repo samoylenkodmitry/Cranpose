@@ -43,7 +43,7 @@ const CLOTH_DEPTH: f32 = -42.0;
 const CARD_DEPTH: f32 = -12.0;
 // The halftone's cell, in pixels as the small curtain shows them.
 const DOT: f32 = 7.0;
-const HALFTONE_WGSL: &str = concat!(include_str!("noise.wgsl"), include_str!("halftone.wgsl"));
+const HALFTONE_WGSL: &str = cranpose_ui::include_wgsl!("noise.wgsl", "halftone.wgsl");
 
 // The section, `top` pixels down the article that `scroll` scrolls.
 #[composable(no_skip)]

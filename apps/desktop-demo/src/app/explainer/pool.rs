@@ -43,8 +43,8 @@ const HEADLINE: &str = "You can type\nunderwater";
 const WORDS: &str = "These words lie at the bottom of a pool, and they are still \
                      composables: select them, copy them. Click the line below and type. \
                      Each letter makes a ripple.";
-const POOL_WGSL: &str = include_str!("pool.wgsl");
-const NOISE_WGSL: &str = include_str!("noise.wgsl");
+const POOL_WGSL: &str = cranpose_ui::include_wgsl!("pool.wgsl");
+const NOISE_WGSL: &str = cranpose_ui::include_wgsl!("noise.wgsl");
 // How fast the lane's glow and first words follow, per second.
 const EASE_RATE: f32 = 10.0;
 

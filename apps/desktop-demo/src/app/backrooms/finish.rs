@@ -135,7 +135,7 @@ fn shader() -> Arc<str> {
     Arc::clone(SOURCE.get_or_init(|| {
         Arc::from(format!(
             "const UNIT: f32 = {UNIT:?};\nconst HEIGHT: f32 = {HEIGHT:?};\n{}",
-            include_str!("finish.wgsl")
+            cranpose_ui::include_wgsl!("finish.wgsl")
         ))
     }))
 }

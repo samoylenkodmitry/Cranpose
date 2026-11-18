@@ -14,7 +14,7 @@ use cranpose_ui::{
 pub(super) const WALL_TOP: [f32; 3] = [0.9464, 0.5462, 0.4799];
 pub(super) const WALL_BOTTOM: [f32; 3] = [0.9049, 0.4131, 0.3509];
 const PAINT: Color = Color(0.97, 0.72, 0.67, 1.0);
-const PLASTER_WGSL: &str = concat!(include_str!("noise.wgsl"), include_str!("plaster.wgsl"));
+const PLASTER_WGSL: &str = cranpose_ui::include_wgsl!("noise.wgsl", "plaster.wgsl");
 
 #[composable(no_skip)]
 pub(super) fn PlasterWall(size: Size, u: f32) {

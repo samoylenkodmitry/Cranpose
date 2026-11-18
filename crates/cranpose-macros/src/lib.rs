@@ -16,6 +16,7 @@ mod callback_param;
 mod composable_marker;
 mod constant_modifiers;
 mod held_callback;
+mod include_wgsl;
 #[cfg(feature = "localization")]
 mod localization;
 mod packed_params;
@@ -34,6 +35,23 @@ mod worker_job;
 #[proc_macro]
 pub fn tr(input: TokenStream) -> TokenStream {
     localization::translate(input.into())
+        .unwrap_or_else(|error| error.to_compile_error())
+        .into()
+}
+
+/// Embeds WGSL files as one `&'static str`, joined in order, without their
+/// `//` comments or the whitespace round each line. Paths are relative to
+/// the calling file, as `include_str!` takes them, and a file with a `/*`
+/// block comment fails the build. Each line of a file stays a line, so a
+/// shader compiler's line numbers still point into a file included alone.
+///
+/// ```ignore
+/// const SURFACE_WGSL: &str = include_wgsl!("noise.wgsl", "surface.wgsl");
+/// ```
+#[proc_macro]
+pub fn include_wgsl(input: TokenStream) -> TokenStream {
+    let caller = proc_macro::Span::call_site().local_file();
+    include_wgsl::include_wgsl(input.into(), caller.as_deref())
         .unwrap_or_else(|error| error.to_compile_error())
         .into()
 }

@@ -35,7 +35,7 @@ pub(super) const INK: Color = Color(0.09, 0.06, 0.16, 1.0);
 // The colour the content marks a selection with: the paper shows it as a
 // postmark.
 pub(super) const MARKER: Color = Color(0.0, 1.0, 0.0, 1.0);
-const PAPER_WGSL: &str = concat!(include_str!("noise.wgsl"), include_str!("stamp_paper.wgsl"));
+const PAPER_WGSL: &str = cranpose_ui::include_wgsl!("noise.wgsl", "stamp_paper.wgsl");
 // How deep the stamps lie in front of the ground.
 const STAMP_DEPTH: f32 = -7.0;
 // How far a stamp lifts while pressed, and under the pointer.

@@ -17,11 +17,7 @@ use super::{
 };
 
 const PAPER: Color = Color(0.03, 0.42, 0.24, 1.0);
-const SWEEP_WGSL: &str = concat!(
-    include_str!("noise.wgsl"),
-    include_str!("sheet_paper.wgsl"),
-    include_str!("sweep.wgsl")
-);
+const SWEEP_WGSL: &str = cranpose_ui::include_wgsl!("noise.wgsl", "sheet_paper.wgsl", "sweep.wgsl");
 // Pieces of the quarter circle where the table turns into the wall.
 const CURVE_PIECES: usize = 16;
 const COLUMNS: usize = 8;

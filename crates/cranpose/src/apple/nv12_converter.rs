@@ -79,7 +79,9 @@ impl Nv12Converter {
         let device = &gpu.device;
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("nv12 to rgb"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("nv12_to_rgb.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                cranpose_macros::include_wgsl!("nv12_to_rgb.wgsl").into(),
+            ),
         });
         let texture = |binding| wgpu::BindGroupLayoutEntry {
             binding,
