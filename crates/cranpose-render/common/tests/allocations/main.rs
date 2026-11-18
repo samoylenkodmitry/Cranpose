@@ -427,7 +427,7 @@ fn texts_around_a_long_paragraph_hold_bounded_room() {
         let mut paragraph = String::with_capacity(WORDS * 6);
         for word in 0..WORDS {
             if word == WORDS / 2 {
-                let _ = write!(paragraph, "f{frame:05} ");
+                write!(paragraph, "f{frame:05} ").expect("a String takes any text");
             } else {
                 paragraph.push_str("word ");
             }
