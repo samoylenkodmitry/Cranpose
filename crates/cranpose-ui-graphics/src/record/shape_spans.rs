@@ -46,23 +46,6 @@ impl ShapeRecorder {
         self.forget_unused_gradient_lists();
     }
 
-    /// Empties the recorder, then takes in the segments of `from` that
-    /// `keep` takes, by index, with their shapes: what
-    /// [`Self::keep_segments`] leaves of `from`, for a `from` that a reader
-    /// still holds as it is. The bounds are those of `from`.
-    pub fn keep_segments_from(&mut self, from: &Self, keep: impl Fn(u32) -> bool) {
-        self.tables.keep_segments_from(&from.tables, keep);
-        self.gradient_lists.clear();
-        if !self.tables.brushes().is_empty() {
-            for lists in from.gradient_lists.iter() {
-                self.gradient_lists.push(lists.clone());
-            }
-        }
-        self.min = from.min;
-        self.max = from.max;
-        self.end_segment();
-    }
-
     // Lets go of the gradient lists once the tables dropped their brushes,
     // and starts a segment of its own for the next shape. The bounds stay:
     // they still hold every shape left.

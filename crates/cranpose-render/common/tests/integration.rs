@@ -2,7 +2,6 @@ mod scene_probe;
 
 mod annotated_text_baselines;
 mod app_supplied_font_raster;
-mod background_churn;
 mod background_redraws;
 mod draw_scope_text_raster;
 mod draw_with_content_updates;
@@ -24,7 +23,6 @@ mod scaling_list_scene;
 mod scene_journal;
 mod scene_reach;
 mod scene_stamps;
-mod shape_items;
 mod shrunk_scene;
 mod size_updates;
 mod space_frames;

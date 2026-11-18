@@ -187,12 +187,8 @@ impl ShapeRecords {
         let mut sources = sources.storage_mut();
         let (mut to, mut source_from, mut source_to) = (0, 0, 0);
         for range in kept {
-            // Records already in their place stay: a copy onto itself
-            // moves their bytes for nothing.
-            if range.start != to {
-                bodies.copy_within(range.clone(), to);
-                curves.copy_within(range.clone(), to);
-            }
+            bodies.copy_within(range.clone(), to);
+            curves.copy_within(range.clone(), to);
             if let Some(sources) = sources.as_deref_mut() {
                 while let Some(&source) = sources.get(source_from)
                     && (source.index as usize) < range.end
@@ -213,26 +209,6 @@ impl ShapeRecords {
         curves.truncate(to);
         if let Some(sources) = sources {
             sources.truncate(source_to);
-        }
-    }
-
-    // Appends the records of `range`, a range of record indexes of `from`.
-    pub(crate) fn extend_from(&mut self, from: &Self, range: Range<usize>) {
-        let to = self.bodies.len();
-        self.bodies.extend_from_slice(&from.bodies[range.clone()]);
-        self.curves.extend_from_slice(&from.curves[range.clone()]);
-        let first = from
-            .sources
-            .partition_point(|source| (source.index as usize) < range.start);
-        for source in from.sources[first..]
-            .iter()
-            .take_while(|source| (source.index as usize) < range.end)
-        {
-            self.sources.push(RecordSource {
-                index: u32::try_from(source.index as usize - range.start + to)
-                    .expect("a recording holds fewer than 2^32 records"),
-                ..*source
-            });
         }
     }
 
