@@ -48,6 +48,9 @@ const LAZY_SCROLL_ALLOCATIONS: usize = 19;
 const LAZY_ROW_SCROLL_ALLOCATIONS: usize = 39;
 // The allocations of a measure pass of an empty lazy column at a new width.
 const EMPTY_LAZY_PASS_ALLOCATIONS: usize = 11;
+// The allocations a frame of a list's row of a live text, which leaves in
+// turn: 15 when the texts that leave give back nothing.
+const LEAVING_TEXT_ROW_ALLOCATIONS: f64 = 13.25;
 
 // Rows of 10 points as tall as their parent is wide.
 fn rows(count: usize) {
@@ -790,13 +793,14 @@ fn composing_a_wide_column_again_allocates_what_a_narrow_one_does() {
 }
 
 // Allocations and reallocations a frame of the frames `counted`, after the
-// frames `warm`, of a column that shows `count` items in each frame `shows`
-// takes, under keys of that frame: a frame composes its items as new nodes,
-// removes the items of the frame before and lays the column out. The first
-// composition is frame 0.
+// frames `warm`, of a column that shows `count` items in each frame, under
+// keys of the generation `generation` gives the frame, or none: a frame of
+// a new generation composes its items as new nodes, removes the items of
+// the one before and lays the column out. `item` composes the item of a
+// frame and an index. The first composition is frame 0.
 fn keyed_items_allocations(
-    (count, item): (usize, fn()),
-    shows: fn(u32) -> bool,
+    (count, item): (usize, fn(u32, usize)),
+    generation: fn(u32) -> Option<u32>,
     warm: Range<u32>,
     counted: Range<u32>,
 ) -> usize {
@@ -807,11 +811,11 @@ fn keyed_items_allocations(
         output.set(Some(round));
         let value = round.value();
         Column(Modifier::empty(), ColumnSpec::default(), move || {
-            if !shows(value) {
+            let Some(keys) = generation(value) else {
                 return;
-            }
+            };
             for index in 0..count {
-                cranpose_core::key((value, index), item);
+                cranpose_core::key((keys, index), || item(value, index));
             }
         });
     });
@@ -860,9 +864,9 @@ fn a_row_of_two_boxes() {
 // frames.
 fn a_frame_that_swaps_nodes_for_new_ones_allocates_nothing_for_them() {
     let passes = u32::try_from(PASSES).expect("ten passes");
-    let swapped = |rows| keyed_items_allocations(rows, |_| true, 1..16, 16..16 + passes);
-    let one = swapped((8, a_row_of_one_box));
-    let two = swapped((8, a_row_of_two_boxes));
+    let swapped = |rows| keyed_items_allocations(rows, Some, 1..16, 16..16 + passes);
+    let one = swapped((8, |_, _| a_row_of_one_box()));
+    let two = swapped((8, |_, _| a_row_of_two_boxes()));
     println!("allocations of a frame that swaps eight rows: of one box {one}, of two boxes {two}");
     assert!(
         two <= one,
@@ -874,8 +878,14 @@ fn a_frame_that_swaps_nodes_for_new_ones_allocates_nothing_for_them() {
 // removed, serve the nodes of the next frame as the others do:
 // twenty-four boxes that come back allocate what twelve do.
 fn nodes_made_fresh_serve_the_nodes_of_a_later_frame() {
-    let regrown =
-        |count| keyed_items_allocations((count, an_empty_box), |frame| frame != 1, 1..2, 2..3);
+    let regrown = |count| {
+        keyed_items_allocations(
+            (count, |_, _| an_empty_box()),
+            |frame| (frame != 1).then_some(frame),
+            1..2,
+            2..3,
+        )
+    };
     let twelve = regrown(12);
     let twenty_four = regrown(24);
     println!(
@@ -894,8 +904,8 @@ fn nodes_made_fresh_serve_the_nodes_of_a_later_frame() {
 fn a_burst_of_nodes_that_comes_back_frames_later_takes_their_shells() {
     const BOXES: usize = 1200;
     let back = keyed_items_allocations(
-        (BOXES, an_empty_box),
-        |frame| frame == 0 || frame >= 10,
+        (BOXES, |_, _| an_empty_box()),
+        |frame| (frame == 0 || frame >= 10).then_some(frame),
         1..10,
         10..11,
     );
@@ -906,6 +916,36 @@ fn a_burst_of_nodes_that_comes_back_frames_later_takes_their_shells() {
     );
 }
 
+// A text of a list's row that shows the frame, as a live price does.
+fn a_text_of_the_frame(frame: u32, index: usize) {
+    Text(
+        format!("{frame} {index}"),
+        Modifier::empty(),
+        TextStyle::default(),
+    );
+}
+
+// The texts of rows that leave give their layouts to the texts of the rows
+// that take their place. A row lives two frames, and its text changes in
+// the second: a text lays out first into a layout a text that left gave up,
+// then into a new one, so a row allocates one layout.
+fn texts_that_leave_give_their_layouts_to_the_texts_that_come() {
+    let passes = u32::try_from(PASSES).expect("ten passes");
+    let rows = |count| {
+        keyed_items_allocations(
+            (count, a_text_of_the_frame),
+            |frame| Some(frame / 2),
+            1..16,
+            16..16 + 2 * passes,
+        )
+    };
+    let per_row = rows(40).saturating_sub(rows(20)) as f64 / 20.0;
+    println!("allocations a frame of a row of a live text that leaves in turn: {per_row}");
+    assert!(
+        per_row <= LEAVING_TEXT_ROW_ALLOCATIONS,
+        "{per_row} allocations a frame of a row of a live text"
+    );
+}
 // A modifier holds a plain element by value: one alone takes no
 // allocation, and a chain of them built link by link takes one shared
 // allocation it extends in place.
@@ -1111,6 +1151,7 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     a_frame_that_swaps_nodes_for_new_ones_allocates_nothing_for_them();
     nodes_made_fresh_serve_the_nodes_of_a_later_frame();
     a_burst_of_nodes_that_comes_back_frames_later_takes_their_shells();
+    texts_that_leave_give_their_layouts_to_the_texts_that_come();
     if !cfg!(feature = "inspection") {
         a_modifier_chain_of_plain_elements_allocates_one_shared_box();
     }

@@ -117,6 +117,25 @@ pub(crate) struct TextPreparedLayoutHandle {
     owner: Rc<TextPreparedLayoutOwner>,
 }
 
+// A dropped text gives the layouts nothing else holds, and its string, to
+// the texts made next, as a list's rows that scroll out give theirs to the
+// rows that scroll in.
+impl Drop for TextPreparedLayoutOwner {
+    fn drop(&mut self) {
+        let cache = self.cache.get_mut();
+        if cache
+            .iter()
+            .any(|entry| Rc::strong_count(&entry.layout) == 1)
+            && let Some(context) = crate::render_state::current_app_context()
+        {
+            let text = std::mem::take(&mut self.source.get_mut().text);
+            context
+                .text
+                .retire(text, cache.drain(..).map(|entry| entry.layout));
+        }
+    }
+}
+
 impl TextPreparedLayoutOwner {
     fn new(text: AnnotatedString, style: Arc<TextStyle>, options: TextLayoutOptions) -> Self {
         let style_hash = PackedU64::new(style.render_hash());
