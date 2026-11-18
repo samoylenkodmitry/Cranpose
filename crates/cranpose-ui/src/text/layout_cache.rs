@@ -1,12 +1,13 @@
 use std::rc::Rc;
 
-use cranpose_core::collections::{pass_aged::PassAgedCache, recent_hashes::RecentHashes};
+use cranpose_core::collections::pass_aged::PassAgedCache;
 use cranpose_ui_graphics::MemoryHeadroom;
 use smallvec::SmallVec;
 
 use super::{
     TextAlign,
     measure::{PreparedTextLayout, TextFrame},
+    returning_texts::ReturningTexts,
     style::TextStyle,
     text_key::TextKey,
 };
@@ -19,8 +20,6 @@ const WIDTHS_PER_TEXT: usize = 2;
 // Layouts of draw scopes' text kept until a pass draws none of them, the
 // last drawn taking the place of the one drawn longest ago.
 const DRAWN_LAYOUTS: usize = 8;
-// The tags of 128 hashes, 512 bytes.
-const RETURNING_SLOTS: usize = 128;
 
 // The layouts of one text at different widths, the newest first.
 type Widths = SmallVec<[Rc<PreparedTextLayout>; WIDTHS_PER_TEXT]>;
@@ -62,7 +61,7 @@ pub(super) struct LayoutCache {
     drawn: DrawnLayouts,
     // The texts changed in place or drawn lately: one laid out again while
     // here came back, and goes into `kept`.
-    returning: RecentHashes,
+    returning: ReturningTexts,
     // The host's memory headroom when the pass began. A tight heap keeps
     // no layout of a text that changes in place.
     headroom: MemoryHeadroom,
@@ -73,7 +72,7 @@ impl LayoutCache {
         Self {
             kept: PassAgedCache::with_capacity_at_least_one(TEXT_PREPARED_CACHE_CAPACITY),
             drawn: DrawnLayouts::default(),
-            returning: RecentHashes::new(RETURNING_SLOTS),
+            returning: ReturningTexts::new(TEXT_PREPARED_CACHE_CAPACITY),
             headroom: MemoryHeadroom::default(),
         }
     }
@@ -155,6 +154,12 @@ impl LayoutCache {
     fn keep_first(&mut self, key: TextKey, prepared: &Rc<PreparedTextLayout>) {
         self.kept
             .push(key, SmallVec::from_elem(Rc::clone(prepared), 1));
+    }
+
+    // Forgets the texts that changed in place or were drawn, and gives back
+    // the room that took: the texts rest.
+    pub(super) fn rest(&mut self) {
+        self.returning.clear();
     }
 
     // Starts a layout pass on a host with `headroom`: drops the kept

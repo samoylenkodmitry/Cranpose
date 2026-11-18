@@ -519,6 +519,7 @@ impl TextService {
     pub(crate) fn trim(&self) {
         self.retired.borrow_mut().clear();
         self.retired_strings.borrow_mut().clear();
+        self.layouts.borrow_mut().rest();
         self.layouter.borrow_mut().rest();
     }
 
