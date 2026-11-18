@@ -70,18 +70,24 @@ fn glaze(robot: &Robot, shots: &Path, paragraph: Area, floor: Area) {
     let floor_before = brightness(robot, WIDTH, floor);
     let wall_before = brightness(robot, WIDTH, wall);
     let glass_before = pixels(robot, WIDTH, wall, is_glass);
+    let tinted_before = pixels(robot, WIDTH, floor, is_glass);
     drag(robot, (x + width * 0.2, y + height * 0.84), x + width * 0.75);
     wait(robot, Duration::from_millis(900));
     save(robot, shots, "glass.png");
     let floor_after = brightness(robot, WIDTH, floor);
     let wall_after = brightness(robot, WIDTH, wall);
     let glass_after = pixels(robot, WIDTH, wall, is_glass);
+    let tinted_after = pixels(robot, WIDTH, floor, is_glass);
     println!(
-        "  glass pixels {glass_before} -> {glass_after}; wall light {wall_before:.0} -> \
-         {wall_after:.0}; floor light {floor_before:.0} -> {floor_after:.0}"
+        "  glass pixels {glass_before} -> {glass_after}; glass light on the floor \
+         {tinted_before} -> {tinted_after}; wall light {wall_before:.0} -> {wall_after:.0}; \
+         floor light {floor_before:.0} -> {floor_after:.0}"
     );
     if glass_after < glass_before + GLASS_PIXELS {
         robot_exit::fail(robot, "a selection showed no coloured glass");
+    }
+    if tinted_after < tinted_before + GLASS_PIXELS {
+        robot_exit::fail(robot, "the glass coloured no light on the floor");
     }
     if (floor_after - floor_before).abs() < floor_before * 0.01 {
         robot_exit::fail(robot, "a selection left the light on the floor as it was");

@@ -1,6 +1,8 @@
 use std::sync::{Arc, mpsc};
 
-use cranpose::{AppLauncher, TouchRouter, embedded_view::EmbeddedView, prelude::PointerSource};
+use cranpose::{
+    AppLauncher, TouchRouter, TouchSample, embedded_view::EmbeddedView, prelude::PointerSource,
+};
 
 use crate::{
     NativeContent, NativeContext, NativeError, NativeEvent, NativeFrame, NativeSlot, TouchPhase,
@@ -87,9 +89,9 @@ impl Component {
                 shell.set_pointer_source(PointerSource::Touch);
                 let finger = Some(pointer);
                 match phase {
-                    TouchPhase::Down => self.touches.press(shell, finger, x, y),
-                    TouchPhase::Move => self.touches.moved(shell, finger, x, y),
-                    TouchPhase::Up => self.touches.release(shell, finger, x, y),
+                    TouchPhase::Down => self.touches.press(shell, finger, TouchSample::new(x, y)),
+                    TouchPhase::Move => self.touches.moved(shell, finger, TouchSample::new(x, y)),
+                    TouchPhase::Up => self.touches.release(shell, finger, TouchSample::new(x, y)),
                     TouchPhase::Cancel => self.touches.cancel(shell, finger, Some((x, y))),
                 };
             }

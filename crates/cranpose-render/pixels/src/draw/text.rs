@@ -113,6 +113,7 @@ fn raster_request(draw: &TextDraw, part: Rect, raster_rect: Rect) -> TextRasterR
     )
     .with_origin(Point::new(raster_rect.x, raster_rect.y))
     .with_ink(draw.ink)
+    .with_layer_paint(&draw.layer_paint)
 }
 
 /// `draw` rasterized into an image of its own, straight alpha, and the

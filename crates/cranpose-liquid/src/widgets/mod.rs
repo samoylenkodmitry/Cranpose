@@ -75,5 +75,8 @@ pub use toggle::LiquidToggle;
 pub use tooltip::LiquidTooltipBox;
 
 #[cfg(test)]
+#[path = "tests/native_toggle_tap.rs"]
+mod native_toggle_tap;
+#[cfg(test)]
 #[path = "tests/widgets_warm_up_tests.rs"]
 mod warm_up_tests;

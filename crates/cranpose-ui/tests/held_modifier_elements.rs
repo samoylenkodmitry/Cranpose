@@ -106,3 +106,57 @@ fn a_chain_holding_elements_in_its_nodes_follows_every_change_of_its_modifier() 
         assert!(held == modifier(value), "the modifier of variant {value}");
     }
 }
+
+// A plain element compares its floats as Compose's data classes do: a padding
+// of 0.0 that becomes -0.0 changes the node, and a NaN padding kept from one
+// pass to the next equals itself and asks for no measure. The padding sits in
+// a cell, since a state of a float takes -0.0 for 0.0 and composes nothing.
+#[test]
+fn a_plain_element_compares_its_floats_as_compose_data_classes() {
+    let padding = Rc::new(Cell::new(0.0_f32));
+    let read = Rc::clone(&padding);
+    let pass_slot = Rc::new(Cell::new(None));
+    let slot = Rc::clone(&pass_slot);
+    let mut composition = cranpose_ui::run_test_composition(move || {
+        let pass = cranpose_core::rememberMutableStateOf(|| 0_usize);
+        slot.set(Some(pass));
+        let read = Rc::clone(&read);
+        Box(
+            Modifier::empty().content_description("wrapper"),
+            BoxSpec::default(),
+            move || {
+                pass.get();
+                Box(
+                    Modifier::empty().padding(read.get()),
+                    BoxSpec::default(),
+                    || {},
+                );
+            },
+        );
+    });
+    let layout = layout_composition(&mut composition, VIEWPORT);
+    let id = subject_box(&layout).node_id;
+    let pass = pass_slot.get().expect("pass state");
+    let mut compose_with = |value: f32| {
+        padding.set(value);
+        pass.set(pass.get() + 1);
+        while composition.process_invalid_scopes().expect("recompose") {}
+        let node = composition
+            .applier_mut()
+            .with_node::<LayoutNode, _>(id, |node| (node.modifier(), node.needs_measure()))
+            .expect("the subject is a layout node");
+        layout_composition(&mut composition, VIEWPORT);
+        node
+    };
+
+    let (held, needs_measure) = compose_with(-0.0);
+    assert!(needs_measure, "-0.0 after 0.0 is a change");
+    assert!(held == Modifier::empty().padding(-0.0));
+    assert!(held != Modifier::empty().padding(0.0));
+
+    let (_, needs_measure) = compose_with(f32::NAN);
+    assert!(needs_measure, "NaN after -0.0 is a change");
+    let (held, needs_measure) = compose_with(f32::NAN);
+    assert!(!needs_measure, "a NaN equals itself");
+    assert!(held == Modifier::empty().padding(f32::NAN));
+}

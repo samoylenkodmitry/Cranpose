@@ -642,6 +642,7 @@ fn push_label(scene: &mut CompositorScene, x: f32, color: Color, clip: Option<Re
         ),
         layout,
         color,
+        layer_paint: cranpose_render_common::layer_paint::LayerPaint::NONE,
         style_hash: style.render_hash(),
         text_style: Arc::new(style),
         font_size: 18.0,

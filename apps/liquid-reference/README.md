@@ -61,6 +61,12 @@ python3 apps/liquid-reference/compare.py target/native-motion/slider target/cran
 python3 apps/liquid-reference/export-control-motion.py target/native_control_contact.csv target/native-motion/slider target/native-motion/toggle target/native-motion/segmented
 ```
 
+`--variant tap` records a 100 ms tap instead: `NativeToggleTapMotionTests` taps the switch on, and `NativeSegmentedTapMotionTests` taps the third segment. `--variant holdout` records the reversed slider path. `crates/cranpose-liquid/tests/fixtures/native_toggle_tap.csv` keeps the native toggle tap's lens size, white fill, thumb center and track-fill strip position for every display-link frame.
+
+```sh
+python3 scripts/dev/capture_control_motion.py YOUR_SIMULATOR_UDID target/native-tap native --variant tap --components toggle segmented
+```
+
 The capture helper saves the source commit and patch plus the installed binary hash after each test build. Use unique output directories. Repeat first-use captures separately from warm captures; do not discard pipeline stalls or merge their cadence statistics. `NativeSliderHoldoutMotionTests` reverses the direction sequence and returns to the starting coordinate. `NativeControlAnimationTests` additionally archives native layer animations during contact and release.
 
 The control contact fixture contains 214 measured size/white-fill samples; the deformation fixture contains 827 native geometry frames. Tests compare contact and release independently from motion-induced strain. Passing these checks does not establish composed pixel or position parity. The slider holdout on iOS 27 simulator build 24A434 continues changing its bound value after release, so its value mapping remains an unresolved reference behavior. The verified iOS 27 bottom-bar reversal has its own strict, currently failing composed-geometry audit; its deformation direction differs from the older unversioned fixture. Keep both sources and their provenance.
@@ -98,6 +104,8 @@ Select `NativeReversalTests/testInteractionKeyframes` or `CranposeReversalTests/
 Physical iPhone tests require USB and Settings → Developer → Enable UI Automation. `liquid-reference-device-test DEVICE TEAM RESULTS SUITE` signs, builds and runs the requested suite. `liquid-reference-device-traces DEVICE OUTPUT [BUNDLE]` copies native or Cranpose touch/layer traces from the device using CoreDevice. `SystemGlassTests/testInspectSettings` captures the actual Settings screen and accessibility tree for inspection.
 
 The iOS 27 validation matrix is 0%, 20%, 50%, 75% and 100% in the system **Tint Amount** setting. `NativeMatrix*Tests` set and assert the actual Settings value before capture; `CranposeMatrix*Tests` assert the corresponding framework theme value. Each test repeats the continuous left–right–left gesture with the original content, changed labels and symbol assignments with a magenta accent and a different color palette, and another label/symbol set with a green accent and a grayscale backdrop. The same `REFERENCE_CONTENT` JSON configures both apps and is retained in the capture metadata. Restore the user's 25% preference afterward. These capture and control checks establish coverage; the exact pixel audit determines image equality. Existing iOS 26.5 optical fixtures do not establish iOS 27 behavior.
+
+`scripts/dev/capture_controls_at_tint.sh DEVICE PERCENT OUTPUT` sets the Tint Amount through `SystemGlassTintTests/testSet0`, `testSet25`, `testSet50` or `testSet100`, then captures every `NativeControlTests` state at it. The simulator's own default is 50%; run `testSet50` last to leave it there.
 
 The component uses overlapping native cell geometry, spring-following drag position, contact growth, and independent width/height responses fitted to native presentation traces. The raised material now composes two native displacement profiles, seven chromatic samples, and separate key/fill lighting. The native lens's central background remains unscaled; Cranpose refracts the glyph mask through its separate 14-point content field and enlarges it by the native 1.16× content ratio. Surface refraction remains active after release. The reference fixture uses native template symbols and the system sans-serif font at UIKit’s exported optical-size and weight-axis coordinates, including its size-dependent tracking.
 

@@ -39,6 +39,7 @@ fn text_bounds_preserve_logical_snapping_clipping_and_invalid_scale_rejection() 
         ),
         layout,
         color: Color::WHITE,
+        layer_paint: cranpose_render_common::layer_paint::LayerPaint::NONE,
         text_style: Default::default(),
         style_hash: 0,
         font_size: 14.0,

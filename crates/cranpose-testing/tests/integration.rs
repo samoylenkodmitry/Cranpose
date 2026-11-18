@@ -27,6 +27,7 @@ mod lazy_grid_test;
 mod lazy_moved_items_test;
 mod lazy_staggered_grid_test;
 mod lazy_sticky_header_test;
+mod lifecycle_local_test;
 mod linked_text_test;
 mod long_press_test;
 mod mesh_surface_selection_test;

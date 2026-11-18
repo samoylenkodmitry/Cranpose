@@ -14,7 +14,7 @@ const WIDTH: f32 = 300.0;
 
 /// The text primitive showing `label`, and the color filter of the nearest
 /// layer above it that has one.
-fn find_label<'a>(
+pub(crate) fn find_label<'a>(
     layer: LayerRef<'a>,
     label: &str,
     filter: Option<&'a ColorFilter>,
@@ -73,7 +73,7 @@ fn accent(colors: LiquidColors, typography: LiquidTypography) -> LiquidSegmented
 
 /// Runs `frames` frames. `wait_for_idle` returns while a spring that needs
 /// no redraw of its own is still moving.
-fn advance_frames(
+pub(crate) fn advance_frames(
     robot: &mut cranpose_testing::RobotTestRule<cranpose_testing::TestRenderer>,
     frames: usize,
 ) {

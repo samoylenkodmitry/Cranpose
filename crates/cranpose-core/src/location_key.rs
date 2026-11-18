@@ -360,28 +360,48 @@ const CONSTANT_SLOTS: usize = 128;
 /// in an event handler, an effect or another thread.
 #[doc(hidden)]
 pub fn __constant<T: Clone + 'static>(key: Key, make: impl FnOnce() -> T) -> T {
-    let slot = (key.0 as usize) & (CONSTANT_SLOTS - 1);
-    if let Some(value) = kept_constant(key, slot).and_then(|kept| kept.downcast_ref::<T>().cloned())
-    {
+    if let Some(value) = kept_copy::<T>(key) {
         return value;
     }
     let value = make();
-    keep_constant(key, slot, Rc::new(value.clone()));
+    keep_value(key, &value);
     value
 }
 
-// The value kept for `key` in `slot`, outside `__constant` so its callers'
-// types make no thread state access each.
-fn kept_constant(key: Key, slot: usize) -> Option<Rc<dyn Any>> {
+// A copy of the value kept for `key`, if it is a `T`. Out of line, once a
+// type: `__constant` has an instance for each call site, as each passes its
+// own closure, so the lookup, the downcast and the copy here would otherwise
+// repeat in every one.
+#[inline(never)]
+fn kept_copy<T: Clone + 'static>(key: Key) -> Option<T> {
+    kept_constant(key)?.downcast_ref::<T>().cloned()
+}
+
+// Keeps a copy of `value` for `key`. Out of line, once a type: it runs once
+// a kept value, and inlined it would take code in every caller.
+#[inline(never)]
+fn keep_value<T: Clone + 'static>(key: Key, value: &T) {
+    keep_constant(key, Rc::new(value.clone()));
+}
+
+// The slot of `key` in the table of constants, found here and not in the
+// generic functions, whose instances would each hold the mask.
+fn constant_slot(key: Key) -> usize {
+    (key.0 as usize) & (CONSTANT_SLOTS - 1)
+}
+
+// The value kept for `key`, outside `kept_copy` so its types make no thread
+// state access each.
+fn kept_constant(key: Key) -> Option<Rc<dyn Any>> {
     thread_state::try_runtimes(|state| {
         let constants = state.constants.try_borrow().ok()?;
-        let (kept_key, value) = constants.get(slot)?.as_ref()?;
+        let (kept_key, value) = constants.get(constant_slot(key))?.as_ref()?;
         (*kept_key == key).then(|| Rc::clone(value))
     })
     .flatten()
 }
 
-fn keep_constant(key: Key, slot: usize, stored: Rc<dyn Any>) {
+fn keep_constant(key: Key, stored: Rc<dyn Any>) {
     thread_state::try_runtimes(|state| {
         let Ok(mut constants) = state.constants.try_borrow_mut() else {
             return;
@@ -389,7 +409,7 @@ fn keep_constant(key: Key, slot: usize, stored: Rc<dyn Any>) {
         if constants.is_empty() {
             constants.resize_with(CONSTANT_SLOTS, || None);
         }
-        if let Some(entry) = constants.get_mut(slot) {
+        if let Some(entry) = constants.get_mut(constant_slot(key)) {
             *entry = Some((key, stored));
         }
     });

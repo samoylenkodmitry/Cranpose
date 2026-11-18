@@ -19,7 +19,7 @@ pub mod android;
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
 pub mod embedded_view;
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
-pub use cranpose_app_shell::TouchRouter;
+pub use cranpose_app_shell::{TouchRouter, TouchSample};
 #[cfg(feature = "renderer-wgpu")]
 mod cover_pipeline;
 #[cfg(feature = "renderer-wgpu")]

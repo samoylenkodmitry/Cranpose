@@ -299,3 +299,70 @@ fn slices_without_text_answer_none_for_every_text_field() {
     assert!(slices.measured_text_layout().is_none());
     assert!(slices.text_window().is_none());
 }
+
+// The colors of the backgrounds a node's slices draw, in order.
+fn background_colors(slices: &ModifierNodeSlices) -> Vec<Color> {
+    let size = Size {
+        width: 20.0,
+        height: 10.0,
+    };
+    slices
+        .draw_commands()
+        .iter()
+        .flat_map(|command| recorded(command, size))
+        .filter_map(|primitive| match primitive {
+            DrawPrimitive::Rect { brush, .. } | DrawPrimitive::RoundRect { brush, .. } => {
+                match brush {
+                    Brush::Solid(color) => Some(color),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_node_collected_again_with_more_and_fewer_draws_draws_each_of_them() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut node = crate::widgets::nodes::LayoutNode::new(
+        Modifier::empty().background(Color::RED),
+        crate::widgets::nodes::layout_node::empty_measure_policy(),
+    );
+    assert_eq!(
+        background_colors(&node.modifier_slices_snapshot()),
+        [Color::RED]
+    );
+    node.set_modifier(
+        Modifier::empty()
+            .background(Color::RED)
+            .background(Color::BLUE),
+    );
+    assert_eq!(
+        background_colors(&node.modifier_slices_snapshot()),
+        [Color::RED, Color::BLUE]
+    );
+    node.set_modifier(Modifier::empty().background(Color::BLUE));
+    assert_eq!(
+        background_colors(&node.modifier_slices_snapshot()),
+        [Color::BLUE]
+    );
+    node.set_modifier(Modifier::empty().padding(2.0));
+    assert!(node.modifier_slices_snapshot().draw_commands().is_empty());
+}
+
+#[test]
+fn a_text_with_a_background_keeps_both() {
+    let text = crate::text_modifier_node::TextModifierElement::new(
+        crate::text::AnnotatedString::from("Behind"),
+        TextStyle::default(),
+        TextLayoutOptions::default(),
+        crate::density::Density::new(2.0, 1.0),
+    );
+    let modifier = Modifier::empty()
+        .background(Color::GREEN)
+        .then(Modifier::with_element(text));
+    let slices = collect_slices_from_modifier(&modifier);
+    assert_eq!(slices.text_content().as_deref(), Some("Behind"));
+    assert_eq!(background_colors(&slices), [Color::GREEN]);
+}

@@ -5,6 +5,7 @@ use cranpose_render_common::{
     graph::{ProjectiveTransform, TextPrimitiveNode},
     graph_scene::RenderDiagnostics,
     layer_composition::folded_layer_alpha,
+    layer_paint::LayerPaint,
     layer_shadow::ShadowLight,
     layer_transform::{apply_layer_affine_to_rect, apply_layer_to_rect, layer_uniform_scale},
     primitive_emit::resolve_clip,
@@ -21,7 +22,10 @@ use cranpose_ui_graphics::{
 use crate::{
     draw::TextRaster,
     scene::{ItemCounts, PassedDown, RasterScene, Subtree, TextDraw},
-    style::{apply_layer_to_brush, apply_layer_to_color, compose_color_filters},
+    style::{
+        apply_layer_geometry_to_brush, apply_layer_to_brush, apply_layer_to_color,
+        compose_color_filters,
+    },
     surface::{SurfacePlacement, rasterize_surface, scales_and_moves},
 };
 
@@ -214,9 +218,12 @@ fn push_text_style_draws(
 
     let text_color =
         resolve_text_color_without_gradient_fallback(text_style, Color(1.0, 1.0, 1.0, 1.0));
-    let transformed_text_color = apply_layer_to_color(text_color, node_layer);
-    // The glyphs draw without the shadow and with the brush the layer
-    // tints; a style with neither is shared as it is.
+    // The glyphs take the layer's paint where their colors resolve. The paint
+    // reaches the colors of the style and the spans as well as this one.
+    let layer_paint = LayerPaint::of(node_layer);
+    let glyph_color = text_color.srgb_8bit();
+    // The glyphs draw without the shadow and with the brush in the layer's
+    // geometry; a style with neither is shared as it is.
     let transformed_text_style =
         if text_style.span_style.shadow.is_none() && text_style.span_style.brush.is_none() {
             Arc::clone(text_style)
@@ -227,7 +234,7 @@ fn push_text_style_draws(
                 .span_style
                 .brush
                 .clone()
-                .map(|brush| apply_layer_to_brush(brush, node_layer));
+                .map(|brush| apply_layer_geometry_to_brush(brush, node_layer));
             Arc::new(style)
         };
 
@@ -245,6 +252,7 @@ fn push_text_style_draws(
             text: Arc::clone(text),
             layout: layout.clone(),
             color: Color::TRANSPARENT,
+            layer_paint: LayerPaint::NONE,
             text_style: Arc::new(shadow_text_style),
             font_size: node.font_size,
             scale: layer_uniform_scale(node_layer),
@@ -258,7 +266,8 @@ fn push_text_style_draws(
         snap_anchor: None,
         text: Arc::clone(text),
         layout: layout.clone(),
-        color: transformed_text_color,
+        color: glyph_color,
+        layer_paint,
         text_style: transformed_text_style,
         font_size: node.font_size,
         scale: layer_uniform_scale(node_layer),

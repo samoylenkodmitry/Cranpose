@@ -7,6 +7,7 @@ mod glass_placeholder;
 mod localization;
 mod provided_colors;
 mod pull_to_refresh;
+mod segmented_press;
 mod segmented_style;
 mod selection_controls;
 mod snackbar_host;

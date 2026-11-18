@@ -107,7 +107,7 @@ fn mesh_surface_shadowed_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // A surface that emits its colour takes no shadow, so reads no map.
     var visibility = 1.0;
     if (mesh.params.y < 1.5) {
-        visibility = shadow_visibility(input.light_position);
+        visibility = shadow_visibility(input.light_position, input.clip_position.xy);
     }
     return shaded(color, shade(input, visibility));
 }

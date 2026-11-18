@@ -614,19 +614,15 @@ fn node_type_mismatch_recreates_entry_instead_of_updating_wrong_node() {
     let mut chain = ModifierNodeChain::new();
     let mut context = TestContext::default();
 
-    let first: Vec<DynModifierElement> = vec![Rc::new(DirectElement::new(
-        DirectNodeKind::A,
-        shared_element_type,
-        Rc::clone(&log),
+    let first: Vec<DynModifierElement> = vec![DynModifierElement::of_shared(Rc::new(
+        DirectElement::new(DirectNodeKind::A, shared_element_type, Rc::clone(&log)),
     ))];
     chain.update_from_slice(&first, &mut context);
     assert!(chain.node::<DirectNodeA>(0).is_some());
 
     log.borrow_mut().clear();
-    let second: Vec<DynModifierElement> = vec![Rc::new(DirectElement::new(
-        DirectNodeKind::B,
-        shared_element_type,
-        Rc::clone(&log),
+    let second: Vec<DynModifierElement> = vec![DynModifierElement::of_shared(Rc::new(
+        DirectElement::new(DirectNodeKind::B, shared_element_type, Rc::clone(&log)),
     ))];
     chain.update_from_slice(&second, &mut context);
 

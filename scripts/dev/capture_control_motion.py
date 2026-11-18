@@ -17,7 +17,7 @@ def installed_binary_sha256(device, bundle):
     return hashlib.sha256(executable.read_bytes()).hexdigest()
 
 
-def capture(device, output, platform, components):
+def capture(device, output, platform, components, variant=""):
     root = Path(__file__).resolve().parents[2]
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -27,11 +27,12 @@ def capture(device, output, platform, components):
     provenance = {"device": device, "bundle": bundle,
                   "source_patch_sha256": hashlib.sha256(patch).hexdigest(),
                   "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
-                  "components": components, "captures": []}
+                  "components": components, "variant": variant, "captures": []}
     (output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     for component in components:
-        suite = ("Native" if platform == "native" else "Cranpose") + component.title() + "MotionTests"
-        prefix = output / component
+        suite = ("Native" if platform == "native" else "Cranpose") + component.title() + variant.title() + "MotionTests"
+        name = component + ("-" + variant if variant else "")
+        prefix = output / name
         result = prefix.with_suffix(".xcresult")
         print(f"Capturing {suite}", flush=True)
         with prefix.with_suffix(".log").open("w") as log:
@@ -40,10 +41,10 @@ def capture(device, output, platform, components):
         provenance["captures"].append({"component": component, "result": result.name,
                                       "binary_sha256": installed_binary_sha256(device, bundle)})
         (output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
-        traces = output / (component + "-traces")
+        traces = output / (name + "-traces")
         subprocess.run([sys.executable, "apps/liquid-reference/collect-traces.py", str(traces),
                         "--bundle", bundle, "--device", device], cwd=root, check=True)
-        with (output / (component + "-extract.log")).open("w") as log:
+        with (output / (name + "-extract.log")).open("w") as log:
             subprocess.run([sys.executable, "apps/liquid-reference/extract-keyframes.py", str(result), str(prefix),
                             "--suite", suite, "--traces", str(traces)], cwd=root,
                            stdout=log, stderr=subprocess.STDOUT, check=True)
@@ -57,5 +58,7 @@ if __name__ == "__main__":
     parser.add_argument("platform", choices=["native", "cranpose"])
     parser.add_argument("--components", nargs="+", choices=["slider", "toggle", "segmented"],
                         default=["slider", "toggle", "segmented"])
+    parser.add_argument("--variant", choices=["", "tap", "holdout"], default="",
+                        help="a gesture other than the continuous drag, such as a tap")
     args = parser.parse_args()
-    capture(args.device, args.output, args.platform, args.components)
+    capture(args.device, args.output, args.platform, args.components, args.variant)

@@ -4,7 +4,7 @@
 // pointer; everything the room shows follows from where it is.
 
 use cranpose_ui::{
-    space::{Camera, Light, Mat4, Vec3},
+    space::{Camera, Mat4, Vec3},
     Point, Size,
 };
 
@@ -18,9 +18,6 @@ const FLOOR_LINE: f32 = 0.655;
 const EYE_DISTANCE: f32 = 1.42;
 const EYE_HEIGHT: f32 = 0.06;
 const LAMP_DEPTH: f32 = 0.45;
-const WORDS_HEIGHT: f32 = 0.25;
-// Radians: shadows soften away from their casters.
-const LAMP_SIZE: f32 = 0.03;
 
 #[derive(Clone, Copy)]
 pub(super) struct Room {
@@ -74,21 +71,6 @@ impl Room {
             height * (-0.25 + 0.06 * half_turn.sin() - 0.02 * eased) + lean.y,
             height * LAMP_DEPTH,
         )
-    }
-
-    pub(super) fn light(self) -> Light {
-        let lamp = self.lamp();
-        let words = Vec3::new(
-            self.size.width * 0.5 + (lamp.x - self.size.width * 0.5) * 0.3,
-            self.size.height * WORDS_HEIGHT,
-            0.0,
-        );
-        Light {
-            direction: words - lamp,
-            ambient: 0.04,
-            shadows: true,
-            size: LAMP_SIZE,
-        }
     }
 
     pub(super) fn lamp_colour(self) -> [f32; 3] {

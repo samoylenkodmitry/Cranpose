@@ -6,9 +6,10 @@ use cranpose_animation::{
     AnimationSpec, RepeatMode, StartOffset, infiniteRepeatable, rememberInfiniteTransition,
 };
 use cranpose_core::{mutableStateOf, remember};
+use cranpose_foundation::lazy::{LazyItems, LazyListScope, rememberLazyListState};
 use cranpose_ui::{
-    Constraints, Layout, MeasureLayoutOptions, MeasureResult, MemoryHeadroom, Modifier,
-    TestComposition, Text, TextLayoutOptions, TextStyle, measure_layout,
+    Constraints, Layout, LazyColumn, LazyColumnSpec, MeasureLayoutOptions, MeasureResult,
+    MemoryHeadroom, Modifier, TestComposition, Text, TextLayoutOptions, TextStyle, measure_layout,
     measure_layout_with_options, prepare_text_layout, run_test_composition, set_memory_headroom,
     text::AnnotatedString,
     widgets::{
@@ -34,6 +35,10 @@ static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 const PASSES: usize = 10;
 // The allocations of a pass that lays a long paragraph out at a new width.
 const LONG_PARAGRAPH_ALLOCATIONS: usize = 10;
+// The allocations of a lazy row measured again at a new width: its root
+// measurements, and what a debug build allocates to compose its kept slot
+// again for the check of `SubcomposeMeasureScope::subcompose`.
+const LAZY_ROW_ALLOCATIONS: f64 = 12.0;
 
 // Rows of 10 points as tall as their parent is wide.
 fn rows(count: usize) {
@@ -275,6 +280,36 @@ fn remeasuring_a_row_allocates_nothing() {
     let per_row = many.saturating_sub(few) as f64 / 100.0;
     println!("allocations per remeasured row: {per_row}");
     assert!(per_row == 0.0, "{per_row} allocations per remeasured row");
+}
+
+// Allocations per pass of a lazy column `visible` rows tall, at a new width
+// each pass, so each visible row measures again from the slot it keeps.
+fn lazy_remeasure_allocations(visible: usize) -> usize {
+    pass_allocations(run_test_composition(move || {
+        LazyColumn(
+            Modifier::empty()
+                .fill_max_width()
+                .height(10.0 * visible as f32),
+            rememberLazyListState(),
+            LazyColumnSpec::default(),
+            |scope| {
+                scope.items(LazyItems::new(1_000), |_| rows(1));
+            },
+        );
+    }))
+}
+
+// A lazy column measured at a new width composes none of its rows again:
+// a row that keeps its slot measures again with no list of its roots.
+fn remeasuring_lazy_rows_allocates_no_root_lists() {
+    let few = lazy_remeasure_allocations(10);
+    let many = lazy_remeasure_allocations(40);
+    let per_row = many.saturating_sub(few) as f64 / 30.0;
+    println!("allocations per remeasured lazy row: {per_row}");
+    assert!(
+        per_row <= LAZY_ROW_ALLOCATIONS,
+        "{per_row} allocations per remeasured lazy row"
+    );
 }
 
 // Places its children one under another, last first when `reversed`.
@@ -565,8 +600,8 @@ fn rows_of_boxes_allocations(count: usize, headroom: MemoryHeadroom) -> usize {
 }
 
 // Composing a row of two boxes makes its three layout nodes, each with its
-// box and parts, the size modifiers of the boxes, one allocation each, and
-// the row's list of children. The rows and the boxes share their measure
+// box and parts, and the row's list of children. The size modifiers of the
+// boxes take no allocation. The rows and the boxes share their measure
 // policies.
 // With little memory left the recycle pool keeps no shells, so a node made
 // fresh makes no shell to seed it with either.
@@ -578,16 +613,23 @@ fn composing_a_row_of_boxes_allocates_within_its_budget() {
             / 20;
         println!("allocations of composing a row of two boxes, {headroom:?} memory: {per_row}");
         assert!(
-            per_row <= 11,
+            per_row <= 9,
             "{per_row} allocations a row, {headroom:?} memory"
         );
     }
 }
 
-/// A modifier chain built link by link keeps its elements in one shared
-/// allocation it extends in place, so each link costs its element alone.
-fn a_modifier_chain_allocates_its_elements_and_one_shared_box() {
+// A modifier holds a plain element by value: one alone takes no
+// allocation, and a chain of them built link by link takes one shared
+// allocation it extends in place.
+fn a_modifier_chain_of_plain_elements_allocates_one_shared_box() {
     drop(Modifier::empty().padding(1.0).background(Color::RED));
+    let region = Region::new(GLOBAL);
+    let modifier = Modifier::empty().padding(1.0);
+    let change = region.change();
+    drop(modifier);
+    assert_eq!(change.allocations, 0, "{change:?}");
+
     let region = Region::new(GLOBAL);
     let modifier = Modifier::empty()
         .padding(1.0)
@@ -595,7 +637,70 @@ fn a_modifier_chain_allocates_its_elements_and_one_shared_box() {
         .rounded_corners(3.0);
     let change = region.change();
     drop(modifier);
-    assert_eq!(change.allocations, 4, "{change:?}");
+    assert_eq!(change.allocations, 1, "{change:?}");
+}
+
+// A node whose chain draws one background collects its slices into their
+// block and a list of exactly that draw, with no growth.
+fn slices_of_one_background_allocate_their_block_and_one_list() {
+    let context = cranpose_ui::AppContext::new();
+    let _scope = context.enter_scope();
+    let node = || {
+        cranpose_ui::LayoutNode::new(
+            Modifier::empty().background(Color::RED).padding(1.0),
+            Rc::new(StackedRows { reversed: false }),
+        )
+    };
+    drop(node().modifier_slices_snapshot());
+    let fresh = node();
+    let region = Region::new(GLOBAL);
+    let slices = fresh.modifier_slices_snapshot();
+    let change = region.change();
+    assert_eq!(slices.draw_commands().len(), 1);
+    assert_eq!(change.allocations, 2, "{change:?}");
+    assert_eq!(change.reallocations, 0, "{change:?}");
+}
+
+// A text that draws one background keeps that draw in a list of one, made
+// at its exact length: its first collection grows no list, and collecting
+// its slices again for another color takes no new list.
+fn slices_of_a_text_with_a_background_keep_their_list() {
+    use cranpose_ui::text::{AnnotatedString, TextLayoutOptions, TextStyle};
+
+    let context = cranpose_ui::AppContext::new();
+    let _scope = context.enter_scope();
+    let modifier = |color| {
+        Modifier::empty()
+            .background(color)
+            .then(Modifier::with_element(
+                cranpose_ui::TextModifierElement::new(
+                    AnnotatedString::from("Behind"),
+                    TextStyle::default(),
+                    TextLayoutOptions::default(),
+                    cranpose_ui::Density::new(2.0, 1.0),
+                ),
+            ))
+    };
+    let mut node = cranpose_ui::LayoutNode::new(
+        modifier(Color::RED),
+        Rc::new(StackedRows { reversed: false }),
+    );
+    let region = Region::new(GLOBAL);
+    let slices = node.modifier_slices_snapshot();
+    let first = region.change();
+    assert_eq!(slices.draw_commands().len(), 1);
+    drop(slices);
+
+    let blue = modifier(Color::BLUE);
+    let region = Region::new(GLOBAL);
+    node.set_modifier(blue);
+    let slices = node.modifier_slices_snapshot();
+    let again = region.change();
+    assert_eq!(slices.draw_commands().len(), 1);
+    println!("allocations of a text's slices: first {first:?}, again {again:?}");
+    assert_eq!(first.reallocations, 0, "{first:?}");
+    assert_eq!(again.reallocations, 0, "{again:?}");
+    assert_eq!(again.allocations, 0, "{again:?}");
 }
 
 fn resolving_text_direction_does_not_allocate() {
@@ -689,6 +794,7 @@ fn a_thread_that_held_a_composition_frees_its_memory_at_exit() {
 fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     a_first_measure_allocates_at_most_one_per_row();
     remeasuring_a_row_allocates_nothing();
+    remeasuring_lazy_rows_allocates_no_root_lists();
     remeasuring_deeply_nested_rows_and_columns_allocates_nothing_more();
     wide_nested_columns_leave_a_bounded_set_of_lists();
     remeasuring_a_wide_column_allocates_nothing_more();
@@ -700,8 +806,10 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     a_rest_gives_back_a_long_paragraph_glyph_room();
     composing_a_row_of_boxes_allocates_within_its_budget();
     if !cfg!(feature = "inspection") {
-        a_modifier_chain_allocates_its_elements_and_one_shared_box();
+        a_modifier_chain_of_plain_elements_allocates_one_shared_box();
     }
+    slices_of_one_background_allocate_their_block_and_one_list();
+    slices_of_a_text_with_a_background_keep_their_list();
     resolving_text_direction_does_not_allocate();
     owned_bitmaps_allocate_only_metadata_and_clones_share_storage();
     owned_bitmaps_do_not_retain_spare_pixel_capacity();

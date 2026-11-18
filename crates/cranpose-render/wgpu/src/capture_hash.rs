@@ -245,7 +245,7 @@ fn hash_text<H: Hasher>(text: &TextDraw, window: CaptureWindow, scale: f32, stat
     visible.hash(state);
     hash_text_gradient_phase_for_cache(text, raster_rect, state);
     text.text.render_hash().hash(state);
-    text.color.render_hash().hash(state);
+    text.hash_glyph_paint(state);
     text.style_hash.hash(state);
     text.layout.id().hash(state);
     hash_f32_for_cache(text.font_size, state);

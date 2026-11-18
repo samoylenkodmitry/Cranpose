@@ -62,6 +62,13 @@ pub fn apply_layer_to_brush(brush: Brush, layer: &GraphicsLayer) -> Brush {
     scale_brush_geometry(brush, layer).map_colors(|color| apply_layer_to_color(color, layer))
 }
 
+/// Resolves `brush` against the scale of `layer` and snaps its colors to eight bits. The layer's
+/// alpha and color filter stay off: a [`LayerPaint`](crate::layer_paint::LayerPaint) applies them
+/// where the colors resolve. [`apply_layer_to_brush`] gives this brush with them applied.
+pub fn apply_layer_geometry_to_brush(brush: Brush, layer: &GraphicsLayer) -> Brush {
+    scale_brush_geometry(brush, layer).map_colors(Color::srgb_8bit)
+}
+
 fn scale_brush_geometry(brush: Brush, layer: &GraphicsLayer) -> Brush {
     let scale_x = layer_scale_x(layer);
     let scale_y = layer_scale_y(layer);

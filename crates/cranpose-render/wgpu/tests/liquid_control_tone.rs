@@ -80,7 +80,7 @@ fn control_gray_responses_follow_the_native_simulator_samples() {
             let pixel = (120 * 1800 + index * 360 + 180) * 4;
             let actual = &frame.pixels[pixel..pixel + 3];
             assert!(
-                actual.iter().all(|value| value.abs_diff(expected) <= 8),
+                actual.iter().all(|value| value.abs_diff(expected) <= 5),
                 "native neutral response: dark={dark} card={card} sample={index}, expected={expected}, actual={actual:?}"
             );
         }
