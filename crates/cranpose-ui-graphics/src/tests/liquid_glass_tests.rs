@@ -1,4 +1,5 @@
 use super::*;
+use crate::{LiquidLoupeSpec, liquid_loupe_effect};
 
 #[test]
 fn a_content_mask_declares_it_preserves_transparency() {

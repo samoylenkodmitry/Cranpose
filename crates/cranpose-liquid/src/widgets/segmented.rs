@@ -12,7 +12,8 @@ use cranpose_ui_graphics::{Brush, Color, ColorFilter, CornerRadii, GraphicsLayer
 use cranpose_ui_layout::Alignment;
 
 use crate::{
-    material::{GlassDynamics, GlassMorph, LiquidModifierExt},
+    glass_morph::GlassMorph,
+    material::{GlassDynamics, LiquidModifierExt},
     motion::LiquidMotion,
     theme::{LiquidSegmentedStyle, liquid_segmented_style},
     widgets::content_scope::ScopeContent,
@@ -504,6 +505,7 @@ impl SegmentLens {
                             capsule_smoothing_dp: 0.0,
                             deformation: None,
                             zoom_anchor: (0.0, 0.0),
+                            tail: None,
                         }),
                         ..super::control_material::dynamics(
                             super::control_motion::ControlContactKind::Segment,

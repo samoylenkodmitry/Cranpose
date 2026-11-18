@@ -220,6 +220,11 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         inactive: |u| slot(u, GLASS_CAPSULE_SMOOTHING_UNIFORM) == 0.0,
     },
     LiquidGlassSpecialization {
+        flag: "GLASS_TAIL_OFF",
+        slots: &[GLASS_TAIL_UNIFORM],
+        inactive: |u| slot(u, GLASS_TAIL_UNIFORM) == 0.0,
+    },
+    LiquidGlassSpecialization {
         flag: "GLASS_INTERIOR_GUARD",
         slots: &[],
         inactive: |_| true,
@@ -292,33 +297,35 @@ pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
     specialize_liquid_glass_with_folds(shader, glass_material_folds_enabled());
 }
 
-fn specialization_flags(uniforms: &[f32], folds: bool) -> u32 {
+// The tail folds out of the general pipeline too: only a popover draws one,
+// and inlined at each of the shader's distance evaluations it would cost
+// every glass where materials do not fold.
+fn specialization_flags(uniforms: &[f32], folds: bool) -> u64 {
     let layered = slot(uniforms, GLASS_REFRACTION_MODE_UNIFORM) > 2.5;
-    if !folds && !layered {
-        return 0;
-    }
     LIQUID_GLASS_SPECIALIZATIONS
         .iter()
         .enumerate()
         .filter(|(_, specialization)| {
             folds
-                || !matches!(
-                    specialization.flag,
-                    "GLASS_PROJECTION_OFF"
-                        | "GLASS_PARTIAL_ACTIVITY_OFF"
-                        | "GLASS_RIM_STYLE_OFF"
-                        | "GLASS_SHADOW_OFF"
-                        | "GLASS_RING_SHADOW_OFF"
-                )
+                || specialization.flag == "GLASS_TAIL_OFF"
+                || layered
+                    && !matches!(
+                        specialization.flag,
+                        "GLASS_PROJECTION_OFF"
+                            | "GLASS_PARTIAL_ACTIVITY_OFF"
+                            | "GLASS_RIM_STYLE_OFF"
+                            | "GLASS_SHADOW_OFF"
+                            | "GLASS_RING_SHADOW_OFF"
+                    )
         })
         .fold(0, |flags, (index, specialization)| {
-            flags | (u32::from((specialization.inactive)(uniforms)) << index)
+            flags | (u64::from((specialization.inactive)(uniforms)) << index)
         })
 }
 
 #[derive(Clone, Copy, PartialEq)]
 struct GlassSpecializationKey {
-    flags: u32,
+    flags: u64,
     substrate_radius: Option<u32>,
     folds: bool,
     mean_tone: bool,
@@ -449,7 +456,7 @@ impl GlassSpecializationKey {
 /// [`specialize_liquid_glass`] with folding decided by the caller rather
 /// than the process: a test of the folds asks for them whatever the platform.
 pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: bool) {
-    const _: () = assert!(LIQUID_GLASS_SPECIALIZATIONS.len() <= u32::BITS as usize);
+    const _: () = assert!(LIQUID_GLASS_SPECIALIZATIONS.len() <= u64::BITS as usize);
     let uniforms = shader.uniforms();
     let content_mask = slot(uniforms, 112) > 0.5;
     let own = GlassSpecializationKey::for_uniforms(uniforms, folds);
@@ -666,6 +673,12 @@ pub const GLASS_KEY_FILL_UNIFORM: usize = 135;
 pub const GLASS_FACE_RESPONSE_UNIFORM: usize = 142;
 /// Primary capsule transition smoothing in dp; zero preserves the primary outline.
 pub const GLASS_CAPSULE_SMOOTHING_UNIFORM: usize = 146;
+/// Four uniform slots for a popover tail: its tip in dp, then the unit axis from its edge
+/// toward the tip.
+pub const GLASS_TAIL_TIP_UNIFORM: usize = 76;
+/// Three uniform slots for a popover tail in dp: its height past the primary edge (zero for
+/// no tail), its tip radius and the distance over which it curves into the edge.
+pub const GLASS_TAIL_UNIFORM: usize = 84;
 /// Edge-lens image stage: zero requests the complete chain, one renders the outer warp,
 /// two renders the inner warp, and three filters the resulting image and lights it.
 pub const GLASS_OPTICAL_STAGE_UNIFORM: usize = 147;
@@ -761,12 +774,12 @@ pub const GLASS_RESTING_TINT_UNIFORM: usize = 113;
 ///          unset -> light overhead, return glow at the bottom rim)
 /// 124..126: ink recolor RGB — the lens recolors dark transmitted ink
 /// 127: ink recolor strength (0 = off)
-pub const LIQUID_GLASS_WGSL: &str =
+pub static LIQUID_GLASS_WGSL: &str =
     runtime_shader_wgsl!("glass_geometry.wgsl", "liquid_glass.wgsl");
 
 /// WGSL distance and circular displacement functions shared by glass and its content.
 /// Concatenate this source once with the runtime shader prelude and a fragment stage.
-pub const LIQUID_GLASS_GEOMETRY_WGSL: &str = framework_wgsl!("glass_geometry.wgsl");
+pub static LIQUID_GLASS_GEOMETRY_WGSL: &str = framework_wgsl!("glass_geometry.wgsl");
 
 /// Uniform slot of the ambient light return direction (x at 122, y at 123).
 pub const GLASS_LIGHT_DIRECTION_UNIFORM: usize = 122;
@@ -886,89 +899,6 @@ pub fn liquid_glass_effect(
 /// outside the effect rect.
 fn liquid_glass_input_padding(spec: &LiquidGlassSpec) -> f32 {
     spec.blur_radius.max(2.0).ceil()
-}
-
-/// The text-drag loupe material: a solid glass drop magnifying an offset
-/// focus (the grab point under the finger), displayed inside a capsule
-/// floating above it. ONE continuous wcKSRD field (example/shaders.txt):
-/// `sample = focus + p·lens_scale/m` — the magnified face, the rim's
-/// descending-branch inversion and the rim line all come from the same
-/// displacement mapping, with no band boundaries.
-#[derive(Clone, Debug, PartialEq)]
-pub struct LiquidLoupeSpec {
-    /// Magnification (the reference loupe measures a uniform ~1.25×).
-    pub magnification: f32,
-    /// Focus offset from the bubble center, dp (the reference samples 75 dp
-    /// below its center: content from under the finger, displayed above).
-    pub focus_offset: (f32, f32),
-    /// Spectral separation of the meniscus return.
-    pub dispersion: f32,
-    /// Specular rim intensity.
-    pub highlight: f32,
-    /// Continuous optical activity. Geometry is owned by the caller; this
-    /// coordinate raises and lowers refraction, magnification, dispersion,
-    /// fold return, and edge light without cross-fading sampled content.
-    pub activity: f32,
-    /// Corner radius in dp. The text loupe follows the smaller half-extent as
-    /// it grows, producing a narrow capsule at birth and the full horizontal
-    /// capsule at rest. Values <= 0 select that capsule radius automatically.
-    pub corner_radius: f32,
-}
-
-impl Default for LiquidLoupeSpec {
-    fn default() -> Self {
-        Self {
-            magnification: 1.25,
-            focus_offset: (0.0, 75.0),
-            dispersion: 0.36,
-            highlight: 0.42,
-            activity: 1.0,
-            corner_radius: 0.0,
-        }
-    }
-}
-
-/// Builds the loupe backdrop effect for a capsule node of `node_size` dp.
-/// Explicit-rect mode: the container carries the node size in dp and the
-/// shader derives px-per-dp from the renderer-injected pixel rect, so the
-/// bubble lands correctly at ANY render scale (live density, robot captures
-/// at 1.0, fractional desktop scales).
-pub fn liquid_loupe_effect(node_size: (f32, f32), spec: &LiquidLoupeSpec) -> RenderEffect {
-    let (w, h) = (node_size.0.max(1.0), node_size.1.max(1.0));
-    let activity = spec.activity.clamp(0.0, 1.0);
-    let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
-    shader.set_float2(0, w, h);
-    shader.set_float2(2, w * 0.5, h * 0.5);
-    shader.set_float2(4, w, h);
-    if spec.corner_radius > 0.0 {
-        shader.set_float(6, spec.corner_radius.min(0.5 * h.min(w)));
-    } else {
-        shader.set_float(6, -1.0);
-    }
-    shader.set_float(9, 0.34 * activity);
-    shader.set_float(GLASS_REFRACTION_CURVE_UNIFORM, 0.25);
-    shader.set_float(
-        GLASS_DISPERSION_UNIFORM,
-        spec.dispersion.clamp(0.0, 1.0) * activity,
-    );
-    shader.set_float(GLASS_TRANSMISSION_REFRACTION_UNIFORM, 1.0);
-    shader.set_float(GLASS_EFFECT_DENSITY_UNIFORM, 1.0);
-    shader.set_float(GLASS_MENISCUS_ABSORPTION_UNIFORM, 1.0);
-    shader.set_float(GLASS_ACTIVITY_UNIFORM, 1.0);
-    shader.set_float(11, spec.highlight * activity);
-    shader.set_float4(14, 1.0, 1.0, 1.0, 0.0);
-    shader.set_float(18, 1.0);
-    shader.set_float(20, 0.0);
-    shader.set_float(21, 0.5);
-    shader.set_float(24, 1.0);
-    shader.set_float(28, activity);
-    shader.set_float(80, 1.0);
-    shader.set_float2(81, spec.focus_offset.0, spec.focus_offset.1);
-    shader.set_float(83, 1.0 + (spec.magnification.max(0.2) - 1.0) * activity);
-    shader.set_float(90, activity);
-    let focus_reach = (spec.focus_offset.0.powi(2) + spec.focus_offset.1.powi(2)).sqrt();
-    shader.set_input_padding((focus_reach + 8.0).ceil());
-    liquid_glass_runtime_effect(shader)
 }
 
 /// The text edit-menu material measured from the reference: a 44 dp glass

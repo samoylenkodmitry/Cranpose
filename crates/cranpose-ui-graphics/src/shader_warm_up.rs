@@ -8,7 +8,7 @@ use crate::ShaderWarmUp;
 /// The framework's own runtime shader sources. A renderer rebuilds the
 /// pipelines its last launch drew the first screen with from these, matched
 /// by [`crate::runtime_shader_source_hash`], before the app builds them.
-pub const BUILTIN_RUNTIME_SHADER_SOURCES: [&str; 9] = [
+pub static BUILTIN_RUNTIME_SHADER_SOURCES: [&str; 9] = [
     crate::LIQUID_GLASS_WGSL,
     crate::GRADIENT_BLUR_WGSL,
     crate::GRADIENT_CUT_MASK_WGSL,

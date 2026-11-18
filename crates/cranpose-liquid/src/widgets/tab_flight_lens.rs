@@ -5,8 +5,9 @@ use cranpose_ui_graphics::{RenderEffect, ShaderTarget, ShaderWarmUp};
 
 use super::tab_bar::{BAR_HEIGHT, BLOB_HEIGHT, TAB_WIDTH};
 use crate::{
+    glass_morph::GlassMorph,
     material::{
-        Glass, GlassDynamics, GlassFaceResponse, GlassKeyFill, GlassMorph, GlassShadow,
+        Glass, GlassDynamics, GlassFaceResponse, GlassKeyFill, GlassShadow,
         cached_glass_content_layers, neutral_surface_tint,
     },
     theme::LiquidColors,
@@ -161,6 +162,7 @@ pub(super) fn tab_flight_dynamics(
                 * activity,
             deformation: None,
             zoom_anchor: (0.0, 0.0),
+            tail: None,
         }),
         activity: Some(1.0),
         resting_tint: Some(geometry.resting_tint),

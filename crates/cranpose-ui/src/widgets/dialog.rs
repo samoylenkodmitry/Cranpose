@@ -32,7 +32,7 @@ pub enum DismissReason {
 }
 
 /// How a dialog behaves.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DialogSpec {
     /// Whether a tap outside the dialog dismisses it.
     pub dismiss_on_outside_tap: bool,
@@ -45,6 +45,10 @@ pub struct DialogSpec {
     /// Where the dialog's surface sits in the window: the centre, or the
     /// bottom edge for a sheet.
     pub alignment: Alignment,
+    /// The shift of the dialog's surface from where `alignment` puts it, in
+    /// logical pixels: a popover that points at a control sits at an offset
+    /// from the window's top-left corner.
+    pub offset: Point,
 }
 
 impl Default for DialogSpec {
@@ -54,6 +58,7 @@ impl Default for DialogSpec {
             dismiss_on_back: true,
             apply_window_insets: true,
             alignment: Alignment::CENTER,
+            offset: Point { x: 0.0, y: 0.0 },
         }
     }
 }
@@ -67,6 +72,7 @@ impl DialogSpec {
             dismiss_on_back: false,
             apply_window_insets: true,
             alignment: Alignment::CENTER,
+            offset: Point { x: 0.0, y: 0.0 },
         }
     }
 
@@ -91,6 +97,12 @@ impl DialogSpec {
     /// Sets where the dialog's surface sits in the window.
     pub const fn with_alignment(mut self, alignment: Alignment) -> Self {
         self.alignment = alignment;
+        self
+    }
+
+    /// Sets the shift of the dialog's surface from where its alignment puts it.
+    pub const fn with_offset(mut self, offset: Point) -> Self {
+        self.offset = offset;
         self
     }
 }
@@ -248,7 +260,9 @@ pub fn DialogWithFadingScrim<C>(
                         let content = Rc::clone(&content);
                         // Taps on the dialog's own surface stay off the scrim below.
                         Box(
-                            Modifier::empty().pointer_opaque(),
+                            Modifier::empty()
+                                .absolute_offset(spec.offset.x, spec.offset.y)
+                                .pointer_opaque(),
                             BoxSpec::default(),
                             move || {
                                 let content = Rc::clone(&content);

@@ -1,7 +1,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use cranpose::{
-    liquid::{material::GlassMorph, prelude::*},
+    liquid::{prelude::*, GlassMorph},
     widgets::{Box as CBox, BoxSpec},
     AppLauncher, Brush, Color, GraphicsLayer, Modifier, Size,
 };
@@ -81,6 +81,7 @@ fn ProbeApp() {
                                 capsule_smoothing_dp: 0.0,
                                 deformation: None,
                                 zoom_anchor: (0.0, 0.0),
+                                tail: None,
                             }),
                             ..Default::default()
                         },

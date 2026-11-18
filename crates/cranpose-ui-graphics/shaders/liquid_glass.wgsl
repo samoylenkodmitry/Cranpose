@@ -124,6 +124,8 @@ override GLASS_HOLDING_OFF: bool = false;
 override GLASS_PARTIAL_ACTIVITY_OFF: bool = false;
 override GLASS_CAPSULE_SMOOTHING_OFF: bool = false;
 override GLASS_TINT_TRANSMISSION_OFF: bool = false;
+// A popover's tail (uniform 84 is its reach); every other material leaves it out.
+override GLASS_TAIL_OFF: bool = false;
 // The interior guard: every rim term (meniscus, bevel, border line,
 // specular, the opposite-wall reflection) is a product with a band weight
 // that is exactly zero deeper inside the shape than `rim_reach`, so a
@@ -729,6 +731,25 @@ struct GlassScene {
     strain_axis: vec2<f32>,
     strain_along: f32,
     strain_across: f32,
+    tail_center: vec2<f32>,
+    tail_u: vec2<f32>,
+    tail_v: vec2<f32>,
+    tail_half: f32,
+    tail_radius: f32,
+    tail_glue: f32,
+}
+
+// A popover's tail: a square turned 45 degrees about `tail_center`, its
+// half side `tail_half` and its corners rounded by `tail_radius`. `tail_u`
+// and `tail_v` are its sides' directions, so one corner points along the
+// tail's axis.
+fn tail_distance(scene: GlassScene, coord: vec2<f32>) -> f32 {
+    let p = coord - scene.tail_center;
+    return sd_round_rect(
+        vec2<f32>(dot(p, scene.tail_u), dot(p, scene.tail_v)),
+        vec2<f32>(scene.tail_half),
+        scene.tail_radius,
+    );
 }
 
 fn scene_sdf(scene: GlassScene, p_a: vec2<f32>) -> f32 {
@@ -759,6 +780,9 @@ fn scene_sdf(scene: GlassScene, p_a: vec2<f32>) -> f32 {
         strain_along,
         strain_across,
     );
+    if !GLASS_TAIL_OFF & (scene.tail_half > 0.0) {
+        d = smin(d, tail_distance(scene, coord), scene.tail_glue);
+    }
     // The flag gates the loop as well as zeroing its count: a GLSL compiler
     // pays for the loop at each of this function's dozen inlined calls
     // before it learns the count is zero. Chrome on a Mate 20 X linked a
@@ -1023,8 +1047,19 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
 
     // SDF distance from combined scene (negative = inside)
     let p = coord - center;
+    // Float 84 is the tail's reach (0 for none), 85 its tip radius and 86
+    // its glue; 76..79 hold its tip and the unit axis toward the tip. The
+    // square's centre sits the reach behind the tip, and the tip radius
+    // leaves its half side short of the reach by the rounding.
+    let tail_reach = fixed_or(get_float(84u), 0.0, GLASS_TAIL_OFF) * s;
+    let tail_radius = get_float(85u) * s;
+    let tail_axis = get_vec2(78u);
+    let tail_across = vec2<f32>(-tail_axis.y, tail_axis.x);
+    let tail_half = select(0.0, (tail_reach - tail_radius) * 0.70710678 + tail_radius, tail_reach > 0.0);
     let scene = GlassScene(center, half_size, corner_radius, shape_count, dp_scale, s,
-        glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir, strain_axis, strain_along, strain_across);
+        glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir, strain_axis, strain_along, strain_across,
+        get_vec2(76u) * dp_scale - tail_axis * tail_reach, (tail_axis + tail_across) * 0.70710678,
+        (tail_axis - tail_across) * 0.70710678, tail_half, tail_radius, get_float(86u) * s);
     let d = scene_sdf(scene, p);
     let key_fill_height = fixed_or(get_float(135u), 0.0, GLASS_KEY_FILL_OFF) * select(max(get_float(99u), 1.0), optical_scale, get_float(141u) > 0.5);
     let key_fill = !GLASS_KEY_FILL_OFF & (key_fill_height > 0.0);

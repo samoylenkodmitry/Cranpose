@@ -16,7 +16,7 @@ use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer, Point, Rect
 use cranpose_ui_layout::VerticalAlignment;
 
 use crate::{
-    material::{GlassDynamics, GlassMorph, GlassShadow, LiquidModifierExt, LiquidShape},
+    material::{GlassDynamics, GlassShadow, LiquidModifierExt, LiquidShape},
     theme::{liquid_colors, liquid_typography},
     widgets::content_scope::ScopeContent,
 };
@@ -1445,7 +1445,7 @@ pub fn LiquidMenu(
                             activity: Some(activity),
                             resting_tint: birth_milk,
                             touch: glow_touch,
-                            morph: Some(GlassMorph {
+                            morph: Some(crate::GlassMorph {
                                 node_size: (size.width.max(1.0), size.height.max(1.0)),
                                 primary,
                                 shapes,
@@ -1455,9 +1455,7 @@ pub fn LiquidMenu(
                                 bulge_amplitude: surface.bulge,
                                 bulge_direction: bulge_dir,
                                 ellipse_blend: menu_ellipse_blend(t),
-                                capsule_smoothing_dp: 0.0,
-                                deformation: None,
-                                zoom_anchor: (0.0, 0.0),
+                                ..crate::GlassMorph::default()
                             }),
                             ..Default::default()
                         }

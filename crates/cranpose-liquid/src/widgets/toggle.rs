@@ -11,7 +11,8 @@ use cranpose_ui::{
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer, Point, TileMode};
 
 use crate::{
-    material::{GlassDynamics, GlassMorph, LiquidModifierExt},
+    glass_morph::GlassMorph,
+    material::{GlassDynamics, LiquidModifierExt},
     motion::{LiquidMotion, Press},
     theme::liquid_colors,
 };
@@ -291,6 +292,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                             capsule_smoothing_dp: 0.0,
                             deformation: None,
                             zoom_anchor: (0.0, 0.0),
+                            tail: None,
                         }),
                         ..super::control_material::dynamics(
                             super::control_motion::ControlContactKind::Thumb,

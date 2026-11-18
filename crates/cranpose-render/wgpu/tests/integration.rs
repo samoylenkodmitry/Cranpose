@@ -49,6 +49,7 @@ mod glass_rim_continuity;
 mod glass_shadow_outside_clip;
 mod glass_specialization_parity;
 mod glass_surface_refraction;
+mod glass_tail;
 mod glass_underlay_scroll;
 mod glass_vibrancy;
 mod glyph_ink;

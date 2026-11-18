@@ -16,7 +16,8 @@ use cranpose_ui_layout::Alignment;
 
 use super::button::{GlassButtonSpec, GlassIconForeground};
 use crate::{
-    material::{Glass, GlassDynamics, GlassMorph, LiquidModifierExt, LiquidShape},
+    glass_morph::GlassMorph,
+    material::{Glass, GlassDynamics, LiquidModifierExt, LiquidShape},
     motion::LiquidMotion,
     theme::{LiquidColors, liquid_colors},
     widgets::content_scope::ScopeContent,

@@ -1,6 +1,7 @@
 mod accessibility_actions;
 mod alert_dialog;
 mod bottom_sheet;
+mod confirmation_dialog;
 mod containers;
 mod date_picker;
 mod floating_button_interaction;
