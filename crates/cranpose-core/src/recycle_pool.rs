@@ -57,7 +57,10 @@ impl RecyclePool {
     }
 
     pub(crate) fn take(&mut self) -> Option<RecycledNode> {
-        self.returning.pop_back().or_else(|| self.warm.pop_back())
+        self.returning
+            .pop_back()
+            .or_else(|| self.warm.pop_back())
+            .or_else(|| self.cold.pop_back())
     }
 
     fn warm_target_limit(&self) -> usize {
