@@ -197,7 +197,7 @@ pub use grid::{
     GridCells, LazyGridState, LazyHorizontalGrid, LazyHorizontalGridSpec, LazyVerticalGrid,
     LazyVerticalGridSpec, rememberLazyGridState,
 };
-use item_cache::{LazyMeasuredItemCache, end_lazy_cache_pass};
+use item_cache::{LazyMeasuredItemCache, end_lazy_cache_pass, note_candidate_miss};
 use item_roots::measure_item_roots;
 use placements::push_lazy_list_placements;
 use skipped_slots::{recycle_out_of_reach, recycle_skipped_active_slots};
@@ -332,7 +332,6 @@ fn measure_lazy_list_item(
     // here is still the cache's when the slot turns out clean.
     let candidate_cache = inputs.measured_item_cache.borrow();
     let candidate = candidate_cache.candidate(&item_context);
-    let stale_candidate = candidate.is_none() && candidate_cache.contains_index(index);
 
     if let Some(cached) = candidate {
         match scope
@@ -378,7 +377,7 @@ fn measure_lazy_list_item(
         }
     } else {
         drop(candidate_cache);
-        note_candidate_miss(inputs.measured_item_cache, index, stale_candidate);
+        note_candidate_miss(inputs.measured_item_cache, index);
         recycle_out_of_reach(scope, inputs, index, slot_id);
     }
 
@@ -429,16 +428,6 @@ fn measure_lazy_list_item(
     );
     crate::lazy_prefetch::record_lazy_item_cost(measure_start.elapsed());
     item
-}
-
-// Notes that the cache held no measurement of the item at `index` to keep,
-// and lets go of a `stale` one it held there.
-fn note_candidate_miss(cache: &RefCell<LazyMeasuredItemCache>, index: usize, stale: bool) {
-    let mut cache = cache.borrow_mut();
-    cache.record_candidate_miss();
-    if stale {
-        cache.remove(index);
-    }
 }
 
 fn subcompose_lazy_list_item(
@@ -617,8 +606,9 @@ fn measure_lazy_list_internal(
             content.item_count(),
         ),
     };
-    end_lazy_cache_pass(&result, context.measured_item_cache);
-    place_lazy_list(scope, constraints, &result, count, &context, &frame)
+    let placed = place_lazy_list(scope, constraints, &result, count, &context, &frame);
+    end_lazy_cache_pass(result, context.measured_item_cache);
+    placed
 }
 
 /// Measures the items of a list's viewport, places the focused one and the

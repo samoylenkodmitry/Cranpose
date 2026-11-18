@@ -26,4 +26,11 @@ impl LazyItemSource for LazyListItems<'_, '_, '_> {
         self.keep(index, composed);
         Ok(BeyondItem::Kept)
     }
+
+    fn item_list(&mut self) -> Vec<LazyListMeasuredItem> {
+        self.inputs
+            .measured_item_cache
+            .borrow_mut()
+            .take_item_list()
+    }
 }

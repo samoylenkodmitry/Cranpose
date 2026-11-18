@@ -753,6 +753,14 @@ impl LazyItemSource for LazyGridLines<'_, '_, '_> {
             BeyondItem::Kept
         })
     }
+
+    fn item_list(&mut self) -> Vec<LazyListMeasuredItem> {
+        self.items
+            .inputs
+            .measured_item_cache
+            .borrow_mut()
+            .take_item_list()
+    }
 }
 
 /// Measures the lines of a grid's viewport and holds its sticky header, and
