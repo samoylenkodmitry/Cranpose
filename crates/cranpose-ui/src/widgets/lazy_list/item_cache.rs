@@ -10,6 +10,10 @@ use cranpose_ui_layout::Axis;
 
 use super::LazyItemMeasureContext;
 
+// The most items the kept list of placed items has room for; a larger one
+// grew in a pass that placed far more items than the list shows.
+const KEPT_ITEM_LIST_CAPACITY: usize = 256;
+
 #[derive(Default)]
 pub(super) struct LazyMeasuredItemCache {
     axis: Option<Axis>,
@@ -20,6 +24,8 @@ pub(super) struct LazyMeasuredItemCache {
     // The roots of the items that the pass let go of, which the items it
     // measures fill again; empty between passes.
     rooms: Vec<Rc<LazyItemRoots>>,
+    // The list of the items the last pass placed, emptied, for the next.
+    item_list: Vec<LazyListMeasuredItem>,
 }
 
 pub(super) struct CachedLazyMeasuredItem {
@@ -160,11 +166,23 @@ impl LazyMeasuredItemCache {
         self.rooms.pop()
     }
 
+    pub(super) fn take_item_list(&mut self) -> Vec<LazyListMeasuredItem> {
+        std::mem::take(&mut self.item_list)
+    }
+
+    // Keeps `items`, emptied, as the list the next pass fills.
+    pub(super) fn keep_item_list(&mut self, mut items: Vec<LazyListMeasuredItem>) {
+        items.clear();
+        if items.capacity() <= KEPT_ITEM_LIST_CAPACITY {
+            self.item_list = items;
+        }
+    }
+
     pub(super) fn record_candidate_hit(&mut self) {
         self.telemetry.candidate_hits += 1;
     }
 
-    pub(super) fn record_candidate_miss(&mut self) {
+    fn record_candidate_miss(&mut self) {
         self.telemetry.candidate_misses += 1;
     }
 
@@ -196,13 +214,31 @@ impl LazyMeasuredItemCache {
     }
 }
 
-// Ends a measure pass of the list: lets go of the roots no item took again
+// Notes that `cache` held no measurement of the item at `index` to keep, and
+// lets go of the one it held there, which does not fit.
+pub(super) fn note_candidate_miss(cache: &RefCell<LazyMeasuredItemCache>, index: usize) {
+    let mut cache = cache.borrow_mut();
+    cache.record_candidate_miss();
+    cache.remove(index);
+}
+
+// Ends a measure pass of the list that placed `result`: lets go of the roots
+// no item took again, keeps the list of the placed items for the next pass
 // and logs what the pass found in the cache.
 pub(super) fn end_lazy_cache_pass(
+    result: LazyListMeasureResult,
+    measured_item_cache: &Rc<RefCell<LazyMeasuredItemCache>>,
+) {
+    log_lazy_cache_telemetry(&result, measured_item_cache);
+    let mut cache = measured_item_cache.borrow_mut();
+    cache.rooms.clear();
+    cache.keep_item_list(result.visible_items);
+}
+
+fn log_lazy_cache_telemetry(
     result: &LazyListMeasureResult,
     measured_item_cache: &Rc<RefCell<LazyMeasuredItemCache>>,
 ) {
-    measured_item_cache.borrow_mut().rooms.clear();
     if !cranpose_core::DIAGNOSTICS.lazy_cache_telemetry.is_set() {
         return;
     }

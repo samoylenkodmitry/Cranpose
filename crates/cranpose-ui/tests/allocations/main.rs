@@ -39,6 +39,10 @@ const LONG_PARAGRAPH_ALLOCATIONS: usize = 10;
 // build allocates to compose its kept slot again for the check of
 // `SubcomposeMeasureScope::subcompose`.
 const LAZY_ROW_ALLOCATIONS: f64 = 10.0;
+// The allocations of a pass of a lazy column scrolled a little.
+const LAZY_SCROLL_ALLOCATIONS: usize = 20;
+// The allocations of a pass of a lazy column scrolled by a row.
+const LAZY_ROW_SCROLL_ALLOCATIONS: usize = 44;
 
 // Rows of 10 points as tall as their parent is wide.
 fn rows(count: usize) {
@@ -310,6 +314,61 @@ fn remeasuring_lazy_rows_allocates_no_root_lists() {
         per_row <= LAZY_ROW_ALLOCATIONS,
         "{per_row} allocations per remeasured lazy row"
     );
+}
+
+// Allocations per pass of a lazy column 10 rows tall scrolled by `delta`
+// before each pass, after two passes that warm it up.
+fn lazy_scroll_allocations(delta: f32) -> usize {
+    let captured = Rc::new(Cell::new(None));
+    let capture = Rc::clone(&captured);
+    let mut composition = run_test_composition(move || {
+        let list = rememberLazyListState();
+        capture.set(Some(list));
+        LazyColumn(
+            Modifier::empty().fill_max_width().height(100.0),
+            list,
+            LazyColumnSpec::default(),
+            |scope| {
+                scope.items(LazyItems::new(1_000), |_| rows(1));
+            },
+        );
+    });
+    let list = captured.get().expect("the composition remembered its list");
+    let root = composition.root().expect("a composed root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    let mut pass = || {
+        list.dispatch_scroll_delta(-delta);
+        measure_layout(&mut applier, root, Size::new(100.0, 4000.0)).expect("the list measures");
+    };
+    pass();
+    pass();
+    let region = Region::new(GLOBAL);
+    for _ in 0..PASSES {
+        pass();
+    }
+    let allocations = region.change().allocations;
+    applier.clear_runtime_handle();
+    allocations / PASSES
+}
+
+// A lazy column places its items in the list of the items its pass before
+// placed: scrolled a pixel, it keeps its rows; scrolled a row, a row comes
+// in, which the pass from the kept rows refuses before the pass that
+// composes it.
+fn scrolling_lazy_rows_allocates_within_its_budget() {
+    for (delta, budget) in [
+        (1.0, LAZY_SCROLL_ALLOCATIONS),
+        (10.0, LAZY_ROW_SCROLL_ALLOCATIONS),
+    ] {
+        let allocations = lazy_scroll_allocations(delta);
+        println!("allocations a pass of a lazy column scrolled {delta} px: {allocations}");
+        assert!(
+            allocations <= budget,
+            "{allocations} allocations a pass of a lazy column scrolled {delta} px"
+        );
+    }
 }
 
 // Places its children one under another, last first when `reversed`.
@@ -795,6 +854,7 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     a_first_measure_allocates_at_most_one_per_row();
     remeasuring_a_row_allocates_nothing();
     remeasuring_lazy_rows_allocates_no_root_lists();
+    scrolling_lazy_rows_allocates_within_its_budget();
     remeasuring_deeply_nested_rows_and_columns_allocates_nothing_more();
     wide_nested_columns_leave_a_bounded_set_of_lists();
     remeasuring_a_wide_column_allocates_nothing_more();

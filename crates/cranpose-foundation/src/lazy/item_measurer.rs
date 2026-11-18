@@ -92,20 +92,42 @@ where
         first_item_index: usize,
         first_item_scroll_offset: f32,
     ) -> Result<ItemMeasurePass, S::Refusal> {
+        let mut items = self.source.item_list();
+        let pass = self.measure_all_into(&mut items, first_item_index, first_item_scroll_offset);
+        if pass.is_err() {
+            items.clear();
+            self.source.keep_item_list(items);
+        }
+        pass
+    }
+
+    // `measure_all`, with the placed items in `visible_items`, which the pass
+    // takes on success.
+    fn measure_all_into(
+        &mut self,
+        visible_items: &mut Vec<LazyListMeasuredItem>,
+        first_item_index: usize,
+        first_item_scroll_offset: f32,
+    ) -> Result<ItemMeasurePass, S::Refusal> {
         let start_time = Instant::now();
         let start_offset = self.config.before_content_padding - first_item_scroll_offset;
         let viewport_end = self.effective_viewport_size;
         let content_end =
             (self.effective_viewport_size - self.config.after_content_padding).max(0.0);
 
-        let (mut visible_items, current_index, current_offset) =
-            self.measure_visible(first_item_index, start_offset, viewport_end, start_time)?;
+        let (current_index, current_offset) = self.measure_visible(
+            visible_items,
+            first_item_index,
+            start_offset,
+            viewport_end,
+            start_time,
+        )?;
         let measured_visible_items = visible_items.len();
         let hit_time_budget = start_time.elapsed() > DEFAULT_TIME_BUDGET;
 
         let effective_first_index = self
             .fill_end_gap(
-                &mut visible_items,
+                visible_items,
                 current_index,
                 current_offset,
                 content_end,
@@ -114,12 +136,7 @@ where
             .unwrap_or(first_item_index);
         let backfilled = effective_first_index != first_item_index;
 
-        self.keep_beyond_after(
-            current_index,
-            current_offset,
-            &mut visible_items,
-            start_time,
-        )?;
+        self.keep_beyond_after(current_index, current_offset, visible_items, start_time)?;
 
         if self.include_before_beyond_bounds
             && effective_first_index > 0
@@ -130,17 +147,13 @@ where
                 visible_items[0].offset,
                 start_time,
             )?;
-            if !placed_before.is_empty() {
-                let mut combined = placed_before;
-                combined.append(&mut visible_items);
-                visible_items = combined;
-            }
+            drop(visible_items.splice(..0, placed_before));
         }
 
         let viewport_filled =
             backfilled || current_offset >= viewport_end || current_index >= self.items_count;
         let pass = ItemMeasurePass {
-            items: visible_items,
+            items: std::mem::take(visible_items),
             start_index: effective_first_index,
             start_offset,
             next_index: current_index,
@@ -207,16 +220,13 @@ where
 
     fn measure_visible(
         &mut self,
+        items: &mut Vec<LazyListMeasuredItem>,
         start_index: usize,
         start_offset: f32,
         viewport_end: f32,
         _start_time: Instant,
-    ) -> Result<(Vec<LazyListMeasuredItem>, usize, f32), S::Refusal> {
-        let mut items = Vec::with_capacity(self.estimated_measure_capacity(
-            start_index,
-            start_offset,
-            viewport_end,
-        ));
+    ) -> Result<(usize, f32), S::Refusal> {
+        items.reserve(self.estimated_measure_capacity(start_index, start_offset, viewport_end));
         let mut current_index = start_index;
         let mut current_offset = start_offset;
 
@@ -244,7 +254,7 @@ where
             );
         }
 
-        Ok((items, current_index, current_offset))
+        Ok((current_index, current_offset))
     }
 
     fn keep_beyond_after(
