@@ -85,7 +85,7 @@ fn recorded(recorder: &mut ShapeRecorder) -> Vec<(Range<u32>, Vec<DrawPrimitive>
 fn keep(kept: &[usize]) -> ShapeRecorder {
     let mut recorder = ShapeRecorder::default();
     let runs = recorded(&mut recorder);
-    recorder.keep_segments(|segment| kept.iter().any(|&index| runs[index].0.contains(&segment)));
+    recorder.keep_segment_ranges(kept.iter().map(|&index| runs[index].0.clone()));
     let mut start = 0;
     for &index in kept {
         let (segments, drawn) = &runs[index];
