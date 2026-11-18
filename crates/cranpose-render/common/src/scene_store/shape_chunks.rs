@@ -133,8 +133,8 @@ pub(super) struct ShapeChunks {
     // The chunks no item names, which take shapes again once no packet
     // holds them.
     empty: Vec<ChunkId>,
-    // The chunks a sweep left with room, which take shapes before a new
-    // chunk does.
+    // The chunks a sweep or a packet left with room, which take shapes
+    // before a new chunk does.
     roomy: Vec<ChunkId>,
     // Whether an item went since a look for chunks of many dead shapes
     // found none or swept them.
@@ -156,6 +156,11 @@ struct ShapeChunk {
 impl ShapeChunk {
     fn dead(&self) -> usize {
         self.recorder.tables().shapes.len() - self.shapes as usize
+    }
+
+    // Whether an item names the chunk and it takes more shapes.
+    fn roomy(&self) -> bool {
+        self.items > 0 && self.recorder.tables().shapes.len() < CHUNK_SHAPES
     }
 
     // Whether the chunk holds at least as many shapes no item draws as
@@ -272,6 +277,15 @@ impl ShapeChunks {
                 return open;
             }
         }
+        // An open chunk that a packet holds takes shapes again once the
+        // packet lets go.
+        if let Some(open) = self.open
+            && self.chunks[open.index()]
+                .as_ref()
+                .is_some_and(ShapeChunk::roomy)
+        {
+            self.roomy.push(open);
+        }
         let id = self
             .free_empty_chunk()
             .or_else(|| self.roomy_chunk())
@@ -301,19 +315,23 @@ impl ShapeChunks {
         Some(id)
     }
 
-    // A chunk a sweep left with room that an item still names and no packet
-    // holds.
+    // A chunk with room that an item still names and no packet holds, among
+    // those a sweep or a packet left with room. The list forgets the chunks
+    // that filled or emptied, and keeps those a packet holds.
     fn roomy_chunk(&mut self) -> Option<ChunkId> {
-        while let Some(id) = self.roomy.pop() {
-            if let Some(chunk) = self.chunks.get_mut(id.index()).and_then(Option::as_mut)
-                && chunk.items > 0
-                && Arc::get_mut(&mut chunk.recorder)
-                    .is_some_and(|recorder| recorder.tables().shapes.len() < CHUNK_SHAPES)
-            {
-                return Some(id);
-            }
-        }
-        None
+        let chunks = &mut self.chunks;
+        self.roomy.retain(|id| {
+            chunks
+                .get(id.index())
+                .and_then(Option::as_ref)
+                .is_some_and(ShapeChunk::roomy)
+        });
+        let at = self.roomy.iter().position(|id| {
+            chunks[id.index()]
+                .as_mut()
+                .is_some_and(|chunk| Arc::get_mut(&mut chunk.recorder).is_some())
+        })?;
+        Some(self.roomy.swap_remove(at))
     }
 
     // Drops the shapes no item draws from every sparse chunk, once the
@@ -329,8 +347,10 @@ impl ShapeChunks {
             return;
         }
         self.released = false;
+        // The chunks no item names take shapes again as they are: their
+        // shapes count as room, not as dead ones.
         let (mut dead, mut live, mut sparse) = (0, 0, false);
-        for chunk in self.chunks.iter().flatten() {
+        for chunk in self.chunks.iter().flatten().filter(|chunk| chunk.items > 0) {
             dead += chunk.dead();
             live += chunk.shapes as usize;
             sparse |= chunk.sparse();

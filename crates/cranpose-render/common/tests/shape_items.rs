@@ -136,10 +136,10 @@ fn staying_shapes_draw_as_recorded_once_a_held_chunk_gives_up_the_others() {
     for item in going {
         store.remove_item(item);
     }
-    // Chunks of items that go at once, which packets in flight hold: none
-    // takes shapes again, so the store gains room for more than twice the
-    // live shapes and four chunks, and the next item takes the held chunk,
-    // the one chunk an item still names.
+    // Chunks of items that all go but one, which packets in flight hold:
+    // none takes shapes again, and once the chunks hold more dead shapes
+    // than live ones and four chunks, the next item finds them all swept,
+    // the held chunk of the staying items among them.
     let mut packets = Vec::new();
     for group in 0..=KEPT_EMPTY_CHUNKS {
         let first = ITEMS + group * CHUNK_SHAPES;
@@ -148,7 +148,7 @@ fn staying_shapes_draw_as_recorded_once_a_held_chunk_gives_up_the_others() {
             .collect();
         let packet = Arc::clone(store.shapes(items[0]).recorder());
         packets.push((packet.fingerprint(), packet));
-        for item in items {
+        for &item in &items[1..] {
             store.remove_item(item);
         }
     }
