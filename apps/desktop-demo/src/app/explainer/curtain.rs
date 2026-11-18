@@ -20,9 +20,8 @@ use cranpose_ui::{
 };
 
 use super::cloth::{Air, Cloth, ClothHang};
-use crate::app::ticking::Ticking;
+use crate::app::{room::TORUS_OBJ, ticking::Ticking};
 
-const TORUS_OBJ: &str = include_str!("../../../assets/torus.obj");
 // The breeze that keeps a hanging curtain alive, in pixels a second
 // squared.
 const BREEZE: f32 = 260.0;

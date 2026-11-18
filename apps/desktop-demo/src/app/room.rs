@@ -34,7 +34,9 @@ use super::{
 };
 
 const TILE: f32 = 160.0;
-const TORUS_OBJ: &str = include_str!("../../assets/torus.obj");
+// The explainer's curtain reads this file too. A static holds it once in the
+// binary. A const would copy it into each codegen unit that reads it.
+pub(super) static TORUS_OBJ: &str = include_str!("../../assets/torus.obj");
 const GLOBE_CONTENT: Size = Size {
     width: 1024.0,
     height: 512.0,

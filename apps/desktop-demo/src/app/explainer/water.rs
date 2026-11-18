@@ -9,7 +9,6 @@
 use cranpose_ui::{space::Mesh, Point, Size};
 
 use super::{
-    grid_mesh,
     ripples::{Disturbance, Ripples},
     swell::{Swell, SwellGrid},
     whole,
@@ -76,10 +75,10 @@ impl Water {
         let mut grid = SwellGrid::default();
         swell.lay_grid(&mut grid, (columns, rows), cell, shape.look);
         let mut indices = Vec::with_capacity((columns - 1) * (rows - 1) * 6);
-        let stride = grid_mesh::vertex(columns);
+        let stride = whole::narrow(columns);
         for row in 0..rows - 1 {
             for column in 0..columns - 1 {
-                let top_left = grid_mesh::vertex(row * columns + column);
+                let top_left = whole::narrow(row * columns + column);
                 let bottom_left = top_left + stride;
                 // Diagonals alternate, so the bend has no grain.
                 if (row + column) % 2 == 0 {
