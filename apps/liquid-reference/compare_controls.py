@@ -92,6 +92,12 @@ def compare(native, cranpose, output, native_extra=(), cranpose_extra=(), prefix
             elif name.startswith("control-scroll-edge-"):
                 # The effect under the status bar and the tallest bar.
                 region = (0, 0, 402, 170)
+            elif name.startswith(("control-sheet-", "control-refresh-")):
+                # Everything below the status bar: the sheet and its dim, or
+                # the spinner and the rows.
+                region = (0, 50, 402, 874)
+            elif name.startswith("control-date-"):
+                region = (0, 280, 402, 620)
             elif name.startswith("control-confirmation-"):
                 # Native's popover frame for each source, with 45 points for the shadow.
                 region = CONFIRMATION_REGIONS[name.rsplit("-", 1)[1]]

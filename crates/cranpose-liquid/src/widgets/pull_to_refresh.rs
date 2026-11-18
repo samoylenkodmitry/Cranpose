@@ -5,20 +5,17 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_animation::{
-    Animatable, AnimationSpec, Easing, RepeatMode, StartOffset, infiniteRepeatable,
-    rememberInfiniteTransition,
-};
-use cranpose_core::{RuntimeHandle, remember, with_current_composer};
+use cranpose_animation::Animatable;
+use cranpose_core::{RuntimeHandle, State, remember, with_current_composer};
 use cranpose_foundation::SemanticsCustomAction;
 use cranpose_macros::composable;
 use cranpose_ui::{
-    Alignment, Axis, Modifier, NestedScroll, NestedScrollConnection, NestedScrollSource, Point,
-    Size,
+    Axis, DrawScope, Modifier, NestedScroll, NestedScrollConnection, NestedScrollSource, Point,
     widgets::{Box, BoxSpec},
 };
-use cranpose_ui_graphics::{Brush, Stroke, StrokeCap};
+use cranpose_ui_graphics::Color;
 
+use super::{LiquidActivityIndicatorSize, activity_indicator::rememberSpinnerHead};
 use crate::{motion::LiquidMotion, theme::liquid_colors};
 
 /// How far the indicator travels before a release refreshes, in dp.
@@ -27,9 +24,13 @@ const THRESHOLD: f32 = 72.0;
 const MAX_PULL: f32 = THRESHOLD * 1.6;
 /// A pull moves the indicator half as far as the finger.
 const RESISTANCE: f32 = 0.5;
-const INDICATOR_SIZE: f32 = 36.0;
-const RING_RADIUS: f32 = 10.0;
-const RING_WIDTH: f32 = 2.5;
+// UIRefreshControl, measured on the simulator at 3x: while the list
+// refreshes it rests 60 points down, and the spinner, the medium activity
+// indicator's wheel at 1.45 times its size, turns in the middle of the gap.
+const REFRESHING_TRAVEL: f32 = 60.0;
+const SPINNER_SCALE: f32 = 1.45;
+// Spokes the wheel has; a pull shows them one by one up to the threshold.
+const SPOKES: f32 = 8.0;
 
 /// What the indicator shows and the pull the connection tracks.
 struct Pull {
@@ -58,7 +59,7 @@ impl Pull {
 
     fn settle(&self) {
         let rest = if self.refreshing.get() {
-            THRESHOLD
+            REFRESHING_TRAVEL
         } else {
             0.0
         };
@@ -141,7 +142,7 @@ pub fn LiquidPullToRefreshBox(
     refreshing: bool,
     refresh_label: impl Into<String>,
     on_refresh: impl Fn() + 'static,
-    content: impl FnMut() + 'static,
+    content: impl Fn() + 'static,
 ) {
     let pull = with_current_composer(|composer| {
         let runtime = composer.runtime_handle();
@@ -160,72 +161,52 @@ pub fn LiquidPullToRefreshBox(
     })
     .with(Rc::clone);
     let action = SemanticsCustomAction::new(refresh_label.into(), move || on_refresh());
+    // The spinner draws behind the list, which moves down with the pull and
+    // leaves it a gap. Only a refreshing list turns its wheel, so an idle
+    // list draws nothing new.
+    let head = refreshing.then(rememberSpinnerHead);
+    let color = liquid_colors().secondary_label;
     let container = modifier
         .clip_to_bounds()
-        .semantics(move |config| config.custom_actions.push(action.clone()));
-    let mut content = content;
+        .semantics(move |config| config.custom_actions.push(action.clone()))
+        .draw_behind(spinner(Rc::clone(&pull), color, head));
+    let content: Rc<dyn Fn()> = Rc::new(content);
     Box(container, BoxSpec::default(), move || {
-        NestedScroll(Rc::clone(&connection), &mut content);
-        PullIndicator(PullHandle(Rc::clone(&pull)), refreshing);
+        let moved = Rc::clone(&pull);
+        let (connection, content) = (Rc::clone(&connection), Rc::clone(&content));
+        Box(
+            Modifier::empty().offset_with(move || Point::new(0.0, moved.travel())),
+            BoxSpec::default(),
+            move || NestedScroll(Rc::clone(&connection), || content()),
+        );
     });
 }
 
-/// The ring that slides down with the pull, fills as it nears the
-/// threshold, and spins while the list refreshes.
-/// The pull, compared by identity: one box keeps one pull.
-#[derive(Clone)]
-struct PullHandle(Rc<Pull>);
-
-impl PartialEq for PullHandle {
-    fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-#[composable]
-fn PullIndicator(pull: PullHandle, refreshing: bool) {
-    let colors = liquid_colors();
-    let (surface, accent) = (colors.surface, colors.accent);
-    let spin = rememberInfiniteTransition("pull-refresh").animateFloat(
-        0.0,
-        360.0,
-        infiniteRepeatable(
-            AnimationSpec::tween(900, Easing::LinearEasing),
-            RepeatMode::Restart,
-            StartOffset::default(),
-        ),
-        "pull-refresh-spin",
-    );
-    let modifier = Modifier::empty()
-        .size(Size::new(INDICATOR_SIZE, INDICATOR_SIZE))
-        .draw_behind(move |scope| {
-            let travel = pull.0.travel();
-            if travel <= 0.5 {
-                return;
+// The spinner in the gap over the list, centred in it: its spokes come in
+// one by one as the pull nears the threshold, and they turn while the list
+// refreshes.
+fn spinner(
+    pull: Rc<Pull>,
+    color: Color,
+    head: Option<State<f32>>,
+) -> impl Fn(&mut dyn DrawScope) + 'static {
+    let wheel = LiquidActivityIndicatorSize::Medium
+        .wheel()
+        .scaled(SPINNER_SCALE);
+    move |scope| {
+        let travel = pull.travel();
+        if travel <= 0.5 {
+            return;
+        }
+        let left = (scope.size().width - wheel.side) * 0.5;
+        let top = (travel - wheel.side) * 0.5;
+        scope.translate(left, top, &mut |scope| match head {
+            Some(head) => wheel.draw(scope, color, head.get(), SPOKES),
+            None => {
+                let shown = (SPOKES * travel / THRESHOLD).ceil().min(SPOKES);
+                // The newest spoke leads.
+                wheel.draw(scope, color, shown - 1.0, shown);
             }
-            let top = travel - INDICATOR_SIZE;
-            let center = Point::new(INDICATOR_SIZE * 0.5, top + INDICATOR_SIZE * 0.5);
-            scope.draw_circle(Brush::solid(surface), center, INDICATOR_SIZE * 0.5);
-            // Degrees, which draw_arc takes in radians.
-            let (start, sweep) = if refreshing {
-                (spin.value(), 270.0)
-            } else {
-                (-90.0, 300.0 * (travel / THRESHOLD).min(1.0))
-            };
-            scope.draw_arc(
-                Brush::solid(accent),
-                center,
-                RING_RADIUS,
-                f32::to_radians(start),
-                f32::to_radians(sweep),
-                Stroke::new(RING_WIDTH).with_cap(StrokeCap::Round),
-            );
         });
-    Box(
-        Modifier::empty().fill_max_width(),
-        BoxSpec::default().content_alignment(Alignment::TOP_CENTER),
-        move || {
-            Box(modifier.clone(), BoxSpec::default(), || {});
-        },
-    );
+    }
 }
