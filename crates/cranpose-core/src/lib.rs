@@ -26,7 +26,8 @@ pub(crate) use command::{
 };
 mod command_queue;
 pub(crate) use command_queue::{
-    COMMAND_FLUSH_THRESHOLD, ChildList, CommandQueue, SMALL_CHILD_SYNC_LINEAR_THRESHOLD,
+    CHILD_LIST_INLINE, COMMAND_FLUSH_THRESHOLD, ChildList, CommandQueue,
+    SMALL_CHILD_SYNC_LINEAR_THRESHOLD,
 };
 #[cfg(test)]
 pub(crate) use command_queue::{CommandTag, SyncChildrenCommand};

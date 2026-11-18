@@ -1,9 +1,12 @@
 use std::any::TypeId;
 
+use smallvec::SmallVec;
+
 use crate::{
-    Applier, ChildList, Command, CommandQueue, Composer, DirtyBubble, EmittedNode, MutableState,
-    Node, NodeError, NodeId, OwnedMutableState, ParentAttachMode, ParentFrame, debug_scope_label,
-    join_made_children, recompose::RecomposeChildCursor, slot::NodeSlotUpdate,
+    Applier, CHILD_LIST_INLINE, ChildList, Command, CommandQueue, Composer, DirtyBubble,
+    EmittedNode, MutableState, Node, NodeError, NodeId, OwnedMutableState, ParentAttachMode,
+    ParentFrame, debug_scope_label, join_made_children, recompose::RecomposeChildCursor,
+    slot::NodeSlotUpdate,
 };
 
 #[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
@@ -462,7 +465,7 @@ impl Composer {
         if made {
             self.parent_stack().push(ParentFrame {
                 id,
-                previous: ChildList::new(),
+                previous: SmallVec::new(),
                 new_children: ChildList::new(),
                 attach_mode: ParentAttachMode::Made,
                 synthetic_root: false,
@@ -472,16 +475,7 @@ impl Composer {
         }
         let in_subcompose = !self.core.subcompose_stack.borrow().is_empty();
 
-        let children = self.get_node_children(id);
-        // A list that left its inline room keeps its block: the frame takes
-        // it whole.
-        let previous = if children.is_empty() {
-            ChildList::new()
-        } else if children.spilled() {
-            ChildList::from_vec(children.into_vec())
-        } else {
-            ChildList::from_slice(&children)
-        };
+        let previous = self.get_node_children(id);
         let attach_mode = if in_subcompose || !previous.is_empty() {
             ParentAttachMode::DeferredSync
         } else {
@@ -490,7 +484,7 @@ impl Composer {
         // A pass mostly composes as many children as the node held: a list
         // past its inline room takes their room at once and does not grow
         // child by child.
-        let new_children = if previous.spilled() {
+        let new_children = if previous.len() > CHILD_LIST_INLINE {
             ChildList::with_capacity(previous.len())
         } else {
             ChildList::new()
