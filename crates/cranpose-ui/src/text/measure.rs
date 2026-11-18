@@ -199,12 +199,14 @@ impl TextService {
 
     // The layout of `source` in `frame` with sizes in `units`: a cached one
     // that breaks into the same lines, aligned to the frame's widths, or a
-    // new one.
+    // new one, laid out into `retired` when it is given and nothing else
+    // holds it, which it then takes.
     fn prepare(
         &self,
         source: LayoutSource<'_>,
         frame: TextFrame,
         (units, admission): (TextUnits, CacheAdmission),
+        retired: &mut Option<Rc<PreparedTextLayout>>,
     ) -> Rc<PreparedTextLayout> {
         let (text, style) = (source.text(), source.style());
         let key = TextKey::of(text, source.style_hash(), frame.options, units);
@@ -220,7 +222,7 @@ impl TextService {
             Some((key, Cached::Missed(miss))) => Some((key, miss)),
             None => None,
         };
-        self.prepare_missed(source, frame, (units, admission), missed)
+        self.prepare_missed(source, frame, (units, admission), (missed, retired))
     }
 
     // Lays out `source` the cache did not hold and keeps it as `missed`
@@ -232,10 +234,10 @@ impl TextService {
         source: LayoutSource<'_>,
         frame: TextFrame,
         (units, admission): (TextUnits, CacheAdmission),
-        missed: Option<(TextKey, Miss)>,
+        (missed, retired): (Option<(TextKey, Miss)>, &mut Option<Rc<PreparedTextLayout>>),
     ) -> Rc<PreparedTextLayout> {
         let prepared = self
-            .lay_out_retired(&source, frame, units)
+            .lay_out_retired(&source, frame, (units, retired))
             .unwrap_or_else(|| {
                 let style = source.shared_style();
                 Rc::new(self.lay_out(source.text(), style, frame, (units, source.shaped())))
@@ -261,7 +263,7 @@ impl TextService {
             // A layout the shared cache keeps stays there. A kept layout lets
             // go of its string, which the next changed text may take.
             if let Some(free) = Rc::get_mut(&mut layout) {
-                free.text = Arc::clone(AnnotatedString::default().render_string());
+                free.let_go_of_text();
                 retired.retire(layout);
             }
         }
@@ -279,22 +281,27 @@ impl TextService {
     }
 
     // `source` laid out in the allocation of a retired layout nothing holds
-    // and in its lines' storage; `None` when no retired layout is free, or
-    // `source` takes glyphs shaped before or sizes itself down.
+    // and in its lines' storage: `own`, one the text's node gave up, when it
+    // is given, which it then takes, else one of the shared pool; `None`
+    // when no retired layout is free, or `source` takes glyphs shaped
+    // before or sizes itself down.
     fn lay_out_retired(
         &self,
         source: &LayoutSource<'_>,
         frame: TextFrame,
-        units: TextUnits,
+        (units, own): (TextUnits, &mut Option<Rc<PreparedTextLayout>>),
     ) -> Option<Rc<PreparedTextLayout>> {
         let scales = frame.options.overflow.scale_down_min_font_size_sp();
         if source.shaped().is_some() || scales.is_some() {
             return None;
         }
-        let mut spare = self
-            .retired
-            .borrow_mut()
-            .take(|layout| Rc::get_mut(layout).is_some_and(|free| !free.layout.shares_lines()))?;
+        let mut spare = match own.take() {
+            Some(own) => own,
+            None => self
+                .retired
+                .borrow_mut()
+                .take(PreparedTextLayout::refillable)?,
+        };
         let slot = Rc::get_mut(&mut spare)?;
         let (text, style) = (source.text(), source.shared_style());
         self.with_input(text, &style, frame, units, |layouter, input, fonts| {
@@ -611,6 +618,7 @@ fn prepare_borrowed(
             LayoutSource::Borrowed { text, style },
             frame,
             (units, CacheAdmission::First),
+            &mut None,
         )
     })
 }
@@ -647,6 +655,7 @@ pub(crate) fn prepare_resolved(text: &SharedText<'_>) -> Rc<PreparedTextLayout> 
             LayoutSource::Shared { text, shaped: None },
             TextFrame::unbounded(TextLayoutOptions::default()),
             (resolved_units(), CacheAdmission::Drawn),
+            &mut None,
         )
     })
 }
@@ -684,18 +693,21 @@ pub fn prepare_text_layout(
 }
 
 // Lays out `text` in `style` between the widths of `frame`, sharing them,
-// kept by the shared cache as `admission` says.
+// kept by the shared cache as `admission` says, with the glyphs of `shaped`
+// when given, else into `retired`, a layout the text's node gave up, when
+// given, which it then takes.
 pub(crate) fn prepare_shared(
     text: &SharedText<'_>,
     frame: TextFrame,
-    admission: CacheAdmission,
-    shaped: Option<&TextLayout>,
+    (admission, shaped): (CacheAdmission, Option<&TextLayout>),
+    retired: &mut Option<Rc<PreparedTextLayout>>,
 ) -> Rc<PreparedTextLayout> {
     crate::render_state::with_text_service(|service| {
         service.prepare(
             LayoutSource::Shared { text, shaped },
             frame,
             (host_units(), admission),
+            retired,
         )
     })
 }
