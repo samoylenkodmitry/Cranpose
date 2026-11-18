@@ -71,11 +71,12 @@ impl<T> Slab<T> {
         self.entries.iter().flatten()
     }
 
-    // The index the next `insert` puts its value at.
-    pub(crate) fn vacant(&self) -> usize {
-        self.free
-            .last()
-            .map_or(self.entries.len(), |&index| index as usize)
+    // Each value with its index.
+    pub(crate) fn indexed(&self) -> impl Iterator<Item = (usize, &T)> {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| Some((index, entry.as_ref()?)))
     }
 
     pub(crate) fn heap_bytes(&self) -> usize {
