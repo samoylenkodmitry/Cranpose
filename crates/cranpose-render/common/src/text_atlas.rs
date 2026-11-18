@@ -41,7 +41,7 @@ pub fn collect_solid_text_atlas_run(
         return Some(());
     }
     let mut paints = SpanPaints::default();
-    paints.fill(request.text, request.style, request.fallback_color);
+    paints.fill(request);
     if request.motion() != TextMotion::Static
         || !paints.all(|paint| {
             paint.solid_color().is_some() && paint.shadow.is_none() && paint.stroke.is_none()

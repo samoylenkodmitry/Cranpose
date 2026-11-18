@@ -5,6 +5,7 @@ pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::{
     glyph_reach::{InkSpread, glyph_part},
     graph::ProjectiveTransform,
+    layer_paint::LayerPaint,
     layer_shadow::ShadowRRect,
     primitive_emit::ShapeDrawParams,
     scene_store::{ItemRef as RecordItem, LayerRef, RecordChanges, RecordKind},
@@ -159,7 +160,12 @@ pub(crate) struct TextDraw {
     pub layout: cranpose_text::TextLayout,
     // Whether the glyphs paint or only their shadows.
     pub ink: cranpose_render_common::text_raster::GlyphInk,
+    // The color of glyphs whose style names none, before `layer_paint`.
     pub color: Color,
+    // The paint of the layer over every resolved color of the glyphs and
+    // their shadows; `LayerPaint::NONE` for a draw with colors painted by
+    // the pipeline.
+    pub layer_paint: LayerPaint,
     pub text_style: Arc<TextStyle>,
     pub font_size: f32,
     pub scale: f32,

@@ -94,6 +94,7 @@ ignores:
   - crates/cranpose/src/ios/scene.rs
   - crates/cranpose/src/ios/share_sheet.rs
   - crates/cranpose/src/ios/storage.rs
+  - crates/cranpose/src/ios/touch_clock.rs
   - crates/cranpose/src/ios/uri_handler.rs
   - crates/cranpose/src/ios/writable_folder.rs
   - crates/cranpose/src/desktop/macos_cursor.rs

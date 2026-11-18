@@ -10,6 +10,7 @@ use cranpose_animation::{Animatable, AnimationType, spring};
 use cranpose_core::{RuntimeHandle, State, with_current_composer};
 use cranpose_foundation::VelocityTracker1D;
 use cranpose_macros::composable;
+use cranpose_services::{HapticFeedback, default_haptics};
 use cranpose_ui::{Modifier, MutableInteractionSource};
 use cranpose_ui_graphics::GraphicsLayer;
 
@@ -286,6 +287,23 @@ fn remember_liquid_axis(initial: f32, follow: Option<AnimationType>) -> Rc<Liqui
 }
 
 // Whether a pointer went down on a control or came up.
+// Animates `value` to `target` from `time`, or from now without one. A value
+// already headed to `target` keeps its motion.
+pub(crate) fn retarget(
+    value: &mut Animatable<f32>,
+    target: f32,
+    animation: AnimationType,
+    time: Option<u64>,
+) {
+    if value.target() == target {
+        return;
+    }
+    match time {
+        Some(time) => value.animate_to_at(target, animation, time),
+        None => value.animateTo(target, animation),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Press {
     Down,
@@ -297,6 +315,21 @@ impl Press {
         self == Self::Down
     }
 }
+
+// What a press on a cell other than the selected one does. The iOS tab bar
+// moves its lens under the finger at once. `UISegmentedControl` keeps the
+// lens and highlights the pressed cell; lifting the finger selects the cell
+// under it, and the lens lifts and travels there on `travel`. `cell` gets
+// the highlighted cell, `None` once the finger leaves, and the event time.
+pub(crate) enum OtherCellPress {
+    MovesLens,
+    Highlights {
+        cell: CellHighlight,
+        travel: AnimationType,
+    },
+}
+
+pub(crate) type CellHighlight = Rc<dyn Fn(Option<usize>, Option<u64>)>;
 
 pub(crate) struct LiquidLensGesture {
     pub axis: Rc<LiquidDragAxis>,
@@ -310,6 +343,34 @@ pub(crate) struct LiquidLensGesture {
     pub on_pressed: Rc<dyn Fn(Press, Option<u64>)>,
     pub on_touch: Rc<dyn Fn(f32, f32)>,
     pub on_select: Rc<dyn Fn(usize)>,
+    pub other_cell_press: OtherCellPress,
+}
+
+// Where the one press a lens gesture follows stands.
+#[derive(Default)]
+enum LensPress {
+    #[default]
+    Idle,
+    // The lens follows the finger from `down_x`; `moved` once it passed the
+    // tap slop.
+    Lens {
+        pointer: cranpose_foundation::PointerId,
+        down_x: f32,
+        moved: bool,
+    },
+    // The finger highlights the cells it passes and leaves the lens alone.
+    Highlight {
+        pointer: cranpose_foundation::PointerId,
+    },
+}
+
+impl LensPress {
+    fn pointer(&self) -> Option<cranpose_foundation::PointerId> {
+        match self {
+            Self::Idle => None,
+            Self::Lens { pointer, .. } | Self::Highlight { pointer } => Some(*pointer),
+        }
+    }
 }
 
 impl LiquidLensGesture {
@@ -317,95 +378,128 @@ impl LiquidLensGesture {
         (((position - self.cell_offset) / self.cell_width.max(1.0)).floor() as isize)
             .clamp(0, self.count.saturating_sub(1) as isize) as usize
     }
+
+    fn on_event(&self, press: &mut LensPress, event: &cranpose_foundation::PointerEvent) {
+        use cranpose_foundation::PointerEventKind;
+        let tracked = press.pointer() == Some(event.id);
+        match event.kind {
+            PointerEventKind::Down if press.pointer().is_none() => self.on_down(press, event),
+            PointerEventKind::Move if tracked => self.on_move(press, event),
+            PointerEventKind::Up if tracked => self.on_up(press, event),
+            PointerEventKind::Cancel if tracked => self.on_cancel(press, event),
+            _ => return,
+        }
+        event.consume();
+    }
+
+    fn highlight(&self) -> Option<(&CellHighlight, AnimationType)> {
+        match &self.other_cell_press {
+            OtherCellPress::Highlights { cell, travel } => Some((cell, *travel)),
+            OtherCellPress::MovesLens => None,
+        }
+    }
+
+    fn on_down(&self, press: &mut LensPress, event: &cranpose_foundation::PointerEvent) {
+        let time = event.animation_time_nanos;
+        let index = self.commit_index(event.position.x);
+        if let Some((cell, _)) = self.highlight().filter(|_| index != self.selected) {
+            *press = LensPress::Highlight { pointer: event.id };
+            cell(Some(index), time);
+            return;
+        }
+        *press = LensPress::Lens {
+            pointer: event.id,
+            down_x: event.position.x,
+            moved: false,
+        };
+        self.axis
+            .settle_to_at((self.rest_left)(index), LiquidMotion::glide(), time);
+        (self.on_pressed)(Press::Down, time);
+        (self.on_touch)(event.position.x, event.position.y);
+        default_haptics().perform(HapticFeedback::Selection);
+    }
+
+    fn on_move(&self, press: &mut LensPress, event: &cranpose_foundation::PointerEvent) {
+        let time = event.animation_time_nanos;
+        let LensPress::Lens { down_x, moved, .. } = press else {
+            if let Some((cell, _)) = self.highlight() {
+                cell(Some(self.commit_index(event.position.x)), time);
+            }
+            return;
+        };
+        *moved |= (event.position.x - *down_x).abs() > self.tap_slop;
+        if *moved {
+            let target = (self.drag_left)(event.position.x);
+            if self.axis.is_dragging() {
+                self.axis.move_to_at(target, event.time_ms, time);
+            } else if (self.axis.value() - target).abs() <= self.cell_width * 0.6 {
+                self.axis.begin(self.axis.value(), event.time_ms);
+                self.axis.move_to_at(target, event.time_ms, time);
+            } else {
+                self.axis.settle_to_at(target, LiquidMotion::glide(), time);
+            }
+        }
+        (self.on_touch)(event.position.x, event.position.y);
+    }
+
+    fn on_up(&self, press: &mut LensPress, event: &cranpose_foundation::PointerEvent) {
+        let time = event.animation_time_nanos;
+        let LensPress::Lens { down_x, moved, .. } = std::mem::take(press) else {
+            if let Some((cell, travel)) = self.highlight() {
+                cell(None, time);
+                let index = self.commit_index(event.position.x);
+                if index != self.selected {
+                    // The lens lifts on its way to a cell picked without it.
+                    (self.on_pressed)(Press::Down, time);
+                    (self.on_pressed)(Press::Up, time);
+                    self.axis
+                        .settle_to_at((self.rest_left)(index), travel, time);
+                    default_haptics().perform(HapticFeedback::ImpactLight);
+                    (self.on_select)(index);
+                }
+            }
+            return;
+        };
+        (self.on_pressed)(Press::Up, time);
+        let index = self.commit_index(if moved { event.position.x } else { down_x });
+        self.axis.release_to_at(
+            (self.rest_left)(index),
+            event.time_ms,
+            LiquidMotion::glide(),
+            time,
+        );
+        default_haptics().perform(HapticFeedback::ImpactLight);
+        (self.on_select)(index);
+    }
+
+    fn on_cancel(&self, press: &mut LensPress, event: &cranpose_foundation::PointerEvent) {
+        let time = event.animation_time_nanos;
+        if !matches!(std::mem::take(press), LensPress::Lens { .. }) {
+            if let Some((cell, _)) = self.highlight() {
+                cell(None, time);
+            }
+            return;
+        }
+        (self.on_pressed)(Press::Up, time);
+        self.axis.release_to_at(
+            (self.rest_left)(self.selected),
+            event.time_ms,
+            LiquidMotion::glide(),
+            time,
+        );
+    }
 }
 
 pub(crate) async fn liquid_lens_gesture(
     scope: cranpose_ui::PointerInputScope,
     gesture: LiquidLensGesture,
 ) {
-    use cranpose_foundation::{PointerEventKind, PointerId};
-    use cranpose_services::{HapticFeedback, default_haptics};
-
     scope
-        .await_pointer_event_scope(|await_scope| async move {
-            let mut down_x = 0.0f32;
-            let mut moved = false;
-            let mut active_pointer = Option::<PointerId>::None;
+        .await_pointer_event_scope(|events| async move {
+            let mut press = LensPress::default();
             loop {
-                let event = await_scope.await_pointer_event().await;
-                match event.kind {
-                    PointerEventKind::Down if active_pointer.is_none() => {
-                        active_pointer = Some(event.id);
-                        down_x = event.position.x;
-                        moved = false;
-                        gesture.axis.settle_to_at(
-                            (gesture.rest_left)(gesture.commit_index(down_x)),
-                            LiquidMotion::glide(),
-                            event.animation_time_nanos,
-                        );
-                        (gesture.on_pressed)(Press::Down, event.animation_time_nanos);
-                        (gesture.on_touch)(event.position.x, event.position.y);
-                        default_haptics().perform(HapticFeedback::Selection);
-                        event.consume();
-                    }
-                    PointerEventKind::Move if active_pointer == Some(event.id) => {
-                        moved |= (event.position.x - down_x).abs() > gesture.tap_slop;
-                        if moved {
-                            let target = (gesture.drag_left)(event.position.x);
-                            if gesture.axis.is_dragging() {
-                                gesture.axis.move_to_at(
-                                    target,
-                                    event.time_ms,
-                                    event.animation_time_nanos,
-                                );
-                            } else if (gesture.axis.value() - target).abs()
-                                <= gesture.cell_width * 0.6
-                            {
-                                gesture.axis.begin(gesture.axis.value(), event.time_ms);
-                                gesture.axis.move_to_at(
-                                    target,
-                                    event.time_ms,
-                                    event.animation_time_nanos,
-                                );
-                            } else {
-                                gesture.axis.settle_to_at(
-                                    target,
-                                    LiquidMotion::glide(),
-                                    event.animation_time_nanos,
-                                );
-                            }
-                        }
-                        (gesture.on_touch)(event.position.x, event.position.y);
-                        event.consume();
-                    }
-                    PointerEventKind::Up if active_pointer == Some(event.id) => {
-                        active_pointer = None;
-                        (gesture.on_pressed)(Press::Up, event.animation_time_nanos);
-                        let commit_x = if moved { event.position.x } else { down_x };
-                        let index = gesture.commit_index(commit_x);
-                        gesture.axis.release_to_at(
-                            (gesture.rest_left)(index),
-                            event.time_ms,
-                            LiquidMotion::glide(),
-                            event.animation_time_nanos,
-                        );
-                        default_haptics().perform(HapticFeedback::ImpactLight);
-                        (gesture.on_select)(index);
-                        event.consume();
-                    }
-                    PointerEventKind::Cancel if active_pointer == Some(event.id) => {
-                        active_pointer = None;
-                        (gesture.on_pressed)(Press::Up, event.animation_time_nanos);
-                        gesture.axis.release_to_at(
-                            (gesture.rest_left)(gesture.selected),
-                            event.time_ms,
-                            LiquidMotion::glide(),
-                            event.animation_time_nanos,
-                        );
-                        event.consume();
-                    }
-                    _ => {}
-                }
+                let event = events.await_pointer_event().await;
+                gesture.on_event(&mut press, &event);
             }
         })
         .await;

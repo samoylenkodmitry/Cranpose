@@ -65,7 +65,7 @@ use shell_frame::Composed;
 use shell_frame::build_draw_refresh_scope;
 pub use surface::{RootId, RootSurface, SurfaceMut};
 use surface::{SurfaceDirtyLane, TextInputRouter, TextInputRoutes, route_nodes_by_surface};
-pub use touch_router::TouchRouter;
+pub use touch_router::{TouchRouter, TouchSample};
 use web_time::Instant;
 pub use wheel::WheelScroll;
 // How long a frame composes before content that a change brings, such as a

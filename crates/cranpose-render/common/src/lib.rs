@@ -31,6 +31,7 @@ pub mod image_compare;
 pub mod installed_fonts;
 /// Rules for when a graphics layer is drawn into its own offscreen buffer and with which alpha.
 pub mod layer_composition;
+pub mod layer_paint;
 pub mod layer_shadow;
 /// Transform math of a graphics layer, re-exported from `cranpose_ui_graphics`.
 pub mod layer_transform;

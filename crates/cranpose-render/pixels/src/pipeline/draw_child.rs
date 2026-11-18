@@ -2,6 +2,7 @@
 
 use cranpose_render_common::{
     graph::{DrawPrimitiveNode, TextPrimitiveNode},
+    layer_paint::LayerPaint,
     layer_transform::apply_layer_to_rect,
     primitive_emit::{
         DrawPrimitiveSink, ImageDrawParams, PrimitiveClipSpace, ShapeDrawParams, TextDrawParams,
@@ -197,6 +198,8 @@ pub(crate) fn push_draw_primitive(
                 layout: params.layout,
                 ink: GlyphInk::Painted,
                 color: params.color,
+                // The draw scope painted the text's color and brush.
+                layer_paint: LayerPaint::NONE,
                 text_style: params.text_style,
                 font_size: params.font_size,
                 scale: params.scale,

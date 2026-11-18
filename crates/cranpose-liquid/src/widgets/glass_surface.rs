@@ -156,7 +156,7 @@ fn control_material(foreground: Color, card: bool) -> Glass {
             white: if dark {
                 1.125
             } else if card {
-                1.2
+                1.162
             } else {
                 1.055
             },
@@ -174,6 +174,13 @@ fn control_material(foreground: Color, card: bool) -> Glass {
             } else {
                 0.96
             },
+        })
+        .face_response(GlassFaceResponse {
+            // The native light card face on white keeps 254.
+            gain: if card && !dark { 0.996 } else { 0.97 },
+            start_dp: 1.0 / 3.0,
+            end_dp: 2.0 / 3.0,
+            illumination: 0.0,
         })
         .tint(Color::WHITE.with_alpha(if dark { 0.0 } else { 0.2 }))
         .blur_radius(10.0)

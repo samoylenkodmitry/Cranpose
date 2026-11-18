@@ -54,15 +54,12 @@ impl TabContactMotion {
         animation: AnimationType,
         event_time: Option<u64>,
     ) {
-        let mut value = value.borrow_mut();
-        if value.target() == target {
-            return;
-        }
-        if let Some(time) = event_time.or_else(|| self.runtime.last_frame_time_nanos()) {
-            value.animate_to_at(target, animation, time);
-        } else {
-            value.animateTo(target, animation);
-        }
+        crate::motion::retarget(
+            &mut value.borrow_mut(),
+            target,
+            animation,
+            event_time.or_else(|| self.runtime.last_frame_time_nanos()),
+        );
     }
 
     pub(super) fn pressed(&self, press: Press, event_time: Option<u64>) {

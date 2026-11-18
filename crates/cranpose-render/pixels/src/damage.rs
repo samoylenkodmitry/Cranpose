@@ -201,6 +201,7 @@ fn same_text(old: &TextDraw, new: &TextDraw) -> bool {
         layout,
         ink,
         color,
+        layer_paint,
         text_style,
         font_size,
         scale,
@@ -213,6 +214,7 @@ fn same_text(old: &TextDraw, new: &TextDraw) -> bool {
         && *ink == new.ink
         && (Arc::ptr_eq(text_style, &new.text_style) || **text_style == *new.text_style)
         && *color == new.color
+        && *layer_paint == new.layer_paint
         && *font_size == new.font_size
         && *scale == new.scale
         && *clip == new.clip
