@@ -56,8 +56,15 @@ impl RecyclePool {
         drop_oldest_past(&mut self.warm, self.limit);
     }
 
+    // The shell that came back last, then the warm ones, then the ones of
+    // nodes made fresh. The pool's pass ends only at a compaction of the
+    // applier, after a pass removed many nodes: until then a removed node
+    // made fresh waits in the cold list.
     pub(crate) fn take(&mut self) -> Option<RecycledNode> {
-        self.returning.pop_back().or_else(|| self.warm.pop_back())
+        self.returning
+            .pop_back()
+            .or_else(|| self.warm.pop_back())
+            .or_else(|| self.cold.pop_back())
     }
 
     fn warm_target_limit(&self) -> usize {

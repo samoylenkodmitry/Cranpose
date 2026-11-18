@@ -984,7 +984,7 @@ fn emitted_node_replacement_removes_displaced_node() {
 }
 
 #[test]
-fn cold_recycled_nodes_are_not_reused_in_same_frame() {
+fn a_cold_recycled_node_serves_the_next_node_of_its_type() {
     #[derive(Default)]
     struct RecyclableTestNode;
 
@@ -999,13 +999,11 @@ fn cold_recycled_nodes_are_not_reused_in_same_frame() {
 
     applier.remove(stable_id).expect("remove recyclable node");
 
-    assert!(
-        applier
-            .take_recycled_node(TypeId::of::<RecyclableTestNode>())
-            .is_none(),
-        "cold shells removed in the current frame must not be reused immediately",
-    );
     assert_eq!(applier.node_generation(stable_id), 1);
+    let recycled = applier
+        .take_recycled_node(TypeId::of::<RecyclableTestNode>())
+        .expect("the removed node's shell serves the next node of its type");
+    assert_eq!(recycled.stable_id(), stable_id);
 }
 
 #[test]

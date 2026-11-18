@@ -1,6 +1,6 @@
 #![allow(clippy::print_stdout, reason = "a test prints what it measured")]
 
-use std::{alloc::System, cell::Cell, rc::Rc};
+use std::{alloc::System, cell::Cell, ops::Range, rc::Rc};
 
 use cranpose_animation::{
     AnimationSpec, RepeatMode, StartOffset, infiniteRepeatable, rememberInfiniteTransition,
@@ -748,10 +748,17 @@ fn composing_a_wide_column_again_allocates_what_a_narrow_one_does() {
     );
 }
 
-// Allocations and reallocations a frame of a column whose eight rows of
-// `boxes` boxes take new keys each frame: a frame composes them as new
-// nodes, removes the rows of the frame before and lays the column out.
-fn swapped_rows_allocations(boxes: usize) -> usize {
+// Allocations and reallocations a frame of the frames `counted`, after the
+// frames `warm`, of a column that shows `count` items in each frame `shows`
+// takes, under keys of that frame: a frame composes its items as new nodes,
+// removes the items of the frame before and lays the column out. The first
+// composition is frame 0.
+fn keyed_items_allocations(
+    (count, item): (usize, fn()),
+    shows: fn(u32) -> bool,
+    warm: Range<u32>,
+    counted: Range<u32>,
+) -> usize {
     let round_handle = Rc::new(Cell::new(None));
     let output = Rc::clone(&round_handle);
     let mut composition = run_test_composition(move || {
@@ -759,14 +766,11 @@ fn swapped_rows_allocations(boxes: usize) -> usize {
         output.set(Some(round));
         let value = round.value();
         Column(Modifier::empty(), ColumnSpec::default(), move || {
-            for index in 0..8 {
-                cranpose_core::key((value, index), || {
-                    Row(Modifier::empty(), RowSpec::default(), move || {
-                        for _ in 0..boxes {
-                            Box(Modifier::empty(), BoxSpec::default(), || {});
-                        }
-                    });
-                });
+            if !shows(value) {
+                return;
+            }
+            for index in 0..count {
+                cranpose_core::key((value, index), item);
             }
         });
     });
@@ -784,29 +788,59 @@ fn swapped_rows_allocations(boxes: usize) -> usize {
         measure_layout(&mut applier, root, Size::new(100.0, 4000.0)).expect("the column measures");
         applier.clear_runtime_handle();
     };
-    // The recycle pool fills over the first frames.
-    for index in 1..16 {
-        frame(index);
-    }
+    warm.for_each(&mut frame);
+    let frames = counted.len();
     let region = Region::new(GLOBAL);
-    for index in 16..16 + PASSES as u32 {
-        frame(index);
-    }
+    counted.for_each(&mut frame);
     let change = region.change();
-    (change.allocations + change.reallocations) / PASSES
+    (change.allocations + change.reallocations) / frames
+}
+
+fn an_empty_box() {
+    Box(Modifier::empty(), BoxSpec::default(), || {});
+}
+
+fn a_row_of_one_box() {
+    Row(Modifier::empty(), RowSpec::default(), an_empty_box);
+}
+
+fn a_row_of_two_boxes() {
+    Row(Modifier::empty(), RowSpec::default(), || {
+        an_empty_box();
+        an_empty_box();
+    });
 }
 
 // A node that leaves the tree goes to the recycle pool whole, and the node
 // that takes its place in the next frame takes its box, its parts and its
 // lists: a frame that swaps rows of two boxes for new ones allocates what a
-// frame that swaps rows of one box does.
+// frame that swaps rows of one box does. The pool fills over the first
+// frames.
 fn a_frame_that_swaps_nodes_for_new_ones_allocates_nothing_for_them() {
-    let one = swapped_rows_allocations(1);
-    let two = swapped_rows_allocations(2);
+    let swapped = |rows| keyed_items_allocations(rows, |_| true, 1..16, 16..16 + PASSES as u32);
+    let one = swapped((8, a_row_of_one_box));
+    let two = swapped((8, a_row_of_two_boxes));
     println!("allocations of a frame that swaps eight rows: of one box {one}, of two boxes {two}");
     assert!(
         two <= one,
         "{two} allocations for rows of two boxes, {one} for one"
+    );
+}
+
+// The nodes that the first composition made fresh, which a frame then
+// removed, serve the nodes of the next frame as the others do:
+// twenty-four boxes that come back allocate what twelve do.
+fn nodes_made_fresh_serve_the_nodes_of_a_later_frame() {
+    let regrown =
+        |count| keyed_items_allocations((count, an_empty_box), |frame| frame != 1, 1..2, 2..3);
+    let twelve = regrown(12);
+    let twenty_four = regrown(24);
+    println!(
+        "allocations of a frame that brings boxes back: twelve {twelve}, twenty-four {twenty_four}"
+    );
+    assert!(
+        twenty_four <= twelve,
+        "{twenty_four} allocations for twenty-four boxes, {twelve} for twelve"
     );
 }
 
@@ -1012,6 +1046,7 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     composing_a_row_of_boxes_allocates_within_its_budget();
     composing_a_wide_column_again_allocates_what_a_narrow_one_does();
     a_frame_that_swaps_nodes_for_new_ones_allocates_nothing_for_them();
+    nodes_made_fresh_serve_the_nodes_of_a_later_frame();
     if !cfg!(feature = "inspection") {
         a_modifier_chain_of_plain_elements_allocates_one_shared_box();
     }
