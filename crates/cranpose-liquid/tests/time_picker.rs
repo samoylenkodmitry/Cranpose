@@ -77,7 +77,11 @@ impl Screen {
 fn the_wheels_show_the_time() {
     let mut screen = screen(9, 41, true);
     assert_eq!(screen.time(), (9, 41));
-    assert_eq!(screen.wheel("Hour").state_description.as_deref(), Some("9"));
+    // A 24-hour clock pads its hours, as iOS does.
+    assert_eq!(
+        screen.wheel("Hour").state_description.as_deref(),
+        Some("09")
+    );
     assert_eq!(
         screen.wheel("Minute").state_description.as_deref(),
         Some("41")
@@ -90,12 +94,13 @@ fn a_drag_turns_a_wheel_to_a_whole_row() {
     let bounds = screen.wheel("Minute").target_bounds();
     let x = bounds.x + bounds.width / 2.0;
     let middle = bounds.y + bounds.height / 2.0;
-    // Up by three rows and a bit, slowly, with a rest before the release.
+    // Up by three 32 point rows and a bit, slowly, with a rest before the
+    // release.
     let shell = screen.robot.shell_mut();
     shell.set_cursor_at_time(x, middle, Some(0));
     shell.pointer_pressed_at_time(Some(0));
     for step in 1..=10_i64 {
-        shell.set_cursor_at_time(x, middle - step as f32 * 13.0, Some(step * 30));
+        shell.set_cursor_at_time(x, middle - step as f32 * 10.0, Some(step * 30));
         shell.update();
     }
     shell.pointer_released_at_time(Some(800));

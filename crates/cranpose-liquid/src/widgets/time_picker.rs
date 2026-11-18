@@ -5,14 +5,18 @@ use std::rc::Rc;
 
 use cranpose_macros::composable;
 use cranpose_ui::{
-    LazyListState, Modifier, TextStyle, UiString, VerticalAlignment,
-    rememberLazyListStateWithPosition,
-    text::TextAlign,
-    widgets::{Row, RowSpec, Text},
+    LazyListState, Modifier, UiString, VerticalAlignment, rememberLazyListStateWithPosition,
+    widgets::{Row, RowSpec},
 };
+use cranpose_ui_layout::LinearArrangement;
 
-use super::wheel::{Wheel, wheel_value};
-use crate::theme::liquid_typography;
+use super::wheel::{PICKER_HEIGHT, Wheel, draw_band, wheel_value};
+use crate::theme::liquid_colors;
+
+// The widths of the hour, minute and day-half wheels.
+const HOUR_WIDTH: f32 = 64.0;
+const MINUTE_WIDTH: f32 = 64.0;
+const PERIOD_WIDTH: f32 = 72.0;
 
 /// The time a [`LiquidTimePicker`] shows.
 #[derive(Clone, Copy, PartialEq)]
@@ -107,49 +111,38 @@ pub fn LiquidTimePicker(state: LiquidTimePickerState, modifier: Modifier) {
             .map(|hour| if hour == 0 { 12 } else { hour }.to_string())
             .collect()
     } else {
-        (0..24).map(|hour: u8| hour.to_string()).collect()
+        (0..24).map(|hour: u8| format!("{hour:02}")).collect()
     };
     let minutes: Rc<[String]> = (0..60).map(|minute: u8| format!("{minute:02}")).collect();
     let periods: Rc<[String]> = day_periods().into_iter().collect();
     let (hour_name, minute_name) = (UiString::Hour.resolve(), UiString::Minute.resolve());
-    let title = liquid_typography().title3;
-    let style = TextStyle {
-        paragraph_style: cranpose_ui::ParagraphStyle {
-            text_align: TextAlign::Center,
-            ..title.paragraph_style
-        },
-        ..title
-    };
+    let band = liquid_colors().quaternary_fill;
     Row(
-        modifier,
-        RowSpec::default().vertical_alignment(VerticalAlignment::CenterVertically),
+        modifier
+            .height(PICKER_HEIGHT)
+            .draw_behind(move |scope| draw_band(scope, band)),
+        RowSpec::default()
+            .vertical_alignment(VerticalAlignment::CenterVertically)
+            .horizontal_arrangement(LinearArrangement::Center),
         move || {
             Wheel(
+                Modifier::empty().width(HOUR_WIDTH),
                 state.hours,
                 Rc::clone(&hours),
                 Some(hour_name.clone()),
-                64.0,
-                style.clone(),
-            );
-            Text(
-                ":",
-                Modifier::empty().hide_from_accessibility(),
-                style.clone(),
             );
             Wheel(
+                Modifier::empty().width(MINUTE_WIDTH),
                 state.minutes,
                 Rc::clone(&minutes),
                 Some(minute_name.clone()),
-                64.0,
-                style.clone(),
             );
             if state.twelve_hour {
                 Wheel(
+                    Modifier::empty().width(PERIOD_WIDTH),
                     state.periods,
                     Rc::clone(&periods),
                     None,
-                    72.0,
-                    style.clone(),
                 );
             }
         },

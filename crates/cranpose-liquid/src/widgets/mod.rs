@@ -6,6 +6,7 @@ mod button;
 mod card;
 mod checkbox;
 mod chip;
+mod color_well;
 mod content_scope;
 mod control_lens;
 mod control_material;
@@ -21,6 +22,7 @@ mod lens_motion;
 mod menu;
 mod nav_bar;
 mod page_control;
+mod pop_up_button;
 mod progress;
 mod pull_to_refresh;
 mod search_field;
@@ -42,6 +44,7 @@ mod toggle;
 mod tooltip;
 mod vibrancy;
 mod wheel;
+mod wheel_picker;
 
 pub use activity_indicator::{LiquidActivityIndicator, LiquidActivityIndicatorSize};
 pub use bottom_sheet::{LiquidModalBottomSheet, LiquidSheetState, rememberLiquidSheetState};
@@ -53,6 +56,7 @@ pub use button::{
 pub use card::{Card, LiquidCard, LiquidListRow, LiquidListRowSpec, LiquidListSection, Surface};
 pub use checkbox::{LiquidCheckbox, LiquidRadioButton, LiquidTriStateCheckbox};
 pub use chip::{LiquidActionChip, LiquidChip};
+pub use color_well::LiquidColorWell;
 pub use date_picker::{
     CalendarDate, LiquidDatePicker, LiquidDatePickerState, days_in_month,
     rememberLiquidDatePickerState,
@@ -69,6 +73,7 @@ pub use menu::{
 };
 pub use nav_bar::{LiquidNavBar, LiquidNavBarSpec, liquid_nav_bar_expanded_height};
 pub use page_control::LiquidPageControl;
+pub use pop_up_button::LiquidPopUpButton;
 pub use progress::LiquidLinearProgressIndicator;
 pub use pull_to_refresh::LiquidPullToRefreshBox;
 pub use search_field::{LiquidSearchField, LiquidSearchFieldSpec, SearchBar, SearchField};
@@ -88,6 +93,7 @@ pub use text_field::LiquidTextField;
 pub use time_picker::{LiquidTimePicker, LiquidTimePickerState, rememberLiquidTimePickerState};
 pub use toggle::LiquidToggle;
 pub use tooltip::LiquidTooltipBox;
+pub use wheel_picker::LiquidWheelPicker;
 
 #[cfg(test)]
 #[path = "tests/native_toggle_tap.rs"]

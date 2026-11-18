@@ -5,6 +5,7 @@ mod floating_button_interaction;
 mod glass_placeholder;
 #[cfg(feature = "localization")]
 mod localization;
+mod pop_up_button;
 mod provided_colors;
 mod pull_to_refresh;
 mod segmented_press;
@@ -16,4 +17,5 @@ mod tab_bar_appearance;
 mod tab_label_extents;
 mod time_picker;
 mod tooltip;
+mod wheel_picker;
 mod widget_composition;
