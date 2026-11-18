@@ -145,6 +145,16 @@ impl LayoutBody {
         self.lines.shrink_to_fit();
     }
 
+    // Gives back the room of the faces, lines and runs past four times their
+    // length, as a long text left to a short one in the layout they take
+    // turns in: a text with half the lines of the last keeps the room their
+    // growth left.
+    pub(crate) fn give_back_room(&mut self) {
+        give_back_room(&mut self.faces);
+        give_back_room(&mut self.runs);
+        give_back_room(&mut self.lines);
+    }
+
     // Whether `align` places every line at its indent whatever the width:
     // the start and the left do, of lines that run left to right.
     pub(crate) fn keeps_lines_at_indent(&self, align: TextAlign) -> bool {
@@ -277,4 +287,19 @@ fn align_fraction(align: TextAlign, level: BidiLevel) -> f32 {
         TextAlign::Start | TextAlign::Justify | TextAlign::Unspecified => start,
         TextAlign::End => 1.0 - start,
     }
+}
+
+// Gives back the room of `items` past four times its length.
+fn give_back_room<A: smallvec::Array>(items: &mut SmallVec<A>) {
+    if items.capacity() > 4 * items.len() {
+        fit(items);
+    }
+}
+
+// Out of line, as a refill rarely gives room back: `grow` to the length
+// moves the items into room of that length, inline when they fit there.
+#[cold]
+#[inline(never)]
+fn fit<A: smallvec::Array>(items: &mut SmallVec<A>) {
+    items.grow(items.len());
 }
