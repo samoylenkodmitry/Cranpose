@@ -10,7 +10,6 @@ use super::{
     Modifier, NestedTarget, PointerEventKind, ScrollGestureDetector, ScrollGestureState,
     ScrollMotionContext, ScrollTarget,
 };
-use crate::scroll::{ScrollMotionContextKey, scroll_motion_context_for_key};
 
 pub(super) struct DragGesture<S: ScrollTarget> {
     pub(super) target: S,
@@ -184,26 +183,4 @@ where
                 .await;
         }
     })
-}
-
-// The drag of `state` along `axis`, keyed by its `identity`.
-pub(super) fn draggable_impl<S: ScrollTarget + 'static>(
-    axis: Axis,
-    identity: usize,
-    state: S,
-    guard: Option<Rc<dyn Fn() -> bool>>,
-) -> Modifier {
-    drag_gesture_input(
-        (identity, axis),
-        DragGesture {
-            target: state,
-            axis,
-            reverse_input: false,
-            motion_context: scroll_motion_context_for_key(ScrollMotionContextKey::Draggable {
-                state_identity: identity,
-                axis,
-            }),
-            guard,
-        },
-    )
 }
