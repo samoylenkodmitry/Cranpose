@@ -66,7 +66,7 @@ impl ManyElements {
         // Only a list another modifier holds too comes here, and `first` is
         // empty then.
         let mut copy = Self::default();
-        copy.append(chain);
+        copy.append(&chain);
         copy.push(more);
         Rc::new(copy)
     }
@@ -83,7 +83,7 @@ impl ManyElements {
                 self.provides_composition_locals |= element.provides_composition_locals();
                 self.elements.push(element);
             }
-            ModifierKind::Many(shared) => self.append(shared),
+            ModifierKind::Many(shared) => self.append(&shared),
         }
     }
 
@@ -91,7 +91,7 @@ impl ManyElements {
     // a plain element's copy is its value, and one way to take them in keeps
     // the code of the join small.
     #[inline(never)]
-    fn append(&mut self, shared: Rc<Self>) {
+    fn append(&mut self, shared: &Self) {
         self.provides_composition_locals |= shared.provides_composition_locals;
         if shared.inspector.is_some() {
             self.inspector = merged_inspector(
@@ -232,7 +232,7 @@ impl Modifier {
             }
             ModifierKind::Many(shared) => {
                 let mut chain = ManyElements::default();
-                chain.append(shared);
+                chain.append(&shared);
                 chain
             }
         };

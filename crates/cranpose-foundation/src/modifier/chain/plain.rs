@@ -509,10 +509,10 @@ impl AnyModifierElement for PlainWords {
     }
 }
 
-/// The type-erased element of a plain `element`.
+/// The type-erased element of a plain `element`, a copy of its value.
 // One copy for each element type: a modifier builder inlined into an app's
 // body then holds a call, not the writing of the element's words.
 #[inline(never)]
-pub fn plain_element<E: PlainElement>(element: E) -> DynModifierElement {
-    DynModifierElement::plain(PlainWords::of(&element))
+pub fn plain_element<E: PlainElement>(element: &E) -> DynModifierElement {
+    DynModifierElement::plain(PlainWords::of(element))
 }

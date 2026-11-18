@@ -644,7 +644,7 @@ fn test_padding_math_validation() {
     let mut context = BasicModifierNodeContext::new();
 
     let padding = EdgeInsets::uniform(10.0);
-    let elements = vec![plain_element(PaddingElement::new(padding))];
+    let elements = vec![plain_element(&PaddingElement::new(padding))];
     chain.update_from_slice(&elements, &mut context);
 
     let node = chain.plain::<PaddingElement>(0).unwrap();
@@ -685,7 +685,7 @@ fn test_asymmetric_padding_math() {
         right: 15.0,
         bottom: 20.0,
     };
-    let elements = vec![plain_element(PaddingElement::new(padding))];
+    let elements = vec![plain_element(&PaddingElement::new(padding))];
     chain.update_from_slice(&elements, &mut context);
 
     let node = chain.plain::<PaddingElement>(0).unwrap();
@@ -720,7 +720,7 @@ fn test_size_modifier_math() {
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
-    let elements = vec![plain_element(SizeElement::new(Some(150.0), Some(200.0)))];
+    let elements = vec![plain_element(&SizeElement::new(Some(150.0), Some(200.0)))];
     chain.update_from_slice(&elements, &mut context);
 
     let node = chain.plain::<SizeElement>(0).unwrap();
@@ -756,8 +756,8 @@ fn test_chained_padding_accumulation() {
     let mut context = BasicModifierNodeContext::new();
 
     let elements = vec![
-        plain_element(PaddingElement::new(EdgeInsets::uniform(10.0))),
-        plain_element(PaddingElement::new(EdgeInsets::uniform(20.0))),
+        plain_element(&PaddingElement::new(EdgeInsets::uniform(10.0))),
+        plain_element(&PaddingElement::new(EdgeInsets::uniform(20.0))),
     ];
     chain.update_from_slice(&elements, &mut context);
 
@@ -805,15 +805,15 @@ fn test_padding_size_order_math() {
 
     let mut chain1 = ModifierNodeChain::new();
     let elements1 = vec![
-        plain_element(PaddingElement::new(EdgeInsets::uniform(10.0))),
-        plain_element(SizeElement::new(Some(100.0), Some(100.0))),
+        plain_element(&PaddingElement::new(EdgeInsets::uniform(10.0))),
+        plain_element(&SizeElement::new(Some(100.0), Some(100.0))),
     ];
     chain1.update_from_slice(&elements1, &mut context);
 
     let mut chain2 = ModifierNodeChain::new();
     let elements2 = vec![
-        plain_element(SizeElement::new(Some(100.0), Some(100.0))),
-        plain_element(PaddingElement::new(EdgeInsets::uniform(10.0))),
+        plain_element(&SizeElement::new(Some(100.0), Some(100.0))),
+        plain_element(&PaddingElement::new(EdgeInsets::uniform(10.0))),
     ];
     chain2.update_from_slice(&elements2, &mut context);
 
@@ -837,7 +837,7 @@ fn test_offset_doesnt_affect_size() {
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
-    let elements = vec![plain_element(OffsetElement::new(20.0, 30.0, false))];
+    let elements = vec![plain_element(&OffsetElement::new(20.0, 30.0, false))];
     chain.update_from_slice(&elements, &mut context);
 
     let node = chain.plain::<OffsetElement>(0).unwrap();
@@ -873,10 +873,10 @@ fn test_complex_modifier_chain_math() {
     let mut context = BasicModifierNodeContext::new();
 
     let elements = vec![
-        plain_element(PaddingElement::new(EdgeInsets::uniform(5.0))),
-        plain_element(SizeElement::new(Some(80.0), Some(60.0))),
-        plain_element(OffsetElement::new(10.0, 10.0, false)),
-        plain_element(PaddingElement::new(EdgeInsets::uniform(10.0))),
+        plain_element(&PaddingElement::new(EdgeInsets::uniform(5.0))),
+        plain_element(&SizeElement::new(Some(80.0), Some(60.0))),
+        plain_element(&OffsetElement::new(10.0, 10.0, false)),
+        plain_element(&PaddingElement::new(EdgeInsets::uniform(10.0))),
     ];
     chain.update_from_slice(&elements, &mut context);
 
@@ -922,12 +922,12 @@ fn test_modifier_reuse_pointer_identity() {
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
-    let elements = vec![plain_element(PaddingElement::new(EdgeInsets::uniform(
+    let elements = vec![plain_element(&PaddingElement::new(EdgeInsets::uniform(
         10.0,
     )))];
     chain.update_from_slice(&elements, &mut context);
 
-    let elements = vec![plain_element(PaddingElement::new(EdgeInsets::uniform(
+    let elements = vec![plain_element(&PaddingElement::new(EdgeInsets::uniform(
         20.0,
     )))];
     chain.update_from_slice(&elements, &mut context);

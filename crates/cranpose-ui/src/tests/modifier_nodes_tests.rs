@@ -77,7 +77,7 @@ fn padding_node_adds_space_to_content() {
     let mut context = BasicModifierNodeContext::new();
 
     let padding = EdgeInsets::uniform(10.0);
-    let elements = vec![plain_element(PaddingElement::new(padding))];
+    let elements = vec![plain_element(&PaddingElement::new(padding))];
     chain.update_from_slice(&elements, &mut context);
 
     assert_eq!(chain.len(), 1);
@@ -200,7 +200,7 @@ fn background_node_is_draw_only() {
     let mut context = BasicModifierNodeContext::new();
 
     let color = Color(1.0, 0.0, 0.0, 1.0);
-    let elements = vec![plain_element(BackgroundElement::new(color))];
+    let elements = vec![plain_element(&BackgroundElement::new(color))];
     chain.update_from_slice(&elements, &mut context);
 
     assert_eq!(chain.len(), 1);
@@ -214,7 +214,7 @@ fn corner_shape_node_is_draw_only() {
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
-    let elements = vec![plain_element(CornerShapeElement::new(
+    let elements = vec![plain_element(&CornerShapeElement::new(
         RoundedCornerShape::uniform(6.0),
     ))];
     chain.update_from_slice(&elements, &mut context);
@@ -229,14 +229,14 @@ fn a_padding_takes_its_new_insets_in_its_place() {
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
-    let elements = vec![plain_element(PaddingElement::new(EdgeInsets::uniform(
+    let elements = vec![plain_element(&PaddingElement::new(EdgeInsets::uniform(
         10.0,
     )))];
     chain.update_from_slice(&elements, &mut context);
 
     context.clear_invalidations();
 
-    let elements = vec![plain_element(PaddingElement::new(EdgeInsets::uniform(
+    let elements = vec![plain_element(&PaddingElement::new(EdgeInsets::uniform(
         20.0,
     )))];
     chain.update_from_slice(&elements, &mut context);
@@ -286,7 +286,7 @@ fn size_node_enforces_dimensions() {
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
 
-    let elements = vec![plain_element(SizeElement::new(Some(100.0), Some(200.0)))];
+    let elements = vec![plain_element(&SizeElement::new(Some(100.0), Some(200.0)))];
     chain.update_from_slice(&elements, &mut context);
 
     let node = chain.plain::<SizeElement>(0).unwrap();
@@ -467,12 +467,12 @@ fn mixed_modifier_chain_tracks_all_capabilities() {
     let clicked = Rc::new(Cell::new(false));
 
     let elements = vec![
-        plain_element(PaddingElement::new(EdgeInsets::uniform(10.0))),
+        plain_element(&PaddingElement::new(EdgeInsets::uniform(10.0))),
         modifier_element(AlphaElement::new(0.8)),
         modifier_element(ClickableElement::new(move |_| {
             clicked.set(true);
         })),
-        plain_element(BackgroundElement::new(Color(1.0, 0.0, 0.0, 1.0))),
+        plain_element(&BackgroundElement::new(Color(1.0, 0.0, 0.0, 1.0))),
     ];
     chain.update_from_slice(&elements, &mut context);
 
@@ -507,11 +507,11 @@ fn a_background_takes_its_new_color_in_its_place() {
     let mut context = BasicModifierNodeContext::new();
 
     let red = Color(1.0, 0.0, 0.0, 1.0);
-    let elements = vec![plain_element(BackgroundElement::new(red))];
+    let elements = vec![plain_element(&BackgroundElement::new(red))];
     chain.update_from_slice(&elements, &mut context);
 
     let blue = Color(0.0, 0.0, 1.0, 1.0);
-    let elements = vec![plain_element(BackgroundElement::new(blue))];
+    let elements = vec![plain_element(&BackgroundElement::new(blue))];
     chain.update_from_slice(&elements, &mut context);
 
     assert_eq!(chain.len(), 1);
@@ -529,14 +529,14 @@ fn reordered_plain_modifiers_keep_their_values() {
     let color = Color(1.0, 0.0, 0.0, 1.0);
 
     let elements = vec![
-        plain_element(PaddingElement::new(padding)),
-        plain_element(BackgroundElement::new(color)),
+        plain_element(&PaddingElement::new(padding)),
+        plain_element(&BackgroundElement::new(color)),
     ];
     chain.update_from_slice(&elements, &mut context);
 
     let elements = vec![
-        plain_element(BackgroundElement::new(color)),
-        plain_element(PaddingElement::new(padding)),
+        plain_element(&BackgroundElement::new(color)),
+        plain_element(&PaddingElement::new(padding)),
     ];
     chain.update_from_slice(&elements, &mut context);
 

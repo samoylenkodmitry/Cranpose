@@ -283,7 +283,7 @@ impl Modifier {
         let modifier = crate::thread_state::with(|state| {
             state
                 .clip_to_bounds
-                .get_or_init(|| Self::from_dyn_element(plain_element(ClipToBoundsElement)))
+                .get_or_init(|| Self::from_dyn_element(plain_element(&ClipToBoundsElement)))
                 .clone()
         });
         let modifier =

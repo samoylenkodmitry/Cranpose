@@ -715,7 +715,11 @@ fn slices_of_one_background_allocate_their_block_and_one_list() {
     let region = Region::new(GLOBAL);
     let slices = fresh.modifier_slices_snapshot();
     let change = region.change();
-    assert_eq!(slices.draw_commands().len(), 1);
+    assert_eq!(
+        slices.draw_commands().len(),
+        1,
+        "the chain draws one background"
+    );
     assert_eq!(change.allocations, 2, "{change:?}");
     assert_eq!(change.reallocations, 0, "{change:?}");
 }
@@ -747,7 +751,11 @@ fn slices_of_a_text_with_a_background_keep_their_list() {
     let region = Region::new(GLOBAL);
     let slices = node.modifier_slices_snapshot();
     let first = region.change();
-    assert_eq!(slices.draw_commands().len(), 1);
+    assert_eq!(
+        slices.draw_commands().len(),
+        1,
+        "the text draws one background"
+    );
     drop(slices);
 
     let blue = modifier(Color::BLUE);
@@ -755,7 +763,11 @@ fn slices_of_a_text_with_a_background_keep_their_list() {
     node.set_modifier(blue);
     let slices = node.modifier_slices_snapshot();
     let again = region.change();
-    assert_eq!(slices.draw_commands().len(), 1);
+    assert_eq!(
+        slices.draw_commands().len(),
+        1,
+        "the text draws one background again"
+    );
     println!("allocations of a text's slices: first {first:?}, again {again:?}");
     assert_eq!(first.reallocations, 0, "{first:?}");
     assert_eq!(again.reallocations, 0, "{again:?}");
