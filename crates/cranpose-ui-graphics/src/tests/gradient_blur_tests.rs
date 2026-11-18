@@ -2,9 +2,12 @@ use super::*;
 
 #[test]
 fn gradient_blur_carries_endpoint_radii_and_capture_padding() {
-    let RenderEffect::Shader { shader } =
-        gradient_blur_effect(0.5, 18.25, GradientBlurDirection::BottomToTop)
-    else {
+    let RenderEffect::Shader { shader } = gradient_blur_effect(
+        0.5,
+        18.25,
+        GradientBlurDirection::BottomToTop,
+        GradientBlurProfile::GAUSSIAN,
+    ) else {
         panic!("gradient blur must use the spatial runtime shader");
     };
     assert_eq!(&shader.uniforms()[..3], &[0.5, 18.25, 3.0]);

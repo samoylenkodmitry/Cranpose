@@ -1,7 +1,8 @@
 use cranpose_render_common::graph::{LayerNode, ProjectiveTransform, RenderNode};
 use cranpose_ui_graphics::{
-    GradientBlurDirection, GraphicsLayer, LayerShape, RUNTIME_SHADER_PRELUDE_WGSL, Rect,
-    RenderEffect, RoundedCornerShape, RuntimeShader, gradient_blur_effect,
+    GradientBlurDirection, GradientBlurLevels, GradientBlurProfile, GraphicsLayer, LayerShape,
+    RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect, RoundedCornerShape, RuntimeShader,
+    gradient_blur_effect,
 };
 
 use crate::{shared_test_support, support};
@@ -41,7 +42,8 @@ fn compare_ladder(substrates: bool) {
         GradientBlurDirection::BottomToTop,
     ] {
         for (start, end) in [(0.0, 24.0), (17.0, 0.1), (3.0, 3.0)] {
-            let RenderEffect::Shader { mut shader } = gradient_blur_effect(start, end, direction)
+            let RenderEffect::Shader { mut shader } =
+                gradient_blur_effect(start, end, direction, GradientBlurProfile::GAUSSIAN)
             else {
                 panic!("gradient blur uses a runtime shader");
             };
@@ -90,4 +92,98 @@ fn gradient_ladder_matches_reference_with_substrates() {
 #[test]
 fn gradient_ladder_preserves_fallback_without_substrates() {
     compare_ladder(false);
+}
+
+// The effect layer of `page` spans rows 29.5 to 164.5; its upper half, inset
+// by a row, holds the start radius under a ramp that starts halfway.
+const UPPER_HALF: std::ops::Range<usize> = 31..96;
+
+#[test]
+fn a_ramp_holds_the_start_radius_before_it_begins() {
+    let mut renderer = support::headless_renderer().expect("gradient reference needs a GPU");
+    let capture = |renderer: &mut support::LockedRenderer, end: f32, ramp: GradientBlurProfile| {
+        support::capture_graph(
+            renderer,
+            &page(gradient_blur_effect(
+                17.0,
+                end,
+                GradientBlurDirection::TopToBottom,
+                ramp,
+            )),
+            FRAME,
+            FRAME,
+        )
+    };
+    let held = capture(&mut renderer, 17.0, GradientBlurProfile::GAUSSIAN);
+    let ramped = capture(
+        &mut renderer,
+        0.1,
+        GradientBlurProfile {
+            ramp_start: 0.5,
+            ..GradientBlurProfile::GAUSSIAN
+        },
+    );
+    let row = FRAME as usize * 4;
+    let rows = UPPER_HALF.start * row..UPPER_HALF.end * row;
+    assert!(
+        held.pixels[rows.clone()] == ramped.pixels[rows],
+        "the upper half blurs by the start radius"
+    );
+    let lower = 140 * row..141 * row;
+    assert!(
+        held.pixels[lower.clone()] != ramped.pixels[lower],
+        "the lower half eases toward the end radius"
+    );
+}
+
+// How far neighbouring pixels of `row` differ inside the effect layer: the
+// stripes' contrast left after the blur.
+fn contrast(pixels: &[u8], row: usize) -> u32 {
+    let start = row * FRAME as usize * 4;
+    pixels[start + 23 * 4..start + 162 * 4]
+        .chunks_exact(4)
+        .map(|pixel| u32::from(pixel[1]))
+        .collect::<Vec<_>>()
+        .windows(2)
+        .map(|pair| pair[0].abs_diff(pair[1]))
+        .sum()
+}
+
+#[test]
+fn sharp_and_half_levels_keep_fine_detail_below_half_the_radius() {
+    let mut renderer = support::headless_renderer().expect("gradient reference needs a GPU");
+    let capture = |renderer: &mut support::LockedRenderer, levels: GradientBlurLevels| {
+        support::capture_graph(
+            renderer,
+            &page(gradient_blur_effect(
+                17.0,
+                0.1,
+                GradientBlurDirection::TopToBottom,
+                GradientBlurProfile {
+                    levels,
+                    ..GradientBlurProfile::GAUSSIAN
+                },
+            )),
+            FRAME,
+            FRAME,
+        )
+        .pixels
+    };
+    let gaussian = capture(&mut renderer, GradientBlurLevels::Gaussian);
+    let sharp_and_half = capture(&mut renderer, GradientBlurLevels::SharpAndHalf);
+    let row = FRAME as usize * 4;
+    let rows = UPPER_HALF.start * row..UPPER_HALF.end * row;
+    assert!(
+        gaussian[rows.clone()] == sharp_and_half[rows],
+        "rows above half the radius blend the half and the wide level alike"
+    );
+    // Row 137 asks for about 1.9 of the 17 pixel radius: the Gaussian
+    // levels blend the sharp content with the quarter level there, keeping
+    // 2,394 of the stripes' contrast, and the sharp and half levels keep
+    // 2,919.
+    let kept = (contrast(&sharp_and_half, 137), contrast(&gaussian, 137));
+    assert!(
+        kept.0 * 10 > kept.1 * 11,
+        "below half the radius the sharp content shows through: {kept:?}"
+    );
 }

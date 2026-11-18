@@ -3,7 +3,7 @@ use cranpose::{
     HorizontalAlignment, LinearArrangement, Modifier, Rect, Row, RowSpec, ScrollState, Size, Text,
     TextStyle, VerticalAlignment,
 };
-use cranpose_ui_graphics::GradientBlurDirection;
+use cranpose_ui_graphics::{GradientBlurDirection, GradientBlurProfile};
 
 const PAPER: Color = Color(0.97, 0.97, 0.99, 1.0);
 const BLUE: Color = Color(0.0, 0.5, 1.0, 1.0);
@@ -81,6 +81,7 @@ pub fn SurfacePrefixReproScreen() {
                         16.0.into(),
                         0.0.into(),
                         GradientBlurDirection::TopToBottom,
+                        GradientBlurProfile::GAUSSIAN,
                     ),
                 BoxSpec::default(),
                 || {},

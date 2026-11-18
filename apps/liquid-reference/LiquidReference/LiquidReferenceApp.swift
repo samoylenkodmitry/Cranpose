@@ -120,12 +120,15 @@ private struct ReferenceControl: View {
         .tint(.blue)
         .preferredColorScheme(environment["REFERENCE_SCHEME"] == "dark" ? .dark : .light)
         .overlay(alignment: component == "nav-bar" ? .bottom : .top) {
+            // The scroll edge cases keep the label for the tests and draw no
+            // pixels of it over the stripes.
             Text("Reference control").font(.caption).padding(.vertical, 24)
+                .foregroundStyle(component == "scroll-edge" ? AnyShapeStyle(.clear) : AnyShapeStyle(.primary))
         }
         .overlay(alignment: .bottom) {
             // The toolbar's capsules sit where the count would.
             VStack {
-                Text("Activations: \(activations)").opacity(component == "toolbar" ? 0 : 1)
+                Text("Activations: \(activations)").opacity(["toolbar", "scroll-edge"].contains(component) ? 0 : 1)
                 if let error = trace.error {
                     Text(error).accessibilityIdentifier("trace-error")
                 }
@@ -285,6 +288,8 @@ private struct ReferenceControl: View {
             ReferenceContextMenu(variant: selection).accessibilityIdentifier("reference-context-menu")
         case "swipe-actions":
             ReferenceSwipeRow().frame(width: 300, height: 44).accessibilityIdentifier("reference-swipe-actions")
+        case "scroll-edge":
+            ReferenceScrollEdge(variant: selection).ignoresSafeArea()
         default:
             Text("Unknown reference control: \(component)")
         }
@@ -447,6 +452,97 @@ private struct ReferenceContextMenu: View {
         default: tile.contextMenu { actions }
         }
     }
+}
+
+// Stripes and solids under the scroll view's edges, which show the edge
+// effect's blur and tint row by row. Four columns on whole points, 100
+// points wide: black, stripes that alternate black and white every 3
+// points, stripes that alternate every 12, and white to the right edge. Variant 0 rests at the top with no
+// bars and every other variant scrolls 200 points. Variant 1 keeps the
+// automatic style, 2 the hard one; 3 and 4 add a navigation bar, automatic
+// and hard; 5 adds a bottom toolbar; 6 and 7 stand a custom bar 44 and 100
+// points tall over the top edge. Variant 8 shows the toolbar at rest, for a
+// test that scrolls it by a drag.
+private struct ReferenceScrollEdge: UIViewControllerRepresentable {
+    let variant: Int
+
+    final class Content: UIViewController {
+        let variant: Int
+        let scroll = UIScrollView()
+        var placed = false
+
+        init(variant: Int) {
+            self.variant = variant
+            super.init(nibName: nil, bundle: nil)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func viewDidLoad() {
+            super.viewDidLoad()
+            view.backgroundColor = .clear
+            title = "Title"
+            navigationItem.largeTitleDisplayMode = .never
+            toolbarItems = [
+                UIBarButtonItem(title: "Edit", style: .plain, target: nil, action: nil), .flexibleSpace(),
+                UIBarButtonItem(title: "Share", style: .plain, target: nil, action: nil),
+            ]
+            scroll.backgroundColor = .clear
+            if variant == 2 || variant == 4 { scroll.topEdgeEffect.style = .hard }
+            view.addSubview(scroll)
+            guard variant >= 6 else { return }
+            let bar = UILabel()
+            bar.text = "Bar"
+            bar.textAlignment = .center
+            bar.tag = variant == 6 ? 44 : 100
+            let container = UIScrollEdgeElementContainerInteraction()
+            container.scrollView = scroll
+            container.edge = .top
+            bar.addInteraction(container)
+            view.addSubview(bar)
+        }
+
+        override func viewDidLayoutSubviews() {
+            super.viewDidLayoutSubviews()
+            scroll.frame = view.bounds
+            for bar in view.subviews where bar is UILabel {
+                bar.frame = CGRect(x: 0, y: view.safeAreaInsets.top, width: view.bounds.width, height: CGFloat(bar.tag))
+            }
+            guard !placed, view.bounds.width > 0 else { return }
+            placed = true
+            let width = view.bounds.width
+            let height: CGFloat = 3000
+            let columns = [UIColor.black, UIColor(patternImage: Self.stripe(period: 6)),
+                           UIColor(patternImage: Self.stripe(period: 24)), UIColor.white]
+            for (index, fill) in columns.enumerated() {
+                let x = CGFloat(index) * 100
+                let column = UIView(frame: CGRect(x: x, y: 0, width: index == 3 ? width - x : 100, height: height))
+                column.backgroundColor = fill
+                scroll.addSubview(column)
+            }
+            scroll.contentSize = CGSize(width: width, height: height)
+            scroll.contentOffset.y = -scroll.adjustedContentInset.top + ([0, 8].contains(variant) ? 0 : 200)
+        }
+
+        static func stripe(period: CGFloat) -> UIImage {
+            UIGraphicsImageRenderer(size: CGSize(width: period, height: 1)).image { context in
+                UIColor.black.setFill()
+                context.fill(CGRect(x: 0, y: 0, width: period / 2, height: 1))
+                UIColor.white.setFill()
+                context.fill(CGRect(x: period / 2, y: 0, width: period / 2, height: 1))
+            }
+        }
+    }
+
+    func makeUIViewController(context: Context) -> UINavigationController {
+        let navigation = UINavigationController(rootViewController: Content(variant: variant))
+        navigation.setNavigationBarHidden(variant != 3 && variant != 4, animated: false)
+        navigation.setToolbarHidden(variant != 5 && variant != 8, animated: false)
+        navigation.view.backgroundColor = .clear
+        return navigation
+    }
+
+    func updateUIViewController(_ uiViewController: UINavigationController, context: Context) {}
 }
 
 // A list row with Flag and a destructive Delete at its trailing edge and Pin

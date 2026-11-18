@@ -2,9 +2,9 @@ use std::{rc::Rc, sync::Arc};
 
 use cranpose_ui_graphics::{
     BlendMode, Color, ColorFilter, CompositingStrategy, Density, Dp, GradientBlurDirection,
-    GradientCutMaskSpec, GradientFadeMaskSpec, LayerShape, Px, RenderEffect, RoundedCornerShape,
-    RuntimeShader, TransformOrigin, gradient_blur_effect, gradient_cut_mask_effect,
-    gradient_fade_dst_out_effect, rounded_alpha_mask_effect,
+    GradientBlurProfile, GradientCutMaskSpec, GradientFadeMaskSpec, LayerShape, Px, RenderEffect,
+    RoundedCornerShape, RuntimeShader, TransformOrigin, gradient_blur_effect,
+    gradient_cut_mask_effect, gradient_fade_dst_out_effect, rounded_alpha_mask_effect,
     space::{LayerSpace, Mat4, MeshSurface, MeshSurfaces, Scene3d},
 };
 
@@ -26,13 +26,14 @@ fn backdrop_gradient_blur_layer(
     start_radius: Dp,
     end_radius: Dp,
     direction: GradientBlurDirection,
+    profile: GradientBlurProfile,
 ) -> GraphicsLayer {
     let density = Density::from_scale(crate::render_state::current_density());
     let start_px = start_radius.to_px(density).max(Px::ZERO);
     let end_px = end_radius.to_px(density).max(Px::ZERO);
     GraphicsLayer {
         backdrop_effect: (start_px.0 > 0.0 || end_px.0 > 0.0)
-            .then(|| gradient_blur_effect(start_px.0, end_px.0, direction)),
+            .then(|| gradient_blur_effect(start_px.0, end_px.0, direction, profile)),
         shape: LayerShape::Rectangle,
         clip: true,
         ..Default::default()
@@ -461,19 +462,21 @@ impl Modifier {
 
     /// Blur content behind this composable with a radius that changes across
     /// its bounds. This is a true spatial blur gradient: the sampling kernel
-    /// interpolates from `start_radius` to `end_radius`; it is not an opacity
-    /// gradient over a uniformly blurred layer.
+    /// interpolates from `start_radius` to `end_radius` in `direction`, over
+    /// the part of the bounds and through the levels `profile` names; it is
+    /// not an opacity gradient over a uniformly blurred layer.
     pub fn backdrop_gradient_blur(
         self,
         start_radius: Dp,
         end_radius: Dp,
         direction: GradientBlurDirection,
+        profile: GradientBlurProfile,
     ) -> Self {
         if start_radius.0 <= 0.0 && end_radius.0 <= 0.0 {
             return self.clip_to_bounds();
         }
         let modifier = Self::with_element(LazyGraphicsLayerElement::new(Rc::new(move || {
-            backdrop_gradient_blur_layer(start_radius, end_radius, direction)
+            backdrop_gradient_blur_layer(start_radius, end_radius, direction, profile)
         })))
         .with_inspector_metadata(inspector_metadata(
             "backdropGradientBlur",
@@ -481,6 +484,7 @@ impl Modifier {
                 info.add_property("startRadius", start_radius.0.to_string());
                 info.add_property("endRadius", end_radius.0.to_string());
                 info.add_property("direction", format!("{direction:?}"));
+                info.add_property("profile", format!("{profile:?}"));
             },
         ));
         self.then(modifier)
