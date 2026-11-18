@@ -32,6 +32,7 @@ pub use language_preferences::{
 };
 pub use ui_strings::UiString;
 
+pub mod anchored_draggable;
 mod animate_content_size;
 /// Screen reader announcements for events that have no control on screen.
 pub mod announce;
@@ -115,6 +116,7 @@ pub mod widgets;
 mod word_boundaries;
 pub mod zoom;
 
+pub use anchored_draggable::{AnchoredDraggableState, DraggableAnchors};
 pub use announce::{Announcement, Announcer, announce, drain_announcements, local_announcer};
 #[doc(hidden)]
 pub use arrow_focus::arrow_focus_target;

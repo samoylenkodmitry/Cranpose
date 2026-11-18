@@ -11,12 +11,12 @@ use super::{
     ScrollMotionContext, ScrollTarget,
 };
 
-pub(super) struct DragGesture<S: ScrollTarget> {
-    pub(super) target: S,
-    pub(super) axis: Axis,
-    pub(super) reverse_input: bool,
-    pub(super) motion_context: ScrollMotionContext,
-    pub(super) guard: Option<Rc<dyn Fn() -> bool>>,
+pub(in crate::modifier) struct DragGesture<S: ScrollTarget> {
+    pub(in crate::modifier) target: S,
+    pub(in crate::modifier) axis: Axis,
+    pub(in crate::modifier) reverse_input: bool,
+    pub(in crate::modifier) motion_context: ScrollMotionContext,
+    pub(in crate::modifier) guard: Option<Rc<dyn Fn() -> bool>>,
 }
 
 struct ScrollGestureLifetime<S: ScrollTarget> {
@@ -87,7 +87,7 @@ where
     )
 }
 
-pub(super) fn drag_gesture_input<K, S>(key: K, gesture: DragGesture<S>) -> Modifier
+pub(in crate::modifier) fn drag_gesture_input<K, S>(key: K, gesture: DragGesture<S>) -> Modifier
 where
     K: std::hash::Hash + 'static,
     S: ScrollTarget + 'static,

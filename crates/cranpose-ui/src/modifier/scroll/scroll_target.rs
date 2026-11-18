@@ -10,7 +10,7 @@ use crate::{
     scroll::{ScrollSettlePolicy, ScrollState},
 };
 
-pub(super) trait ScrollTarget: Clone {
+pub(in crate::modifier) trait ScrollTarget: Clone {
     fn apply_delta(&self, delta: f32) -> f32;
 
     fn apply_wheel_delta(&self, delta: f32) -> f32 {

@@ -10,9 +10,9 @@ use cranpose_foundation::{
 };
 use cranpose_ui_layout::Axis;
 
-mod drag_gesture;
+pub(super) mod drag_gesture;
 mod release_motion;
-mod scroll_target;
+pub(super) mod scroll_target;
 use drag_gesture::{DragGesture, drag_gesture_input, nested_drag_gesture_input};
 use scroll_target::{NestedTarget, ScrollTarget};
 
