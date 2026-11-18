@@ -2,8 +2,8 @@ use cranpose::{
     composable,
     liquid::prelude::*,
     local_safe_area_insets, rememberMutableStateOf,
-    widgets::{Box, BoxSpec, Text},
-    Alignment, Color, Modifier, Size,
+    widgets::{Box, BoxSpec, Row, RowSpec, Text},
+    Alignment, Brush, Color, Modifier, Rect, Size,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -41,6 +41,7 @@ pub(crate) enum Control {
     Toolbar,
     SwipeActions,
     ContextMenu,
+    ScrollEdge,
 }
 
 // The names shared with the native app's `REFERENCE_COMPONENT`.
@@ -78,6 +79,7 @@ const NAMES: &[(&str, Control)] = &[
     ("toolbar", Control::Toolbar),
     ("swipe-actions", Control::SwipeActions),
     ("context-menu", Control::ContextMenu),
+    ("scroll-edge", Control::ScrollEdge),
 ];
 
 impl Control {
@@ -108,11 +110,24 @@ pub(crate) fn LiquidControlReference(
             Color::from_rgb_u8(0, if dark { 145 } else { 136 }, 255),
         ),
         move || {
+            // The native app's window takes its scheme, and the status bar
+            // icons with it.
+            cranpose::SystemBarAppearance(if dark {
+                cranpose::SystemBarIcons::Light
+            } else {
+                cranpose::SystemBarIcons::Dark
+            });
             let insets = local_safe_area_insets().current();
             Box(
                 super::liquid_tab_reference::reference_background(backdrop, dark),
                 BoxSpec::default(),
                 move || {
+                    // The scroll edge cases keep the label for the tests and
+                    // draw no pixels of it over the stripes.
+                    let mut caption = liquid_typography().caption1;
+                    if control == Control::ScrollEdge {
+                        caption.span_style.color = Some(Color::TRANSPARENT);
+                    }
                     Text(
                         "Reference control",
                         Modifier::empty().offset(
@@ -123,12 +138,15 @@ pub(crate) fn LiquidControlReference(
                                 insets.top + 24.0
                             },
                         ),
-                        liquid_typography().caption1,
+                        caption,
                     );
                     Box(
                         Modifier::empty().fill_max_size().offset(
                             0.0,
-                            if matches!(control, Control::NavBar | Control::Toolbar) {
+                            if matches!(
+                                control,
+                                Control::NavBar | Control::Toolbar | Control::ScrollEdge
+                            ) {
                                 0.0
                             } else {
                                 (insets.top - insets.bottom) * 0.5
@@ -138,7 +156,7 @@ pub(crate) fn LiquidControlReference(
                         move || ControlContent(control, initial, activations),
                     );
                     // The toolbar's capsules sit where the count would.
-                    if control != Control::Toolbar {
+                    if !matches!(control, Control::Toolbar | Control::ScrollEdge) {
                         Text(
                             format!("Activations: {}", activations.get()),
                             Modifier::empty().offset(150.0, 800.0),
@@ -180,6 +198,7 @@ fn ControlContent(control: Control, initial: f32, activations: cranpose::Mutable
         Control::Toolbar => ReferenceToolbar(initial as usize),
         Control::SwipeActions => ReferenceSwipeActions(),
         Control::ContextMenu => ReferenceContextMenu(initial as usize),
+        Control::ScrollEdge => ReferenceScrollEdge(initial as usize),
         _ => ReferenceSurface(control, initial, activations),
     }
 }
@@ -593,6 +612,124 @@ fn ReferenceToolbar(variant: usize) {
             });
         },
     );
+}
+
+// The native fixture's stripes and solids under the top edge, 100 points
+// wide each: black, stripes that alternate black and white every 3 points,
+// stripes that alternate every 12, and white to the right edge. Variant 0
+// starts them below the status bar, as the native list at rest; the others
+// run them under it, as the native list scrolled. Variants 2 to 4, 6 and 7
+// frost the edge with the hard style, to the bottom of the bar that stands
+// over it in the native variant; the others soften it.
+#[composable]
+fn ReferenceScrollEdge(variant: usize) {
+    let insets = local_safe_area_insets().current();
+    let (bar, style) = scroll_edge_bar(variant);
+    Box(
+        Modifier::empty().fill_max_size(),
+        BoxSpec::default(),
+        move || {
+            Row(
+                Modifier::empty().fill_max_size().padding_each(
+                    0.0,
+                    if variant == 0 { insets.top } else { 0.0 },
+                    0.0,
+                    0.0,
+                ),
+                RowSpec::default(),
+                || {
+                    for column in 0..4 {
+                        let width = if column == 3 {
+                            Modifier::empty().weight(1.0)
+                        } else {
+                            Modifier::empty().width(100.0)
+                        };
+                        Box(
+                            width
+                                .fill_max_height()
+                                .draw_behind(move |scope| stripes(scope, column)),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    }
+                },
+            );
+            LiquidScrollEdgeEffect(
+                Modifier::empty().fill_max_width().height(insets.top + bar),
+                LiquidScrollEdge::Top,
+                style,
+            );
+            if variant >= 6 {
+                Box(
+                    Modifier::empty()
+                        .offset(0.0, insets.top)
+                        .fill_max_width()
+                        .height(bar),
+                    BoxSpec::default().content_alignment(Alignment::CENTER),
+                    || {
+                        Text("Bar", Modifier::empty(), liquid_typography().body);
+                    },
+                );
+            }
+            if variant == 5 || variant == 8 {
+                Box(
+                    Modifier::empty().fill_max_size(),
+                    BoxSpec::default().content_alignment(Alignment::BOTTOM_START),
+                    || {
+                        LiquidToolbar(Modifier::empty(), |toolbar| {
+                            toolbar.button("Edit", || {});
+                            toolbar.flexible_space();
+                            toolbar.button("Share", || {});
+                        });
+                    },
+                );
+            }
+        },
+    );
+}
+
+// The height of the bar over the top edge in scroll edge variant `variant`
+// and the style that stands in for its look.
+fn scroll_edge_bar(variant: usize) -> (f32, LiquidScrollEdgeEffectStyle) {
+    match variant {
+        2 => (0.0, LiquidScrollEdgeEffectStyle::Hard),
+        3 | 4 => (54.0, LiquidScrollEdgeEffectStyle::Hard),
+        6 => (44.0, LiquidScrollEdgeEffectStyle::Hard),
+        7 => (100.0, LiquidScrollEdgeEffectStyle::Hard),
+        _ => (0.0, LiquidScrollEdgeEffectStyle::Soft),
+    }
+}
+
+// Column `column` of the scroll edge fixture: black, stripes with a period of
+// 6 points, stripes with a period of 24, or white.
+fn stripes(scope: &mut dyn cranpose::DrawScope, column: usize) {
+    let size = scope.size();
+    let period: f32 = match column {
+        0 => {
+            scope.draw_rect(Brush::solid(Color::BLACK));
+            return;
+        }
+        1 => 6.0,
+        2 => 24.0,
+        _ => {
+            scope.draw_rect(Brush::solid(Color::WHITE));
+            return;
+        }
+    };
+    scope.draw_rect(Brush::solid(Color::WHITE));
+    let mut x = 0.0;
+    while x < size.width {
+        scope.draw_rect_at(
+            Rect {
+                x,
+                y: 0.0,
+                width: (period * 0.5).min(size.width - x),
+                height: size.height,
+            },
+            Brush::solid(Color::BLACK),
+        );
+        x += period;
+    }
 }
 
 // A list row with Flag and a destructive Delete at its trailing edge and Pin

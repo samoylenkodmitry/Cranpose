@@ -47,9 +47,9 @@ fn map_uv(map: RegionMap, local_uv: vec2<f32>) -> vec2<f32> {
 }
 
 // Renderer-reserved slots 224..236: the substrate regions, the source
-// blurred by the wide radius (slot 232), by half of it (228) and by a
-// quarter (224), packed in the same texture at their scratch sizes; zero
-// when the renderer packed none. A substrate is read through its own map,
+// blurred by the wide radius (slot 232), by half of it (228) and, for the
+// Gaussian levels, by a quarter (224), packed in the same texture at their
+// scratch sizes; zero when the renderer packed none. A substrate is read through its own map,
 // held to its texel centers.
 fn substrate_region(slot: u32) -> vec4<f32> {
     return get_vec4(slot);
@@ -61,7 +61,7 @@ fn has_substrate(slot: u32) -> bool {
 }
 
 fn has_substrates() -> bool {
-    return has_substrate(232u) && has_substrate(228u) && has_substrate(224u);
+    return has_substrate(232u) && has_substrate(228u);
 }
 
 fn substrate_uv(slot: u32, local_uv: vec2<f32>) -> vec2<f32> {
@@ -166,7 +166,7 @@ fn blur_fs(input: VertexOutput) -> vec4<f32> {
 
     // Smoothstep avoids a derivative discontinuity where the frosted region
     // meets the sharp scene. The radius itself—not output alpha—varies.
-    let progress = smoothstep(0.0, 1.0, axis);
+    let progress = smoothstep(get_float(3u), get_float(4u), axis);
     let radius_px = mix(get_float(0u), get_float(1u), progress);
     if radius_px < 0.25 {
         return textureSampleLevel(input_texture, input_sampler, map_uv(map, input.uv), 0.0);
@@ -174,22 +174,24 @@ fn blur_fs(input: VertexOutput) -> vec4<f32> {
 
     // With the renderer's substrates the radius at this fragment is
     // realised by the two levels of the ladder around it, the sharp source
-    // and the three blurs halving from the wide radius, blended by where
-    // the radius falls between them.
+    // and the blurs halving from the wide radius, blended by where the
+    // radius falls between them. Without the quarter level the sharp
+    // source blends with the half level directly.
     if (has_substrates()) {
         let wide_radius = max(get_float(0u), get_float(1u));
         let half_radius = wide_radius * 0.5;
-        let quarter_radius = wide_radius * 0.25;
+        let quarter = has_substrate(224u);
+        let quarter_radius = select(0.0, wide_radius * 0.25, quarter);
         var low_uv: vec2<f32>;
         var high_uv: vec2<f32>;
         var fraction: f32;
-        if (radius_px <= quarter_radius) {
+        if (quarter & (radius_px <= quarter_radius)) {
             low_uv = map_uv(map, input.uv);
             high_uv = substrate_uv(224u, input.uv);
             fraction = radius_px / max(quarter_radius, 0.001);
         } else if (radius_px <= half_radius) {
             let span = max(half_radius - quarter_radius, 0.001);
-            low_uv = substrate_uv(224u, input.uv);
+            low_uv = select(map_uv(map, input.uv), substrate_uv(224u, input.uv), quarter);
             high_uv = substrate_uv(228u, input.uv);
             fraction = (radius_px - quarter_radius) / span;
         } else {

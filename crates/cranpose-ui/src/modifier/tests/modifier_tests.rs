@@ -7,7 +7,8 @@ use cranpose_foundation::{
 };
 use cranpose_ui_graphics::{
     BlurredEdgeTreatment, Brush, ColorFilter, CutDirection, Dp, DrawPrimitive,
-    GradientBlurDirection, GradientCutMaskSpec, GradientFadeMaskSpec, ShadowPrimitive, TileMode,
+    GradientBlurDirection, GradientBlurProfile, GradientCutMaskSpec, GradientFadeMaskSpec,
+    ShadowPrimitive, TileMode,
 };
 
 use super::{
@@ -420,6 +421,7 @@ fn backdrop_gradient_blur_converts_radii_and_clips_backdrop_to_bounds() {
         Dp(14.0),
         Dp(0.5),
         GradientBlurDirection::TopToBottom,
+        GradientBlurProfile::GAUSSIAN,
     );
     let slices = collect_slices_from_modifier(&modifier);
 

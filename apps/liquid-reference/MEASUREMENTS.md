@@ -557,3 +557,32 @@ Mean RGB difference against native, x 0–402 by y 110–840 points:
 | 71 points left of the middle | 0.95 | 1.05 | 0.76 | 1.73 |
 
 The rest: native's menu glass picks up the lifted tile's blue along its top edge and gives its face a cool cast of 4 levels; its rim draws a thin dark line; its dark Delete label over the checkerboard reads paler. No motion is captured yet: the lift, the menu's growth and the close.
+
+## Scroll edge effect, native, 2026-11-18
+
+`testScrollEdge` captures each `scroll-edge` variant one second after launch, on the solid backdrop; `testScrollEdgeDragged` scrolls the variants at rest by a slow drag and captures them 0, 1, 3 and 7 seconds after the release. `scroll_edge_profile.py` reads each point row: the black and white columns give the tint and how much of it the effect lays over the content, and the two stripe periods give the blur.
+
+- At rest the content starts below the status bar and the effect shows nothing over the backdrop.
+- The automatic style under the bare status bar is soft. In light it only blurs: black stays 0 to 2 and white 254. The blur holds a sigma of 6.5 points over the top 18 points and falls to 0.4 at 60, where the effect ends at the safe area's 62 points. In dark it also lays black over the content, 46% at the top falling to nothing at 60, under a sigma of 5.9 points.
+- The soft blur is not one Gaussian: in its lower half the 3 point stripes keep up to 57% of their contrast where a Gaussian of the 12 point stripes' sigma keeps 13%. It fits a blend of the sharp content and a blur of half the top radius, then of that blur and the full one.
+- The hard style frosts evenly: white over 54% of the content and a sigma of 6.35 points in light, gray 14 over 60% and 5.8 points in dark. A one pixel line ends it at the safe area: black at about 10% in light, white at about 10% in dark.
+- Under a navigation bar or a custom bar (`UIScrollEdgeElementContainerInteraction`) the effect grows to the bar's bottom edge, 116, 106 and 162 points, in either style. It frosts as the hard style does and blurs less over its lower third: the sigma falls to 5.0 to 5.5 points and the 3 point stripes show through at 20%.
+- No variant draws a bottom effect, neither under the home indicator nor under the toolbar. With the toolbar shown, a drag turns the top effect into the frost, with a sigma of 7.0 points in light and 6.5 in dark, and it stays so over the 7 seconds captured.
+
+## Liquid scroll edge effect, 2026-11-18
+
+`LiquidScrollEdgeEffect` draws both styles over the content under it. The soft style blurs through `GradientBlurLevels::SharpAndHalf`, a gradient blur whose renderer blurs only the wide and the half level and whose rows under half the radius blend the sharp content with the half level, as native's do. Its `GradientBlurProfile` holds the start radius over the outer quarter and eases to nothing at the inner edge. In dark a gradient of black follows native's dim. The hard style is a backdrop blur under the measured tint and the one pixel line.
+
+Mean RGB difference against native, x 0–402 by y 0–170 points, without the status bar's clock and icons (the twin's icons stay dark in dark mode, #2059):
+
+| Variant | Light | Dark |
+| --- | --- | --- |
+| At rest | 0.011 | 0.007 |
+| Automatic, under the status bar | 1.974 | 1.349 |
+| Hard, under the status bar | 1.153 | 0.663 |
+| With the toolbar | 1.974 | 1.349 |
+| Hard, to a navigation bar's bottom | 3.128 | 2.382 |
+| Hard, to a 44 point bar's bottom | 2.709 | 1.612 |
+| Hard, to a 100 point bar's bottom | 3.937 | 2.715 |
+
+The bar variants stand the hard style in for the bar's own look, whose lower third blurs less, and the twin draws no navigation bar title. The soft style's remaining difference sits in the 3 point stripes, which native's kernel blurs with longer tails across the columns.

@@ -13,6 +13,9 @@ VISIBLE_DIFFERENCE = 8
 
 # The native popover of each `confirmation` source value grown by 45 points,
 # and kept below the status bar.
+# The status bar's clock and icons, in points: the clock's minutes differ
+# between captures, and the twin's icons do not follow its scheme.
+STATUS_BAR_GLYPHS = [(40, 10, 110, 45), (275, 10, 385, 45)]
 CONFIRMATION_REGIONS = {"0": (36, 199, 366, 474), "1": (23, 60, 366, 315), "2": (36, 587, 379, 840)}
 
 
@@ -86,6 +89,9 @@ def compare(native, cranpose, output, native_extra=(), cranpose_extra=(), prefix
                 # The dimmed screen below the status bar and above the home
                 # indicator: the lifted preview and the menu move over all of it.
                 region = (0, 110, 402, 840)
+            elif name.startswith("control-scroll-edge-"):
+                # The effect under the status bar and the tallest bar.
+                region = (0, 0, 402, 170)
             elif name.startswith("control-confirmation-"):
                 # Native's popover frame for each source, with 45 points for the shadow.
                 region = CONFIRMATION_REGIONS[name.rsplit("-", 1)[1]]
@@ -94,6 +100,10 @@ def compare(native, cranpose, output, native_extra=(), cranpose_extra=(), prefix
             crop = tuple(round(coordinate * scale) for coordinate in region)
             a = a.convert("RGBA").crop(crop)
             b = b.convert("RGBA").crop(crop)
+            excluded = STATUS_BAR_GLYPHS if region[1] < 45 else []
+            for rect in excluded:
+                box = tuple(round((coordinate - region[index % 2]) * scale) for index, coordinate in enumerate(rect))
+                b.paste(a.crop(box), box[:2])
             difference = ImageChops.difference(a, b)
             channels = difference.split()
             maximum = channels[0]
@@ -105,7 +115,8 @@ def compare(native, cranpose, output, native_extra=(), cranpose_extra=(), prefix
             visible = sum(histogram[VISIBLE_DIFFERENCE + 1:])
             mean = sum(index * count for channel in channels[:3]
                        for index, count in enumerate(channel.histogram())) / (3 * a.width * a.height)
-            rows.append({"case": name, "region_points": region, "crop_pixels": crop, "unequal_pixels": unequal,
+            rows.append({"case": name, "region_points": region, "excluded_points": excluded,
+                         "crop_pixels": crop, "unequal_pixels": unequal,
                          "visible_pixels": visible, "mean_rgb_difference": round(mean, 4),
                          "worst_channel_difference": worst})
             for suffix, image in [("native", a), ("cranpose", b), ("difference", difference.convert("RGB"))]:

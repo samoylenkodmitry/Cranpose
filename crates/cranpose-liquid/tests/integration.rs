@@ -13,6 +13,7 @@ mod pop_up_button;
 mod provided_colors;
 mod pull_to_refresh;
 mod reader;
+mod scroll_edge_effect;
 mod segmented_press;
 mod segmented_style;
 mod selection_controls;

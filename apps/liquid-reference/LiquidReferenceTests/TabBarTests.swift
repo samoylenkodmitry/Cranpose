@@ -296,6 +296,40 @@ class NativeControlTests: ReferenceUITests {
         }
     }
 
+    // Each variant of the scroll edge fixture once it has settled, on the
+    // solid backdrop only: the stripes cover the screen.
+    func testScrollEdge() {
+        for scheme in ["light", "dark"] {
+            for variant in 0...7 {
+                let app = launchControl("scroll-edge", scheme: scheme, value: "\(variant)")
+                Thread.sleep(forTimeInterval: 1.0)
+                capture("control-scroll-edge-\(scheme)-solid-\(variant)", app: app)
+                app.terminate()
+            }
+        }
+    }
+
+    // The variants at rest, with no bar (0) and with the toolbar (8),
+    // scrolled 200 points by a slow drag that leaves no fling, where the
+    // other variants set the offset in code. The captures follow the
+    // release at 0, 1, 3 and 7 seconds.
+    func testScrollEdgeDragged() {
+        for variant in ["0", "8"] {
+            let app = launchControl("scroll-edge", value: variant)
+            let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+            origin.withOffset(CGVector(dx: 201, dy: 600)).press(
+                forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: 201, dy: 400)),
+                withVelocity: XCUIGestureVelocity(rawValue: 200), thenHoldForDuration: 0.5)
+            var waited = 0.0
+            for second in [0.0, 1, 3, 7] {
+                Thread.sleep(forTimeInterval: second - waited)
+                waited = second
+                capture("scroll-edge-dragged-\(variant)-at-\(Int(second))", app: app)
+            }
+            app.terminate()
+        }
+    }
+
     private func captureStates(_ component: String, values: [String]) {
         for scheme in ["light", "dark"] {
             for backdrop in ["solid", "checkerboard"] {

@@ -35,6 +35,7 @@ mod pop_up_button;
 mod popover;
 mod progress;
 mod pull_to_refresh;
+mod scroll_edge_effect;
 mod search_field;
 mod segmented;
 mod selection;
@@ -98,6 +99,9 @@ pub use pop_up_button::LiquidPopUpButton;
 pub use popover::LiquidPopover;
 pub use progress::LiquidLinearProgressIndicator;
 pub use pull_to_refresh::LiquidPullToRefreshBox;
+pub use scroll_edge_effect::{
+    LiquidScrollEdge, LiquidScrollEdgeEffect, LiquidScrollEdgeEffectStyle,
+};
 pub use search_field::{LiquidSearchField, LiquidSearchFieldSpec, SearchBar, SearchField};
 pub use segmented::{LiquidSegmentedControl, LiquidSegmentedControlScope};
 pub use slider::LiquidSlider;

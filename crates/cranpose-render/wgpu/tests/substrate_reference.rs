@@ -1,7 +1,8 @@
 use cranpose_render_common::graph::{LayerNode, ProjectiveTransform, RenderNode};
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
-    GradientBlurDirection, GraphicsLayer, Rect, RenderEffect, SubstrateSpec, gradient_blur_effect,
+    GradientBlurDirection, GradientBlurProfile, GraphicsLayer, Rect, RenderEffect, SubstrateSpec,
+    gradient_blur_effect,
 };
 use support::{ReferenceEdge, SubstrateProbeRead, region_pixels};
 
@@ -334,7 +335,12 @@ fn gradient_band(renderer: &mut support::LockedRenderer) -> CapturedFrame {
         renderer,
         &page(Some(effect_layer(
             band(),
-            gradient_blur_effect(WIDE_RADIUS, 0.0, GradientBlurDirection::TopToBottom),
+            gradient_blur_effect(
+                WIDE_RADIUS,
+                0.0,
+                GradientBlurDirection::TopToBottom,
+                GradientBlurProfile::GAUSSIAN,
+            ),
         ))),
     )
 }

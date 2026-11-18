@@ -6,7 +6,9 @@ use cranpose_ui::{
     text::{SpanStyle, TextStyle},
     widgets::{Box, BoxSpec, Row, RowSpec, Text},
 };
-use cranpose_ui_graphics::{Brush, GradientBlurDirection, GraphicsLayer};
+use cranpose_ui_graphics::{
+    Brush, Color, GradientBlurDirection, GradientBlurProfile, GraphicsLayer,
+};
 use cranpose_ui_layout::{Alignment, VerticalAlignment};
 
 use crate::theme::{liquid_colors, liquid_typography};
@@ -110,27 +112,7 @@ pub fn LiquidNavBar(
             );
         }
 
-        let background = colors.background;
-        let band = Modifier::empty()
-            .fill_max_width()
-            .height(BAR_HEIGHT)
-            .backdrop_gradient_blur(
-                Dp(BAND_BLUR_TOP_DP * progress),
-                Dp(BAND_BLUR_BOTTOM_DP * progress),
-                GradientBlurDirection::TopToBottom,
-            )
-            .draw_behind(move |scope| {
-                scope.draw_rect(Brush::vertical_gradient(
-                    vec![
-                        background.with_alpha(SCRIM_TOP_ALPHA * progress),
-                        background.with_alpha(SCRIM_MIDDLE_ALPHA * progress),
-                        background.with_alpha(0.0),
-                    ],
-                    0.0,
-                    scope.size().height,
-                ));
-            });
-        Box(band, BoxSpec::default(), || {});
+        Box(band(progress, colors.background), BoxSpec::default(), || {});
 
         let inline_alpha = ((progress - 0.5) * 2.0).clamp(0.0, 1.0);
         let inline_title = title.clone();
@@ -169,6 +151,31 @@ pub fn LiquidNavBar(
             },
         );
     });
+}
+
+// The band over the content: a gradient blur under a scrim of the
+// background colour, both fading in with the collapse `progress`.
+fn band(progress: f32, background: Color) -> Modifier {
+    // An infinite end names the band's bottom edge.
+    let scrim = Brush::vertical_gradient(
+        vec![
+            background.with_alpha(SCRIM_TOP_ALPHA * progress),
+            background.with_alpha(SCRIM_MIDDLE_ALPHA * progress),
+            background.with_alpha(0.0),
+        ],
+        0.0,
+        f32::INFINITY,
+    );
+    Modifier::empty()
+        .fill_max_width()
+        .height(BAR_HEIGHT)
+        .backdrop_gradient_blur(
+            Dp(BAND_BLUR_TOP_DP * progress),
+            Dp(BAND_BLUR_BOTTOM_DP * progress),
+            GradientBlurDirection::TopToBottom,
+            GradientBlurProfile::GAUSSIAN,
+        )
+        .draw_behind(move |scope| scope.draw_rect(scrim.clone()))
 }
 
 pub(super) fn large_title_settle_policy(collapse_range: f32) -> cranpose_ui::ScrollSettlePolicy {
