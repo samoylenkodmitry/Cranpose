@@ -76,9 +76,11 @@ readonly START_ROW=wall-t20
 readonly INSTRUCTION_ROWS=" gauntlet-t12 patchwork-t17 feed "
 
 # What the A/Bs of all lanes on a host share: the lock that lets one fat LTO
-# build run at a time, and the measured bases (STEADY_LEDGER_SHARED moves
-# them on this host). FORMAT names the rows that this script writes; a new
-# one measures a kept base again.
+# build run at a time, and the measured bases. STEADY_LEDGER_SHARED moves
+# them, on the host of --host too, under the same path below the home
+# directory: a second directory gives a host a second build slot, with bases
+# of its own. FORMAT names the rows that this script writes; a new one
+# measures a kept base again.
 readonly SHARED="${STEADY_LEDGER_SHARED:-$HOME/hotpath}"
 readonly FORMAT=1
 
@@ -391,7 +393,13 @@ if [ -n "$host" ]; then
     dir=${dir:-steady-ledger}
     ssh "$host" "mkdir -p '$dir'"
     kept=false
-    if ssh "$host" "test -f '${SHARED#"$HOME"/}/base/$base_sha/rows.$FORMAT.txt'"; then
+    # The shared directory on the host: the same path below its home
+    # directory, which the host's shell names, or the same path outside one.
+    case $SHARED in
+    "$HOME"/*) shared_on_host="\$HOME/${SHARED#"$HOME"/}" ;;
+    *) shared_on_host=$SHARED ;;
+    esac
+    if ssh "$host" "test -f \"$shared_on_host/base/$base_sha/rows.$FORMAT.txt\""; then
         kept=true
     fi
     archive "$kept" "$tmp"
@@ -407,7 +415,7 @@ if [ -n "$host" ]; then
         remote=(--base-tar "$remote_base" "$base_sha")
     fi
     # At a low priority, as the host can be a desktop in use.
-    ssh "$host" "nice -n 10 bash '$dir/steady_ledger.sh' --dir '$dir' ${remote[*]}"
+    ssh "$host" "STEADY_LEDGER_SHARED=\"$shared_on_host\" nice -n 10 bash '$dir/steady_ledger.sh' --dir '$dir' ${remote[*]}"
 else
     dir=${dir:-$root/target/steady-ledger}
     mkdir -p "$dir"
