@@ -1,8 +1,9 @@
 // `LiquidConfirmationDialog` and `LiquidPopover` through the headless robot:
 // the card reads its title, message and actions but not the cancel action; it
-// sits above a wide control and beside a small one near a side; an action
-// runs and then the dismiss request; a tap outside the card and the back
-// gesture run the cancel action and then the dismiss request.
+// sits beside a small control near a side, else above a wide one, else below
+// it, and inside the window; an action runs and then the dismiss request; a
+// tap outside the card and the back gesture run the cancel action and then
+// the dismiss request.
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -104,7 +105,7 @@ fn a_confirmation_reads_its_actions_but_not_cancel_and_runs_the_chosen_one() {
 }
 
 #[test]
-fn a_confirmation_sits_above_a_wide_control_and_beside_a_small_one() {
+fn a_confirmation_sits_beside_a_small_control_else_above_else_below() {
     let (mut wide, ..) = confirmation(Alignment::CENTER, 300.0);
     let title = node(&mut wide, TITLE).layout_bounds;
     let delete = node(&mut wide, "Delete").layout_bounds;
@@ -120,6 +121,20 @@ fn a_confirmation_sits_above_a_wide_control_and_beside_a_small_one() {
     assert!(
         delete.x > 24.0 + 44.0,
         "the card sits right of a small control near the left side: delete {delete:?}"
+    );
+    // Centred on a control 24 points from the top, the card would leave the
+    // window; it stops 8 points inside, its title 22 points lower.
+    let title = node(&mut near_left, TITLE).layout_bounds;
+    assert!(
+        (28.0..34.0).contains(&title.y),
+        "the card stays inside the window: title {title:?}"
+    );
+
+    let (mut wide_top, ..) = confirmation(Alignment::TOP_CENTER, 300.0);
+    let title = node(&mut wide_top, TITLE).layout_bounds;
+    assert!(
+        title.y > 24.0 + 44.0 + 13.0,
+        "with no room beside or above a wide control the card sits below it: title {title:?}"
     );
 
     let (mut near_right, ..) = confirmation(Alignment::BOTTOM_END, 44.0);
