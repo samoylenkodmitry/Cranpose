@@ -19,7 +19,7 @@ fn record(index: u32, recorder: &mut ShapeRecorder) {
         width: 10.0,
         height: 8.0,
     };
-    if index % STAYS_EVERY != 0 {
+    if !index.is_multiple_of(STAYS_EVERY) {
         recorder.push_rect(
             rect,
             &Brush::solid(Color(at / 256.0, 0.5, 0.0, 1.0)),
@@ -111,7 +111,7 @@ fn staying_shapes_draw_as_recorded_once_a_held_chunk_gives_up_the_others() {
     let (mut staying, mut going) = (Vec::new(), Vec::new());
     for index in 0..ITEMS {
         let item = store.add_shapes(u64::from(index), |recorder| record(index, recorder));
-        if index % STAYS_EVERY == 0 {
+        if index.is_multiple_of(STAYS_EVERY) {
             staying.push((item, drawn(&store, item)));
         } else {
             going.push(item);
