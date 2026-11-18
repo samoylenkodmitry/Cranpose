@@ -6,6 +6,8 @@ extern crate self as cranpose;
 #[cfg(feature = "image-loading")]
 mod async_image;
 mod player_surface;
+#[cfg(not(target_arch = "wasm32"))]
+mod player_surface_intake;
 #[cfg(feature = "localization")]
 mod system_languages;
 #[cfg(feature = "localization")]
@@ -245,6 +247,8 @@ pub use cranpose_services::isSystemInDarkTheme;
 pub use cranpose_services::*;
 pub use cranpose_ui::*;
 pub use player_surface::PlayerSurface;
+#[cfg(not(target_arch = "wasm32"))]
+pub use player_surface_intake::{FramePresenter, PlayerSurfaceIntake};
 
 static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
