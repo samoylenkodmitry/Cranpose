@@ -74,7 +74,8 @@ fn composed_right_to_left() -> bool {
 }
 
 // The drag of `state` along `axis`, keyed by its `identity`. A
-// `reverse_input` drag hands `state` the opposite of the pointer's deltas.
+// `reverse_input` drag hands `state` the opposite of the pointer's deltas;
+// the key holds it, so a changed direction restarts the gesture.
 fn draggable_impl<S: ScrollTarget + 'static>(
     axis: Axis,
     identity: usize,
@@ -83,7 +84,7 @@ fn draggable_impl<S: ScrollTarget + 'static>(
     guard: Option<Rc<dyn Fn() -> bool>>,
 ) -> Modifier {
     drag_gesture_input(
-        (identity, axis),
+        (identity, axis, reverse_input),
         DragGesture {
             target: state,
             axis,

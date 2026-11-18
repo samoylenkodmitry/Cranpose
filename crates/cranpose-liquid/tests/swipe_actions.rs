@@ -4,8 +4,9 @@
 // row's content closes it; readers find every action among the row's custom
 // actions. A right-to-left row mirrors all of it.
 
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
+use cranpose_core::{MutableState, mutableStateOf, remember};
 use cranpose_liquid::prelude::*;
 use cranpose_testing::robot_assertions::{assert_approx_eq, find_semantics_node};
 use cranpose_ui::{
@@ -20,13 +21,19 @@ const ROW_Y: f32 = 122.0;
 // A 300 by 44 row at (50, 100) in a 400 by 800 window, with Delete and Flag
 // at its trailing edge and Pin at its leading edge.
 fn row() -> (Robot, Log) {
-    row_in(LayoutDirection::Ltr)
+    let (robot, log, _) = row_in(LayoutDirection::Ltr);
+    (robot, log)
 }
 
-fn row_in(direction: LayoutDirection) -> (Robot, Log) {
-    liquid_screen(move |log| {
+// The row laid out in `initial`, with the state that holds its direction.
+fn row_in(initial: LayoutDirection) -> (Robot, Log, MutableState<LayoutDirection>) {
+    let slot = Rc::new(Cell::new(None));
+    let direction_slot = Rc::clone(&slot);
+    let (robot, log) = liquid_screen(move |log| {
         let record = Rc::clone(log);
-        ProvideLayoutDirection(direction, || {
+        let direction = remember(|| mutableStateOf(initial)).with(|state| *state);
+        direction_slot.set(Some(direction));
+        ProvideLayoutDirection(direction.get(), || {
             Box(
                 Modifier::empty()
                     .fill_max_size()
@@ -62,7 +69,9 @@ fn row_in(direction: LayoutDirection) -> (Robot, Log) {
                 },
             );
         });
-    })
+    });
+    let direction = slot.get().expect("the row composed");
+    (robot, log, direction)
 }
 
 fn shown(robot: &mut Robot, label: &str) -> bool {
@@ -113,11 +122,21 @@ fn a_swipe_shows_the_trailing_actions_with_the_first_at_the_edge() {
 
 #[test]
 fn a_right_to_left_row_shows_its_trailing_actions_on_the_left() {
-    let (mut robot, _) = row_in(LayoutDirection::Rtl);
+    let (mut robot, _, _) = row_in(LayoutDirection::Rtl);
     robot.drag(80.0, ROW_Y, 280.0, ROW_Y);
     let delete = node(&mut robot, "Delete").target_bounds();
     assert_approx_eq(delete.x, 60.0, 0.01, "Delete starts 10 from the left edge");
     assert!(!shown(&mut robot, "Pin"), "the leading action stays hidden");
+}
+
+#[test]
+fn a_row_follows_a_direction_changed_on_screen() {
+    let (mut robot, _, direction) = row_in(LayoutDirection::Ltr);
+    direction.set(LayoutDirection::Rtl);
+    robot.wait_for_idle();
+    robot.drag(80.0, ROW_Y, 280.0, ROW_Y);
+    let delete = node(&mut robot, "Delete").target_bounds();
+    assert_approx_eq(delete.x, 60.0, 0.01, "the drag follows the new direction");
 }
 
 #[test]
