@@ -113,9 +113,13 @@ axis. Jetpack XR's `TrackedDimensions.All` also tracks the head's pitch and roll
 
 ## Carrying a panel
 
-A `movable` panel or surface has a handle under it. A controller's ray that points at the handle
-grabs the panel when its trigger goes down, and the panel follows the controller until the trigger
-goes up. The thumbstick pushes it away or pulls it near.
+A `movable` panel or surface has a handle under it: a sphere 4 cm across, 2 cm below the panel's
+bottom edge. A controller's ray that points at the handle grabs the panel when its trigger goes
+down, and the panel follows the controller until the trigger goes up. The thumbstick pushes it
+away or pulls it near. The ray meets the sphere from any side, so a user who stands behind the
+panel grabs it as well. The handle is a quad layer with one static picture of a lit sphere. The
+quad turns its face to the head in each frame, so the handle looks round from every side and costs
+no draw.
 
 `movable_with(MovePolicy)` follows Jetpack XR's `movable(movePolicy = ...)`. `MovePolicy::system`
 lets the headset move the panel and calls `on_move` with each step. `MovePolicy::custom` only
@@ -167,9 +171,10 @@ the edge of a large surface in front of it, where the distance to the layer's ce
 behind. A curved panel sorts by the plane at its center. Its arc leaves that plane by 2 cm for a
 panel of 0.4 m on a cylinder of 1 m. A distance that follows the arc changes when the head steps
 aside, and it would sink a flat panel that stands 3 cm in front of a curved panel under that
-panel. The handles and the rays follow, so they show over everything. The sort runs in place on
-the panels' list and allocates nothing. The session keeps the raw structs of the frame's layers in
-lists that it reuses from frame to frame.
+panel. The handle of a movable panel follows the panel's own layers, so a panel in front of the
+handle shows over it. The rays follow all of them, so they show over everything. The sort runs in
+place on the panels' list and allocates nothing. The session keeps the raw structs of the frame's
+layers in lists that it reuses from frame to frame.
 
 ## Video decoding
 

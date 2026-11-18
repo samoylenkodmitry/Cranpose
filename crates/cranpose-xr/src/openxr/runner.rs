@@ -236,9 +236,10 @@ impl Immersive {
     }
 
     // Ends the frame with the layers of the streamed scenes, the panels and the surfaces. The
-    // handles and the rays go over them. The compositor draws layers in list order, so `panels`
-    // go back to front. The flat panels, the curved panels and the surfaces share that order: a
-    // panel in front of a surface shows over it.
+    // rays go over them. The compositor draws layers in list order, so `panels` go back to front.
+    // The flat panels, the curved panels and the surfaces share that order: a panel in front of a
+    // surface shows over it. The handle of a movable panel comes right after the panel's own
+    // layers, so a panel in front of the handle shows over it.
     fn end_with_layers(
         &mut self,
         display_time: xr::Time,
@@ -249,24 +250,21 @@ impl Immersive {
             sort_back_to_front(panels, head.position, |slot| &slot.pose);
         }
         let beams = self.pointer.beams();
-        let (layers, surfaces) = (&self.layers, &self.surfaces);
+        let active = self.pointer.handle();
+        let head_position = head.as_ref().map(|head| head.position);
+        let (layers, surfaces, handles) = (&self.layers, &self.surfaces, &self.handles);
         let shown = panels.iter().flat_map(|slot| {
             layers
                 .layer(slot)
                 .into_iter()
                 .chain(surfaces.layers(slot).map(Layer::Quad))
+                .chain(handles.layer(slot, active, head_position).map(Layer::Quad))
         });
         let rays = head
             .iter()
             .flat_map(|head| self.rays.layers(&beams, head.position));
-        self.xr_session.end_frame(
-            display_time,
-            self.streams.layers(),
-            shown,
-            self.handles
-                .layers(panels, self.pointer.handle())
-                .chain(rays),
-        )
+        self.xr_session
+            .end_frame(display_time, self.streams.layers(), shown, rays)
     }
 
     // The room follows what the app prefers, and the app learns what the room shows.
