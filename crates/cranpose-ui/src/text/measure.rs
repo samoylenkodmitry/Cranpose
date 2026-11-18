@@ -19,6 +19,7 @@ use super::{
     layout_cache::{CacheAdmission, Cached, LayoutCache, Miss},
     layout_input::{ParagraphSpans, TextUnits},
     layout_options::{TextLayoutOptions, TextOverflow},
+    node_layouts::NodeLayouts,
     style::TextStyle,
     text_key::TextKey,
 };
@@ -199,14 +200,14 @@ impl TextService {
 
     // The layout of `source` in `frame` with sizes in `units`: a cached one
     // that breaks into the same lines, aligned to the frame's widths, or a
-    // new one, laid out into `retired` when it is given and nothing else
-    // holds it, which it then takes.
+    // new one, laid out into a retired layout of `own`, the layouts of the
+    // text's node, when they are given and hold a free one.
     fn prepare(
         &self,
         source: LayoutSource<'_>,
         frame: TextFrame,
         (units, admission): (TextUnits, CacheAdmission),
-        retired: &mut Option<Rc<PreparedTextLayout>>,
+        own: Option<&RefCell<NodeLayouts>>,
     ) -> Rc<PreparedTextLayout> {
         let (text, style) = (source.text(), source.style());
         let key = TextKey::of(text, source.style_hash(), frame.options, units);
@@ -222,7 +223,7 @@ impl TextService {
             Some((key, Cached::Missed(miss))) => Some((key, miss)),
             None => None,
         };
-        self.prepare_missed(source, frame, (units, admission), (missed, retired))
+        self.prepare_missed(source, frame, (units, admission), (missed, own))
     }
 
     // Lays out `source` the cache did not hold and keeps it as `missed`
@@ -234,10 +235,10 @@ impl TextService {
         source: LayoutSource<'_>,
         frame: TextFrame,
         (units, admission): (TextUnits, CacheAdmission),
-        (missed, retired): (Option<(TextKey, Miss)>, &mut Option<Rc<PreparedTextLayout>>),
+        (missed, own): (Option<(TextKey, Miss)>, Option<&RefCell<NodeLayouts>>),
     ) -> Rc<PreparedTextLayout> {
         let prepared = self
-            .lay_out_retired(&source, frame, (units, retired))
+            .lay_out_retired(&source, frame, (units, own))
             .unwrap_or_else(|| {
                 let style = source.shared_style();
                 Rc::new(self.lay_out(source.text(), style, frame, (units, source.shaped())))
@@ -250,22 +251,19 @@ impl TextService {
         prepared
     }
 
-    // Keeps `text` and `layouts`, what a text that changed gave up, for the
-    // next changed texts.
-    pub(crate) fn retire(
-        &self,
-        text: AnnotatedString,
-        layouts: impl IntoIterator<Item = Rc<PreparedTextLayout>>,
-    ) {
+    // Keeps `text`, the string a text that changed gave up, for the next
+    // changed texts.
+    pub(crate) fn retire_string(&self, text: AnnotatedString) {
         self.retired_strings.borrow_mut().retire_text(text);
-        let mut retired = self.retired.borrow_mut();
-        for mut layout in layouts {
-            // A layout the shared cache keeps stays there. A kept layout lets
-            // go of its string, which the next changed text may take.
-            if let Some(free) = Rc::get_mut(&mut layout) {
-                free.let_go_of_text();
-                retired.retire(layout);
-            }
+    }
+
+    // Keeps `layout`, which a text node gave up, for the next changed texts.
+    // A layout the shared cache keeps stays there. A kept layout lets go of
+    // its string, which the next changed text may take.
+    pub(crate) fn retire_layout(&self, mut layout: Rc<PreparedTextLayout>) {
+        if let Some(free) = Rc::get_mut(&mut layout) {
+            free.let_go_of_text();
+            self.retired.borrow_mut().retire(layout);
         }
     }
 
@@ -281,21 +279,22 @@ impl TextService {
     }
 
     // `source` laid out in the allocation of a retired layout nothing holds
-    // and in its lines' storage: `own`, one the text's node gave up, when it
-    // is given, which it then takes, else one of the shared pool; `None`
-    // when no retired layout is free, or `source` takes glyphs shaped
-    // before or sizes itself down.
+    // and in its lines' storage: one of `own`, the layouts of the text's
+    // node, when they are given and hold a free one, which it then takes,
+    // else one of the shared pool; `None` when no retired layout is free, or
+    // `source` takes glyphs shaped before or sizes itself down.
     fn lay_out_retired(
         &self,
         source: &LayoutSource<'_>,
         frame: TextFrame,
-        (units, own): (TextUnits, &mut Option<Rc<PreparedTextLayout>>),
+        (units, own): (TextUnits, Option<&RefCell<NodeLayouts>>),
     ) -> Option<Rc<PreparedTextLayout>> {
         let scales = frame.options.overflow.scale_down_min_font_size_sp();
         if source.shaped().is_some() || scales.is_some() {
             return None;
         }
-        let mut spare = match own.take() {
+        let own = own.and_then(|own| own.borrow_mut().take_refillable());
+        let mut spare = match own {
             Some(own) => own,
             None => self
                 .retired
@@ -618,7 +617,7 @@ fn prepare_borrowed(
             LayoutSource::Borrowed { text, style },
             frame,
             (units, CacheAdmission::First),
-            &mut None,
+            None,
         )
     })
 }
@@ -655,7 +654,7 @@ pub(crate) fn prepare_resolved(text: &SharedText<'_>) -> Rc<PreparedTextLayout> 
             LayoutSource::Shared { text, shaped: None },
             TextFrame::unbounded(TextLayoutOptions::default()),
             (resolved_units(), CacheAdmission::Drawn),
-            &mut None,
+            None,
         )
     })
 }
@@ -694,20 +693,20 @@ pub fn prepare_text_layout(
 
 // Lays out `text` in `style` between the widths of `frame`, sharing them,
 // kept by the shared cache as `admission` says, with the glyphs of `shaped`
-// when given, else into `retired`, a layout the text's node gave up, when
-// given, which it then takes.
+// when given, else into a retired layout of `own`, the layouts of the
+// text's node, when they are given and hold a free one.
 pub(crate) fn prepare_shared(
     text: &SharedText<'_>,
     frame: TextFrame,
     (admission, shaped): (CacheAdmission, Option<&TextLayout>),
-    retired: &mut Option<Rc<PreparedTextLayout>>,
+    own: Option<&RefCell<NodeLayouts>>,
 ) -> Rc<PreparedTextLayout> {
     crate::render_state::with_text_service(|service| {
         service.prepare(
             LayoutSource::Shared { text, shaped },
             frame,
             (host_units(), admission),
-            retired,
+            own,
         )
     })
 }
