@@ -177,7 +177,9 @@ impl LayoutNode {
                 && modifier_slices_dirty.get(),
             "only a shell fills"
         );
-        *parts = Rc::new(LayoutParts::new(LayoutRuntimeState::new(measure_policy)));
+        if let Err(measure_policy) = LayoutParts::refill(parts, measure_policy) {
+            *parts = Rc::new(LayoutParts::new(LayoutRuntimeState::new(measure_policy)));
+        }
         *density = crate::density::shared_density(environment.density);
         *is_virtual = false;
         needs_semantics.set(true);

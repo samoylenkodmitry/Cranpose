@@ -1,9 +1,14 @@
-//! How many removed layout nodes stay for later nodes to reuse.
+//! How many removed layout nodes stay for later nodes to reuse, and how much
+//! room for children each keeps.
 
 use crate::MemoryHeadroom;
 
 // With ample memory, the shells of up to this many removed nodes stay.
 const AMPLE_NODE_POOL_LIMIT: usize = 128;
+
+// The children a removed node keeps room for in its lists: a node that held
+// more lets its lists go, so a pool of shells holds a bounded room.
+pub(crate) const KEPT_CHILD_ROOM: usize = 64;
 
 // The shells of removed layout nodes the recycle pool keeps under the
 // current memory headroom. With little memory left it keeps none: a removed

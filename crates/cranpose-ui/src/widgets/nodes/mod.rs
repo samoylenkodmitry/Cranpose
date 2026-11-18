@@ -6,7 +6,7 @@ mod layout_node_registry;
 mod layout_parts;
 mod layout_state;
 mod node_cache;
-mod node_pool_limit;
+pub(crate) mod node_pool_limit;
 
 pub(crate) use layout_cells::LayoutCells;
 pub(crate) use layout_dirt::LayoutDirt;

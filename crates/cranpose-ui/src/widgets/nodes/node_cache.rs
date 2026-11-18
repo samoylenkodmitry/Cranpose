@@ -199,6 +199,27 @@ impl NodeCache {
         state.epoch = PackedU64::default();
     }
 
+    // Makes the cache that of a node not measured yet; the intrinsic sizes
+    // keep their room, and the revision counts on.
+    pub(crate) fn start_over(&self) {
+        {
+            let mut state = self.cache.borrow_mut();
+            state.clear_intrinsics();
+            let NodeCacheState {
+                epoch,
+                measurement,
+                retired,
+                intrinsics: _,
+                intrinsics_read,
+            } = &mut *state;
+            *epoch = PackedU64::default();
+            *measurement = None;
+            *retired = None;
+            *intrinsics_read = false;
+        }
+        self.dirt.set(LayoutDirt::default());
+    }
+
     pub(crate) fn revision(&self) -> u32 {
         self.revision.get()
     }

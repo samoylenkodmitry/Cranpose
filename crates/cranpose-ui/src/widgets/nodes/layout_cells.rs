@@ -102,6 +102,32 @@ impl LayoutCells {
         }
     }
 
+    // Makes the cells those of a node layout has not reached yet.
+    pub(crate) fn start_over(&self) {
+        let Self {
+            size,
+            position,
+            is_placed,
+            cleared_in_pass,
+            content_offset,
+            semantics_stamp,
+            moved_noted_in,
+            reshaped_noted_in,
+            z_index,
+            places_children_with_z_index: _,
+        } = self;
+        size.take();
+        position.take();
+        is_placed.take();
+        cleared_in_pass.take();
+        content_offset.take();
+        semantics_stamp.take();
+        moved_noted_in.take();
+        reshaped_noted_in.take();
+        z_index.take();
+        self.set_places_children_with_z_index(false);
+    }
+
     // Places node `node_id` where `at` says, with its z index.
     pub(crate) fn place_child(
         &self,

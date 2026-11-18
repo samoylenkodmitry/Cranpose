@@ -20,7 +20,10 @@ use crate::{
     modifier::{Point, SharedParentData},
     render_state::AppContext,
     subcompose_layout::SubcomposeLayoutNode,
-    widgets::nodes::{IntrinsicKind, LayoutCells, LayoutNode, LayoutParts, NodeCache},
+    widgets::nodes::{
+        IntrinsicKind, LayoutCells, LayoutNode, LayoutParts, NodeCache,
+        node_pool_limit::KEPT_CHILD_ROOM,
+    },
 };
 
 #[expect(
@@ -172,6 +175,16 @@ impl LayoutChildFrame {
 
     pub(super) fn unbind(&self) {
         self.builder.borrow_mut().take();
+    }
+
+    // Makes the frame, which no child's record holds, the frame of a new
+    // node with the same parts.
+    fn start_over(&self) {
+        self.unbind();
+        self.error.take();
+        self.pass.set(ChildPass::default());
+        self.parent.set(None);
+        self.placed_with_z_index.set(0);
     }
 
     fn record_error(&self, err: NodeError) {
@@ -346,6 +359,17 @@ impl LayoutChildMeasureState {
         self.measured_constraints.set(None);
         self.read_intrinsics.set(false);
         self.force_remeasure.set(true);
+    }
+
+    // Takes the record from its parent, as its node leaves the tree, and
+    // makes it the record of a node no parent bound yet.
+    pub(crate) fn start_over(&self) {
+        self.release();
+        self.node_id.set(None);
+        self.layout_node.set(false);
+        self.revision.set(0);
+        self.cache_epoch.set(PackedU64::default());
+        self.parent_data.take();
     }
 
     // `measures` tells whether the pass measures the record's parent.
@@ -567,6 +591,29 @@ impl LayoutRuntimeState {
         if let Some(children) = &self.children {
             children.frame.unbind();
         }
+    }
+
+    // Lets go of every child, as the node leaves the tree: the list keeps
+    // its room for up to `KEPT_CHILD_ROOM` children.
+    pub(super) fn release_children(&mut self) {
+        if let Some(children) = self.children.as_deref_mut() {
+            children.truncate(0);
+            if children.list.capacity() > KEPT_CHILD_ROOM {
+                children.list = Vec::new();
+            }
+        }
+    }
+
+    // Makes the children's frame the frame of a new node, in place: false
+    // while a child's record still holds it.
+    pub(super) fn restart_child_frame(&self) -> bool {
+        self.children.as_deref().is_none_or(|children| {
+            let unique = Rc::strong_count(&children.frame) == 1;
+            if unique {
+                children.frame.start_over();
+            }
+            unique
+        })
     }
 
     // The first error a child recorded in the pass, taken.
