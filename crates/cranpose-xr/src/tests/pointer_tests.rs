@@ -160,6 +160,62 @@ fn a_shaking_press_clicks_and_a_turning_press_drags() {
 }
 
 #[test]
+fn a_press_whose_pull_turned_the_controller_holds_its_point_while_held_long() {
+    let mut frames = Frames::default();
+    frames.right(0.0, 0.0, 0.0);
+    // The pull turns the controller by 6 degrees before the trigger goes down
+    for _ in 0..10 {
+        frames.right(0.0, 6.0, 0.3);
+    }
+    let (events, _) = frames.right(0.0, 6.0, 1.0);
+    assert_eq!(
+        events,
+        [Gesture::Move { x: 400.0, y: 250.0 }, Gesture::Press]
+    );
+    for _ in 0..60 {
+        let (events, cursor) = frames.right(0.0, 6.0, 1.0);
+        assert!(events.is_empty());
+        assert_eq!(cursor.map(|cursor| cursor.x), Some(400.0));
+    }
+    assert_eq!(
+        frames.right(0.0, 6.0, 0.0).0.first(),
+        Some(&Gesture::Release)
+    );
+}
+
+#[test]
+fn letting_go_of_a_long_press_does_not_drag() {
+    let mut frames = Frames::default();
+    frames.right(0.0, 0.0, 0.0);
+    frames.right(0.0, 0.0, 1.0);
+    for _ in 0..50 {
+        frames.right(0.0, 0.0, 1.0);
+    }
+    // Letting go turns the controller by 8 degrees while the trigger is still down
+    for _ in 0..10 {
+        let (events, cursor) = frames.right(0.0, 8.0, 0.7);
+        assert!(events.is_empty());
+        assert_eq!(cursor.map(|cursor| cursor.x), Some(400.0));
+    }
+    assert_eq!(
+        frames.right(0.0, 8.0, 0.3).0.first(),
+        Some(&Gesture::Release)
+    );
+}
+
+#[test]
+fn a_pull_that_aims_anew_presses_where_the_ray_points_now() {
+    let mut frames = Frames::default();
+    frames.right(0.0, 0.0, 0.0);
+    for _ in 0..10 {
+        frames.right(0.0, 15.0, 0.3);
+    }
+    let (events, cursor) = frames.right(0.0, 15.0, 1.0);
+    assert_eq!(events.last(), Some(&Gesture::Press));
+    assert!(cursor.is_some_and(|cursor| cursor.x > 600.0));
+}
+
+#[test]
 fn the_nearest_panel_takes_the_pointer() {
     let mut frames = Frames::default();
     let (events, cursor) = frames.update([None, aim(0.0, 0.0, 0.0)], &[BEHIND, PANEL]);
@@ -215,6 +271,21 @@ fn a_ray_shows_up_to_the_panel_it_meets() {
     let [left, right] = frames.pointer.beams();
     assert_eq!(left, None);
     assert!(right.is_some_and(|beam| (beam.length - 1.0).abs() < 1e-4));
+}
+
+#[test]
+fn a_ray_reaches_a_far_panel_and_shows_its_full_length_where_it_meets_nothing() {
+    let far = PanelSlot {
+        pose: Pose::at([0.0, 0.0, -6.0]),
+        ..PANEL
+    };
+    let mut frames = Frames::default();
+    frames.update([None, aim(0.0, 0.0, 0.0)], &[far]);
+    let beam = frames.pointer.beams()[1];
+    assert!(beam.is_some_and(|beam| (beam.length - 6.0).abs() < 1e-3));
+    frames.update([None, aim(0.0, 0.0, 0.0)], &[]);
+    let beam = frames.pointer.beams()[1];
+    assert!(beam.is_some_and(|beam| (beam.length - RAY_LENGTH).abs() < 1e-4));
 }
 
 #[test]

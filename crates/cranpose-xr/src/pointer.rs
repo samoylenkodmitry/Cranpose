@@ -16,17 +16,22 @@ use crate::{
 const PRESS: f32 = 0.6;
 const RELEASE: f32 = 0.4;
 // A trigger below REST is untouched. The pull of a trigger turns the controller, so a press
-// points where the ray pointed in the last frame of rest, unless the pull took longer than
-// PULL_TIME.
+// points where the ray pointed in the last frame of rest. A pull that took longer than PULL_TIME,
+// or a ray that turned CLICK_ANGLE degrees since that frame, presses where the ray points now:
+// the user aimed anew.
 const REST: f32 = 0.1;
-const PULL_TIME: Duration = Duration::from_millis(300);
-// A press holds its point while the hand shakes: until the ray turns CLICK_ANGLE degrees in the
-// press's first CLICK_TIME, or DRAG_ANGLE degrees later. Then the press drags.
+const PULL_TIME: Duration = Duration::from_millis(500);
+// A press holds its point while the hand shakes: until the ray turns CLICK_ANGLE degrees from
+// where it pointed at the pull in the press's first CLICK_TIME, or DRAG_ANGLE degrees later. Then
+// the press drags.
 const CLICK_TIME: Duration = Duration::from_millis(350);
 const CLICK_ANGLE: f32 = 10.0;
 const DRAG_ANGLE: f32 = 4.0;
-// A ray that meets no panel shows this long, in meters.
-const RAY_LENGTH: f32 = 1.5;
+// A trigger that falls LET_GO below the highest pull of its press is on its way up. Letting go
+// turns the controller as the pull does, so a press that still holds its point keeps it then.
+const LET_GO: f32 = 0.15;
+// A ray that meets no panel and no handle shows this long, in meters.
+const RAY_LENGTH: f32 = 3.0;
 // A thumbstick pushed all the way moves a carried panel by this share of its distance each
 // second. A thumbstick within DEAD_ZONE of its middle moves nothing.
 const PUSH_SPEED: f32 = 1.2;
@@ -115,6 +120,8 @@ struct Hand {
     // The controller's own pose and its thumbstick, which carry a panel
     pose: Option<Pose>,
     stick: f32,
+    // How far the trigger is pulled in this frame
+    trigger: f32,
 }
 
 impl Hand {
@@ -130,6 +137,7 @@ impl Hand {
         self.content_hit = self.hit.filter(Hit::on_content);
         self.handle = nearest_handle(&ray, panels);
         self.pose = Some(aim.pose);
+        self.trigger = aim.trigger;
         self.stick = if aim.stick.abs() > DEAD_ZONE {
             aim.stick
         } else {
@@ -151,13 +159,18 @@ impl Hand {
         }
     }
 
-    // The ray and the hit that a press in this frame takes: those from just before the pull.
-    fn press_hit(&self, time: Duration, panels: &[PanelSlot]) -> Option<(Ray, Hit)> {
+    // The hit that a press in this frame takes: the one from just before the pull, if the ray
+    // still points near it.
+    fn press_hit(&self, time: Duration, panels: &[PanelSlot]) -> Option<Hit> {
+        let now = self.ray?;
         let before = self
             .rest
-            .filter(|(rest, _)| time.saturating_sub(*rest) <= PULL_TIME)
-            .and_then(|(_, ray)| Some((ray, nearest_hit(&ray, panels)?)));
-        before.or_else(|| Some((self.ray?, self.hit?)))
+            .filter(|(rest, ray)| {
+                time.saturating_sub(*rest) <= PULL_TIME
+                    && angle_between(ray.direction, now.direction).to_degrees() < CLICK_ANGLE
+            })
+            .and_then(|(_, ray)| nearest_hit(&ray, panels));
+        before.or(self.hit)
     }
 
     // Whether the ray meets a panel or a handle.
@@ -174,14 +187,17 @@ impl Hand {
             .then_some(slot)
     }
 
+    // The ray up to the nearest panel or handle that it meets.
     fn beam(&self) -> Option<Beam> {
         let ray = self.ray?;
-        let hit = self.hit.map_or(RAY_LENGTH, |hit| hit.distance);
-        let handle = self.handle.map_or(RAY_LENGTH, |(_, distance)| distance);
-        Some(Beam {
-            ray,
-            length: hit.min(handle),
-        })
+        let hit = self.hit.map(|hit| hit.distance);
+        let handle = self.handle.map(|(_, distance)| distance);
+        let length = match (hit, handle) {
+            (Some(hit), Some(handle)) => hit.min(handle),
+            (Some(distance), None) | (None, Some(distance)) => distance,
+            (None, None) => RAY_LENGTH,
+        };
+        Some(Beam { ray, length })
     }
 }
 
@@ -191,8 +207,10 @@ struct Press {
     // Where the press's events go, also after the ray left the panel
     target: Target,
     start: Duration,
-    // The direction that the press pointed in
+    // The direction that the ray pointed in at the pull
     direction: [f32; 3],
+    // The highest pull of the trigger since the press began
+    peak: f32,
     // The press's point while it holds; None once it drags
     held: Option<Hit>,
 }
@@ -324,18 +342,19 @@ impl Pointer {
     // A press starts where the trigger goes down over a panel. A trigger that was down before
     // the ray reached a panel does not press.
     fn pull(&mut self, hand: &Hand, time: Duration, panels: &[PanelSlot]) {
-        match hand.press_hit(time, panels) {
-            Some((ray, hit)) => {
+        match (hand.press_hit(time, panels), hand.ray) {
+            (Some(hit), Some(ray)) => {
                 self.move_to(hit.target(), hit.position());
                 self.emit(hit.target(), Gesture::Press);
                 self.press = Some(Press {
                     target: hit.target(),
                     start: time,
                     direction: ray.direction,
+                    peak: hand.trigger,
                     held: Some(hit),
                 });
             }
-            None => self.hover(hand.hit),
+            _ => self.hover(hand.hit),
         }
     }
 
@@ -392,7 +411,10 @@ impl Pointer {
             self.hover(hand.hit);
             return;
         };
+        press.peak = press.peak.max(hand.trigger);
+        let letting_go = hand.trigger < press.peak - LET_GO;
         if press.held.is_some()
+            && !letting_go
             && let Some(ray) = hand.ray
         {
             let turn = angle_between(press.direction, ray.direction).to_degrees();
