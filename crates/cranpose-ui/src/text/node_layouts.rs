@@ -4,7 +4,7 @@ use cranpose_core::PackedU64;
 use cranpose_ui_layout::BoundRange;
 use smallvec::SmallVec;
 
-use super::{PreparedTextLayout, TextAlign};
+use super::{PreparedTextLayout, TextAlign, measure::TextService};
 
 // The most layouts of its text a node keeps, at different widths.
 const LIVE_LAYOUTS: usize = 4;
@@ -194,12 +194,35 @@ impl NodeLayouts {
     }
 
     // The text changed: the latest layout of the old one, which nothing
-    // but the scene holds, becomes a layout of a text shown before.
-    // Returns what the node gives up: the old text's layouts at other
-    // widths, the one a shared cache holds, and the retired ones past those
-    // it keeps.
-    pub(crate) fn retire_text(&mut self) -> SmallVec<[Rc<PreparedTextLayout>; LIVE_LAYOUTS]> {
-        let mut given_up = SmallVec::new();
+    // but the scene holds, becomes a layout of a text shown before, and one
+    // a shared cache holds goes. The node gives `pool` the old text's
+    // layouts at other widths and the retired ones past those it keeps.
+    pub(crate) fn retire_text(&mut self, pool: Option<&TextService>) {
+        match self.layouts.get(1) {
+            Some(NodeLayout::Live(_)) => self.retire_widths(pool),
+            // One layout of the text, or none: the common case.
+            _ => self.retire_latest(pool),
+        }
+    }
+
+    fn retire_latest(&mut self, pool: Option<&TextService>) {
+        let Some(NodeLayout::Live(_)) = self.layouts.first() else {
+            return;
+        };
+        let mut latest = self.layouts.swap_remove(0).into_layout();
+        let Some(free) = Rc::get_mut(&mut latest) else {
+            return;
+        };
+        free.let_go_of_text();
+        if self.layouts.len() >= RETIRED_LAYOUTS {
+            give(pool, self.layouts.swap_remove(0).into_layout());
+        }
+        self.layouts.push(NodeLayout::Retired(latest));
+    }
+
+    // Out of line: only a text laid out at several widths gets here.
+    #[inline(never)]
+    fn retire_widths(&mut self, pool: Option<&TextService>) {
         let live = self.live_count();
         // From the back, so the entry that comes in from the end lands past
         // the layouts of the text.
@@ -210,13 +233,12 @@ impl NodeLayouts {
                     free.let_go_of_text();
                     self.layouts.push(NodeLayout::Retired(layout));
                 }
-                _ => given_up.push(layout),
+                _ => give(pool, layout),
             }
         }
         while self.layouts.len() > RETIRED_LAYOUTS {
-            given_up.push(self.layouts.swap_remove(0).into_layout());
+            give(pool, self.layouts.swap_remove(0).into_layout());
         }
-        given_up
     }
 
     // A layout of a text shown before that nothing else holds, which a new
@@ -230,11 +252,6 @@ impl NodeLayouts {
         Some(self.layouts.swap_remove(index).into_layout())
     }
 
-    // Holds `layout`, a retired one a new text did not lay out into, again.
-    pub(crate) fn put_back(&mut self, layout: Rc<PreparedTextLayout>) {
-        self.layouts.push(NodeLayout::Retired(layout));
-    }
-
     // The latest layout. Panics when the node holds none: a reader asks
     // after `prepare` or a hit.
     pub(crate) fn latest(&self) -> &Rc<PreparedTextLayout> {
@@ -242,5 +259,13 @@ impl NodeLayouts {
             NodeLayout::Live(live) => &live.layout,
             NodeLayout::Retired(layout) => layout,
         }
+    }
+}
+
+// Gives `layout`, which a node gave up, to `pool` for the next changed
+// texts, or drops it when no pool is given.
+fn give(pool: Option<&TextService>, layout: Rc<PreparedTextLayout>) {
+    if let Some(pool) = pool {
+        pool.retire_layout(layout);
     }
 }

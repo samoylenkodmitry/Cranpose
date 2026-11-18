@@ -120,9 +120,11 @@ impl TextPreparedLayoutOwner {
         source.options = options;
         source.admission = CacheAdmission::Changed;
         drop(source);
-        let given_up = self.cache.borrow_mut().retire_text();
-        if let Some(context) = crate::render_state::current_app_context() {
-            context.text.retire(replaced, given_up);
+        let context = crate::render_state::current_app_context();
+        let pool = context.as_ref().map(|context| &context.text);
+        self.cache.borrow_mut().retire_text(pool);
+        if let Some(pool) = pool {
+            pool.retire_string(replaced);
         }
         self.changed.set(true);
     }
@@ -167,29 +169,33 @@ impl TextPreparedLayoutOwner {
         let prepared = match aligned {
             Some(aligned) => aligned,
             None => {
-                // A changed text lays out into a layout of a text it showed
-                // before that nothing else holds any more.
-                let mut retired = self.cache.borrow_mut().take_refillable();
                 let text = crate::text::measure::SharedText {
                     text: &source.text,
                     style: &source.style,
                     style_hash: source.style_hash.get(),
                 };
-                let prepared = {
+                let cache = self.cache.borrow();
+                match cache.latest_on(stamp) {
                     // The latest layout on the fonts of now gives its glyphs.
-                    let cache = self.cache.borrow();
-                    let shaped = cache.latest_on(stamp).map(|latest| &latest.layout);
-                    crate::text::measure::prepare_shared(
+                    Some(latest) => crate::text::measure::prepare_shared(
                         &text,
                         frame,
-                        (source.admission, shaped),
-                        &mut retired,
-                    )
-                };
-                if let Some(unused) = retired {
-                    self.cache.borrow_mut().put_back(unused);
+                        (source.admission, Some(&latest.layout)),
+                        None,
+                    ),
+                    // A changed text that the shared cache misses lays out
+                    // into a layout of a text it showed before that nothing
+                    // else holds any more.
+                    None => {
+                        drop(cache);
+                        crate::text::measure::prepare_shared(
+                            &text,
+                            frame,
+                            (source.admission, None),
+                            Some(&self.cache),
+                        )
+                    }
                 }
-                prepared
             }
         };
         if Arc::ptr_eq(&prepared.visual_style, &source.style) {
