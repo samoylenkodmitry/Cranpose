@@ -27,7 +27,7 @@ use crate::{
     frame_effects::local_frame_effects,
     local_haptics, local_headset_properties, local_spatial_capabilities, local_spatial_environment,
     pointer::Pointer,
-    space::{PanelSlot, Space, local_space},
+    space::{PanelSlot, Ride, Space, local_space},
     surface_input::Gesture,
 };
 
@@ -166,8 +166,9 @@ impl Immersive {
     fn frame(&mut self, status: SessionStatus) -> Result<(), String> {
         let frame = self.xr_session.begin_frame()?;
         let aims = self.headset.sample(&mut self.xr_session, &frame, status);
-        self.space.track_head(
+        self.space.track(
             self.headset.device_pose(),
+            self.headset.grips(),
             self.headset.display_time(),
             self.headset.recenter(),
         );
@@ -253,13 +254,16 @@ impl Immersive {
         let active = self.pointer.handle();
         let head_position = head.as_ref().map(|head| head.position);
         let (layers, surfaces, handles) = (&self.layers, &self.surfaces, &self.handles);
-        let shown = panels.iter().flat_map(|slot| {
-            layers
-                .layer(slot)
-                .into_iter()
-                .chain(surfaces.layers(slot).map(Layer::Quad))
-                .chain(handles.layer(slot, active, head_position).map(Layer::Quad))
-        });
+        let shown = panels
+            .iter()
+            .filter(|slot| slot.ride != Ride::Hidden)
+            .flat_map(|slot| {
+                layers
+                    .layer(slot)
+                    .into_iter()
+                    .chain(surfaces.layers(slot).map(Layer::Quad))
+                    .chain(handles.layer(slot, active, head_position).map(Layer::Quad))
+            });
         let rays = head_position
             .into_iter()
             .flat_map(|head| self.rays.layers(&beams, head));

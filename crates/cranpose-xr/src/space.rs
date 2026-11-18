@@ -16,9 +16,9 @@ use cranpose::{ExternalSurface, MutableState, mutableStateOf};
 use cranpose_core::CompositionLocal;
 
 use crate::{
-    METERS_PER_DP, MovePolicy, PanelHit, Pose, Ray, Recenter, SpatialMoveEvent,
+    FollowTarget, Hand, METERS_PER_DP, MovePolicy, PanelHit, Pose, Ray, Recenter, SpatialMoveEvent,
     SpatialMoveEventType, StereoMode,
-    follow_origin::{FollowOrigin, FollowOrigins},
+    follow_origin::{FollowOrigins, Standing},
     locals::with_locals,
     stream_source::StreamSource,
     surface_input::{PointerSink, SurfaceGesture, SurfaceInput},
@@ -34,6 +34,41 @@ const CURSOR_STEP: f32 = 0.5;
 // Where a subspace starts: a meter in front of where the viewer's head was when the app
 // started, at the same height.
 pub(crate) const SUBSPACE_ORIGIN: Pose = Pose::at([0.0, 0.0, -1.0]);
+
+// The origin of the subspace that holds a panel: a place in the room, or a following subspace
+// whose origin moves in the frame loop.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Origin {
+    // The origin's pose. In a following subspace it is the identity, and the panel's pose is
+    // relative to the subspace's live origin.
+    pose: Pose,
+    // The following subspace that places the panel
+    follower: Option<u64>,
+}
+
+impl Origin {
+    // The origin of a following subspace.
+    pub(crate) const fn following(id: u64) -> Self {
+        Self {
+            pose: Pose::IDENTITY,
+            follower: Some(id),
+        }
+    }
+
+    // The pose `child`, given in this origin's frame.
+    pub(crate) fn then(&self, child: &Pose) -> Pose {
+        self.pose.then(child)
+    }
+}
+
+impl From<Pose> for Origin {
+    fn from(pose: Pose) -> Self {
+        Self {
+            pose,
+            follower: None,
+        }
+    }
+}
 
 // What a panel shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,6 +94,8 @@ pub(crate) struct PanelSlot {
     pub(crate) mobility: Mobility,
     // The shape the panel shows on. A surface panel is flat.
     pub(crate) shape: Shape,
+    // Whether a controller places the panel
+    pub(crate) ride: Ride,
 }
 
 impl PanelSlot {
@@ -92,6 +129,18 @@ pub(crate) enum Shape {
     // A cylinder of `radius` meters. Its upright axis stands that far from the panel's center
     // along the panel's +z, and the panel's width is arc length.
     Curved { radius: f32 },
+}
+
+// How a following subspace places a panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Ride {
+    // No controller places the panel.
+    Free,
+    // The panel stands where the controller of this hand puts it.
+    On(Hand),
+    // The panel's subspace has no place: it follows a controller that the runtime does not
+    // track. The panel shows nowhere and takes no hits.
+    Hidden,
 }
 
 // Whether the user may carry a panel with a controller.
@@ -173,12 +222,40 @@ struct Entry {
     carried: Option<Pose>,
     // The pose that the move in progress reported last, relative to `origin`
     moving: Option<Pose>,
+    // The following subspace that places the panel, and the pose that the panel's modifier gives
+    // relative to the subspace's origin
+    follow: Option<Following>,
     // What the panel does when the user carries it, or `None` for a panel that stays
     policy: Option<MovePolicy>,
     // For a surface: where the app takes the pointer's events, and what the surface knows of
     // the pointer
     sink: Option<PointerSink>,
     input: SurfaceInput,
+}
+
+// The place of a panel in a following subspace.
+#[derive(Clone, Copy)]
+struct Following {
+    id: u64,
+    local: Pose,
+}
+
+impl Entry {
+    // Puts the panel where its following subspace stands, or hides it while the subspace has no
+    // place.
+    fn stand(&mut self, standing: Standing) {
+        let Some(follow) = self.follow else {
+            return;
+        };
+        match standing.at {
+            Some(origin) => {
+                self.origin = origin;
+                self.slot.pose = origin.then(&self.carried.unwrap_or(follow.local));
+                self.slot.ride = standing.hand.map_or(Ride::Free, Ride::On);
+            }
+            None => self.slot.ride = Ride::Hidden,
+        }
+    }
 }
 
 impl PartialEq for Space {
@@ -238,11 +315,13 @@ impl Space {
         self.inner.streams.borrow().clone()
     }
 
-    // A new following subspace, placed in front of the head if the head is known.
-    pub(crate) fn new_follow_origin(&self) -> FollowOrigin {
+    // A new following subspace of `target`, placed at once if the headset tracks the target.
+    // Returns its id.
+    pub(crate) fn new_follow_origin(&self, target: FollowTarget) -> u64 {
         let id = self.inner.next_id.get();
         self.inner.next_id.set(id + 1);
-        self.inner.follow_origins.borrow_mut().add(id)
+        self.inner.follow_origins.borrow_mut().add(id, target);
+        id
     }
 
     // Forgets the following subspace `id`.
@@ -254,18 +333,25 @@ impl Space {
         not(any(test, headset)),
         expect(dead_code, reason = "the headset backend calls it")
     )]
-    // Tells the following subspaces where the head is in the frame at `time`, and whether the runtime
-    // recentered the room.
-    pub(crate) fn track_head(
+    // Tells the following subspaces where the head and the controllers' grips are in the frame at
+    // `time`, and whether the runtime recentered the room. The panels of a subspace that moved
+    // take their new poses.
+    pub(crate) fn track(
         &self,
         head: Option<Pose>,
+        grips: [Option<Pose>; 2],
         time: Duration,
         recenter: Option<Recenter>,
     ) {
-        self.inner
-            .follow_origins
-            .borrow_mut()
-            .track(head, time, recenter);
+        let mut origins = self.inner.follow_origins.borrow_mut();
+        if !origins.track(head, grips, time, recenter) {
+            return;
+        }
+        for entry in self.inner.entries.borrow_mut().iter_mut() {
+            if let Some(standing) = entry.follow.and_then(|follow| origins.standing(follow.id)) {
+                entry.stand(standing);
+            }
+        }
     }
 
     // A new panel with its states. A composable calls it inside a `remember`, so that the states
@@ -284,8 +370,14 @@ impl Space {
     // Registers `panel` of `size` dp at `pose`, in a subspace whose origin is `origin`, and
     // returns its part of the atlas. A new panel and a panel of a new size stack every panel
     // again.
-    pub(crate) fn place(&self, panel: Panel, size: [f32; 2], origin: Pose, pose: Pose) -> [f32; 4] {
-        self.place_kind(panel, PanelKind::Content, size, origin, pose)
+    pub(crate) fn place(
+        &self,
+        panel: Panel,
+        size: [f32; 2],
+        origin: impl Into<Origin>,
+        pose: Pose,
+    ) -> [f32; 4] {
+        self.place_kind(panel, PanelKind::Content, size, origin.into(), pose)
     }
 
     // Registers the surface `panel` of `size` dp at `pose`, in a subspace whose origin is
@@ -295,10 +387,16 @@ impl Space {
         panel: Panel,
         stereo_mode: StereoMode,
         size: [f32; 2],
-        origin: Pose,
+        origin: impl Into<Origin>,
         pose: Pose,
     ) {
-        self.place_kind(panel, PanelKind::Surface(stereo_mode), size, origin, pose);
+        self.place_kind(
+            panel,
+            PanelKind::Surface(stereo_mode),
+            size,
+            origin.into(),
+            pose,
+        );
     }
 
     fn place_kind(
@@ -306,9 +404,10 @@ impl Space {
         panel: Panel,
         kind: PanelKind,
         size: [f32; 2],
-        origin: Pose,
+        subspace: Origin,
         pose: Pose,
     ) -> [f32; 4] {
+        let origin = subspace.pose;
         let mut entries = self.inner.entries.borrow_mut();
         let (index, changed) = match entries.iter().position(|entry| entry.slot.id == panel.id) {
             Some(index) => {
@@ -329,12 +428,14 @@ impl Space {
                         pose,
                         mobility: Mobility::Fixed,
                         shape: Shape::Flat,
+                        ride: Ride::Free,
                     },
                     panel,
                     dot: None,
                     origin,
                     carried: None,
                     moving: None,
+                    follow: None,
                     policy: None,
                     sink: None,
                     input: SurfaceInput::default(),
@@ -345,7 +446,18 @@ impl Space {
         if changed {
             restack(&mut entries);
         }
-        entries[index].slot.atlas
+        let entry = &mut entries[index];
+        // The panel stands where its subspace's live origin is, not where the composition put
+        // it: a composition that draws later in a frame must not move it back
+        entry.follow = subspace.follower.map(|id| Following { id, local: pose });
+        match subspace
+            .follower
+            .and_then(|id| self.inner.follow_origins.borrow().standing(id))
+        {
+            Some(standing) => entry.stand(standing),
+            None => entry.slot.ride = Ride::Free,
+        }
+        entry.slot.atlas
     }
 
     // Sets what the panel `id` does when the user carries it. A panel with no policy stays.
@@ -563,7 +675,7 @@ fn dot_of(cursor: Cursor) -> Dot {
 
 // The origin of the subspace that holds the content, in the room. The pose of a panel is relative
 // to it.
-pub(crate) fn local_subspace_origin() -> CompositionLocal<Pose> {
+pub(crate) fn local_subspace_origin() -> CompositionLocal<Origin> {
     with_locals(|locals| locals.origin.clone())
 }
 

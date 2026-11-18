@@ -1,15 +1,15 @@
 //! A subspace that places its content relative to the user.
 
 use cranpose::prelude::*;
-use cranpose_core::CompositionLocalProvider;
+use cranpose_core::{CompositionLocalProvider, rememberKeyed};
 
 use crate::{
-    FollowMode, FollowTarget, Subspace,
-    space::{SUBSPACE_ORIGIN, local_space, local_subspace_origin},
+    FollowTarget, Subspace,
+    space::{Origin, local_space, local_subspace_origin},
 };
 
-/// A [`Subspace`] whose origin is in front of the user's head, where an ordinary subspace's origin
-/// is in front of where the head was when the app started. Jetpack XR's `Subspace` with a `follow`
+/// A [`Subspace`] whose origin follows a target, where an ordinary subspace's origin is in front
+/// of where the head was when the app started. Jetpack XR's `Subspace` with a `follow`
 /// parameter, which replaced `FollowingSubspace`. Rust has no overloads, so this is a composable
 /// of its own.
 ///
@@ -17,9 +17,17 @@ use crate::{
 /// `FollowTarget::View(FollowMode::Snap)` the panels stand in front of the head when the subspace
 /// first composes, and again after the runtime recenters the room. Until the headset has tracked
 /// the head, which can take a few frames after the app starts, the panels stand where a
-/// `Subspace` puts them. A panel that the user carried keeps its place relative to the origin, so
-/// it moves with the origin when the room is recentered. A panel's
-/// [`SpatialMoveEvent`](crate::SpatialMoveEvent) poses are relative to this origin.
+/// `Subspace` puts them. With `FollowMode::Tight` the origin follows the target in every frame.
+/// [`FollowTarget::Controller`] follows the controller in a hand, for example to put a small ball
+/// above it.
+///
+/// The origin has the target's place and its turn about the vertical axis, so the panels stand
+/// upright. A panel that the user carried keeps its place relative to the origin, so it moves
+/// with the origin. A panel's [`SpatialMoveEvent`](crate::SpatialMoveEvent) poses are relative to
+/// this origin.
+///
+/// A following subspace moves its panels in the headset's frame loop. A moving target does not
+/// compose the subspace's content again.
 ///
 /// Outside a headset it is a `Subspace`.
 #[composable]
@@ -28,23 +36,16 @@ pub fn FollowingSubspace(follow: FollowTarget, content: impl FnMut() + 'static) 
         Subspace(content);
         return;
     };
-    match follow {
-        FollowTarget::View(FollowMode::Snap) => {}
-    }
-    let origin = remember({
-        let space = space.clone();
-        move || space.new_follow_origin()
-    })
-    .with(|origin| *origin);
-    let id = origin.id;
+    let id = rememberKeyed(follow, |target| space.new_follow_origin(*target));
     DisposableEffect(id, move |_| {
         DisposableEffectResult::new(move || space.remove_follow_origin(id))
     });
-    // The state is read here, so a new origin composes the subspace's panels again
-    let pose = origin.pose.get().unwrap_or(SUBSPACE_ORIGIN);
     let mut content = content;
     Subspace(move || {
-        CompositionLocalProvider([local_subspace_origin().provides(pose)], &mut content);
+        CompositionLocalProvider(
+            [local_subspace_origin().provides(Origin::following(id))],
+            &mut content,
+        );
     });
 }
 

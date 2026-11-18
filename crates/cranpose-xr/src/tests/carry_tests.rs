@@ -1,5 +1,5 @@
 use super::*;
-use crate::space::{Mobility, PanelKind, Shape};
+use crate::space::{Mobility, PanelKind, Ride, Shape};
 
 fn close(a: [f32; 3], b: [f32; 3]) -> bool {
     a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-4)
@@ -21,6 +21,7 @@ fn slot() -> PanelSlot {
         pose: Pose::at([0.0, 0.0, -2.0]),
         mobility: Mobility::Movable,
         shape: Shape::Flat,
+        ride: Ride::Free,
     }
 }
 

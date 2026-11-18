@@ -70,6 +70,13 @@ impl HeadsetInput {
         self.frame.device_pose
     }
 
+    // The pose of each controller's grip in the frame sampled last, left then right, or `None`
+    // for a controller that the runtime does not track.
+    pub(crate) fn grips(&self) -> [Option<Pose>; 2] {
+        [&self.frame.left_controller, &self.frame.right_controller]
+            .map(|controller| controller.grip.map(|grip| grip.pose))
+    }
+
     // Samples the headset for the frame that `state` describes, runs the app's frame effects and
     // plays the vibrations that they or the app's handlers asked for. Returns where each
     // controller points, for the pointer.

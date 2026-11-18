@@ -3,11 +3,11 @@
 use std::time::Duration;
 
 use crate::{
-    Pose, Ray, SpatialMoveEventType,
+    Hand as Side, Pose, Ray, SpatialMoveEventType,
     aim_filter::{AimFilter, angle_between},
     carry::{Carry, handle_hit},
     ray::Beam,
-    space::{Cursor, Mobility, PanelKind, PanelMove, PanelSlot},
+    space::{Cursor, Mobility, PanelKind, PanelMove, PanelSlot, Ride},
     surface_input::{Gesture, SurfaceGesture},
 };
 
@@ -125,7 +125,13 @@ struct Hand {
 }
 
 impl Hand {
-    fn update(&mut self, aim: Option<Aim>, time: Duration, panels: &[PanelSlot]) -> Trigger {
+    fn update(
+        &mut self,
+        side: Side,
+        aim: Option<Aim>,
+        time: Duration,
+        panels: &[PanelSlot],
+    ) -> Trigger {
         let Some(aim) = aim else {
             // A hand the runtime stops tracking lets its press go
             *self = Self::default();
@@ -133,9 +139,9 @@ impl Hand {
         };
         let ray = self.filter.apply(aim.ray, time);
         self.ray = Some(ray);
-        self.hit = nearest_hit(&ray, panels);
+        self.hit = nearest_hit(&ray, panels, side);
         self.content_hit = self.hit.filter(Hit::on_content);
-        self.handle = nearest_handle(&ray, panels);
+        self.handle = nearest_handle(&ray, panels, side);
         self.pose = Some(aim.pose);
         self.trigger = aim.trigger;
         self.stick = if aim.stick.abs() > DEAD_ZONE {
@@ -161,7 +167,7 @@ impl Hand {
 
     // The hit that a press in this frame takes: the one from just before the pull, if the ray
     // still points near it.
-    fn press_hit(&self, time: Duration, panels: &[PanelSlot]) -> Option<Hit> {
+    fn press_hit(&self, side: Side, time: Duration, panels: &[PanelSlot]) -> Option<Hit> {
         let now = self.ray?;
         let before = self
             .rest
@@ -169,7 +175,7 @@ impl Hand {
                 time.saturating_sub(*rest) <= PULL_TIME
                     && angle_between(ray.direction, now.direction).to_degrees() < CLICK_ANGLE
             })
-            .and_then(|(_, ray)| nearest_hit(&ray, panels));
+            .and_then(|(_, ray)| nearest_hit(&ray, panels, side));
         before.or(self.hit)
     }
 
@@ -261,7 +267,8 @@ impl Pointer {
             .time
             .map_or(0.0, |last| time.saturating_sub(last).as_secs_f32());
         self.time = Some(time);
-        let triggers = [0, 1].map(|hand| self.hands[hand].update(aims[hand], time, panels));
+        let triggers = Side::BOTH
+            .map(|side| self.hands[side.index()].update(side, aims[side.index()], time, panels));
         self.choose_hand(triggers);
         let hand = self.hands[self.hand];
         match triggers[self.hand] {
@@ -342,7 +349,10 @@ impl Pointer {
     // A press starts where the trigger goes down over a panel. A trigger that was down before
     // the ray reached a panel does not press.
     fn pull(&mut self, hand: &Hand, time: Duration, panels: &[PanelSlot]) {
-        match (hand.press_hit(time, panels), hand.ray) {
+        match (
+            hand.press_hit(Side::BOTH[self.hand], time, panels),
+            hand.ray,
+        ) {
             (Some(hit), Some(ray)) => {
                 self.move_to(hit.target(), hit.position());
                 self.emit(hit.target(), Gesture::Press);
@@ -475,19 +485,32 @@ impl Pointer {
     }
 }
 
-// The movable panel whose handle the ray meets first, and how far along the ray.
-fn nearest_handle(ray: &Ray, panels: &[PanelSlot]) -> Option<(PanelSlot, f32)> {
+// Whether the ray of the controller in hand `side` can meet the panel. A panel that stands in no
+// place shows nowhere and takes no hits. A panel that rides a controller is out of reach of that
+// controller's own ray: the left ray passes through the ball above the left controller.
+fn reachable(slot: &PanelSlot, side: Side) -> bool {
+    match slot.ride {
+        Ride::Free => true,
+        Ride::On(rides) => rides != side,
+        Ride::Hidden => false,
+    }
+}
+
+// The movable panel whose handle the ray of `side` meets first, and how far along the ray.
+fn nearest_handle(ray: &Ray, panels: &[PanelSlot], side: Side) -> Option<(PanelSlot, f32)> {
     panels
         .iter()
+        .filter(|slot| reachable(slot, side))
         .filter(|slot| slot.mobility == Mobility::Movable)
         .filter_map(|slot| Some((*slot, handle_hit(ray, slot)?)))
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
-// The panel the ray meets first and the place on it.
-fn nearest_hit(ray: &Ray, panels: &[PanelSlot]) -> Option<Hit> {
+// The panel the ray of `side` meets first and the place on it.
+fn nearest_hit(ray: &Ray, panels: &[PanelSlot], side: Side) -> Option<Hit> {
     panels
         .iter()
+        .filter(|slot| reachable(slot, side))
         .filter_map(|slot| {
             let size = slot.size();
             let hit = slot.hit(ray)?;

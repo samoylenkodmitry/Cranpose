@@ -58,6 +58,40 @@ it is when the subspace first composes, and again after the user recenters. Its 
 movable. Jetpack XR spells this `Subspace(follow = FollowTarget.view(FollowMode.snap()))`. Rust has
 no overloads, so the composable has its own name.
 
+`FollowMode::Tight` follows the target in every frame with no lag, as Jetpack XR's
+`FollowMode.tight` does. The follow moves the panels' poses in the frame loop and composes nothing.
+Jetpack XR's `TrackedDimensions` chooses the tracked axes and tracks all six by default. Here the
+subspace tracks the target's place and its turn about the vertical axis, so the panels stand
+upright. `FollowMode.soft` is not available.
+
+`FollowTarget::Controller(hand, mode)` follows the controller in a hand. Jetpack XR has no such
+target. The origin is where the controller's grip pose is, and it turns with the controller's
+heading about the vertical axis. A ball 10 cm above the controller stays straight above it when the
+hand tilts. A controller that points straight up keeps the heading that it had. While the runtime
+does not track the controller, the subspace's panels do not show and take no hits. A controller's
+own ray ignores the panels that ride on it, so the other hand's ray presses them. The user can
+show or hide the app's panels with a ball above the left controller that the right ray presses:
+
+```rust
+FollowingSubspace(FollowTarget::Controller(Hand::Left, FollowMode::Tight), move || {
+    SpatialPanel(SubspaceModifier::new().size(40.0, 40.0).offset(0.0, 100.0, 0.0), move || {
+        Box(
+            Modifier::empty()
+                .fill_max_size()
+                .background(Color(0.2, 0.6, 0.45, 1.0))
+                .rounded_corners(20.0)
+                .clickable(move |_| panels_shown.set(!panels_shown.get())),
+            BoxSpec::default(),
+            || {},
+        );
+    });
+});
+```
+
+A panel that has rounded corners and no background around them shows as that shape: the headset
+draws the panels with premultiplied alpha, and a 40 by 40 dp panel with `rounded_corners(20.0)` is a
+circle.
+
 A `SpatialCurvedRow` bends the panels inside it around the viewer, as a cylinder layer of the
 compositor. `local_spatial_environment()` gives the app the room around its panels: where the
 headset has passthrough, `set_preferred_passthrough_opacity(Some(1.0))` shows it. Check
