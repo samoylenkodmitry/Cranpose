@@ -42,6 +42,9 @@ pub(crate) enum Control {
     SwipeActions,
     ContextMenu,
     ScrollEdge,
+    Sheet,
+    Refresh,
+    Date,
 }
 
 // The names shared with the native app's `REFERENCE_COMPONENT`.
@@ -80,6 +83,9 @@ const NAMES: &[(&str, Control)] = &[
     ("swipe-actions", Control::SwipeActions),
     ("context-menu", Control::ContextMenu),
     ("scroll-edge", Control::ScrollEdge),
+    ("sheet", Control::Sheet),
+    ("refresh", Control::Refresh),
+    ("date", Control::Date),
 ];
 
 impl Control {
@@ -122,10 +128,11 @@ pub(crate) fn LiquidControlReference(
                 super::liquid_tab_reference::reference_background(backdrop, dark),
                 BoxSpec::default(),
                 move || {
-                    // The scroll edge cases keep the label for the tests and
-                    // draw no pixels of it over the stripes.
+                    // The scroll edge and refresh cases keep the label for the
+                    // tests and draw no pixels of it over the stripes or the
+                    // spinner.
                     let mut caption = liquid_typography().caption1;
-                    if control == Control::ScrollEdge {
+                    if matches!(control, Control::ScrollEdge | Control::Refresh) {
                         caption.span_style.color = Some(Color::TRANSPARENT);
                     }
                     Text(
@@ -145,7 +152,11 @@ pub(crate) fn LiquidControlReference(
                             0.0,
                             if matches!(
                                 control,
-                                Control::NavBar | Control::Toolbar | Control::ScrollEdge
+                                Control::NavBar
+                                    | Control::Toolbar
+                                    | Control::ScrollEdge
+                                    | Control::Sheet
+                                    | Control::Refresh
                             ) {
                                 0.0
                             } else {
@@ -156,7 +167,10 @@ pub(crate) fn LiquidControlReference(
                         move || ControlContent(control, initial, activations),
                     );
                     // The toolbar's capsules sit where the count would.
-                    if !matches!(control, Control::Toolbar | Control::ScrollEdge) {
+                    if !matches!(
+                        control,
+                        Control::Toolbar | Control::ScrollEdge | Control::Refresh
+                    ) {
                         Text(
                             format!("Activations: {}", activations.get()),
                             Modifier::empty().offset(150.0, 800.0),
@@ -199,6 +213,9 @@ fn ControlContent(control: Control, initial: f32, activations: cranpose::Mutable
         Control::SwipeActions => ReferenceSwipeActions(),
         Control::ContextMenu => ReferenceContextMenu(initial as usize),
         Control::ScrollEdge => ReferenceScrollEdge(initial as usize),
+        Control::Sheet => ReferenceSheet(initial as usize == 1),
+        Control::Refresh => ReferenceRefresh(),
+        Control::Date => ReferenceDate(),
         _ => ReferenceSurface(control, initial, activations),
     }
 }
@@ -399,8 +416,7 @@ fn ReferenceTextField(filled: bool) {
 }
 
 fn centered_body() -> cranpose::text::TextStyle {
-    let mut style = liquid_typography().body;
-    style.span_style.color = Some(liquid_colors().label);
+    let mut style = body();
     style.paragraph_style.text_align = cranpose::text::TextAlign::Center;
     style
 }
@@ -472,9 +488,7 @@ fn ReferenceSurface(control: Control, initial: f32, activations: cranpose::Mutab
                 Modifier::empty().fill_max_size(),
                 BoxSpec::default().content_alignment(Alignment::CENTER),
                 || {
-                    let mut style = liquid_typography().body;
-                    style.span_style.color = Some(liquid_colors().label);
-                    Text("Content", Modifier::empty(), style);
+                    Text("Content", Modifier::empty(), body());
                 },
             );
         }),
@@ -501,9 +515,7 @@ fn ReferenceSurface(control: Control, initial: f32, activations: cranpose::Mutab
             LiquidListRowSpec::default().with_separator(true),
             || {},
             || {
-                let mut style = liquid_typography().body;
-                style.span_style.color = Some(liquid_colors().label);
-                Text("Content", Modifier::empty(), style);
+                Text("Content", Modifier::empty(), body());
             },
         ),
         _ => unreachable!("surface controls are dispatched by ControlContent"),
@@ -688,6 +700,84 @@ fn ReferenceScrollEdge(variant: usize) {
     );
 }
 
+// The body style in the label colour, which the body style leaves unset.
+fn body() -> cranpose::text::TextStyle {
+    let mut style = liquid_typography().body;
+    style.span_style.color = Some(liquid_colors().label);
+    style
+}
+
+// The native fixture's sheet of a centred label: at its medium detent, or at
+// its large one when `large`.
+#[composable]
+fn ReferenceSheet(large: bool) {
+    let state = rememberLiquidSheetState(large);
+    LiquidModalBottomSheet(
+        state,
+        || {},
+        || {
+            Box(
+                Modifier::empty().fill_max_size(),
+                BoxSpec::default().content_alignment(Alignment::CENTER),
+                || {
+                    Text("Sheet content", Modifier::empty(), body());
+                },
+            );
+        },
+    );
+}
+
+// The native fixture's list of 20 rows, refreshing from the start, below
+// the status bar as UIKit insets a table.
+#[composable]
+fn ReferenceRefresh() {
+    let scroll = cranpose::rememberScrollState!(0.0);
+    let top = local_safe_area_insets().current().top;
+    LiquidPullToRefreshBox(
+        Modifier::empty()
+            .fill_max_size()
+            .padding_each(0.0, top, 0.0, 0.0),
+        true,
+        "Refresh",
+        || {},
+        move || {
+            cranpose::widgets::Column(
+                Modifier::empty()
+                    .fill_max_size()
+                    .vertical_scroll(scroll, false),
+                cranpose::widgets::ColumnSpec::default(),
+                || {
+                    for row in 1..=20 {
+                        LiquidListRow(
+                            Modifier::empty().fill_max_width(),
+                            LiquidListRowSpec::default().with_separator(true),
+                            || {},
+                            move || {
+                                Text(format!("Row {row}"), Modifier::empty(), body());
+                            },
+                        );
+                    }
+                },
+            );
+        },
+    );
+}
+
+// The native fixture's graphical date picker on 15 January 2026, a month
+// away from the simulator's today.
+#[composable]
+fn ReferenceDate() {
+    let state = rememberLiquidDatePickerState(
+        CalendarDate::new(2026, 1, 15),
+        CalendarDate::new(2026, 11, 18).expect("a date"),
+    );
+    LiquidDatePicker(
+        state,
+        CalendarDate::new(2026, 11, 18).expect("a date"),
+        Modifier::empty().width(320.0),
+    );
+}
+
 // The height of the bar over the top edge in scroll edge variant `variant`
 // and the style that stands in for its look.
 fn scroll_edge_bar(variant: usize) -> (f32, LiquidScrollEdgeEffectStyle) {
@@ -750,9 +840,7 @@ fn ReferenceSwipeActions() {
                 LiquidListRowSpec::default().with_separator(true),
                 || {},
                 || {
-                    let mut style = liquid_typography().body;
-                    style.span_style.color = Some(liquid_colors().label);
-                    Text("Content", Modifier::empty(), style);
+                    Text("Content", Modifier::empty(), body());
                 },
             );
         },

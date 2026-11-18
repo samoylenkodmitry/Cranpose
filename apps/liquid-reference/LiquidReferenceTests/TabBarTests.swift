@@ -228,7 +228,8 @@ class NativeControlTests: ReferenceUITests {
         // A modal dialog hides the screen behind it from readers; both apps
         // show its Delete button.
         let marker = ["alert", "confirmation"].contains(component)
-            ? app.buttons["Delete"] : app.staticTexts["Reference control"]
+            ? app.buttons["Delete"]
+            : app.staticTexts[component == "sheet" ? "Sheet content" : "Reference control"]
         XCTAssertTrue(marker.waitForExistence(timeout: 10))
         return app
     }
@@ -329,6 +330,30 @@ class NativeControlTests: ReferenceUITests {
             app.terminate()
         }
     }
+
+    func testSheet() {
+        for scheme in ["light", "dark"] {
+            for backdrop in ["solid", "checkerboard"] {
+                for value in ["0", "1"] {
+                    let app = launchControl("sheet", scheme: scheme, backdrop: backdrop, value: value)
+                    Thread.sleep(forTimeInterval: 1.0)
+                    capture("control-sheet-\(scheme)-\(backdrop)-\(value)", app: app)
+                    app.terminate()
+                }
+            }
+        }
+    }
+
+    func testRefresh() {
+        for scheme in ["light", "dark"] {
+            let app = launchControl("refresh", scheme: scheme)
+            Thread.sleep(forTimeInterval: 1.0)
+            capture("control-refresh-\(scheme)-solid-0", app: app)
+            app.terminate()
+        }
+    }
+
+    func testDate() { captureStates("date", values: ["0"]) }
 
     private func captureStates(_ component: String, values: [String]) {
         for scheme in ["light", "dark"] {

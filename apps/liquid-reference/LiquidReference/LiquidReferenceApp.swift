@@ -120,15 +120,16 @@ private struct ReferenceControl: View {
         .tint(.blue)
         .preferredColorScheme(environment["REFERENCE_SCHEME"] == "dark" ? .dark : .light)
         .overlay(alignment: component == "nav-bar" ? .bottom : .top) {
-            // The scroll edge cases keep the label for the tests and draw no
-            // pixels of it over the stripes.
+            // The scroll edge and refresh cases keep the label for the tests
+            // and draw no pixels of it over the stripes or the spinner.
             Text("Reference control").font(.caption).padding(.vertical, 24)
-                .foregroundStyle(component == "scroll-edge" ? AnyShapeStyle(.clear) : AnyShapeStyle(.primary))
+                .foregroundStyle(["scroll-edge", "refresh"].contains(component)
+                    ? AnyShapeStyle(.clear) : AnyShapeStyle(.primary))
         }
         .overlay(alignment: .bottom) {
             // The toolbar's capsules sit where the count would.
             VStack {
-                Text("Activations: \(activations)").opacity(["toolbar", "scroll-edge"].contains(component) ? 0 : 1)
+                Text("Activations: \(activations)").opacity(["toolbar", "scroll-edge", "refresh"].contains(component) ? 0 : 1)
                 if let error = trace.error {
                     Text(error).accessibilityIdentifier("trace-error")
                 }
@@ -290,6 +291,19 @@ private struct ReferenceControl: View {
             ReferenceSwipeRow().frame(width: 300, height: 44).accessibilityIdentifier("reference-swipe-actions")
         case "scroll-edge":
             ReferenceScrollEdge(variant: selection).ignoresSafeArea()
+        case "sheet":
+            // Value 0 opens the sheet at its medium detent, 1 at its large one.
+            Color.clear.frame(width: 300, height: 44)
+                .sheet(isPresented: .constant(true)) {
+                    Text("Sheet content").presentationDetents(selection == 1 ? [.large] : [.medium, .large])
+                }
+        case "refresh":
+            ReferenceRefresh().ignoresSafeArea()
+        case "date":
+            DatePicker("Date", selection: .constant(ReferenceChoices.date), displayedComponents: .date)
+                .datePickerStyle(.graphical).frame(width: 320)
+                .environment(\.locale, Locale(identifier: "en_US"))
+                .accessibilityIdentifier("reference-date")
         default:
             Text("Unknown reference control: \(component)")
         }
@@ -301,6 +315,8 @@ private enum ReferenceChoices {
     static let fruits = ["Apple", "Banana", "Cherry", "Grape", "Lemon", "Mango", "Orange"]
     static let colors: [Color] = [.blue, .red, .green]
     static let time = Calendar.current.date(from: DateComponents(year: 2026, month: 1, day: 1, hour: 10, minute: 42))!
+    // A month away from the simulator's today, so neither calendar marks it.
+    static let date = Calendar.current.date(from: DateComponents(year: 2026, month: 1, day: 15, hour: 12))!
 }
 
 // A UIKit wheel of `labels` resting on `selected`, turned `shift` rows past
@@ -543,6 +559,37 @@ private struct ReferenceScrollEdge: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UINavigationController, context: Context) {}
+}
+
+// A list of rows whose refresh control spins, shown from the start.
+private struct ReferenceRefresh: UIViewRepresentable {
+    final class Coordinator: NSObject, UITableViewDataSource {
+        func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 20 }
+        func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+            cell.textLabel?.text = "Row \(indexPath.row + 1)"
+            cell.backgroundColor = .clear
+            return cell
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UITableView {
+        let table = UITableView(frame: .zero, style: .plain)
+        table.dataSource = context.coordinator
+        table.backgroundColor = .clear
+        table.refreshControl = UIRefreshControl()
+        // While it refreshes the control adds its height to the inset, so
+        // the inset's top is where the list rests.
+        DispatchQueue.main.async {
+            table.refreshControl?.beginRefreshing()
+            table.setContentOffset(CGPoint(x: 0, y: -table.adjustedContentInset.top), animated: false)
+        }
+        return table
+    }
+
+    func updateUIView(_ uiView: UITableView, context: Context) {}
 }
 
 // A list row with Flag and a destructive Delete at its trailing edge and Pin

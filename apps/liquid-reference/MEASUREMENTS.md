@@ -586,3 +586,17 @@ Mean RGB difference against native, x 0–402 by y 0–170 points, without the s
 | Hard, to a 100 point bar's bottom | 3.937 | 2.715 |
 
 The bar variants stand the hard style in for the bar's own look, whose lower third blurs less, and the twin draws no navigation bar title. The soft style's remaining difference sits in the 3 point stripes, which native's kernel blurs with longer tails across the columns.
+
+## Sheet, refresh and date picker, native, 2026-11-18
+
+`testSheet`, `testRefresh` and `testDate` capture each case one second after launch. `compare_controls.py` compares the sheet and the refresh below the status bar, y 50 to 874 points, and the date picker over y 280 to 620.
+
+- The medium sheet floats: a glass card inset about 8 points from the sides and the bottom, with corners of about 38 points and its grabber at the top. The large sheet is an opaque card from the status bar's bottom edge, 62 points, with the same corners and no grabber. Both dim the screen behind them.
+- While it refreshes, the list rests 60 points down: the first row spans 121 to 173. The spinner is the medium activity indicator's wheel at 1.45 times its size, tips at 4.8 to 5.6 and 14.1 to 14.8 points from its centre and spokes 3.6 points wide, centred at 201 by 91.8, in the middle of the gap. Rows are 52 points tall, their labels and separators 20 points in from both sides; the separator is 1 point of gray 232.
+- The graphical date picker starts its weeks on Monday, names the weekdays in capitals (MON to SUN), heads the month with "January 2026" and a chevron in the accent, and fills the picked day with a black circle in light mode.
+
+## Liquid refresh, 2026-11-18
+
+`LiquidPullToRefreshBox` moves its content down with the pull and rests it 60 points down while it refreshes. Its spinner is the activity indicator's wheel at 1.45 times the medium size, centred in the gap; a pull brings its spokes in one by one, and they turn only while the list refreshes. The twin's spinner lands at 201.0 by 91.7, 28.7 points across, against native's 91.8 and 29.7. The refresh case still differs by 4.49 (light) and 5.42 (dark): `LiquidListRow` rows are 44 points tall with 16 point insets, where native's are 52 and 20, so the rows drift apart down the list.
+
+The sheet differs by 7.2 to 57.3 and the date picker by 5.2 to 13.4: Liquid draws an opaque sheet edge to edge with small corners, and a calendar that starts on Sunday with smaller type and a blue picked day.
