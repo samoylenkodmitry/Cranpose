@@ -3,7 +3,7 @@
 use crate::{
     Pose,
     pose::turn_of_axes,
-    vector::{cross, dot, normalize, scale, sub},
+    vector::{cross, dot, normalize, perpendicular, sub},
 };
 
 // The pose of a quad centered on `center` that shows its picture to a viewer at `head`. The quad
@@ -19,12 +19,12 @@ pub(crate) fn billboard_pose(center: [f32; 3], head: [f32; 3]) -> Pose {
         [0.0, 0.0, 1.0]
     };
     // The way up with the part along the facing removed
-    let up = sub([0.0, 1.0, 0.0], scale(facing, facing[1]));
+    let up = perpendicular([0.0, 1.0, 0.0], facing);
     // A head straight above or below leaves no up: the way ahead does as well
     let top = if dot(up, up) > 1e-8 {
         normalize(up)
     } else {
-        normalize(sub([0.0, 0.0, -1.0], scale(facing, -facing[2])))
+        normalize(perpendicular([0.0, 0.0, -1.0], facing))
     };
     Pose {
         position: center,

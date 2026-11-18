@@ -28,7 +28,7 @@ room. The controllers point at the panels, and their triggers press. Outside a h
 panels draw flat, side by side.
 
 A panel or a surface with `SubspaceModifier::movable()` has a handle under it: a sphere that shows
-and grabs from any side. A controller grabs it and carries the panel.
+from any side. A controller grabs it from any side and carries the panel.
 `movable_with(MovePolicy::system(...))` calls back with a `SpatialMoveEvent` for the grab
 (`Start`), each change of the pose (`Moving`) and the release (`End`). The event's pose is in
 meters, relative to the subspace's origin. An app that saves it places the panel there at its next

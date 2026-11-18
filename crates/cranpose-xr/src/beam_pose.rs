@@ -4,7 +4,7 @@ use crate::{
     Pose,
     pose::turn_of_axes,
     ray::Beam,
-    vector::{add, cross, dot, normalize, scale, sub},
+    vector::{add, cross, dot, normalize, perpendicular, scale, sub},
 };
 
 // The pose of a quad that shows `beam` to a viewer at `head`. The quad lies in its local XY
@@ -15,7 +15,7 @@ pub(crate) fn quad_pose(beam: &Beam, head: [f32; 3]) -> Pose {
     let along = beam.ray.direction;
     let middle = add(beam.ray.origin, scale(along, beam.length / 2.0));
     let to_head = sub(head, middle);
-    let across = sub(to_head, scale(along, dot(to_head, along)));
+    let across = perpendicular(to_head, along);
     // A head on the beam's line leaves no side to face: any direction across the beam does
     let facing = if dot(across, across) > 1e-8 {
         normalize(across)
@@ -29,7 +29,7 @@ pub(crate) fn quad_pose(beam: &Beam, head: [f32; 3]) -> Pose {
         });
         let mut axis = [0.0; 3];
         axis[smallest] = 1.0;
-        normalize(sub(axis, scale(along, dot(axis, along))))
+        normalize(perpendicular(axis, along))
     };
     Pose {
         position: middle,
