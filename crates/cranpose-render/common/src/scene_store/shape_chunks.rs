@@ -7,6 +7,15 @@
 // shapes an item took last go with the item at once. A chunk whose next
 // shape would grow it, or that is full, first drops the shapes no item
 // draws once they are a quarter of it and at least `MIN_DEAD_SHAPES`.
+// When it cannot take the next shape, an empty chunk that no packet holds
+// takes the shapes. Without one, the chunk with the most shapes no item
+// draws, at least as many as its live ones and `MIN_DEAD_SHAPES`, drops
+// them and takes the shapes, before a new chunk does. So the store makes a
+// chunk only while every chunk holds fewer such shapes than live ones or
+// `MIN_DEAD_SHAPES`, however long a few items of a chunk live, and a move
+// frees room for as many new shapes as it moves or more. A packet that
+// holds such a chunk reads it as it was: a new recorder takes in the live
+// shapes and the chunk's place.
 
 use std::{num::NonZeroU32, ops::Range, sync::Arc};
 
@@ -115,9 +124,10 @@ pub(super) struct ShapeChunks {
     // The chunks no item names, which take shapes again once no packet
     // holds them.
     empty: Vec<ChunkId>,
-    // One bit a segment of the chunk that drops its dead shapes, set for
-    // the segments a run names: room the next such chunk takes again.
-    live: Vec<u64>,
+    live: LiveRuns,
+    // Whether an item went since a look for a chunk of many dead shapes
+    // found none.
+    released: bool,
 }
 
 #[derive(Clone)]
@@ -126,6 +136,57 @@ struct ShapeChunk {
     // How many items name the chunk, and how many shapes they draw.
     items: u32,
     shapes: u32,
+}
+
+// The runs of the chunk that drops its dead shapes, by index among the
+// runs, and one bit a segment of it, set for the segments they name: room
+// the next such chunk takes again.
+#[derive(Clone, Default)]
+struct LiveRuns {
+    runs: Vec<usize>,
+    segments: Vec<u64>,
+}
+
+impl LiveRuns {
+    // Notes the runs of `chunk`, a chunk of `segments` segments, and the
+    // segments they name.
+    fn mark(&mut self, chunk: ChunkId, segments: u32, runs: &Slab<ShapeRun>) {
+        self.runs.clear();
+        self.segments.clear();
+        self.segments.resize(segments.div_ceil(64) as usize, 0);
+        for (index, run) in runs.indexed().filter(|(_, run)| run.chunk == chunk) {
+            self.runs.push(index);
+            for segment in run.segments.clone() {
+                self.segments[segment as usize / 64] |= 1 << (segment % 64);
+            }
+        }
+    }
+
+    fn keeps(&self, segment: u32) -> bool {
+        self.segments[segment as usize / 64] & (1 << (segment % 64)) != 0
+    }
+
+    // Starts each run noted past the segments before it that the chunk
+    // keeps, once it kept those alone.
+    fn renumber(&self, runs: &mut Slab<ShapeRun>) {
+        for &index in &self.runs {
+            let run = &mut runs[index];
+            let (word, bit) = (run.segments.start as usize / 64, run.segments.start % 64);
+            let start = self.segments[..word]
+                .iter()
+                .map(|bits| bits.count_ones())
+                .sum::<u32>()
+                + self
+                    .segments
+                    .get(word)
+                    .map_or(0, |bits| (bits & ((1 << bit) - 1)).count_ones());
+            run.segments = start..start + (run.segments.end - run.segments.start);
+        }
+    }
+
+    fn heap_bytes(&self) -> usize {
+        self.runs.capacity() * size_of::<usize>() + self.segments.capacity() * size_of::<u64>()
+    }
 }
 
 impl ShapeChunks {
@@ -161,8 +222,9 @@ impl ShapeChunks {
     }
 
     // A chunk with room that no packet holds: the open one, rid of the
-    // shapes no item draws when it holds enough of them, an empty one
-    // emptied of its old shapes, or a new one.
+    // shapes no item draws when it holds enough of them; else an empty one
+    // emptied of its old shapes; else the chunk of the most such shapes, rid
+    // of them; else a new one.
     fn writable_chunk(&mut self, runs: &mut Slab<ShapeRun>) -> ChunkId {
         if let Some(open) = self.open
             && let Some(chunk) = self.chunks[open.index()].as_mut()
@@ -181,26 +243,81 @@ impl ShapeChunks {
                 return open;
             }
         }
-        let reused = self.empty.iter().position(|&id| {
-            self.chunks[id.index()]
-                .as_mut()
-                .is_some_and(|chunk| Arc::get_mut(&mut chunk.recorder).is_some())
-        });
-        let id = match reused {
-            Some(at) => {
-                let id = self.empty.swap_remove(at);
-                if let Some(recorder) = self.chunks[id.index()]
-                    .as_mut()
-                    .and_then(|chunk| Arc::get_mut(&mut chunk.recorder))
-                {
-                    recorder.clear();
+        let id = match self.free_empty_chunk() {
+            Some(empty) => empty,
+            None => match self.sparse_chunk() {
+                Some(sparse) => {
+                    self.compact(sparse, runs);
+                    sparse
                 }
-                id
-            }
-            None => self.add_chunk(),
+                None => self.add_chunk(),
+            },
         };
         self.open = Some(id);
         id
+    }
+
+    // An empty chunk that no packet holds, emptied of its old shapes.
+    fn free_empty_chunk(&mut self) -> Option<ChunkId> {
+        let at = self.empty.iter().position(|&id| {
+            self.chunks[id.index()]
+                .as_mut()
+                .is_some_and(|chunk| Arc::get_mut(&mut chunk.recorder).is_some())
+        })?;
+        let id = self.empty.swap_remove(at);
+        if let Some(recorder) = self.chunks[id.index()]
+            .as_mut()
+            .and_then(|chunk| Arc::get_mut(&mut chunk.recorder))
+        {
+            recorder.clear();
+        }
+        Some(id)
+    }
+
+    // The chunk of the most shapes no item draws, among those that hold at
+    // least as many of them as live ones and `MIN_DEAD_SHAPES`: a move of
+    // its live shapes frees room for as many new ones or more. None is
+    // looked for while no item went since a look found none.
+    fn sparse_chunk(&mut self) -> Option<ChunkId> {
+        if !self.released {
+            return None;
+        }
+        let sparse = self
+            .chunks
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| {
+                let chunk = slot.as_ref().filter(|chunk| chunk.items > 0)?;
+                let live = chunk.shapes as usize;
+                let dead = chunk.recorder.tables().shapes.len() - live;
+                (dead >= live.max(MIN_DEAD_SHAPES)).then_some((dead, index))
+            })
+            .max()
+            .map(|(_, index)| ChunkId::at(index));
+        self.released = sparse.is_some();
+        sparse
+    }
+
+    // Drops the shapes no item draws from the chunk `id`, its live shapes
+    // moved to its front. A chunk that a packet holds stays as the packet
+    // reads it: a new recorder takes in its live shapes and its place, and
+    // the old one goes once the packet lets go. No empty chunk could serve
+    // in its place, as the store looks for this chunk only without one.
+    #[cold]
+    #[inline(never)]
+    fn compact(&mut self, id: ChunkId, runs: &mut Slab<ShapeRun>) {
+        let chunk = self.chunks[id.index()]
+            .as_mut()
+            .expect("a chunk an item names is there");
+        if let Some(recorder) = Arc::get_mut(&mut chunk.recorder) {
+            keep_live_runs(id, recorder, runs, &mut self.live);
+            return;
+        }
+        self.live.mark(id, chunk.recorder.all_segments().end, runs);
+        let mut kept = ShapeRecorder::default();
+        kept.keep_segments_from(&chunk.recorder, |segment| self.live.keeps(segment));
+        chunk.recorder = Arc::new(kept);
+        self.live.renumber(runs);
     }
 
     #[cold]
@@ -232,6 +349,7 @@ impl ShapeChunks {
         let Some(entry) = self.chunks[chunk.index()].as_mut() else {
             return;
         };
+        self.released = true;
         entry.items -= 1;
         entry.shapes -= run.shapes;
         if let Some(recorder) = Arc::get_mut(&mut entry.recorder) {
@@ -291,14 +409,14 @@ impl ShapeChunks {
             self.chunks.pop();
         }
         self.chunks.trim_growth_slack();
-        self.live = Vec::new();
+        self.live = LiveRuns::default();
     }
 
     // The heap the chunks hold: their lists and every chunk's recorder.
     fn heap_bytes(&self) -> usize {
         self.chunks.capacity() * size_of::<Option<ShapeChunk>>()
             + self.empty.capacity() * size_of::<ChunkId>()
-            + self.live.capacity() * size_of::<u64>()
+            + self.live.heap_bytes()
             + self
                 .chunks
                 .iter()
@@ -316,36 +434,18 @@ impl ShapeChunks {
 }
 
 // Moves the shapes of the runs in `chunk` to the front of its recorder, in
-// record order, and drops the shapes no run names. `live` is room for one
-// bit a segment.
+// record order, and drops the shapes no run names.
 #[cold]
 #[inline(never)]
 fn keep_live_runs(
     chunk: ChunkId,
     recorder: &mut ShapeRecorder,
     runs: &mut Slab<ShapeRun>,
-    live: &mut Vec<u64>,
+    live: &mut LiveRuns,
 ) {
-    live.clear();
-    live.resize(recorder.all_segments().end.div_ceil(64) as usize, 0);
-    for run in runs.values().filter(|run| run.chunk == chunk) {
-        for segment in run.segments.clone() {
-            live[segment as usize / 64] |= 1 << (segment % 64);
-        }
-    }
-    recorder.keep_segments(|segment| live[segment as usize / 64] & (1 << (segment % 64)) != 0);
-    // A run now starts past the live segments before it.
-    for run in runs.values_mut().filter(|run| run.chunk == chunk) {
-        let (word, bit) = (run.segments.start as usize / 64, run.segments.start % 64);
-        let start = live[..word]
-            .iter()
-            .map(|bits| bits.count_ones())
-            .sum::<u32>()
-            + live
-                .get(word)
-                .map_or(0, |bits| (bits & ((1 << bit) - 1)).count_ones());
-        run.segments = start..start + (run.segments.end - run.segments.start);
-    }
+    live.mark(chunk, recorder.all_segments().end, runs);
+    recorder.keep_segments(|segment| live.keeps(segment));
+    live.renumber(runs);
 }
 
 #[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]

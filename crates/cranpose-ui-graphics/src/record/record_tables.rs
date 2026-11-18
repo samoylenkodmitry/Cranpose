@@ -143,6 +143,35 @@ impl RecordTables {
         drop_unused_gradients(shapes, gradients);
     }
 
+    // Empties the tables, then takes in the segments of `from` that `keep`
+    // takes, by index, with their shapes: what `keep_segments` leaves of
+    // `from`. The gradient tables come whole while a kept shape paints with
+    // a brush.
+    pub(super) fn keep_segments_from(&mut self, from: &Self, keep: impl Fn(u32) -> bool) {
+        self.clear();
+        let mut shape_to = 0;
+        for (index, segment) in (0..).zip(&from.segments) {
+            if !keep(index) {
+                continue;
+            }
+            let mut segment = *segment;
+            if segment.lane == RecordLane::Shapes {
+                self.shapes.extend_from(&from.shapes, segment.range());
+                segment.start = shape_to;
+                shape_to += segment.count;
+            }
+            self.segments.push(segment);
+        }
+        if let Some(tables) = from.gradients.as_deref()
+            && self.shapes.bodies().iter().any(|body| body.brush != 0)
+        {
+            let to = self.gradients_mut();
+            to.brushes.extend_from_slice(&tables.brushes);
+            to.stops.extend_from_slice(&tables.stops);
+            to.explicit_stops.extend_from_slice(&tables.explicit_stops);
+        }
+    }
+
     // Gives back the room growth left in every table; see
     // [`crate::shape_records::trim_growth`]. The content, and so the
     // fingerprint, stay.
