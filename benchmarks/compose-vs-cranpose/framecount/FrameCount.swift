@@ -82,6 +82,19 @@ struct Options {
         if pid <= 0 || (seconds <= 0 && until <= 0) || (out.isEmpty && screenshot.isEmpty) { throw Failure.usage }
     }
 
+    /// The JSON file with the result or the failure for the caller; empty for
+    /// a screenshot.
+    var report: String { [display, ambient, out].first { !$0.isEmpty } ?? "" }
+
+    /// The seconds of work asked of FrameCount, from now: the capture's span,
+    /// plus the waits of the ambient read for its window and its transition.
+    var work: Double {
+        if !display.isEmpty { return linkSeconds }
+        if !ambient.isEmpty { return ownWindowSeconds + transitionSeconds + seconds }
+        if !screenshot.isEmpty { return 0 }
+        return until > 0 ? max(0, until - CACurrentMediaTime()) : seconds
+    }
+
     /// Whether, at `now`, each of the last `slowSeconds` whole seconds since
     /// the app's first frame at `first` held fewer than `slowFps` of the
     /// frames `frames` counts between two times. Before its first frame the
@@ -102,6 +115,7 @@ enum Failure: Error, CustomStringConvertible {
     case noPermission
     case noWindow(pid_t)
     case unwritable(String)
+    case overran(Double)
 
     var description: String {
         switch self {
@@ -113,8 +127,31 @@ enum Failure: Error, CustomStringConvertible {
         case .noPermission: return "FrameCount has no Screen Recording permission"
         case .noWindow(let pid): return "process \(pid) shows no window"
         case .unwritable(let path): return "cannot write \(path)"
+        case .overran(let seconds):
+            return "FrameCount stopped after \(Int(seconds)) s, \(Int(overrunSeconds)) s past its work: "
+                + "a capture call did not return"
         }
     }
+}
+
+/// Seconds FrameCount may run past its work before it ends itself. `open -W`
+/// gives up on a caller's timeout and leaves the app running under launchd,
+/// so a ScreenCaptureKit call that never returns would keep it there.
+let overrunSeconds = 30.0
+/// Seconds the ambient read waits for its own window to show.
+let ownWindowSeconds = 5.0
+/// Seconds the ambient read lets its window's own transition pass.
+let transitionSeconds = 1.0
+
+/// Writes `error` to the caller's report and to standard error, then ends
+/// FrameCount.
+func fail(_ error: Error, report: String) -> Never {
+    if !report.isEmpty {
+        let failure = try? JSONSerialization.data(withJSONObject: ["error": "\(error)"])
+        try? failure?.write(to: URL(fileURLWithPath: report))
+    }
+    FileHandle.standardError.write("\(error)\n".data(using: .utf8) ?? Data())
+    exit(1)
 }
 
 /// The hash of a frame's pixels, which says whether two frames show the same
@@ -437,7 +474,7 @@ func ambient(_ options: Options) async throws -> [String: Any] {
     let blank = await showBlankWindow(on: main)
     defer { Task { @MainActor in blank.close() } }
     let window = try await awaitedWindow(of: ProcessInfo.processInfo.processIdentifier,
-                                         until: CACurrentMediaTime() + 5)
+                                         until: CACurrentMediaTime() + ownWindowSeconds)
     let configuration = SCStreamConfiguration()
     configuration.width = max(1, Int(window.frame.width / 8))
     configuration.height = max(1, Int(window.frame.height / 8))
@@ -451,7 +488,7 @@ func ambient(_ options: Options) async throws -> [String: Any] {
     try await stream.startCapture()
     // The window appears with a transition of its own: its frames are not what
     // moves under it.
-    try await Task.sleep(nanoseconds: 1_000_000_000)
+    try await Task.sleep(nanoseconds: UInt64(transitionSeconds * 1_000_000_000))
     let settled = frames.taken().count
     let began = CACurrentMediaTime()
     try await Task.sleep(nanoseconds: UInt64(options.seconds * 1_000_000_000))
@@ -545,6 +582,10 @@ do {
     FileHandle.standardError.write("\(error)\n".data(using: .utf8) ?? Data())
     exit(2)
 }
+let limit = options.work + overrunSeconds
+DispatchQueue.global().asyncAfter(deadline: .now() + limit) {
+    fail(Failure.overran(limit), report: options.report)
+}
 do {
     if !options.display.isEmpty {
         let state = try await displayState(options)
@@ -562,11 +603,5 @@ do {
         try json.write(to: URL(fileURLWithPath: options.out))
     }
 } catch {
-    let report = [options.display, options.ambient, options.out].first { !$0.isEmpty } ?? ""
-    if !report.isEmpty {
-        let failure = try? JSONSerialization.data(withJSONObject: ["error": "\(error)"])
-        try? failure?.write(to: URL(fileURLWithPath: report))
-    }
-    FileHandle.standardError.write("\(error)\n".data(using: .utf8) ?? Data())
-    exit(1)
+    fail(error, report: options.report)
 }

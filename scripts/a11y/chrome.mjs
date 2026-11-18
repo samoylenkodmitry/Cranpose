@@ -44,10 +44,14 @@ export async function launchChrome(flags, output) {
             // and never loads a page.
             "--password-store=basic",
             "--use-mock-keychain",
+            // Chrome quits once its DevTools pipe on fd 3 closes. This process
+            // holds the other end of the pipe, so Chrome exits with this
+            // process even when a SIGKILL skips `close`.
+            "--remote-debugging-pipe",
             ...flags,
             "about:blank",
         ],
-        { stdio: ["ignore", "ignore", browserLog ?? "inherit"] },
+        { stdio: ["ignore", "ignore", browserLog ?? "inherit", "pipe", "pipe"] },
     );
     browser.on("error", error => { browserError = error; });
     const cdp = new Cdp();
@@ -86,5 +90,5 @@ export async function launchChrome(flags, output) {
         await close();
         throw error;
     }
-    return { cdp, close };
+    return { cdp, close, pid: browser.pid };
 }
