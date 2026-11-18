@@ -85,9 +85,13 @@ fn main() {
     black_box(&mut shell);
     // The shell's teardown is no part of the counts.
     std::mem::forget(shell);
+    // The heap bytes the process holds at the end of the counted frames.
+    let held = GLOBAL.stats();
+    let live_bytes = held.bytes_allocated as i128 - held.bytes_deallocated as i128
+        + held.bytes_reallocated as i128;
     println!(
         "steady_frames warmup={warmup} frames={frames} start_malloc={} start_realloc={} \
-         start_free={} nodes={nodes} malloc={} realloc={} free={}",
+         start_free={} nodes={nodes} malloc={} realloc={} free={} live_bytes={live_bytes}",
         started.allocations,
         started.reallocations,
         started.deallocations,
