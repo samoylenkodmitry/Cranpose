@@ -1,5 +1,6 @@
 mod accessibility_actions;
 mod bottom_sheet;
+mod containers;
 mod date_picker;
 mod floating_button_interaction;
 mod glass_placeholder;
@@ -8,6 +9,7 @@ mod localization;
 mod pop_up_button;
 mod provided_colors;
 mod pull_to_refresh;
+mod reader;
 mod segmented_press;
 mod segmented_style;
 mod selection_controls;

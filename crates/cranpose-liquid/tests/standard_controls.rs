@@ -4,13 +4,10 @@ use cranpose_core::{MutableState, rememberMutableStateOf};
 use cranpose_foundation::text::TextFieldState;
 use cranpose_liquid::prelude::*;
 use cranpose_render_common::text_fonts::TextFonts;
-use cranpose_testing::{
-    PlacedSemanticsNode, RobotTestRule, TestRenderer, create_headless_robot_test_with_fonts,
-    placed_semantics_from_shell,
-};
+use cranpose_testing::create_headless_robot_test_with_fonts;
 use cranpose_ui::{Modifier, SemanticsWidgetRole};
 
-type Robot = RobotTestRule<TestRenderer>;
+use crate::reader::{Robot, node, nodes};
 
 fn robot(content: impl FnMut() + 'static) -> Robot {
     let fonts = TextFonts::from_fonts_or_default(&[include_bytes!(
@@ -23,23 +20,6 @@ fn robot(content: impl FnMut() + 'static) -> Robot {
     robot.shell_mut().set_semantics_enabled(true);
     robot.wait_for_idle();
     robot
-}
-
-// The reader nodes that are not hidden, as the platform reader sees them.
-fn nodes(robot: &mut Robot) -> Vec<PlacedSemanticsNode> {
-    let tree = placed_semantics_from_shell(robot.shell_mut()).expect("placed controls");
-    tree.flatten()
-        .into_iter()
-        .filter(|node| !node.hidden)
-        .cloned()
-        .collect()
-}
-
-fn node(robot: &mut Robot, label: &str) -> PlacedSemanticsNode {
-    nodes(robot)
-        .into_iter()
-        .find(|node| node.label.as_deref() == Some(label))
-        .unwrap_or_else(|| panic!("no reader node named {label}"))
 }
 
 fn tap(robot: &mut Robot, x: f32, y: f32) {

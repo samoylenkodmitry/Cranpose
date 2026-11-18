@@ -34,10 +34,12 @@ pub(crate) enum Control {
     Time12,
     PopUp,
     ColorWell,
+    Unavailable,
+    ControlGroup,
 }
 
 // The names shared with the native app's `REFERENCE_COMPONENT`.
-const NAMES: [(&str, Control); 26] = [
+const NAMES: [(&str, Control); 28] = [
     ("slider", Control::Slider),
     ("toggle", Control::Toggle),
     ("segmented", Control::Segmented),
@@ -64,6 +66,8 @@ const NAMES: [(&str, Control); 26] = [
     ("time-12", Control::Time12),
     ("pop-up", Control::PopUp),
     ("color-well", Control::ColorWell),
+    ("unavailable", Control::Unavailable),
+    ("control-group", Control::ControlGroup),
 ];
 
 impl Control {
@@ -156,6 +160,7 @@ fn ControlContent(control: Control, initial: f32, activations: cranpose::Mutable
         | Control::Time12
         | Control::PopUp
         | Control::ColorWell => ReferencePicker(control, initial),
+        Control::Unavailable | Control::ControlGroup => ReferenceContainer(control),
         _ => ReferenceSurface(control, initial, activations),
     }
 }
@@ -218,6 +223,29 @@ const FRUITS: [&str; 7] = [
 const SAME: [&str; 7] = ["Grape"; 7];
 // The native time picker's frame on this simulator, on either clock.
 const TIME_WIDTH: f32 = 320.0;
+
+// The containers of other controls, as the native app shows them.
+#[composable]
+fn ReferenceContainer(control: Control) {
+    if control == Control::ControlGroup {
+        LiquidControlGroup(Modifier::empty().width(300.0), |scope| {
+            scope.button("Previous", || {});
+            scope.button("Next", || {});
+        });
+        return;
+    }
+    LiquidContentUnavailableView(
+        Modifier::empty().width(320.0),
+        "No Photos",
+        "Photos you take appear here.",
+        || {
+            // SwiftUI's borderless button: the label alone.
+            let mut style = liquid_typography().subheadline;
+            style.span_style.color = Some(liquid_colors().accent);
+            Text("Take Photo", Modifier::empty().clickable(|_| {}), style);
+        },
+    );
+}
 
 // The pickers, at the native app's `REFERENCE_VALUE`.
 #[composable]
