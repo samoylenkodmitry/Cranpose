@@ -1,20 +1,21 @@
-use std::{mem, rc::Rc};
+use std::{ops::Range, rc::Rc};
 
 use cranpose_macros::composable;
 use cranpose_services::HapticFeedback;
 use cranpose_ui::{
-    Modifier, SemanticsConfiguration, SemanticsWidgetRole, SharedText, VerticalAlignment,
-    text::FontWeight,
+    Modifier, SemanticsWidgetRole, SharedText, VerticalAlignment,
+    text::{FontWeight, TextStyle},
     widgets::{Box, BoxSpec, Row, RowSpec, Spacer, Text},
 };
 use cranpose_ui_layout::{Alignment, LinearArrangement};
 
 use super::{
     button::{ButtonMetrics, GlassButtonSpec, GlassButtonWithFeedback},
+    content_scope::ScopeContent,
     glass_surface::floating_material,
 };
 use crate::{
-    material::{LiquidModifierExt, LiquidShape},
+    material::LiquidModifierExt,
     theme::{liquid_colors, liquid_typography},
 };
 
@@ -28,31 +29,26 @@ const GAP: f32 = 12.0;
 const ICON_SLOT: f32 = 60.0;
 const ICON_GROUP_TRIM: f32 = 15.0;
 const ICON_SIZE: f32 = 30.0;
-const TEXT_PADDING: f32 = 16.0;
+const TEXT_METRICS: ButtonMetrics = ButtonMetrics {
+    height: HEIGHT,
+    padding: (16.0, 0.0),
+};
 
 /// The scope a [`LiquidToolbar`]'s items are declared in, leading to
 /// trailing.
 pub struct LiquidToolbarScope {
-    entries: super::content_scope::ScopeContent<ToolbarEntry>,
+    entries: ScopeContent<ToolbarEntry>,
 }
 
 impl LiquidToolbarScope {
     /// A button reading `label`, on a capsule of its own.
     pub fn button(&self, label: impl Into<SharedText>, on_click: impl Fn() + 'static) {
-        self.entries.push(ToolbarEntry::Text(ToolbarText {
-            label: label.into(),
-            prominent: false,
-            on_click: Rc::new(on_click),
-        }));
+        self.text(label.into(), TextKind::Plain, Rc::new(on_click));
     }
 
     /// A button reading `label` on the accent color, for the primary action.
     pub fn prominent_button(&self, label: impl Into<SharedText>, on_click: impl Fn() + 'static) {
-        self.entries.push(ToolbarEntry::Text(ToolbarText {
-            label: label.into(),
-            prominent: true,
-            on_click: Rc::new(on_click),
-        }));
+        self.text(label.into(), TextKind::Prominent, Rc::new(on_click));
     }
 
     /// A button showing `icon`, an SVG path in a 24 unit box, that readers
@@ -60,14 +56,14 @@ impl LiquidToolbarScope {
     pub fn icon_button(
         &self,
         icon: &'static str,
-        description: impl Into<String>,
+        description: impl Into<SharedText>,
         on_click: impl Fn() + 'static,
     ) {
-        self.entries.push(ToolbarEntry::Icon(ToolbarIcon {
+        self.entries.push(ToolbarEntry::Icon {
             path: icon,
             description: description.into(),
             on_click: Rc::new(on_click),
-        }));
+        });
     }
 
     /// Room that pushes the items after it to the far end. Several share the
@@ -75,55 +71,34 @@ impl LiquidToolbarScope {
     pub fn flexible_space(&self) {
         self.entries.push(ToolbarEntry::FlexibleSpace);
     }
+
+    fn text(&self, label: SharedText, kind: TextKind, on_click: Rc<dyn Fn()>) {
+        self.entries.push(ToolbarEntry::Text {
+            label,
+            kind,
+            on_click,
+        });
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TextKind {
+    Plain,
+    Prominent,
 }
 
 enum ToolbarEntry {
-    Text(ToolbarText),
-    Icon(ToolbarIcon),
+    Text {
+        label: SharedText,
+        kind: TextKind,
+        on_click: Rc<dyn Fn()>,
+    },
+    Icon {
+        path: &'static str,
+        description: SharedText,
+        on_click: Rc<dyn Fn()>,
+    },
     FlexibleSpace,
-}
-
-struct ToolbarText {
-    label: SharedText,
-    prominent: bool,
-    on_click: Rc<dyn Fn()>,
-}
-
-struct ToolbarIcon {
-    path: &'static str,
-    description: String,
-    on_click: Rc<dyn Fn()>,
-}
-
-// What the toolbar draws: a text capsule, a capsule of adjacent icons or a
-// flexible space.
-enum ToolbarPart {
-    Text(ToolbarText),
-    Icons(Rc<[ToolbarIcon]>),
-    FlexibleSpace,
-}
-
-fn toolbar_parts(entries: Vec<ToolbarEntry>) -> Vec<ToolbarPart> {
-    let mut parts = Vec::with_capacity(entries.len());
-    let mut icons = Vec::new();
-    for entry in entries {
-        let part = match entry {
-            ToolbarEntry::Icon(icon) => {
-                icons.push(icon);
-                continue;
-            }
-            ToolbarEntry::Text(text) => ToolbarPart::Text(text),
-            ToolbarEntry::FlexibleSpace => ToolbarPart::FlexibleSpace,
-        };
-        if !icons.is_empty() {
-            parts.push(ToolbarPart::Icons(mem::take(&mut icons).into()));
-        }
-        parts.push(part);
-    }
-    if !icons.is_empty() {
-        parts.push(ToolbarPart::Icons(icons.into()));
-    }
-    parts
 }
 
 /// A row of glass capsules along the bottom of the window. Place it at the
@@ -137,15 +112,13 @@ pub fn LiquidToolbar(modifier: Modifier, content: impl FnOnce(&LiquidToolbarScop
     // Only this shell is generic, so every call site shares the body below.
     ToolbarRow(
         modifier,
-        toolbar_parts(super::content_scope::ScopeContent::collect(
-            |entries| LiquidToolbarScope { entries },
-            content,
-        )),
+        ScopeContent::collect(|entries| LiquidToolbarScope { entries }, content).into(),
     );
 }
 
 #[composable(no_skip)]
-fn ToolbarRow(modifier: Modifier, parts: Vec<ToolbarPart>) {
+fn ToolbarRow(modifier: Modifier, entries: Rc<[ToolbarEntry]>) {
+    let body = liquid_typography().body;
     Row(
         modifier
             .fill_max_width()
@@ -154,45 +127,49 @@ fn ToolbarRow(modifier: Modifier, parts: Vec<ToolbarPart>) {
             .horizontal_arrangement(LinearArrangement::spaced_by(GAP))
             .vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
-            for part in &parts {
-                match part {
-                    ToolbarPart::Text(text) => TextItem(
-                        text.label.clone(),
-                        text.prominent,
-                        Rc::clone(&text.on_click),
-                    ),
-                    ToolbarPart::Icons(icons) => IconGroup(Rc::clone(icons)),
-                    ToolbarPart::FlexibleSpace => {
+            let mut index = 0;
+            while let Some(entry) = entries.get(index) {
+                match entry {
+                    ToolbarEntry::Text {
+                        label,
+                        kind,
+                        on_click,
+                    } => TextItem(label.clone(), *kind, body.clone(), Rc::clone(on_click)),
+                    ToolbarEntry::Icon { .. } => {
+                        let run = entries[index..]
+                            .iter()
+                            .take_while(|entry| matches!(entry, ToolbarEntry::Icon { .. }))
+                            .count();
+                        IconGroup(Rc::clone(&entries), index..index + run);
+                        index += run;
+                        continue;
+                    }
+                    ToolbarEntry::FlexibleSpace => {
                         Spacer(Modifier::empty().weight(1.0));
                     }
                 }
+                index += 1;
             }
         },
     );
 }
 
 #[composable(no_skip)]
-fn TextItem(label: SharedText, prominent: bool, on_click: Rc<dyn Fn()>) {
+fn TextItem(label: SharedText, kind: TextKind, mut style: TextStyle, on_click: Rc<dyn Fn()>) {
     let colors = liquid_colors();
-    let spec = if prominent {
-        GlassButtonSpec::prominent()
-    } else {
-        GlassButtonSpec::glass().with_content_color(colors.label)
+    let (spec, weight) = match kind {
+        TextKind::Plain => (
+            GlassButtonSpec::glass().with_content_color(colors.label),
+            FontWeight::MEDIUM,
+        ),
+        TextKind::Prominent => (GlassButtonSpec::prominent(), FontWeight::SEMI_BOLD),
     };
-    let mut style = liquid_typography().body;
     style.span_style.color = Some(spec.content_color(&colors));
-    style.span_style.font_weight = Some(if prominent {
-        FontWeight::SEMI_BOLD
-    } else {
-        FontWeight::MEDIUM
-    });
+    style.span_style.font_weight = Some(weight);
     GlassButtonWithFeedback(
         Modifier::empty(),
         spec,
-        ButtonMetrics {
-            height: HEIGHT,
-            padding: (TEXT_PADDING, 0.0),
-        },
+        TEXT_METRICS,
         HapticFeedback::ImpactLight,
         None,
         move || on_click(),
@@ -202,32 +179,35 @@ fn TextItem(label: SharedText, prominent: bool, on_click: Rc<dyn Fn()>) {
     );
 }
 
+// The icons of `entries` in `run`, on one capsule.
 #[composable(no_skip)]
-fn IconGroup(icons: Rc<[ToolbarIcon]>) {
-    let colors = liquid_colors();
-    let width = (ICON_SLOT * icons.len() as f32 - ICON_GROUP_TRIM).max(HEIGHT);
-    let material = floating_material(colors.label, HEIGHT).shape(LiquidShape::Capsule);
+fn IconGroup(entries: Rc<[ToolbarEntry]>, run: Range<usize>) {
+    let color = liquid_colors().label;
+    let width = (ICON_SLOT * run.len() as f32 - ICON_GROUP_TRIM).max(HEIGHT);
     Row(
         Modifier::empty()
             .width(width)
             .height(HEIGHT)
-            .glass_effect(material),
+            .glass_effect(floating_material(color, HEIGHT)),
         RowSpec::default().vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
-            for icon in icons.iter() {
-                let on_click = Rc::clone(&icon.on_click);
-                let description = icon.description.clone();
-                let path = icon.path;
-                let color = colors.label;
+            for entry in &entries[run.clone()] {
+                let ToolbarEntry::Icon {
+                    path,
+                    description,
+                    on_click,
+                } = entry
+                else {
+                    continue;
+                };
+                let (path, on_click) = (*path, Rc::clone(on_click));
                 Box(
                     Modifier::empty()
                         .weight(1.0)
                         .fill_max_height()
                         .clickable(move |_| on_click())
-                        .semantics(move |config: &mut SemanticsConfiguration| {
-                            config.role = Some(SemanticsWidgetRole::Button);
-                            config.content_description = Some(description.clone());
-                        }),
+                        .role(SemanticsWidgetRole::Button)
+                        .content_description(description.as_str()),
                     BoxSpec::default().content_alignment(Alignment::CENTER),
                     move || crate::icons::Icon(path, None, ICON_SIZE, color),
                 );

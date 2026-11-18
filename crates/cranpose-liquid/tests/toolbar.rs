@@ -6,13 +6,13 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_liquid::prelude::*;
-use cranpose_testing::create_headless_robot_test;
+use cranpose_testing::{create_headless_robot_test, robot_assertions::assert_approx_eq};
 use cranpose_ui::{
     Alignment, Modifier, SemanticsWidgetRole,
     widgets::{Box, BoxSpec},
 };
 
-use crate::reader::{Robot, node};
+use crate::reader::{Robot, node, tap_node};
 
 type Log = Rc<RefCell<Vec<&'static str>>>;
 
@@ -40,43 +40,36 @@ fn toolbar(items: fn(&LiquidToolbarScope, &Log)) -> (Robot, Log) {
     (robot, log)
 }
 
-fn tap(log: &Log, name: &'static str) -> impl Fn() + 'static {
+fn record(log: &Log, name: &'static str) -> impl Fn() + 'static {
     let log = Rc::clone(log);
     move || log.borrow_mut().push(name)
 }
 
 fn edit_share_delete(scope: &LiquidToolbarScope, log: &Log) {
-    scope.button("Edit", tap(log, "edit"));
+    scope.button("Edit", record(log, "edit"));
     scope.flexible_space();
-    scope.button("Share", tap(log, "share"));
-    scope.prominent_button("Delete", tap(log, "delete"));
+    scope.button("Share", record(log, "share"));
+    scope.prominent_button("Delete", record(log, "delete"));
 }
 
 fn icons_text_icon(scope: &LiquidToolbarScope, log: &Log) {
-    scope.icon_button(icons::SHARE, "Share", tap(log, "share"));
-    scope.icon_button(icons::TRASH, "Delete", tap(log, "delete"));
-    scope.button("Edit", tap(log, "edit"));
-    scope.icon_button(icons::PLUS, "Add", tap(log, "add"));
+    scope.icon_button(icons::SHARE, "Share", record(log, "share"));
+    scope.icon_button(icons::TRASH, "Delete", record(log, "delete"));
+    scope.button("Edit", record(log, "edit"));
+    scope.icon_button(icons::PLUS, "Add", record(log, "add"));
     scope.flexible_space();
-    scope.icon_button(icons::FOLDER, "Move", tap(log, "move"));
+    scope.icon_button(icons::FOLDER, "Move", record(log, "move"));
 }
+
+const EXACT: f32 = 0.01;
 
 #[test]
 fn each_item_reads_as_a_button_and_runs_its_own_action() {
     let (mut robot, log) = toolbar(icons_text_icon);
     for label in ["Share", "Delete", "Edit", "Add", "Move"] {
-        let item = node(&mut robot, label);
-        assert_eq!(
-            item.widget_role,
-            Some(SemanticsWidgetRole::Button),
-            "{label}"
-        );
-        let bounds = item.layout_bounds;
-        robot.click_at(
-            bounds.x + bounds.width * 0.5,
-            bounds.y + bounds.height * 0.5,
-        );
-        robot.wait_for_idle();
+        let role = node(&mut robot, label).widget_role;
+        assert_eq!(role, Some(SemanticsWidgetRole::Button), "{label}");
+        tap_node(&mut robot, label);
     }
     assert_eq!(*log.borrow(), ["share", "delete", "edit", "add", "move"]);
 }
@@ -88,24 +81,22 @@ fn capsules_sit_28_points_in_and_12_apart() {
     let share = node(&mut robot, "Share").layout_bounds;
     let delete = node(&mut robot, "Delete").layout_bounds;
     for bounds in [edit, share, delete] {
-        assert!((bounds.height - 48.0).abs() < 0.01, "48 tall: {bounds:?}");
-        assert!(
-            (bounds.y + bounds.height - 772.0).abs() < 0.01,
-            "28 above the bottom: {bounds:?}"
+        assert_approx_eq(bounds.height, 48.0, EXACT, "48 tall");
+        assert_approx_eq(
+            bounds.y + bounds.height,
+            772.0,
+            EXACT,
+            "28 above the bottom",
         );
     }
-    assert!(
-        (edit.x - 28.0).abs() < 0.01,
-        "28 from the leading side: {edit:?}"
+    assert_approx_eq(edit.x, 28.0, EXACT, "28 from the leading side");
+    assert_approx_eq(
+        delete.x + delete.width,
+        372.0,
+        EXACT,
+        "28 from the trailing side",
     );
-    assert!(
-        (delete.x + delete.width - 372.0).abs() < 0.01,
-        "28 from the trailing side: {delete:?}"
-    );
-    assert!(
-        (delete.x - share.x - share.width - 12.0).abs() < 0.01,
-        "12 apart: {share:?} {delete:?}"
-    );
+    assert_approx_eq(delete.x - share.x - share.width, 12.0, EXACT, "12 apart");
 }
 
 #[test]
@@ -116,46 +107,49 @@ fn adjacent_icons_share_a_capsule_that_a_text_item_splits() {
     let edit = node(&mut robot, "Edit").layout_bounds;
     let add = node(&mut robot, "Add").layout_bounds;
     let moved = node(&mut robot, "Move").layout_bounds;
-    assert!((share.x - 28.0).abs() < 0.01, "{share:?}");
-    assert!(
-        (delete.x - share.x - share.width).abs() < 0.01,
-        "the pair abuts: {share:?} {delete:?}"
+    assert_approx_eq(share.x, 28.0, EXACT, "the pair starts 28 in");
+    assert_approx_eq(delete.x, share.x + share.width, EXACT, "the pair abuts");
+    assert_approx_eq(
+        delete.x + delete.width - share.x,
+        105.0,
+        EXACT,
+        "the pair's capsule",
     );
-    assert!(
-        (delete.x + delete.width - share.x - 105.0).abs() < 0.01,
-        "the pair's capsule is 105 wide"
+    assert_approx_eq(
+        edit.x - delete.x - delete.width,
+        12.0,
+        EXACT,
+        "the text item stands apart",
     );
-    assert!(
-        (edit.x - delete.x - delete.width - 12.0).abs() < 0.01,
-        "the text item stands apart"
-    );
-    assert!(
-        (add.x - edit.x - edit.width - 12.0).abs() < 0.01,
-        "the icon after it starts a capsule"
+    assert_approx_eq(
+        add.x - edit.x - edit.width,
+        12.0,
+        EXACT,
+        "the icon after it starts a capsule",
     );
     for lone in [add, moved] {
-        assert!(
-            (lone.width - 48.0).abs() < 0.01,
-            "a lone icon is a 48 point circle: {lone:?}"
-        );
+        assert_approx_eq(lone.width, 48.0, EXACT, "a lone icon is a 48 point circle");
     }
-    assert!((moved.x + moved.width - 372.0).abs() < 0.01, "{moved:?}");
+    assert_approx_eq(
+        moved.x + moved.width,
+        372.0,
+        EXACT,
+        "the last icon ends 28 in",
+    );
 }
 
 #[test]
 fn flexible_spaces_share_the_free_room() {
     fn centered(scope: &LiquidToolbarScope, log: &Log) {
         scope.flexible_space();
-        scope.button("Edit", tap(log, "edit"));
+        scope.button("Edit", record(log, "edit"));
         scope.flexible_space();
     }
     let (mut robot, _) = toolbar(centered);
     let edit = node(&mut robot, "Edit").layout_bounds;
     let before = edit.x - 28.0 - 12.0;
     let after = 372.0 - edit.x - edit.width - 12.0;
+    assert!(before > 100.0, "the spaces take the free room: {edit:?}");
     // Each space takes whole pixels, so the shares may differ by one.
-    assert!(
-        before > 100.0 && (before - after).abs() <= 1.0,
-        "equal shares: {edit:?}"
-    );
+    assert_approx_eq(before, after, 1.0, "equal shares");
 }

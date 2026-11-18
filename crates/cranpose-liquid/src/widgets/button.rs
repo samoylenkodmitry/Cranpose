@@ -188,7 +188,7 @@ impl GlassButtonSpec {
                 colors.label,
                 height,
             )),
-            // Over a dark backdrop iOS keeps the accent at full strength.
+            // In dark mode iOS keeps the accent at full strength.
             GlassButtonStyle::Prominent => Some(
                 super::glass_surface::floating_material(colors.label, height)
                     .transmission_tint(colors.accent, if colors.is_dark { 1.0 } else { 0.6 }),

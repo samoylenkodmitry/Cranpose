@@ -7,7 +7,7 @@ use cranpose_render_common::text_fonts::TextFonts;
 use cranpose_testing::create_headless_robot_test_with_fonts;
 use cranpose_ui::{Modifier, SemanticsWidgetRole};
 
-use crate::reader::{Robot, node, nodes};
+use crate::reader::{Robot, node, nodes, tap, tap_node};
 
 fn robot(content: impl FnMut() + 'static) -> Robot {
     let fonts = TextFonts::from_fonts_or_default(&[include_bytes!(
@@ -20,22 +20,6 @@ fn robot(content: impl FnMut() + 'static) -> Robot {
     robot.shell_mut().set_semantics_enabled(true);
     robot.wait_for_idle();
     robot
-}
-
-fn tap(robot: &mut Robot, x: f32, y: f32) {
-    robot.mouse_move(x, y);
-    robot.mouse_down();
-    robot.mouse_up();
-    robot.wait_for_idle();
-}
-
-fn tap_node(robot: &mut Robot, label: &str) {
-    let bounds = node(robot, label).layout_bounds;
-    tap(
-        robot,
-        bounds.x + bounds.width * 0.5,
-        bounds.y + bounds.height * 0.5,
-    );
 }
 
 type Slot<T> = Rc<Cell<Option<MutableState<T>>>>;
