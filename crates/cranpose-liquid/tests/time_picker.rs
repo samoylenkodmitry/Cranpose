@@ -154,10 +154,18 @@ fn the_clock_follows_the_app_s_language() {
                 LiquidTimePicker(picker, Modifier::empty());
             });
         });
+        robot.shell_mut().set_semantics_enabled(true);
         robot.wait_for_idle();
         let picker = state.get().expect("composed");
         assert_eq!(picker.is_24_hour(), twenty_four, "{tag}");
         assert_eq!((picker.hour(), picker.minute()), (21, 5), "{tag}");
-        assert_eq!(robot.find_by_text("PM").exists(), !twenty_four, "{tag}");
+        // The wheels draw their labels; a reader hears the day-half wheel read
+        // the half of the day.
+        let tree = placed_semantics_from_shell(robot.shell_mut()).expect("placed wheels");
+        let reads_pm = tree
+            .flatten()
+            .iter()
+            .any(|node| node.state_description.as_deref() == Some("PM"));
+        assert_eq!(reads_pm, !twenty_four, "{tag}");
     }
 }
