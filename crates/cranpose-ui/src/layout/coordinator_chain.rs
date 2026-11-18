@@ -227,27 +227,34 @@ impl CoordinatorNode {
     }
 
     // Whether the coordinator stands for `found` at `modifier_index`: the
-    // same node, or a plain element of the same measure, whose words it
-    // then takes.
+    // same node, or a plain element of the same measure.
+    fn stands_for(&self, modifier_index: usize, found: &Found<'_>) -> bool {
+        self.modifier_index == modifier_index
+            && match (&self.source, found) {
+                (Source::Node(held), Found::Node(node)) => Rc::ptr_eq(held, node),
+                (Source::Plain { layout, .. }, Found::Plain(found_layout, _)) => {
+                    match (*layout, *found_layout) {
+                        (Some(held), Some(found)) => std::ptr::eq(held, found),
+                        (None, None) => true,
+                        _ => false,
+                    }
+                }
+                _ => false,
+            }
+    }
+
+    // Whether the coordinator stands for `found` at `modifier_index`; a
+    // plain element's coordinator then takes its words.
     fn takes(&mut self, modifier_index: usize, found: &Found<'_>, at: PrepareAt) -> bool {
-        if self.modifier_index != modifier_index {
+        if !self.stands_for(modifier_index, found) {
             return false;
         }
-        match (&mut self.source, found) {
-            (Source::Node(held), Found::Node(node)) => Rc::ptr_eq(held, node),
-            (Source::Plain { layout, words }, Found::Plain(found_layout, found_words)) => {
-                let same = match (*layout, *found_layout) {
-                    (Some(held), Some(found)) => std::ptr::eq(held, found),
-                    (None, None) => true,
-                    _ => false,
-                };
-                if same {
-                    *words = prepared(*layout, found_words, at);
-                }
-                same
-            }
-            _ => false,
+        if let (Source::Plain { layout, words }, Found::Plain(_, found_words)) =
+            (&mut self.source, found)
+        {
+            *words = prepared(*layout, found_words, at);
         }
+        true
     }
 }
 
@@ -397,22 +404,43 @@ impl CoordinatorChain {
         inputs
     }
 
+    // Refills the list in place: the coordinators of layout modifiers the
+    // chain no longer holds go first, so the list grows by no more than the
+    // coordinators it lacks.
     fn rebuild(&mut self, layouts: &[(usize, Found<'_>)], at: PrepareAt) {
-        let mut previous_nodes = std::mem::take(&mut self.nodes);
+        self.nodes.retain(|candidate| {
+            layouts
+                .iter()
+                .any(|(index, found)| candidate.stands_for(*index, found))
+        });
         // Exactly: most chains hold one layout modifier, where growth would
         // make room for four.
-        self.nodes.reserve_exact(layouts.len());
-        for (index, found) in layouts {
-            match previous_nodes
+        self.nodes.reserve_exact(layouts.len() - self.nodes.len());
+        for (position, (index, found)) in layouts.iter().enumerate() {
+            match self.nodes[position..]
                 .iter_mut()
                 .position(|candidate| candidate.takes(*index, found, at))
             {
-                Some(position) => self.nodes.push(previous_nodes.swap_remove(position)),
+                Some(offset) => self.nodes.swap(position, position + offset),
                 None => self
                     .nodes
-                    .push(CoordinatorNode::new(*index, found.source(at))),
+                    .insert(position, CoordinatorNode::new(*index, found.source(at))),
             }
         }
+    }
+
+    // Lets go of the coordinators, as the node leaves the tree for the
+    // recycle pool, and keeps the room of their list up to `kept_room`.
+    pub(super) fn release_for_recycle(&mut self, kept_room: usize) {
+        let mut nodes = std::mem::take(&mut self.nodes);
+        if nodes.capacity() > kept_room {
+            nodes = Vec::new();
+        }
+        nodes.clear();
+        *self = Self {
+            nodes,
+            ..Self::default()
+        };
     }
 
     /// What the last measure through this chain holds for: the policy's own

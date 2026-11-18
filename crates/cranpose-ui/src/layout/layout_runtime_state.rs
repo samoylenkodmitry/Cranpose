@@ -32,10 +32,12 @@ impl LayoutRuntimeState {
 
     // Lets go of what the node held, as it leaves the tree for the recycle
     // pool: its children, its coordinators and its measure policy. The
-    // children's list and frame keep their room for the node that comes in.
+    // children's list and frame and the coordinators' list keep their room
+    // for the node that comes in.
     pub(crate) fn release_for_recycle(&mut self) {
         self.release_children();
-        self.coordinator_chain = CoordinatorChain::default();
+        self.coordinator_chain
+            .release_for_recycle(crate::widgets::nodes::node_pool_limit::KEPT_MODIFIER_ROOM);
         self.measure_policy = crate::widgets::nodes::layout_node::empty_measure_policy();
     }
 

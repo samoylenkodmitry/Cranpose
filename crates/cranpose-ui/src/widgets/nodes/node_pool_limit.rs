@@ -10,6 +10,10 @@ const AMPLE_NODE_POOL_LIMIT: usize = 128;
 // more lets its lists go, so a pool of shells holds a bounded room.
 pub(crate) const KEPT_CHILD_ROOM: usize = 64;
 
+// The same for the entries of a removed node's modifier chain and for the
+// coordinators of its layout modifiers.
+pub(crate) const KEPT_MODIFIER_ROOM: usize = 8;
+
 // The shells of removed layout nodes the recycle pool keeps under the
 // current memory headroom. With little memory left it keeps none: a removed
 // node goes, and a new one takes fresh memory, since shells kept for later

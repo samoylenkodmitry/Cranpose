@@ -164,6 +164,19 @@ impl ModifierChainHandle {
         Self::with_chain(ModifierNodeChain::detached(), layout_direction)
     }
 
+    // Makes the handle a detached one, as the node it serves leaves the tree
+    // for the recycle pool: the chain keeps the room of its entries, up to
+    // `kept_room`, for the node that takes its place.
+    pub(crate) fn release_for_recycle(
+        &mut self,
+        layout_direction: crate::LayoutDirection,
+        kept_room: usize,
+    ) {
+        let mut chain = std::mem::replace(&mut self.chain, ModifierNodeChain::detached());
+        chain.release(kept_room);
+        *self = Self::with_chain(chain, layout_direction);
+    }
+
     pub(crate) fn for_layout_direction(layout_direction: crate::LayoutDirection) -> Self {
         Self {
             layout_direction,
