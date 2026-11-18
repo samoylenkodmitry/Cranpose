@@ -75,6 +75,49 @@ pub(crate) fn turn_degrees(pitch: f32, yaw: f32, roll: f32) -> [f32; 4] {
     )
 }
 
+// The unit quaternion x, y, z, w of the turn that takes the x, y and z axes to `x`, `y` and
+// `z`, which are unit vectors at right angles with `x` cross `y` equal to `z`.
+#[cfg(any(test, headset))]
+pub(crate) fn turn_of_axes(x: [f32; 3], y: [f32; 3], z: [f32; 3]) -> [f32; 4] {
+    // The turn's matrix has these axes as its columns: m[row][column]
+    let m = [[x[0], y[0], z[0]], [x[1], y[1], z[1]], [x[2], y[2], z[2]]];
+    let trace = m[0][0] + m[1][1] + m[2][2];
+    // Each branch divides by the largest of w, x, y and z, which keeps the division exact
+    if trace > 0.0 {
+        let s = 2.0 * (trace + 1.0).sqrt();
+        [
+            (m[2][1] - m[1][2]) / s,
+            (m[0][2] - m[2][0]) / s,
+            (m[1][0] - m[0][1]) / s,
+            0.25 * s,
+        ]
+    } else if m[0][0] > m[1][1] && m[0][0] > m[2][2] {
+        let s = 2.0 * (1.0 + m[0][0] - m[1][1] - m[2][2]).sqrt();
+        [
+            0.25 * s,
+            (m[0][1] + m[1][0]) / s,
+            (m[0][2] + m[2][0]) / s,
+            (m[2][1] - m[1][2]) / s,
+        ]
+    } else if m[1][1] > m[2][2] {
+        let s = 2.0 * (1.0 + m[1][1] - m[0][0] - m[2][2]).sqrt();
+        [
+            (m[0][1] + m[1][0]) / s,
+            0.25 * s,
+            (m[1][2] + m[2][1]) / s,
+            (m[0][2] - m[2][0]) / s,
+        ]
+    } else {
+        let s = 2.0 * (1.0 + m[2][2] - m[0][0] - m[1][1]).sqrt();
+        [
+            (m[0][2] + m[2][0]) / s,
+            (m[1][2] + m[2][1]) / s,
+            0.25 * s,
+            (m[1][0] - m[0][1]) / s,
+        ]
+    }
+}
+
 fn multiply(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     let [ax, ay, az, aw] = a;
     let [bx, by, bz, bw] = b;

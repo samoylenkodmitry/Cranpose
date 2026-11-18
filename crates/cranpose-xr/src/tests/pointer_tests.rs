@@ -48,21 +48,29 @@ fn aim(x: f32, yaw: f32, trigger: f32) -> Option<Aim> {
     })
 }
 
-// A controller at `x` that points at the handle under `slot`'s panel, with its trigger pulled by
-// `trigger`.
-fn handle_aim(slot: &PanelSlot, x: f32, trigger: f32) -> Option<Aim> {
-    let (handle, _) = crate::carry::handle_pose(slot);
-    let [hx, hy, hz] = handle.position;
-    let length = (hx * hx + hy * hy + hz * hz).sqrt();
+// A controller at `origin` that points at `target`, with its trigger pulled by `trigger`.
+fn aim_at(origin: [f32; 3], target: [f32; 3], trigger: f32) -> Option<Aim> {
+    let to_target = [
+        target[0] - origin[0],
+        target[1] - origin[1],
+        target[2] - origin[2],
+    ];
+    let length = to_target.iter().map(|v| v * v).sum::<f32>().sqrt();
     Some(Aim {
         ray: Ray {
-            origin: [x, 0.0, 0.0],
-            direction: [hx / length, hy / length, hz / length],
+            origin,
+            direction: to_target.map(|v| v / length),
         },
-        pose: Pose::at([x, 0.0, 0.0]),
+        pose: Pose::at(origin),
         trigger,
         stick: 0.0,
     })
+}
+
+// A controller at `x` that points at the handle under `slot`'s panel, with its trigger pulled by
+// `trigger`.
+fn handle_aim(slot: &PanelSlot, x: f32, trigger: f32) -> Option<Aim> {
+    aim_at([x, 0.0, 0.0], crate::carry::handle_center(slot), trigger)
 }
 
 // Frames 10 ms apart.
@@ -252,6 +260,56 @@ fn a_pull_on_a_handle_carries_the_panel() {
             ..moving
         }]
     );
+}
+
+// A movable `PANEL`: its bottom edge is at y = -0.25.
+const MOVABLE: PanelSlot = PanelSlot {
+    mobility: Mobility::Movable,
+    ..PANEL
+};
+
+#[test]
+fn a_pull_on_a_handle_from_behind_the_panel_carries_it() {
+    let center = crate::carry::handle_center(&MOVABLE);
+    // The controller stands two meters behind the panel and points back at the handle.
+    let behind = |trigger: f32| aim_at([0.1, 0.3, -3.0], center, trigger);
+    let mut frames = Frames::default();
+    frames.update([None, behind(0.0)], &[MOVABLE]);
+    assert_eq!(frames.pointer.handle(), Some(1));
+    frames.update([None, behind(1.0)], &[MOVABLE]);
+    assert_eq!(
+        frames.pointer.moves(),
+        [PanelMove {
+            panel: 1,
+            event_type: SpatialMoveEventType::Start,
+            pose: MOVABLE.pose,
+        }]
+    );
+}
+
+#[test]
+fn a_pull_beside_a_handle_does_not_carry() {
+    let [x, y, z] = crate::carry::handle_center(&MOVABLE);
+    // 10 cm to the side of the handle, in front of the panel and behind it
+    for origin in [[x + 0.1, y, 0.0], [x + 0.1, y, -3.0]] {
+        let beside = |trigger: f32| aim_at(origin, [x + 0.1, y, z], trigger);
+        let mut frames = Frames::default();
+        frames.update([None, beside(0.0)], &[MOVABLE]);
+        assert_eq!(frames.pointer.handle(), None, "{origin:?}");
+        frames.update([None, beside(1.0)], &[MOVABLE]);
+        assert!(frames.pointer.moves().is_empty(), "{origin:?}");
+    }
+}
+
+#[test]
+fn a_pull_just_above_the_bottom_edge_of_a_movable_panel_presses() {
+    let mut frames = Frames::default();
+    let aim = |trigger: f32| aim_at([0.0, -0.245, 0.0], [0.0, -0.245, -1.0], trigger);
+    frames.update([None, aim(0.0)], &[MOVABLE]);
+    assert_eq!(frames.pointer.handle(), None);
+    let (events, _) = frames.update([None, aim(1.0)], &[MOVABLE]);
+    assert!(events.contains(&Gesture::Press));
+    assert!(frames.pointer.moves().is_empty());
 }
 
 #[test]

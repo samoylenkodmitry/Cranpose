@@ -25,6 +25,8 @@ mod aim_filter;
 #[cfg(any(test, headset))]
 mod beam_pose;
 #[cfg(any(test, headset))]
+mod billboard_pose;
+#[cfg(any(test, headset))]
 mod carry;
 mod controller;
 #[cfg(any(test, headset))]
@@ -73,6 +75,8 @@ mod streamed_view;
 mod subspace;
 mod subspace_modifier;
 mod surface_input;
+#[cfg(any(test, headset))]
+mod vector;
 mod xr_frame;
 
 mod android_main;

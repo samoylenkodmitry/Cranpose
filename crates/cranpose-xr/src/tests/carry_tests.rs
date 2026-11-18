@@ -76,22 +76,50 @@ fn a_push_moves_the_panel_away_within_limits() {
 }
 
 #[test]
-fn the_handle_catches_a_ray_under_the_panel_and_misses_a_far_one() {
+fn the_handle_catches_a_ray_from_any_side_and_misses_a_ray_beside_it() {
     let slot = slot();
-    let (pose, size) = handle_pose(&slot);
-    assert!(close(pose.position, [0.0, -0.277, -2.0]));
-    assert_eq!(size, [0.12, 0.014]);
-    let ahead = |x: f32, y: f32| Ray {
-        origin: [x, y, 0.0],
-        direction: [0.0, 0.0, -1.0],
-    };
-    let hit = handle_hit(&ahead(0.0, -0.3), &slot).expect("just under the bar");
-    assert!((hit - 2.0).abs() < 1e-4);
+    // The panel is 0.5 m high and 2 m ahead: its bottom edge is at y = -0.25, and the handle's
+    // center is 4 cm under it.
+    let center = handle_center(&slot);
+    assert!(close(center, [0.0, -0.29, -2.0]));
+    let ray = |origin: [f32; 3], direction: [f32; 3]| Ray { origin, direction };
+    // From the front, looking at the panel
+    let hit = handle_hit(&ray([0.0, -0.29, 0.0], [0.0, 0.0, -1.0]), &slot).expect("front");
+    assert!(
+        (hit - (2.0 - 0.035)).abs() < 1e-4,
+        "the grab sphere's near side"
+    );
+    // From behind the panel, looking back at it
+    let hit = handle_hit(&ray([0.0, -0.29, -4.0], [0.0, 0.0, 1.0]), &slot).expect("behind");
+    assert!((hit - (2.0 - 0.035)).abs() < 1e-4);
+    // From below, from the side and from above at a slant
+    assert!(handle_hit(&ray([0.0, -1.29, -2.0], [0.0, 1.0, 0.0]), &slot).is_some());
+    assert!(handle_hit(&ray([1.0, -0.29, -2.0], [-1.0, 0.0, 0.0]), &slot).is_some());
+    let slant = [0.0, -0.6, -0.8];
+    assert!(handle_hit(&ray([0.0, 0.31, -1.2], slant), &slot).is_some());
+    // A ray inside the margin meets the handle at once
     assert_eq!(
-        handle_hit(&ahead(0.0, 0.0), &slot),
+        handle_hit(&ray([0.0, -0.29, -2.0], [0.0, 0.0, -1.0]), &slot),
+        Some(0.0)
+    );
+    // Misses: the panel itself, beside the margin, far to the side, and a handle behind the ray
+    assert_eq!(
+        handle_hit(&ray([0.0, 0.0, 0.0], [0.0, 0.0, -1.0]), &slot),
         None,
         "the panel itself"
     );
-    assert_eq!(handle_hit(&ahead(0.0, -0.5), &slot), None);
-    assert_eq!(handle_hit(&ahead(1.0, -0.28), &slot), None);
+    assert_eq!(
+        handle_hit(&ray([0.0, -0.29 - 0.04, 0.0], [0.0, 0.0, -1.0]), &slot),
+        None,
+        "4 cm beside the center, past the 3.5 cm grab"
+    );
+    assert_eq!(
+        handle_hit(&ray([1.0, -0.29, 0.0], [0.0, 0.0, -1.0]), &slot),
+        None
+    );
+    assert_eq!(
+        handle_hit(&ray([0.0, -0.29, -4.0], [0.0, 0.0, -1.0]), &slot),
+        None,
+        "the handle lies behind the ray"
+    );
 }
