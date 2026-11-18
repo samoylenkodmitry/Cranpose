@@ -148,8 +148,17 @@ impl LayoutBody {
     // Gives back the room of the faces, lines and runs past four times their
     // length, as a long text left to a short one in the layout they take
     // turns in: a text with half the lines of the last keeps the room their
-    // growth left.
+    // growth left. A body whose parts all sit inline holds no room to give
+    // back, so a one-line text pays one test.
     pub(crate) fn give_back_room(&mut self) {
+        if self.faces.spilled() | self.runs.spilled() | self.lines.spilled() {
+            self.give_back_spilled_room();
+        }
+    }
+
+    // Out of line: only a text of several lines, runs or faces needs it.
+    #[inline(never)]
+    fn give_back_spilled_room(&mut self) {
         give_back_room(&mut self.faces);
         give_back_room(&mut self.runs);
         give_back_room(&mut self.lines);
