@@ -3,19 +3,22 @@
 // one lamp behind it lights the room through them. The words glow, their
 // light spills over the plaster and streams through the dusty air, and the
 // lamp throws them onto the floor. A selection knocks an opening out of
-// the plate and glazes it with coloured glass. The lamp swings as the
-// scroll walks the section and leans toward the pointer.
+// the plate and glazes it with coloured glass; once, the words the
+// paragraph asks for select themselves. The lamp swings as the scroll walks
+// the section and leans toward the pointer.
 
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc, time::Duration};
 
-use cranpose_core::{rememberKeyed, CompositionLocalProvider};
+use cranpose_core::{
+    delay, derivedStateOf, remember, rememberKeyed, CompositionLocalProvider, LaunchedEffect,
+};
 use cranpose_ui::{
     composable, local_text_selection_colors,
     space::{Multisample, Scene3d},
     text::{AnnotatedString, TextAlign, TextLayoutOptions},
-    widgets::SelectionContainer,
+    widgets::{local_selection_registrar, SelectionContainer},
     Box, BoxSpec, Color, Column, ColumnSpec, HorizontalAlignment, LinearArrangement, Modifier,
-    ScrollState, Size, Text, TextSelectionColors, TextStyle,
+    ScrollState, Size, Text, TextRange, TextSelectionColors, TextStyle,
 };
 
 use super::{
@@ -34,6 +37,12 @@ const HEADLINE: &str = "Words can light a room";
 const PARAGRAPH: &str = "Each letter is a hole in the wall with a lamp behind it. Cranpose works \
                          the light out from the letters, so when they change, it changes. Select \
                          some words to color the room.";
+// The words the paragraph asks a reader to select.
+const ASKED: &str = "Select some words";
+// How long the stage holds in view before the asked words select
+// themselves, and how many milliseconds they take to.
+const ASK_AFTER: Duration = Duration::from_millis(1200);
+const ASK_MILLIS: usize = 900;
 const HANDLE: Color = Color(1.0, 0.8, 0.4, 1.0);
 
 #[composable(no_skip)]
@@ -84,7 +93,7 @@ fn LampStage(size: Size, walk: Walk, moving: bool) {
                 move || {
                     let lettering = Rc::clone(&lettering);
                     Plate(room, (lettering.cuts, density), move || {
-                        LampWords(Rc::clone(&lettering));
+                        LampWords(Rc::clone(&lettering), walk);
                     });
                     Skirting(room);
                 },
@@ -94,7 +103,7 @@ fn LampStage(size: Size, walk: Walk, moving: bool) {
 }
 
 #[composable(no_skip)]
-fn LampWords(lettering: Rc<LampLettering>) {
+fn LampWords(lettering: Rc<LampLettering>, walk: Walk) {
     let glass = TextSelectionColors {
         handle_color: HANDLE,
         background_color: SELECTION_KEY,
@@ -102,6 +111,7 @@ fn LampWords(lettering: Rc<LampLettering>) {
     CompositionLocalProvider([local_text_selection_colors().provides(glass)], move || {
         let lettering = Rc::clone(&lettering);
         SelectionContainer(Modifier::empty().fill_max_size(), move || {
+            SelectAsked(walk);
             let lettering = Rc::clone(&lettering);
             Column(
                 Modifier::empty().fill_max_size().padding_each(
@@ -126,6 +136,47 @@ fn LampWords(lettering: Rc<LampLettering>) {
                 },
             );
         });
+    });
+}
+
+// Once, for a reader who has selected nothing in the lamp's words: when the
+// stage has held in view for a while, the words the paragraph asks for
+// select themselves letter by letter, so the coloured light shows by
+// itself. A selection the reader makes stops it.
+#[composable(no_skip)]
+fn SelectAsked(walk: Walk) {
+    let Some(registrar) = local_selection_registrar().current() else {
+        return;
+    };
+    let pinned =
+        derivedStateOf(move || (0.0..=walk.travel).contains(&(walk.scroll.value() - walk.top)))
+            .get();
+    let done = remember(|| Rc::new(Cell::new(false))).with(Rc::clone);
+    LaunchedEffect(pinned, async move |scope| {
+        if !pinned || done.get() {
+            return;
+        }
+        delay(ASK_AFTER).await;
+        done.set(true);
+        let Some(start) = registrar.text().find(ASKED) else {
+            return;
+        };
+        let began = scope.with_frame_nanos(|now| now).await;
+        let mut written = None;
+        loop {
+            let now = scope.with_frame_nanos(|now| now).await;
+            if registrar.selection() != written {
+                return;
+            }
+            let millis = usize::try_from(now.saturating_sub(began) / 1_000_000)
+                .map_or(ASK_MILLIS, |millis| millis.min(ASK_MILLIS));
+            let letters = (ASKED.len() * millis).div_ceil(ASK_MILLIS).max(1);
+            registrar.select(TextRange::new(start, start + letters));
+            written = registrar.selection();
+            if letters == ASKED.len() {
+                return;
+            }
+        }
     });
 }
 
