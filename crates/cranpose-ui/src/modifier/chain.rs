@@ -382,18 +382,19 @@ impl ModifierChainHandle {
 
     // Whether the chain holds `modifier`'s elements, as `rule` compares them.
     pub(crate) fn holds(&self, modifier: &Modifier, rule: ElementMatch) -> bool {
-        element_match::elements_match(self.chain.held_elements(), modifier, rule)
+        element_match::elements_match(self.chain.held_elements(), modifier.as_elements(), rule)
     }
 
     // The node after `modifier`'s elements, when the chain holds them, as
     // they compare equal, and that one node more.
     pub(crate) fn node_after(&self, modifier: &Modifier) -> Option<&Rc<RefCell<dyn ModifierNode>>> {
+        let elements = modifier.as_elements();
         element_match::elements_match_but_last(
             self.chain.held_elements(),
-            modifier,
+            elements,
             ElementMatch::Equal,
         )
-        .then(|| self.chain.get_node_rc(modifier.element_count()))
+        .then(|| self.chain.get_node_rc(elements.len()))
         .flatten()
     }
 

@@ -17,37 +17,35 @@ pub(crate) enum ElementMatch {
     Structural,
 }
 
-// Whether `held` are `modifier`'s elements, one for one, as `rule` compares
-// them.
+// Whether `held` are `elements`, one for one, as `rule` compares them. The
+// callers take a modifier's elements once: each take decodes its kind.
 pub(crate) fn elements_match<'a>(
     held: impl ExactSizeIterator<Item = HeldElement<'a>>,
-    modifier: &Modifier,
+    elements: &[DynModifierElement],
     rule: ElementMatch,
 ) -> bool {
-    held.len() == modifier.element_count()
-        && held
-            .zip(modifier.iter_elements())
-            .all(|(a, b)| element_matches(a, b, rule))
+    held.len() == elements.len() && held.zip(elements).all(|(a, b)| element_matches(a, b, rule))
 }
 
-// Whether `held` are `modifier`'s elements, one for one, as `rule` compares
-// them, and one element more after them.
+// Whether `held` are `elements`, one for one, as `rule` compares them, and
+// one element more after them.
 pub(crate) fn elements_match_but_last<'a>(
     held: impl ExactSizeIterator<Item = HeldElement<'a>>,
-    modifier: &Modifier,
+    elements: &[DynModifierElement],
     rule: ElementMatch,
 ) -> bool {
-    held.len() == modifier.element_count() + 1
-        && held
-            .zip(modifier.iter_elements())
-            .all(|(a, b)| element_matches(a, b, rule))
+    held.len() == elements.len() + 1 && held.zip(elements).all(|(a, b)| element_matches(a, b, rule))
 }
 
 // Whether `a` and `b` hold equal elements as `rule` compares them: those of
 // one shared list without comparing them.
 pub(crate) fn modifiers_match(a: &Modifier, b: &Modifier, rule: ElementMatch) -> bool {
     a.kind.shares_storage(&b.kind)
-        || elements_match(a.as_elements().iter().map(HeldElement::from), b, rule)
+        || elements_match(
+            a.as_elements().iter().map(HeldElement::from),
+            b.as_elements(),
+            rule,
+        )
 }
 
 fn element_matches(a: HeldElement<'_>, b: &DynModifierElement, rule: ElementMatch) -> bool {
@@ -86,11 +84,12 @@ pub(crate) fn match_for_set<'a>(
     held: impl ExactSizeIterator<Item = HeldElement<'a>>,
     modifier: &Modifier,
 ) -> SetMatch {
+    let elements = modifier.as_elements();
     let count = held.len();
     let mut matched = SetMatch {
-        equal: count == modifier.element_count(),
-        structural: count == modifier.element_count(),
-        in_place: (count == modifier.element_count() && count <= u64::BITS as usize).then_some(
+        equal: count == elements.len(),
+        structural: count == elements.len(),
+        in_place: (count == elements.len() && count <= u64::BITS as usize).then_some(
             InPlaceUpdate {
                 reach: InPlaceReach::Node,
                 elements: 0,
@@ -100,10 +99,10 @@ pub(crate) fn match_for_set<'a>(
     if !matched.structural {
         return matched;
     }
-    for (index, (a, b)) in held.zip(modifier.iter_elements()).enumerate() {
+    for (index, (a, b)) in held.zip(elements).enumerate() {
         // Most pairs are equal values the chain keeps: one compare tells,
         // and an equal element asks for no update either.
-        if a.is_kept_by_value() && a.equals(&**b) {
+        if a.is_kept_by_value() && a.matches(b) {
             continue;
         }
         // One element in both, as a kept chain shares them.
