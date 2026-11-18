@@ -297,24 +297,26 @@ pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
     specialize_liquid_glass_with_folds(shader, glass_material_folds_enabled());
 }
 
+// The tail folds out of the general pipeline too: only a popover draws one,
+// and inlined at each of the shader's distance evaluations it would cost
+// every glass where materials do not fold.
 fn specialization_flags(uniforms: &[f32], folds: bool) -> u64 {
     let layered = slot(uniforms, GLASS_REFRACTION_MODE_UNIFORM) > 2.5;
-    if !folds && !layered {
-        return 0;
-    }
     LIQUID_GLASS_SPECIALIZATIONS
         .iter()
         .enumerate()
         .filter(|(_, specialization)| {
             folds
-                || !matches!(
-                    specialization.flag,
-                    "GLASS_PROJECTION_OFF"
-                        | "GLASS_PARTIAL_ACTIVITY_OFF"
-                        | "GLASS_RIM_STYLE_OFF"
-                        | "GLASS_SHADOW_OFF"
-                        | "GLASS_RING_SHADOW_OFF"
-                )
+                || specialization.flag == "GLASS_TAIL_OFF"
+                || layered
+                    && !matches!(
+                        specialization.flag,
+                        "GLASS_PROJECTION_OFF"
+                            | "GLASS_PARTIAL_ACTIVITY_OFF"
+                            | "GLASS_RIM_STYLE_OFF"
+                            | "GLASS_SHADOW_OFF"
+                            | "GLASS_RING_SHADOW_OFF"
+                    )
         })
         .fold(0, |flags, (index, specialization)| {
             flags | (u64::from((specialization.inactive)(uniforms)) << index)

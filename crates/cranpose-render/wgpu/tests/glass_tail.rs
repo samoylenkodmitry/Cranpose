@@ -1,6 +1,7 @@
 // A popover's glass tail: it covers the point it reaches, leaves the backdrop
 // beside and past it, and draws the same bytes with its own folded pipeline
-// as with the general one.
+// as with the general one, and where materials do not fold, whose general
+// pipeline leaves the tail out.
 
 use cranpose_app_shell::AppShell;
 use cranpose_liquid::{
@@ -188,5 +189,22 @@ fn a_tailed_glass_draws_the_same_with_its_own_pipeline_and_the_general_one() {
         FRAME_WIDTH,
         &own.pixels,
         &general.pixels,
+    );
+}
+
+#[test]
+fn a_tailed_glass_draws_its_tail_where_materials_do_not_fold() {
+    let Some((folded, _)) = capture(TailedPage, None) else {
+        return;
+    };
+    let unfolded = {
+        let _folds = support::glass_page::GlassFolds::set(false);
+        capture(TailedPage, None).expect("headless WGPU init failed mid-suite")
+    };
+    support::assert_same_bytes(
+        "a tailed glass with folding off and on",
+        FRAME_WIDTH,
+        &folded.pixels,
+        &unfolded.0.pixels,
     );
 }
