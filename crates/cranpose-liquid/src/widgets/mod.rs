@@ -40,6 +40,7 @@ mod slider_gesture;
 mod slider_motion;
 mod snackbar;
 mod stepper;
+mod swipe_actions;
 mod tab_bar;
 mod tab_cells;
 mod tab_flight_lens;
@@ -100,6 +101,7 @@ pub use snackbar::{
     SnackbarVisuals, rememberLiquidSnackbarHostState,
 };
 pub use stepper::LiquidStepper;
+pub use swipe_actions::{LiquidSwipeActions, LiquidSwipeActionsScope};
 pub use tab_bar::{
     LiquidTab, LiquidTabBar, LiquidTabBarScope, LiquidTabBarSearchAccessory, LiquidTabBarSpec,
     LiquidTabBarWithAccessory, LiquidTabIcon, LiquidTabIconStyle, tab_lens_rest_width,

@@ -257,6 +257,24 @@ class NativeControlTests: ReferenceUITests {
     func testToolbar() { captureStates("toolbar", values: ["0", "1", "2", "3"]) }
     func testFilterChip() { captureStates("filter-chip", values: ["0", "1"]) }
 
+    // Value 0 drags the row 200 points toward its leading edge and shows the
+    // trailing actions; value 1 drags it the other way and shows Pin.
+    func testSwipeActions() {
+        for scheme in ["light", "dark"] {
+            for backdrop in ["solid", "checkerboard"] {
+                for (value, from, to) in [("0", 330.0, 130.0), ("1", 72.0, 272.0)] {
+                    let app = launchControl("swipe-actions", scheme: scheme, backdrop: backdrop, value: value)
+                    let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+                    origin.withOffset(CGVector(dx: from, dy: 451)).press(
+                        forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: to, dy: 451)))
+                    Thread.sleep(forTimeInterval: 1.0)
+                    capture("control-swipe-actions-\(scheme)-\(backdrop)-\(value)", app: app)
+                    app.terminate()
+                }
+            }
+        }
+    }
+
     private func captureStates(_ component: String, values: [String]) {
         for scheme in ["light", "dark"] {
             for backdrop in ["solid", "checkerboard"] {

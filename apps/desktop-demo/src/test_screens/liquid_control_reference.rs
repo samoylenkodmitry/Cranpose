@@ -39,10 +39,11 @@ pub(crate) enum Control {
     Alert,
     Confirmation,
     Toolbar,
+    SwipeActions,
 }
 
 // The names shared with the native app's `REFERENCE_COMPONENT`.
-const NAMES: [(&str, Control); 31] = [
+const NAMES: [(&str, Control); 32] = [
     ("slider", Control::Slider),
     ("toggle", Control::Toggle),
     ("segmented", Control::Segmented),
@@ -74,6 +75,7 @@ const NAMES: [(&str, Control); 31] = [
     ("alert", Control::Alert),
     ("confirmation", Control::Confirmation),
     ("toolbar", Control::Toolbar),
+    ("swipe-actions", Control::SwipeActions),
 ];
 
 impl Control {
@@ -174,6 +176,7 @@ fn ControlContent(control: Control, initial: f32, activations: cranpose::Mutable
         }
         Control::Confirmation => ReferenceConfirmation(initial as usize),
         Control::Toolbar => ReferenceToolbar(initial as usize),
+        Control::SwipeActions => ReferenceSwipeActions(),
         _ => ReferenceSurface(control, initial, activations),
     }
 }
@@ -585,6 +588,33 @@ fn ReferenceToolbar(variant: usize) {
                     toolbar.button("Delete", || {});
                 }
             });
+        },
+    );
+}
+
+// A list row with Flag and a destructive Delete at its trailing edge and Pin
+// at its leading edge, as the native fixture shows them.
+#[composable]
+fn ReferenceSwipeActions() {
+    let colors = liquid_colors();
+    LiquidSwipeActions(
+        Modifier::empty().width(300.0).height(44.0),
+        move |scope| {
+            scope.trailing("Delete", colors.destructive, || {});
+            scope.trailing("Flag", colors.warning, || {});
+            scope.leading("Pin", colors.accent, || {});
+        },
+        || {
+            LiquidListRow(
+                Modifier::empty().width(300.0),
+                LiquidListRowSpec::default().with_separator(true),
+                || {},
+                || {
+                    let mut style = liquid_typography().body;
+                    style.span_style.color = Some(liquid_colors().label);
+                    Text("Content", Modifier::empty(), style);
+                },
+            );
         },
     );
 }

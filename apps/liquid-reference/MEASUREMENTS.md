@@ -509,3 +509,11 @@ Adjacent image items share one capsule. One is a circle of 48 points, two take 1
 
 The dark prominent fill now keeps the accent at full strength over a dark backdrop. It was 65% of the accent, (0, 94, 166). The dark prominent button moves from 2.06 to 0.13 against native, and the dark prominent toolbar item reads 0.46. The filter chip, whose selected glass is the prominent one, differs by 0.12 to 0.34 over its eight states; the dark selected chip reads 0.12.
 
+## Swipe actions, native, 2026-11-18
+
+A plain `UITableView` row 300 by 44 points, its trailing actions Delete (destructive) and Flag (orange) and its leading action Pin (blue), on the iOS 27 simulator at 3x after an XCTest drag of 200 points. Each action is a pill 35 points tall inside the row, filled with the system color under a white 13 point label at the regular weight: red (255, 56, 60) and (255, 66, 69), orange (255, 141, 40) and (255, 146, 48), blue (0, 136, 255) and (0, 145, 255) in light and dark mode. The pills sit 10 points from each other, from the row's edge and from the content. Flag and Delete both take 63 points, the width of Delete's label and 12 points on each side; Pin alone takes 43. The content slides by the pills and their gaps, 156.67 points for the trailing pair and 63 for Pin: the closed separator spans 67 to 335, the open ones end at 178.33 and start at 130.
+
+## Liquid swipe actions, 2026-11-18
+
+`LiquidSwipeActions` lays the pills out by that rule and moves its content with `Modifier::anchored_draggable`, Compose's anchored drag: a release faster than 125 points a second goes to the next anchor in its direction, a slower one to the closest. The pills ride in from their edge with the content. Against native over the open trailing and leading states, 2 schemes and 2 backdrops, the eight states differ by 0.12 to 0.24, and every pill edge lands within a third of a point. The drag phase, the release thresholds, the full swipe and what closes an open row are not captured yet.
+
