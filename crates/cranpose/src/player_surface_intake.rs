@@ -16,9 +16,9 @@ use crate::player_surface::Picture;
 ///
 /// `intake` runs on the thread of the composition each time `frames` holds pictures. It takes the
 /// pictures that it wants with [`next_frame`](DecodedFrames::next_frame), and gives the one to
-/// show to [`FramePresenter::present`]. The surface drops the pictures that `intake` leaves in
-/// `frames` when it returns. A picture that the decoder outputs while `intake` runs stays for the
-/// next call, which comes at once. The surface calls `intake` also where it cannot draw, so that the
+/// show to [`FramePresenter::present`]. A picture that `intake` leaves in `frames`, and a picture
+/// that the decoder outputs while `intake` runs, wait for the next call. The surface makes that
+/// call at the window's next frame, so `intake` runs at most once a frame. The surface calls `intake` also where it cannot draw, so that the
 /// app drains the decoder and counts what it could not show. The surface keeps the `intake` of
 /// the composition in which `frames` last changed.
 ///
@@ -117,7 +117,7 @@ pub(crate) fn pump_with(
 ) {
     // A lost device gives a new context, which makes a new converter
     let gpu: Gpu = gpu();
-    LaunchedEffect((frames.clone(), gpu.clone()), async move |_scope| {
+    LaunchedEffect((frames.clone(), gpu.clone()), async move |scope| {
         // A painter of the old context's textures does not draw on the new device
         shown.set(None);
         let mut presenter = FramePresenter {
@@ -125,16 +125,14 @@ pub(crate) fn pump_with(
             converter: converter_of(&gpu),
         };
         let mut intake = intake;
+        let clock = scope.runtime().frame_clock();
         loop {
             frames.wait_for_frame().await;
-            let output = frames.stats().decoded;
             intake(&frames, &mut presenter);
-            // A picture that waits ends the next wait at once, so a loop that left one would
-            // never yield. A picture that the decoder output while the intake ran is newer than
-            // the ones the intake saw: it waits for the next call.
-            if frames.stats().decoded == output {
-                while frames.next_frame().is_some() {}
-            }
+            // A picture that waits ends the next wait at once: one that the intake left, or one
+            // that came while it ran. The next call waits for the window's next frame, so the
+            // loop yields to the window between two calls.
+            clock.next_frame().await;
         }
     });
 }

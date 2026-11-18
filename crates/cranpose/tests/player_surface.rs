@@ -322,19 +322,39 @@ fn a_surface_refuses_a_part_that_reaches_outside_the_picture() {
 }
 
 #[test]
-fn a_surface_drops_the_pictures_that_its_intake_leaves() {
-    // An intake that takes nothing must not keep the surface's task from yielding
-    let mut player = Player::with_surface(VideoCodec::H264, H264_CLIP, (WIDTH, HEIGHT), |frames| {
-        PlayerSurfaceIntake(
-            frames,
-            Modifier::empty().fill_max_size(),
-            ContentScale::Fit,
-            |_frames, _presenter| {},
-        );
-    });
+fn a_picture_that_the_intake_leaves_reaches_its_next_call() {
+    // The first call takes nothing. The surface must still yield to the window, and the next
+    // call must get the picture.
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&calls);
+    let mut player = Player::with_surface(
+        VideoCodec::H264,
+        H264_CLIP,
+        (WIDTH, HEIGHT),
+        move |frames| {
+            let log = Rc::clone(&log);
+            PlayerSurfaceIntake(
+                frames,
+                Modifier::empty().fill_max_size(),
+                ContentScale::Fit,
+                move |frames, _presenter| {
+                    let first = log.borrow().is_empty();
+                    let taken = if first { None } else { frames.next_frame() };
+                    log.borrow_mut()
+                        .push(taken.map(|frame| frame.info().metadata));
+                },
+            );
+        },
+    );
     player.feed();
-    assert!(!player.view.draw(&mut player.pixels).expect("frame"));
-    assert!(player.decoder.frames().next_frame().is_none());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while calls.borrow().len() < 2 && Instant::now() < deadline {
+        player.view.draw(&mut player.pixels).expect("frame");
+    }
+    assert_eq!(*calls.borrow(), [None, Some(0)]);
+    // With no picture left, the surface asks for no more frames
+    draw_settled(&mut player.view, &mut player.pixels);
+    assert_eq!(calls.borrow().len(), 2);
 }
 
 #[test]
