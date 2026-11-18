@@ -168,7 +168,7 @@ impl Immersive {
         let aims = self.headset.sample(&mut self.xr_session, &frame, status);
         self.space.track(
             self.headset.device_pose(),
-            self.headset.grips(),
+            self.headset.controllers(),
             self.headset.display_time(),
             self.headset.recenter(),
         );

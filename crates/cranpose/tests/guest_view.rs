@@ -122,7 +122,7 @@ fn a_rounded_box_on_a_transparent_texture_is_a_premultiplied_circle() {
     let _host = AppLauncher::new()
         .create_embedded_view(16, 16, 1.0, move || {
             if let Some(gpu) = gpu_context() {
-                let _ = keep.set(gpu);
+                keep.get_or_init(|| gpu);
             }
         })
         .expect("GPU embedded component");
@@ -173,7 +173,7 @@ fn a_rounded_box_on_a_transparent_texture_is_a_premultiplied_circle() {
                 std::time::Instant::now() < deadline,
                 "the view kept asking for frames"
             );
-            std::thread::sleep(std::time::Duration::from_millis(2));
+            std::thread::yield_now();
         }
         let pixels = read_texture(&gpu, &texture);
         assert_eq!(
@@ -183,19 +183,27 @@ fn a_rounded_box_on_a_transparent_texture_is_a_premultiplied_circle() {
         );
         let middle = pixel(&pixels, side, 30, 30);
         assert_eq!(middle[3], 255, "{format:?}: inside the circle");
-        // The edge on the diagonal covers a part of its pixel. Its color is the circle's times
-        // that part, whatever the format encodes: a straight color would be brighter.
-        let edge = (1..30)
-            .map(|step| pixel(&pixels, side, step, step))
-            .find(|texel| texel[3] > 0 && texel[3] < 255)
-            .expect("an edge pixel with partial alpha");
+        // An edge pixel covers a part of itself. Its color is the circle's times that part,
+        // whatever the format encodes. A straight color would be brighter.
         let srgb = format == wgpu::TextureFormat::Rgba8UnormSrgb;
-        for channel in 0..3 {
-            let covered = linear(middle[channel], srgb) * f32::from(edge[3]) / 255.0;
-            assert!(
-                (linear(edge[channel], srgb) - covered).abs() < 0.02,
-                "{format:?}: {edge:?} is not premultiplied against {middle:?}"
-            );
+        let edges = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|texel| texel[3] > 0 && texel[3] < 255)
+            .collect::<Vec<_>>();
+        assert!(
+            !edges.is_empty(),
+            "{format:?}: the circle has no edge pixels"
+        );
+        for edge in edges {
+            for channel in 0..3 {
+                let covered = linear(middle[channel], srgb) * f32::from(edge[3]) / 255.0;
+                assert!(
+                    (linear(edge[channel], srgb) - covered).abs() < 0.02,
+                    "{format:?}: {edge:?} is not premultiplied against {middle:?}"
+                );
+            }
         }
     }
 }

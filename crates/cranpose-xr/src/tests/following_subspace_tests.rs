@@ -184,14 +184,15 @@ impl Ball {
         self.space.panels()[0]
     }
 
-    // Tells the space where the controllers' grips are in a frame at `time`.
-    fn track(&self, grips: [Option<Pose>; 2], time: Duration) {
-        self.space.track(None, grips, time, None);
+    // Tells the space where the controllers are in a frame at `time`.
+    fn track(&self, controllers: [Option<Pose>; 2], time: Duration) {
+        self.space.track(None, controllers, time, None);
     }
 }
 
-// A controller at `position` with its grip pitched, turned left and rolled.
-fn grip(position: [f32; 3], pitch: f32, yaw: f32, roll: f32) -> Pose {
+// A controller at `position` that points up by `pitch` degrees, is turned left by `yaw` and
+// rolled by `roll`.
+fn controller(position: [f32; 3], pitch: f32, yaw: f32, roll: f32) -> Pose {
     Pose {
         position,
         orientation: turn_degrees(pitch, yaw, roll),
@@ -213,7 +214,7 @@ fn a_subspace_follows_its_controller_in_every_frame_and_stays_upright() {
     // The controller is tilted and rolled. The ball stands 10 cm straight above it and turns
     // with its heading only. The read comes right after the tracking: a frame hit-tests the
     // panels before it composes.
-    let tilted = grip([0.3, 1.0, -0.4], 50.0, 30.0, 20.0);
+    let tilted = controller([0.3, 1.0, -0.4], 50.0, 30.0, 20.0);
     ball.track([Some(tilted), None], seconds(1));
     assert_eq!(ball.slot().ride, Ride::On(Hand::Left));
     assert!(upright_at(&ball.slot(), [0.3, 1.1, -0.4], 30.0));
@@ -226,7 +227,7 @@ fn a_subspace_follows_its_controller_in_every_frame_and_stays_upright() {
     .into_iter()
     .enumerate()
     {
-        let moved = grip(position, pitch, yaw, roll);
+        let moved = controller(position, pitch, yaw, roll);
         ball.track([Some(moved), None], seconds(2 + frame as u64));
         let up = [position[0], position[1] + 0.1, position[2]];
         assert!(upright_at(&ball.slot(), up, yaw));
@@ -241,8 +242,8 @@ fn a_subspace_follows_its_controller_in_every_frame_and_stays_upright() {
     // The other hand's controller does not move it
     ball.track(
         [
-            Some(grip([0.0, 0.8, 0.1], 70.0, 120.0, 90.0)),
-            Some(grip([5.0, 5.0, 5.0], 0.0, 0.0, 0.0)),
+            Some(controller([0.0, 0.8, 0.1], 70.0, 120.0, 90.0)),
+            Some(controller([5.0, 5.0, 5.0], 0.0, 0.0, 0.0)),
         ],
         seconds(5),
     );
@@ -260,12 +261,12 @@ fn a_subspace_follows_its_controller_in_every_frame_and_stays_upright() {
 fn a_controller_that_points_straight_up_keeps_the_heading_that_it_had() {
     let ball = ball(FollowTarget::Controller(Hand::Right, FollowMode::Tight));
     ball.track(
-        [None, Some(grip([0.0, 1.0, 0.0], 0.0, 60.0, 0.0))],
+        [None, Some(controller([0.0, 1.0, 0.0], 0.0, 60.0, 0.0))],
         seconds(1),
     );
     assert!(upright_at(&ball.slot(), [0.0, 1.1, 0.0], 60.0));
     ball.track(
-        [None, Some(grip([0.0, 1.2, 0.0], 90.0, 60.0, 0.0))],
+        [None, Some(controller([0.0, 1.2, 0.0], 90.0, 60.0, 0.0))],
         seconds(2),
     );
     assert!(upright_at(&ball.slot(), [0.0, 1.3, 0.0], 60.0));
@@ -276,12 +277,12 @@ fn a_snap_subspace_of_a_controller_places_once_and_stays_when_the_controller_is_
     let ball = ball(FollowTarget::Controller(Hand::Left, FollowMode::Snap));
     assert_eq!(ball.slot().ride, Ride::Hidden);
     ball.track(
-        [Some(grip([0.5, 1.0, -0.5], 10.0, 90.0, 0.0)), None],
+        [Some(controller([0.5, 1.0, -0.5], 10.0, 90.0, 0.0)), None],
         seconds(1),
     );
     assert!(upright_at(&ball.slot(), [0.5, 1.1, -0.5], 90.0));
     ball.track(
-        [Some(grip([2.0, 1.0, -0.5], 0.0, 0.0, 0.0)), None],
+        [Some(controller([2.0, 1.0, -0.5], 0.0, 0.0, 0.0)), None],
         seconds(2),
     );
     assert!(upright_at(&ball.slot(), [0.5, 1.1, -0.5], 90.0));
@@ -298,7 +299,7 @@ fn a_snap_subspace_of_a_controller_places_once_and_stays_when_the_controller_is_
         .track(None, [None, None], seconds(3), Some(recenter));
     assert!(upright_at(&ball.slot(), [0.5, 1.1, -0.5], 90.0));
     ball.track(
-        [Some(grip([1.0, 1.0, 1.0], 0.0, 0.0, 0.0)), None],
+        [Some(controller([1.0, 1.0, 1.0], 0.0, 0.0, 0.0)), None],
         seconds(4),
     );
     assert!(upright_at(&ball.slot(), [1.0, 1.1, 1.0], 0.0));

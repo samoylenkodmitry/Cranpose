@@ -662,7 +662,7 @@ fn a_controllers_own_ray_ignores_the_panels_that_ride_it() {
     assert_eq!(events, [Gesture::Move { x: 400.0, y: 250.0 }]);
     assert!(
         frames.pointer.beams()[0].is_some_and(|beam| (beam.length - 1.0).abs() < 1e-4),
-        "the ray ends at the panel, not at the ball"
+        "the ray ends at the panel behind the ball"
     );
     let (events, _) = frames.update([aim(0.0, 0.0, 1.0), None], &panels);
     assert_eq!(events, [Gesture::Press]);

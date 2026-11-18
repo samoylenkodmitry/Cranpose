@@ -15,8 +15,8 @@ use crate::Hand;
 pub enum FollowMode {
     /// The content stands where the target put it once: where the target is when the
     /// [`FollowingSubspace`](crate::FollowingSubspace) first composes, or when the runtime first
-    /// tracks the target after that, and again after the runtime recenters the room. It does not
-    /// follow later movement. Jetpack XR's `FollowMode.snap`.
+    /// tracks the target after that. The runtime's recenter of the room places it again. It does
+    /// not follow later movement. Jetpack XR's `FollowMode.snap`.
     Snap,
     /// The content follows the target in every frame, with no lag: its origin has the target's
     /// place and heading as the frame shows them. Jetpack XR's `FollowMode.tight`.
@@ -38,12 +38,13 @@ pub enum FollowTarget {
     /// The controller in a hand, as `mode` says. Jetpack XR has no controller target: its
     /// targets are the head and anchors.
     ///
-    /// The subspace's origin is where the hand's grip pose is, and it turns about the vertical
-    /// axis with the controller's heading, which is the direction of the grip's forward axis
-    /// seen from above. A controller that points straight up or down has no heading, so the
-    /// content keeps the heading that it had. The grip pose is the hand's, not the ray's: it does
-    /// not swing when the user tilts the ray. The pose that the ray follows is
-    /// [`Controller::aim`](crate::Controller::aim).
+    /// The subspace's origin is where the hand's grip pose is
+    /// ([`Controller::grip`](crate::Controller::grip)). It turns about the vertical axis with the
+    /// heading of the controller's aim pose ([`Controller::aim`](crate::Controller::aim)), which
+    /// is the direction of the ray seen from above. The grip pose has no steady heading: its
+    /// forward axis runs along the controller's handle, which points steeply upward in the usual
+    /// hold. A ray that points straight up or down has no heading. The content keeps the heading
+    /// that it had then.
     ///
     /// While the runtime does not track the controller, the subspace's panels do not show and
     /// take no hits. An app that has no input focus gets no controller poses, so they do not show

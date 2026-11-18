@@ -39,7 +39,7 @@ pub(crate) const SUBSPACE_ORIGIN: Pose = Pose::at([0.0, 0.0, -1.0]);
 // whose origin moves in the frame loop.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Origin {
-    // The origin's pose. In a following subspace it is the identity, and the panel's pose is
+    // The origin's pose. In a following subspace it is the identity. The panel's pose is then
     // relative to the subspace's live origin.
     pose: Pose,
     // The following subspace that places the panel
@@ -222,7 +222,7 @@ struct Entry {
     carried: Option<Pose>,
     // The pose that the move in progress reported last, relative to `origin`
     moving: Option<Pose>,
-    // The following subspace that places the panel, and the pose that the panel's modifier gives
+    // The following subspace that places the panel, with the pose that the panel's modifier gives
     // relative to the subspace's origin
     follow: Option<Following>,
     // What the panel does when the user carries it, or `None` for a panel that stays
@@ -333,22 +333,22 @@ impl Space {
         not(any(test, headset)),
         expect(dead_code, reason = "the headset backend calls it")
     )]
-    // Tells the following subspaces where the head and the controllers' grips are in the frame at
-    // `time`, and whether the runtime recentered the room. The panels of a subspace that moved
-    // take their new poses.
+    // Tells the following subspaces where the head and the controllers are in the frame at `time`,
+    // and whether the runtime recentered the room. The panels of a subspace that moved take
+    // their new poses.
     pub(crate) fn track(
         &self,
         head: Option<Pose>,
-        grips: [Option<Pose>; 2],
+        controllers: [Option<Pose>; 2],
         time: Duration,
         recenter: Option<Recenter>,
     ) {
         let mut origins = self.inner.follow_origins.borrow_mut();
-        if !origins.track(head, grips, time, recenter) {
+        if !origins.track(head, controllers, time, recenter) {
             return;
         }
         for entry in self.inner.entries.borrow_mut().iter_mut() {
-            if let Some(standing) = entry.follow.and_then(|follow| origins.standing(follow.id)) {
+            if let Some(standing) = entry.follow.and_then(|follow| origins.moved(follow.id)) {
                 entry.stand(standing);
             }
         }
@@ -447,8 +447,8 @@ impl Space {
             restack(&mut entries);
         }
         let entry = &mut entries[index];
-        // The panel stands where its subspace's live origin is, not where the composition put
-        // it: a composition that draws later in a frame must not move it back
+        // The panel stands where its subspace's live origin puts it. A composition that draws
+        // later in a frame must not move it back to the pose that the composition gave
         entry.follow = subspace.follower.map(|id| Following { id, local: pose });
         match subspace
             .follower

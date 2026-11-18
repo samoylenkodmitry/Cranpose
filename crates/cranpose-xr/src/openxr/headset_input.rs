@@ -70,11 +70,18 @@ impl HeadsetInput {
         self.frame.device_pose
     }
 
-    // The pose of each controller's grip in the frame sampled last, left then right, or `None`
-    // for a controller that the runtime does not track.
-    pub(crate) fn grips(&self) -> [Option<Pose>; 2] {
-        [&self.frame.left_controller, &self.frame.right_controller]
-            .map(|controller| controller.grip.map(|grip| grip.pose))
+    // Where each controller is in the frame sampled last, left then right: the place of its grip
+    // with the turn of its aim, or `None` for a controller that the runtime does not track. The
+    // grip's own forward axis runs along the handle, which points steeply upward when the hand
+    // holds the controller as usual. The aim's forward axis is the ray, so its heading stays
+    // steady when the hand rises.
+    pub(crate) fn controllers(&self) -> [Option<Pose>; 2] {
+        [&self.frame.left_controller, &self.frame.right_controller].map(|controller| {
+            Some(Pose {
+                position: controller.grip?.pose.position,
+                orientation: controller.aim?.pose.orientation,
+            })
+        })
     }
 
     // Samples the headset for the frame that `state` describes, runs the app's frame effects and

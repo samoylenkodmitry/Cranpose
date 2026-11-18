@@ -65,12 +65,13 @@ subspace tracks the target's place and its turn about the vertical axis, so the 
 upright. `FollowMode.soft` is not available.
 
 `FollowTarget::Controller(hand, mode)` follows the controller in a hand. Jetpack XR has no such
-target. The origin is where the controller's grip pose is, and it turns with the controller's
-heading about the vertical axis. A ball 10 cm above the controller stays straight above it when the
-hand tilts. A controller that points straight up keeps the heading that it had. While the runtime
-does not track the controller, the subspace's panels do not show and take no hits. A controller's
-own ray ignores the panels that ride on it, so the other hand's ray presses them. The user can
-show or hide the app's panels with a ball above the left controller that the right ray presses:
+target. The origin is where the controller's grip pose is. It turns about the vertical axis with
+the heading of the controller's aim pose, which is the direction of its ray seen from above. A ball
+10 cm above the controller stays straight above it when the hand tilts. A ray that points straight
+up keeps the heading that it had. While the runtime does not track the controller, the subspace's
+panels do not show and take no hits. A controller's own ray ignores the panels that ride on it. The
+other hand's ray presses them. The user can show or hide the app's panels with a ball above the
+left controller that the right ray presses:
 
 ```rust
 FollowingSubspace(FollowTarget::Controller(Hand::Left, FollowMode::Tight), move || {
@@ -88,8 +89,8 @@ FollowingSubspace(FollowTarget::Controller(Hand::Left, FollowMode::Tight), move 
 });
 ```
 
-A panel that has rounded corners and no background around them shows as that shape: the headset
-draws the panels with premultiplied alpha, and a 40 by 40 dp panel with `rounded_corners(20.0)` is a
+A panel that has rounded corners and no background around them shows as that shape. The headset
+draws the panels with premultiplied alpha. A 40 by 40 dp panel with `rounded_corners(20.0)` is a
 circle.
 
 A `SpatialCurvedRow` bends the panels inside it around the viewer, as a cylinder layer of the

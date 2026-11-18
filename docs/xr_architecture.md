@@ -97,24 +97,23 @@ on. The backend picks how the runtime shows it:
 
 A `Subspace`'s origin is a meter ahead of where the head was when the app started, in the room's
 LOCAL space. A `FollowingSubspace` has an origin that follows a target. The panels read the origin
-from a composition local, so every panel and surface of the subspace uses it, and so does a
-`SpatialCurvedRow`.
+from a composition local, so every panel and surface of the subspace uses it. A `SpatialCurvedRow`
+uses it too.
 
-The local holds the id of the following subspace and the identity pose, not the live pose. Each
-panel keeps its pose relative to that origin. The frame loop calls `Space::track` once in each
-frame, right after the controllers are sampled and before the pointer reads the panels. The call
-gives the head's pose, the pose of each controller's grip, and the recenter. It computes the
-origin of each following subspace, and for a subspace whose origin moved it sets the pose of each
-of its panels to the origin times the panel's own pose. The cost in a frame is one origin per
-following subspace and one multiplication of poses per panel of a subspace that moved. A frame
-allocates nothing and writes no state, so a moving target does not compose the panels again. A
-composition that draws later in the frame, and the `place` of a panel in it, read the live origin
-and do not move the panel back.
+The local holds the id of the following subspace and the identity pose. It does not hold the live
+pose. Each panel keeps its pose relative to that origin. The frame loop calls `Space::track` once
+in each frame, after it sampled the controllers and before the pointer reads the panels. The call
+takes the head's pose, the pose of each controller and the recenter. It computes the origin of each
+following subspace. For a subspace whose origin moved it sets the pose of each of its panels to the
+origin times the panel's own pose. A frame costs one origin per following subspace and one
+multiplication of poses per panel of a subspace that moved. It allocates nothing and writes no
+state, so a moving target does not compose the panels again. A composition that draws later in the
+frame reads the live origin in the `place` of each panel. It does not move the panel back.
 
 A target and a mode make four cases:
 
 - `View(Snap)`: the origin is one meter ahead of the head along its heading, at its height,
-  facing it. The headset has no head pose at the first composition, so the subspace stands at the
+  facing it. The headset has no head pose at the first composition. The subspace stands at the
   plain origin until the first frame in which the runtime tracks the head. A subspace that
   composes while the head is tracked takes its place at once. A recenter takes effect at the
   `change_time` of its event, which can lie after the frame that reports it. The loop places the
@@ -122,31 +121,37 @@ A target and a mode make four cases:
 - `View(Tight)`: the same origin in every frame. A frame in which the runtime loses the head keeps
   the origin of the frame before.
 - `Controller(hand, Tight)`: the origin is the place of the hand's grip pose, with no offset.
-- `Controller(hand, Snap)`: the origin is that place in the first frame that tracks the controller,
-  and again after a recenter. The panels do not show before the first place.
+- `Controller(hand, Snap)`: the origin is that place in the first frame that tracks the controller.
+  A recenter places it again. The panels do not show before the first place.
 
 Only the target's turn about the vertical axis counts, so the panels stand upright. A ball that
-sits 10 cm above a controller stays straight above it when the hand tilts, and Jetpack XR's
-`TrackedDimensions.All` would also tilt it. The turn is the heading of the pose's forward axis seen
-from above. A pose whose forward axis is within about 6 degrees of vertical has no heading, so the
-origin keeps the last one. The controller's heading comes from the grip pose and not from the aim
-pose: the grip is where the hand is, and it does not swing when the user tilts the ray.
+sits 10 cm above a controller stays straight above it when the hand tilts. Jetpack XR's
+`TrackedDimensions.All` would tilt the ball with the hand. The turn is the heading of the pose's
+forward axis seen from above. A pose whose forward axis is within about 6 degrees of vertical has no
+heading, so the origin keeps the last one.
+
+A controller gives its place from the grip pose and its turn from the aim pose. The OpenXR grip
+pose has its forward axis along the controller's handle. The handle points steeply upward when
+the hand holds the controller as usual, so the grip's heading would flip by 180 degrees when the
+hand rises a few tens of degrees. A quad layer shows its front face only, so a flipped panel would
+vanish. The aim pose points where the ray points. That direction stays steady. A controller counts
+as tracked when the runtime tracks both poses.
 
 A panel that the user carried keeps its pose relative to the origin, so it moves with the origin.
 
 A following subspace of a controller has no place while the runtime does not track the controller.
-The loop marks each of its panels `Ride::Hidden`. The panel stays registered and keeps its
-swapchain image, so it shows again at once. The end of the frame leaves it out of the layers, and
-the pointer ignores it. A panel that rides a controller is `Ride::On(hand)`. The pointer skips it
-in the ray of that hand, both for hits and for handles, because a ball above the left controller
-would stop the left ray at the user's own hand. The other hand's ray meets it like any panel. The
-filter is one function of `pointer.rs` that `nearest_hit` and `nearest_handle` both use, so the
-cursor, the press, the grab and the length of the beam agree.
+The loop marks each of its panels `Ride::Hidden`. The panel stays registered with its swapchain
+image, so it shows again at once. The end of the frame leaves it out of the layers. The pointer
+ignores it. A panel that rides a controller is `Ride::On(hand)`. The pointer skips it in the ray of
+that hand, for hits and for handles, because a ball above the left controller would stop the left
+ray at the user's own hand. The other hand's ray meets it like any panel. The filter is one function
+of `pointer.rs`. `nearest_hit` and `nearest_handle` both use it, so the cursor, the press, the grab
+and the length of the beam agree.
 
-A panel with rounded corners and no background around them is a shape. The composition draws the
-atlas on a transparent background with premultiplied blending, and the quad layer's flags name
-source alpha only, so the compositor reads the image as premultiplied. A 40 by 40 dp panel with
-`rounded_corners(20.0)` shows as a circle.
+A panel with rounded corners and no background around them takes the shape of its corners. The
+composition draws the atlas on a transparent background with premultiplied blending. The quad
+layer's flags name source alpha only, so the compositor reads the image as premultiplied. A 40 by
+40 dp panel with `rounded_corners(20.0)` shows as a circle.
 
 ## Carrying a panel
 
