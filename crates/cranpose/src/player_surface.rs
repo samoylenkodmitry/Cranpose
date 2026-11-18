@@ -4,7 +4,7 @@ use cranpose_core::{MutableState, rememberMutableStateOf};
 use cranpose_services::DecodedFrames;
 use cranpose_ui::{
     Alignment, Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, ContentScale, Image,
-    ImageBitmap, Modifier, composable,
+    Modifier, Painter, composable,
 };
 
 /// Shows the pictures of a [`VideoDecoder`](crate::VideoDecoder) in the box that the layout gives
@@ -30,8 +30,18 @@ use cranpose_ui::{
 /// with no picture draws nothing and keeps its size.
 #[composable]
 pub fn PlayerSurface(frames: DecodedFrames, modifier: Modifier, content_scale: ContentScale) {
-    let shown = rememberMutableStateOf(|| None::<ImageBitmap>);
+    let shown = rememberMutableStateOf(|| None::<Painter>);
     pump(frames, shown);
+    Picture(shown, modifier, content_scale);
+}
+
+// Draws the picture that `shown` holds, or an empty box of the same size.
+#[composable]
+pub(crate) fn Picture(
+    shown: MutableState<Option<Painter>>,
+    modifier: Modifier,
+    content_scale: ContentScale,
+) {
     BoxWithConstraints(modifier, move |scope| {
         let constraints = scope.constraints();
         let bounded = constraints.max_width.is_finite() && constraints.max_height.is_finite();
@@ -40,9 +50,9 @@ pub fn PlayerSurface(frames: DecodedFrames, modifier: Modifier, content_scale: C
         } else {
             Modifier::empty()
         };
-        if let Some(bitmap) = shown.value() {
+        if let Some(painter) = shown.value() {
             Image(
-                bitmap,
+                painter,
                 None,
                 fill,
                 Alignment::CENTER,
@@ -56,56 +66,21 @@ pub fn PlayerSurface(frames: DecodedFrames, modifier: Modifier, content_scale: C
     });
 }
 
-// Takes each picture that the decoder outputs and puts its bitmap in `shown`.
-#[cfg(all(
-    feature = "renderer-wgpu",
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        all(feature = "android", target_os = "android")
-    )
-))]
+// Takes each picture that the decoder outputs and puts its painter in `shown`.
+#[cfg(not(target_arch = "wasm32"))]
 #[composable]
-fn pump(frames: DecodedFrames, shown: MutableState<Option<ImageBitmap>>) {
-    use cranpose_core::LaunchedEffect;
+fn pump(frames: DecodedFrames, shown: MutableState<Option<Painter>>) {
+    use crate::player_surface_intake::pump_with;
 
-    use crate::gpu_context;
-
-    // A lost device gives a new context, which makes a new converter
-    let gpu = gpu_context();
-    LaunchedEffect((frames.clone(), gpu.clone()), async move |_scope| {
-        // A bitmap of the old context's textures does not draw on the new device
-        shown.set(None);
-        let Some(gpu) = gpu else {
-            return;
-        };
-        let Some(mut converter) = Converter::new(&gpu) else {
-            return;
-        };
-        loop {
-            frames.wait_for_frame().await;
-            if let Some(frame) = frames.latest_frame()
-                && let Some(bitmap) = converter.convert(frame)
-            {
-                shown.set(Some(bitmap));
-            }
+    pump_with(frames, shown, |frames, presenter| {
+        // A picture that is not shown drops, and the last one stays on the screen
+        if let Some(frame) = frames.latest_frame() {
+            presenter.present(frame, None).unwrap_or_default();
         }
     });
 }
 
-// The converter of the platform's decoded pictures: one pass that turns a picture into RGB
-#[cfg(all(feature = "renderer-wgpu", feature = "android", target_os = "android"))]
-use crate::android::ycbcr_converter::YcbcrConverter as Converter;
-#[cfg(all(feature = "renderer-wgpu", any(target_os = "macos", target_os = "ios")))]
-use crate::apple::nv12_converter::Nv12Converter as Converter;
-
-#[cfg(not(all(
-    feature = "renderer-wgpu",
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        all(feature = "android", target_os = "android")
-    )
-)))]
+// A web page has no decoder.
+#[cfg(target_arch = "wasm32")]
 #[composable]
-fn pump(_frames: DecodedFrames, _shown: MutableState<Option<ImageBitmap>>) {}
+fn pump(_frames: DecodedFrames, _shown: MutableState<Option<Painter>>) {}

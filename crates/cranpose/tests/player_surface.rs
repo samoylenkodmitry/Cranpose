@@ -1,8 +1,13 @@
-use std::time::{Duration, Instant};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 use cranpose::{
-    AccessUnit, AppLauncher, DecodedFrames, DecoderConfig, DecoderOutput, PlayerSurface,
-    VideoCodec, VideoDecoder, embedded_view::EmbeddedView, prelude::*, split_access_units,
+    AccessUnit, AppLauncher, CropRect, DecodedFrames, DecoderConfig, DecoderOutput, PlayerSurface,
+    PlayerSurfaceIntake, PresentError, VideoCodec, VideoDecoder, embedded_view::EmbeddedView,
+    prelude::*, split_access_units,
 };
 
 use crate::gpu_support::{draw_settled, pixel};
@@ -59,6 +64,19 @@ impl Player {
         content_scale: ContentScale,
         size: (u32, u32),
     ) -> Self {
+        Self::with_surface(codec, clip, size, move |frames| {
+            PlayerSurface(frames, Modifier::empty().fill_max_size(), content_scale);
+        })
+    }
+
+    // A player whose view is `size` pixels and shows the surface that `surface` composes for the
+    // decoder's frames.
+    fn with_surface(
+        codec: VideoCodec,
+        clip: &'static [u8],
+        size: (u32, u32),
+        surface: impl Fn(DecodedFrames) + 'static,
+    ) -> Self {
         let decoder = VideoDecoder::new(DecoderConfig::new(
             codec,
             WIDTH,
@@ -68,13 +86,7 @@ impl Player {
         .expect("a decoder");
         let frames: DecodedFrames = decoder.frames();
         let mut view = AppLauncher::new()
-            .create_embedded_view(size.0, size.1, 1.0, move || {
-                PlayerSurface(
-                    frames.clone(),
-                    Modifier::empty().fill_max_size(),
-                    content_scale,
-                );
-            })
+            .create_embedded_view(size.0, size.1, 1.0, move || surface(frames.clone()))
             .expect("GPU embedded component");
         let mut pixels = Vec::new();
         draw_settled(&mut view, &mut pixels);
@@ -88,12 +100,10 @@ impl Player {
         }
     }
 
-    // Feeds the next picture and draws until it shows, which the decoder's wake-up and the
-    // surface's task do. Returns the time from the unit to the drawn picture.
-    fn show_next(&mut self) -> Duration {
+    // Feeds the next picture and waits until the decoder outputs it.
+    fn feed(&mut self) {
         let before = self.decoder.frames().stats().decoded;
         let unit = self.units[usize::try_from(self.fed).expect("small") % self.units.len()];
-        let started = Instant::now();
         self.decoder
             .submit(AccessUnit {
                 data: unit,
@@ -107,6 +117,13 @@ impl Player {
             wait_until(|| frames.stats().decoded > before),
             "the decoder output no picture"
         );
+    }
+
+    // Feeds the next picture and draws until it shows, which the decoder's wake-up and the
+    // surface's task do. Returns the time from the unit to the drawn picture.
+    fn show_next(&mut self) -> Duration {
+        let started = Instant::now();
+        self.feed();
         let drawn = self.view.draw(&mut self.pixels).expect("frame");
         assert!(drawn, "the picture's frame drew nothing");
         draw_settled(&mut self.view, &mut self.pixels);
@@ -228,4 +245,94 @@ fn a_surface_fits_or_crops_the_picture_to_its_box() {
         ],
         12,
     );
+}
+
+#[test]
+fn a_surface_shows_the_part_that_its_intake_presents() {
+    // The intake presents the right half of each picture, and tells whether the surface took it
+    let results = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&results);
+    let mut player = Player::with_surface(VideoCodec::H264, H264_CLIP, (320, 360), move |frames| {
+        let log = Rc::clone(&log);
+        PlayerSurfaceIntake(
+            frames,
+            Modifier::empty().fill_max_size(),
+            ContentScale::Fit,
+            move |frames, presenter| {
+                while let Some(frame) = frames.next_frame() {
+                    let right_half = CropRect {
+                        x: 320,
+                        y: 0,
+                        width: 320,
+                        height: 360,
+                    };
+                    log.borrow_mut()
+                        .push(presenter.present(frame, Some(right_half)));
+                }
+            },
+        );
+    });
+    player.show_next();
+    assert_points(
+        &player,
+        "the right half",
+        &[
+            ((50, 330), [0, 0, 255]),
+            ((160, 330), [255, 0, 255]),
+            ((270, 330), [0, 255, 255]),
+        ],
+        12,
+    );
+    assert_eq!(*results.borrow(), [Ok(())]);
+}
+
+#[test]
+fn a_surface_refuses_a_part_that_reaches_outside_the_picture() {
+    let results = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&results);
+    let mut player = Player::with_surface(
+        VideoCodec::H264,
+        H264_CLIP,
+        (WIDTH, HEIGHT),
+        move |frames| {
+            let log = Rc::clone(&log);
+            PlayerSurfaceIntake(
+                frames,
+                Modifier::empty().fill_max_size(),
+                ContentScale::Fit,
+                move |frames, presenter| {
+                    while let Some(frame) = frames.next_frame() {
+                        // The part starts inside and ends 10 columns past the picture's edge
+                        let part = CropRect {
+                            x: 330,
+                            y: 0,
+                            width: 320,
+                            height: 360,
+                        };
+                        log.borrow_mut().push(presenter.present(frame, Some(part)));
+                    }
+                },
+            );
+        },
+    );
+    player.feed();
+    // The surface draws nothing, so the frame that takes the picture has nothing to show
+    assert!(!player.view.draw(&mut player.pixels).expect("frame"));
+    assert_eq!(*results.borrow(), [Err(PresentError::PartOutside)]);
+}
+
+#[test]
+fn a_surface_drops_the_pictures_that_its_intake_leaves() {
+    // An intake that takes nothing must not keep the surface's task from yielding
+    let mut player = Player::with_surface(VideoCodec::H264, H264_CLIP, (WIDTH, HEIGHT), |frames| {
+        PlayerSurfaceIntake(
+            frames,
+            Modifier::empty().fill_max_size(),
+            ContentScale::Fit,
+            |_frames, _presenter| {},
+        );
+    });
+    player.feed();
+    assert!(!player.view.draw(&mut player.pixels).expect("frame"));
+    assert!(player.decoder.frames().next_frame().is_none());
 }

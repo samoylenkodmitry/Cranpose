@@ -50,6 +50,8 @@ pub fn XrDemo() {
         HeadsetReadout(presses, readout, clock.clone(), logs.clone());
         // A flat window shows the panels side by side, so the clips come first
         #[cfg(not(target_os = "android"))]
+        FlatStreamedClip(logs.clip.clone());
+        #[cfg(not(target_os = "android"))]
         FlatClips();
         ClipSurface(
             StereoMode::Mono,
@@ -129,6 +131,33 @@ fn FlatClips() {
             Clips,
         );
     });
+}
+
+// The frames of the clip in a streamed scene, which a window shows as the left eye's picture, the
+// left half of the clip, fitted to its box. A headset shows the scene of `ClipSurface` instead.
+#[cfg(not(target_os = "android"))]
+#[composable]
+fn FlatStreamedClip(stats: StreamStats) {
+    let started = remember(|| {
+        ClipPlayer::start_frames()
+            .map(|(player, frames)| (Rc::new(player), frames))
+            .map_err(|error| log::error!("xr demo: no flat clip: {error}"))
+            .ok()
+    })
+    .with(Clone::clone);
+    if let Some((_player, frames)) = started {
+        Box(
+            Modifier::empty().size_points(320.0, 360.0),
+            BoxSpec::default(),
+            move || {
+                StreamedScene(
+                    frames.clone(),
+                    |index| clip_views(index, Duration::ZERO),
+                    stats.clone(),
+                );
+            },
+        );
+    }
 }
 
 // The panel with the counter and the button for the room. A handle under it carries it.

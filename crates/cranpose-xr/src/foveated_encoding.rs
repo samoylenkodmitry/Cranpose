@@ -36,8 +36,11 @@ pub struct FoveatedEncoding {
 
 impl FoveatedEncoding {
     #[cfg_attr(
-        not(any(test, all(headset, target_os = "android"))),
-        expect(dead_code, reason = "the headset backend calls it")
+        all(target_arch = "wasm32", not(test)),
+        expect(
+            dead_code,
+            reason = "a web page has no decoder, so no flat scene reads it"
+        )
     )]
     // Whether the unwarp has a result for this description. The pieces of each axis divide by
     // the edge ratio less 1, by the distance of the center from both edges and by the center's

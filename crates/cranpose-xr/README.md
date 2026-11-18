@@ -154,7 +154,17 @@ StreamedScene(frames, |metadata: u64| -> StreamedViews { views_of_frame(metadata
 // Any thread: stats.counts() gives the shown, skipped and repeated frames.
 ```
 
-Outside a headset the composable shows nothing.
+Outside a headset the scene fills the box that the layout gives it with the left eye's picture of
+the newest frame, fitted to the box, and shows that picture again while no newer frame comes. A
+desktop window of `run` on macOS does this, and so does the screen of a phone or a tablet. The
+scene takes the left eye's rectangle from `StreamedView::rect` and ignores the rest of the views.
+It counts the frames shown and skipped in `StreamStats`, and `repeated` stays 0, because the system
+repeats the last picture of a window by itself. A flat scene cannot unwarp a foveated picture: it
+shows the picture as the host encoded it and logs that once. A host that streams to a flat viewer
+must not foveate. The decoder's `depth` must be at least 6 there. macOS, iOS and Android decode
+frames, so a flat scene shows nothing on other platforms. On a phone or a tablet the app starts
+with `cranpose::android_main!` and builds without the `openxr` feature, because an app that
+starts through this crate's `android_main!` is an immersive app that runs on a headset only.
 
 ## Android headsets
 
