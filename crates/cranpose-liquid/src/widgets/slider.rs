@@ -175,16 +175,7 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                                     morph: Some(GlassMorph {
                                         node_size: (node_w, node_h),
                                         primary: (node_w * 0.5, node_h * 0.5, w, h, -1.0),
-                                        shapes: Vec::new(),
-                                        glue: 0.0,
-                                        wobble_amplitude: 0.0,
-                                        wobble_phase: 0.0,
-                                        bulge_amplitude: 0.0,
-                                        bulge_direction: 0.0,
-                                        ellipse_blend: 0.0,
-                                        capsule_smoothing_dp: 0.0,
-                                        deformation: None,
-                                        zoom_anchor: (0.0, 0.0),
+                                        ..GlassMorph::default()
                                     }),
                                     ..Default::default()
                                 }

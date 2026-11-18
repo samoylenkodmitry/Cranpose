@@ -1,7 +1,7 @@
 //! Glass shapeshift frames: the primary shape of a glass element and the
 //! nearby glass shapes that join it in one field.
 
-use cranpose_ui_graphics::{Rect, RuntimeShader};
+use cranpose_ui_graphics::{GLASS_TAIL_TIP_UNIFORM, GLASS_TAIL_UNIFORM, Rect, RuntimeShader};
 
 /// A liquid shapeshift frame: the primary shape plus any number of nearby
 /// glass shapes, ALL smooth-unioned into one field — liquid glass glues to
@@ -58,6 +58,48 @@ pub struct GlassMorph {
     /// magnification there keeps the face filled by that content instead of
     /// pulling in whatever lies beyond it.
     pub zoom_anchor: (f32, f32),
+    /// A popover's tail joined to the primary shape.
+    pub tail: Option<GlassTail>,
+}
+
+/// A popover's tail: the rounded corner of a square turned 45 degrees, joined to one edge of
+/// the primary shape and pointing away from it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlassTail {
+    /// The tip, node-local, in dp.
+    pub tip: (f32, f32),
+    /// The edge of the primary shape that the tail leaves.
+    pub edge: GlassTailEdge,
+    /// The distance in dp from that edge to the tip.
+    pub height: f32,
+    /// The radius in dp of the rounded tip.
+    pub tip_radius: f32,
+    /// The distance in dp over which the tail curves into the edge.
+    pub glue: f32,
+}
+
+/// The edge of a glass shape that a [`GlassTail`] leaves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GlassTailEdge {
+    /// The top edge: the tail points up.
+    Top,
+    /// The bottom edge: the tail points down.
+    Bottom,
+    /// The left edge: the tail points left.
+    Left,
+    /// The right edge: the tail points right.
+    Right,
+}
+
+impl GlassTailEdge {
+    fn axis(self) -> (f32, f32) {
+        match self {
+            Self::Top => (0.0, -1.0),
+            Self::Bottom => (0.0, 1.0),
+            Self::Left => (-1.0, 0.0),
+            Self::Right => (1.0, 0.0),
+        }
+    }
 }
 
 /// A normalized motion axis and reciprocal scales for incompressible glass.
@@ -105,6 +147,28 @@ impl GlassDeformation {
 impl GlassMorph {
     /// Shader budget for extra scene shapes.
     pub const MAX_SHAPES: usize = 8;
+
+    pub(crate) fn field_reach(&self) -> f32 {
+        let (px, py, pw, ph, _) = self.primary;
+        let (left, top) = (px - pw * 0.5, py - ph * 0.5);
+        let (right, bottom) = (px + pw * 0.5, py + ph * 0.5);
+        let mut shape_reach = self.tail.map_or(0.0, |tail| tail.height + tail.glue);
+        for (sx, sy, sw, sh, _) in &self.shapes {
+            let reach_x = ((sx + sw * 0.5) - right)
+                .max(left - (sx - sw * 0.5))
+                .max(0.0);
+            let reach_y = ((sy + sh * 0.5) - bottom)
+                .max(top - (sy - sh * 0.5))
+                .max(0.0);
+            shape_reach = shape_reach.max(reach_x.max(reach_y));
+        }
+        let glue_pad = if self.shapes.is_empty() {
+            0.0
+        } else {
+            self.glue * 2.0
+        };
+        self.wobble_amplitude * 2.0 + self.bulge_amplitude + shape_reach + glue_pad
+    }
 }
 
 pub(crate) fn glass_morphs_match(a: &GlassMorph, b: &GlassMorph) -> bool {
@@ -124,6 +188,7 @@ pub(crate) fn glass_morphs_match(a: &GlassMorph, b: &GlassMorph) -> bool {
             capsule_smoothing_dp,
             deformation,
             zoom_anchor,
+            tail,
         } = m;
         (
             [
@@ -143,6 +208,19 @@ pub(crate) fn glass_morphs_match(a: &GlassMorph, b: &GlassMorph) -> bool {
             shape_bits(primary),
             deformation
                 .map(|GlassDeformation { axis, along }| [axis.0, axis.1, along].map(f32::to_bits)),
+            tail.map(|tail| {
+                (
+                    [
+                        tail.tip.0,
+                        tail.tip.1,
+                        tail.height,
+                        tail.tip_radius,
+                        tail.glue,
+                    ]
+                    .map(f32::to_bits),
+                    tail.edge,
+                )
+            }),
         )
     };
     bits(a) == bits(b)
@@ -189,6 +267,12 @@ pub(crate) fn morph_output_support(
         top = top.min(sy - sh * 0.5 - reach);
         right = right.max(sx + sw * 0.5 + reach);
         bottom = bottom.max(sy + sh * 0.5 + reach);
+    }
+    if let Some(GlassTail { tip: (x, y), .. }) = morph.tail {
+        left = left.min(x - reach);
+        top = top.min(y - reach);
+        right = right.max(x + reach);
+        bottom = bottom.max(y + reach);
     }
     Rect {
         x: left,
@@ -238,5 +322,21 @@ pub(crate) fn set_morph_uniforms(shader: &mut RuntimeShader, morph: &GlassMorph,
     } else {
         shader.set_float2(106, 1.0, 0.0);
         shader.set_float2(108, 1.0, 1.0);
+    }
+    if let Some(tail) = morph.tail {
+        let (axis_x, axis_y) = tail.edge.axis();
+        shader.set_float4(
+            GLASS_TAIL_TIP_UNIFORM,
+            tail.tip.0,
+            tail.tip.1,
+            axis_x,
+            axis_y,
+        );
+        shader.set_float(GLASS_TAIL_UNIFORM, tail.height.max(0.0));
+        shader.set_float(
+            GLASS_TAIL_UNIFORM + 1,
+            tail.tip_radius.clamp(0.0, tail.height.max(0.0)),
+        );
+        shader.set_float(GLASS_TAIL_UNIFORM + 2, tail.glue.max(0.0));
     }
 }

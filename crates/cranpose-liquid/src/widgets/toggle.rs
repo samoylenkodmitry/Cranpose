@@ -292,6 +292,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                             capsule_smoothing_dp: 0.0,
                             deformation: None,
                             zoom_anchor: (0.0, 0.0),
+                            tail: None,
                         }),
                         ..super::control_material::dynamics(
                             super::control_motion::ControlContactKind::Thumb,

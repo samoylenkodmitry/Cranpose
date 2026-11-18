@@ -1560,27 +1560,7 @@ impl ResolvedGlass {
         } else {
             self.set_shadow_uniforms(&mut shader, dynamics, activity)
         };
-        let morph_pad = dynamics.morph.as_ref().map_or(0.0, |morph| {
-            let (px, py, pw, ph, _) = morph.primary;
-            let (left, top) = (px - pw * 0.5, py - ph * 0.5);
-            let (right, bottom) = (px + pw * 0.5, py + ph * 0.5);
-            let mut shape_reach = 0.0f32;
-            for (sx, sy, sw, sh, _) in &morph.shapes {
-                let reach_x = ((sx + sw * 0.5) - right)
-                    .max(left - (sx - sw * 0.5))
-                    .max(0.0);
-                let reach_y = ((sy + sh * 0.5) - bottom)
-                    .max(top - (sy - sh * 0.5))
-                    .max(0.0);
-                shape_reach = shape_reach.max(reach_x.max(reach_y));
-            }
-            let glue_pad = if morph.shapes.is_empty() {
-                0.0
-            } else {
-                morph.glue * 2.0
-            };
-            morph.wobble_amplitude * 2.0 + morph.bulge_amplitude + shape_reach + glue_pad
-        });
+        let morph_pad = dynamics.morph.as_ref().map_or(0.0, GlassMorph::field_reach);
         shader.set_input_padding(if content_mask {
             0.0
         } else {

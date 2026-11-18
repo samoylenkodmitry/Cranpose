@@ -1504,6 +1504,7 @@ fn morph_geometry_and_incompressible_strain_are_packed() {
         capsule_smoothing_dp: 4.0,
         deformation: Some(deformation),
         zoom_anchor: (0.0, 0.0),
+        tail: None,
     };
     let RenderEffect::Shader { shader } = Glass::lens()
         .no_clip()

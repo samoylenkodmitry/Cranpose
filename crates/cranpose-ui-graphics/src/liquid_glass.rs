@@ -220,6 +220,11 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         inactive: |u| slot(u, GLASS_CAPSULE_SMOOTHING_UNIFORM) == 0.0,
     },
     LiquidGlassSpecialization {
+        flag: "GLASS_TAIL_OFF",
+        slots: &[GLASS_TAIL_UNIFORM],
+        inactive: |u| slot(u, GLASS_TAIL_UNIFORM) == 0.0,
+    },
+    LiquidGlassSpecialization {
         flag: "GLASS_INTERIOR_GUARD",
         slots: &[],
         inactive: |_| true,
@@ -292,7 +297,7 @@ pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
     specialize_liquid_glass_with_folds(shader, glass_material_folds_enabled());
 }
 
-fn specialization_flags(uniforms: &[f32], folds: bool) -> u32 {
+fn specialization_flags(uniforms: &[f32], folds: bool) -> u64 {
     let layered = slot(uniforms, GLASS_REFRACTION_MODE_UNIFORM) > 2.5;
     if !folds && !layered {
         return 0;
@@ -312,13 +317,13 @@ fn specialization_flags(uniforms: &[f32], folds: bool) -> u32 {
                 )
         })
         .fold(0, |flags, (index, specialization)| {
-            flags | (u32::from((specialization.inactive)(uniforms)) << index)
+            flags | (u64::from((specialization.inactive)(uniforms)) << index)
         })
 }
 
 #[derive(Clone, Copy, PartialEq)]
 struct GlassSpecializationKey {
-    flags: u32,
+    flags: u64,
     substrate_radius: Option<u32>,
     folds: bool,
     mean_tone: bool,
@@ -449,7 +454,7 @@ impl GlassSpecializationKey {
 /// [`specialize_liquid_glass`] with folding decided by the caller rather
 /// than the process: a test of the folds asks for them whatever the platform.
 pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: bool) {
-    const _: () = assert!(LIQUID_GLASS_SPECIALIZATIONS.len() <= u32::BITS as usize);
+    const _: () = assert!(LIQUID_GLASS_SPECIALIZATIONS.len() <= u64::BITS as usize);
     let uniforms = shader.uniforms();
     let content_mask = slot(uniforms, 112) > 0.5;
     let own = GlassSpecializationKey::for_uniforms(uniforms, folds);
@@ -666,6 +671,12 @@ pub const GLASS_KEY_FILL_UNIFORM: usize = 135;
 pub const GLASS_FACE_RESPONSE_UNIFORM: usize = 142;
 /// Primary capsule transition smoothing in dp; zero preserves the primary outline.
 pub const GLASS_CAPSULE_SMOOTHING_UNIFORM: usize = 146;
+/// Four uniform slots for a popover tail: its tip in dp, then the unit axis from its edge
+/// toward the tip.
+pub const GLASS_TAIL_TIP_UNIFORM: usize = 76;
+/// Three uniform slots for a popover tail in dp: its height past the primary edge (zero for
+/// no tail), its tip radius and the distance over which it curves into the edge.
+pub const GLASS_TAIL_UNIFORM: usize = 84;
 /// Edge-lens image stage: zero requests the complete chain, one renders the outer warp,
 /// two renders the inner warp, and three filters the resulting image and lights it.
 pub const GLASS_OPTICAL_STAGE_UNIFORM: usize = 147;

@@ -1455,9 +1455,7 @@ pub fn LiquidMenu(
                                 bulge_amplitude: surface.bulge,
                                 bulge_direction: bulge_dir,
                                 ellipse_blend: menu_ellipse_blend(t),
-                                capsule_smoothing_dp: 0.0,
-                                deformation: None,
-                                zoom_anchor: (0.0, 0.0),
+                                ..crate::GlassMorph::default()
                             }),
                             ..Default::default()
                         }

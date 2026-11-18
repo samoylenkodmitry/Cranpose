@@ -15,7 +15,7 @@ pub mod widgets;
 
 pub use appearance::{GlassTintAmount, InvalidGlassTintAmount};
 pub use dynamics::{LiquidDynamics, LiquidPose, rememberLiquidDynamics};
-pub use glass_morph::{GlassDeformation, GlassMorph};
+pub use glass_morph::{GlassDeformation, GlassMorph, GlassTail, GlassTailEdge};
 pub use material::{
     Glass, GlassContourHighlight, GlassDynamics, GlassFaceResponse, GlassFaceTone, GlassKeyFill,
     GlassRefraction, GlassShadow, GlassSpectrum, GlassSpecularHighlight, GlassVariant,
@@ -36,7 +36,7 @@ pub mod prelude {
         LiquidPalette,
         appearance::{GlassTintAmount, InvalidGlassTintAmount},
         dynamics::{LiquidDynamics, LiquidPose, rememberLiquidDynamics},
-        glass_morph::{GlassDeformation, GlassMorph},
+        glass_morph::{GlassDeformation, GlassMorph, GlassTail, GlassTailEdge},
         icons,
         material::{
             Glass, GlassContourHighlight, GlassDynamics, GlassFaceResponse, GlassFaceTone,

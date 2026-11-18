@@ -162,6 +162,7 @@ pub(super) fn tab_flight_dynamics(
                 * activity,
             deformation: None,
             zoom_anchor: (0.0, 0.0),
+            tail: None,
         }),
         activity: Some(1.0),
         resting_tint: Some(geometry.resting_tint),

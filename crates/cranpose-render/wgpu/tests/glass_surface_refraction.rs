@@ -250,7 +250,8 @@ fn assert_native_spectral_profile(
             let size = logical_extent();
             let index = u32(floor(select(input.uv.y * size.y, input.uv.x * size.x, {horizontal})));
             let measured = fields[min(index, 41u)];
-            let scene = GlassScene(vec2<f32>(0.0), size, 0.0, 0u, vec2<f32>(1.0), 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, vec2<f32>(1.0, 0.0), 1.0, 1.0);
+            let scene = GlassScene(vec2<f32>(0.0), size, 0.0, 0u, vec2<f32>(1.0), 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, vec2<f32>(1.0, 0.0), 1.0, 1.0,
+                vec2<f32>(0.0), vec2<f32>(0.0, 1.0), 0.0, 0.0, 0.0);
             let field = EdgeLensRay(scene, vec2<f32>(0.0), size, measured.x, 112.24138, 1.0, 1.0, vec2<f32>(0.0), measured.yz, 0.0);
             let spectrum = edge_spectrum(field.lens_refraction, 4.09435, 1.0);
             let dispersed = sample_chromatic_edge_lens(region_map(), input.uv, size, field, spectrum);

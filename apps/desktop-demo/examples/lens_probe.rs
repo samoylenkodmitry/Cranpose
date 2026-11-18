@@ -81,6 +81,7 @@ fn ProbeApp() {
                                 capsule_smoothing_dp: 0.0,
                                 deformation: None,
                                 zoom_anchor: (0.0, 0.0),
+                                tail: None,
                             }),
                             ..Default::default()
                         },
