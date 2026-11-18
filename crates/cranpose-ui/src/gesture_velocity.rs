@@ -1,16 +1,22 @@
 //! The velocity of a finger along one axis. A sample takes the platform's
 //! event time where the platform gives one. Desktop, iOS and watchOS give
-//! none, so there a sample takes the time of its handling.
+//! none, so there a sample takes the instant at which the shell received it.
 
 mod arrival_clock;
 
 use arrival_clock::ArrivalClock;
-use cranpose_foundation::{VelocityTracker1D, velocity_tracker::ASSUME_STOPPED_MS};
+use cranpose_foundation::{PointerEvent, VelocityTracker1D, velocity_tracker::ASSUME_STOPPED_MS};
 use web_time::Instant;
+
+// The instant at which the shell received `event`. An event built without the
+// shell has none: it counts as received by the call that handles it.
+fn received_at(event: &PointerEvent) -> Instant {
+    event.received_at.unwrap_or_else(Instant::now)
+}
 
 pub(crate) struct GestureVelocity {
     tracker: VelocityTracker1D,
-    // When the gesture began, by the clock of the handling and by the
+    // When the gesture began, by the clock of the shell's receipt and by the
     // platform's event clock.
     start: Option<Instant>,
     start_event_ms: Option<i64>,
@@ -30,22 +36,21 @@ impl GestureVelocity {
         }
     }
 
-    // Starts a gesture at `position`, with the down event's time `time_ms`.
-    pub(crate) fn begin(&mut self, time_ms: Option<i64>, position: f32) {
+    // Starts a gesture at `position`, with the down `event`.
+    pub(crate) fn begin(&mut self, event: &PointerEvent, position: f32) {
         self.tracker.reset();
-        self.start = Some(Instant::now());
+        self.start = Some(received_at(event));
         self.arrival_clock = ArrivalClock::default();
-        self.start_event_ms = time_ms;
+        self.start_event_ms = event.time_ms;
         self.tracker.add_data_point(0, position);
         self.last_sample_ms = Some(0);
     }
 
-    // Adds the sample of a move to `position`, with the event's time
-    // `time_ms`.
-    pub(crate) fn add(&mut self, time_ms: Option<i64>, position: f32) {
+    // Adds the sample of the move `event` to `position`.
+    pub(crate) fn add(&mut self, event: &PointerEvent, position: f32) {
         let event_sample_ms = self
             .start_event_ms
-            .zip(time_ms)
+            .zip(event.time_ms)
             .map(|(start_ms, now_ms)| now_ms - start_ms);
         let sample_ms = if let Some(event_sample_ms) = event_sample_ms {
             Some(match self.last_sample_ms {
@@ -55,27 +60,32 @@ impl GestureVelocity {
         } else {
             self.start.map(|start| {
                 self.arrival_clock
-                    .sample_ms(Instant::now(), start, self.last_sample_ms)
+                    .sample_ms(received_at(event), start, self.last_sample_ms)
             })
         };
         if let Some(sample_ms) = sample_ms {
             log::trace!(
                 target: "cranpose::velocity",
-                "sample t={sample_ms}ms pos={position:.2} event_time={time_ms:?}"
+                "sample t={sample_ms}ms pos={position:.2} event_time={:?}",
+                event.time_ms
             );
             self.tracker.add_data_point(sample_ms, position);
             self.last_sample_ms = Some(sample_ms);
         }
     }
 
-    // The velocity the gesture ends with at `release_time_ms`, at most
+    // The velocity the gesture ends with at the release `event`, at most
     // `max_velocity`. It is zero when the finger rested before it lifted.
-    pub(crate) fn release(&mut self, release_time_ms: Option<i64>, max_velocity: f32) -> f32 {
+    pub(crate) fn release(&mut self, event: &PointerEvent, max_velocity: f32) -> f32 {
         let Some(start) = self.start else {
             return 0.0;
         };
-        let release_sample_ms = release_time_ms.zip(self.start_event_ms).map_or_else(
-            || start.elapsed().as_millis() as i64,
+        let release_sample_ms = event.time_ms.zip(self.start_event_ms).map_or_else(
+            || {
+                received_at(event)
+                    .saturating_duration_since(start)
+                    .as_millis() as i64
+            },
             |(release_ms, start_ms)| release_ms - start_ms,
         );
         let rested_before_release = self

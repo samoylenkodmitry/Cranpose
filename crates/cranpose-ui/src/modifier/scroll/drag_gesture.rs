@@ -153,13 +153,10 @@ where
 
                         let should_consume = match event.kind {
                             PointerEventKind::Down => detector.on_down(&event),
-                            PointerEventKind::Move => detector.on_move(
-                                event.position,
-                                event.buttons,
-                                event.time_ms,
-                                &event,
-                            ),
-                            PointerEventKind::Up => detector.on_up(event.time_ms),
+                            PointerEventKind::Move => {
+                                detector.on_move(event.position, event.buttons, &event)
+                            }
+                            PointerEventKind::Up => detector.on_up(&event),
                             PointerEventKind::Cancel => detector.on_cancel(),
                             PointerEventKind::Scroll => detector.on_scroll(
                                 if axis.is_vertical() {

@@ -24,9 +24,8 @@ where
             x: origin.x + global_position.x,
             y: origin.y + global_position.y,
         });
-        let mut event = PointerEvent::new(kind, position, global_position)
-            .with_time_ms(event_time.platform_time_ms)
-            .with_animation_time_nanos(event_time.animation_time_nanos)
+        let mut event = event_time
+            .stamp(PointerEvent::new(kind, position, global_position))
             .with_screen_position(screen_position);
         event.modifiers = self.shell.app.modifiers;
         event

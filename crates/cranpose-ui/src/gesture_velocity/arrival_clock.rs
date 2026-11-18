@@ -1,16 +1,16 @@
 // The times of a gesture's samples on a platform that gives its pointer
-// moves no event time: each sample is timed by when it is handled.
+// moves no event time: each sample is timed by when the shell received it.
 //
-// A frame that runs long holds its moves back and they are then handled one
-// after another, microseconds apart, though the finger made them a display
-// frame or so apart. Timed by their handling they read as one fast flick.
-// So a sample handled right after another is put one sample gap after it:
-// the gap the gesture's samples kept while they arrived in time.
+// A frame that runs long holds its moves back and the shell then receives
+// them one after another, microseconds apart, though the finger made them a
+// display frame or so apart. Timed by their receipt they read as one fast
+// flick. So a sample received right after another is put one sample gap
+// after it: the gap the gesture's samples kept while they arrived in time.
 
 use cranpose_foundation::velocity_tracker::ASSUME_STOPPED_MS;
 use web_time::{Duration, Instant};
 
-// Samples handled closer together than this were held back: no pointer
+// Samples received closer together than this were held back: no pointer
 // reports this often, a 1,000 Hz mouse reports every millisecond.
 const HELD_BACK: Duration = Duration::from_micros(250);
 // The gap between samples before the gesture showed its own: a 120 Hz
@@ -20,14 +20,14 @@ const FIRST_GAP_MS: i64 = 8;
 const LONGEST_OWN_GAP_MS: i64 = 20;
 
 pub(super) struct ArrivalClock {
-    last_handled: Option<Instant>,
+    last_received: Option<Instant>,
     gap_ms: i64,
 }
 
 impl Default for ArrivalClock {
     fn default() -> Self {
         Self {
-            last_handled: None,
+            last_received: None,
             gap_ms: FIRST_GAP_MS,
         }
     }
@@ -35,10 +35,10 @@ impl Default for ArrivalClock {
 
 impl ArrivalClock {
     // The time, in milliseconds since the gesture began at `start`, of a
-    // sample handled at `now`, after the one at `last_ms`.
+    // sample received at `now`, after the one at `last_ms`.
     pub(super) fn sample_ms(&mut self, now: Instant, start: Instant, last_ms: Option<i64>) -> i64 {
         let held_back = self
-            .last_handled
+            .last_received
             .replace(now)
             .is_some_and(|before| now.saturating_duration_since(before) < HELD_BACK);
         let elapsed = now.saturating_duration_since(start).as_millis();
