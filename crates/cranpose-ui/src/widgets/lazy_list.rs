@@ -487,7 +487,7 @@ fn measure_lazy_list_children(
     context: LazyItemMeasureContext,
     measure_start: Instant,
 ) -> LazyListMeasuredItem {
-    let room = measured_item_cache.borrow_mut().take_room();
+    let room = measured_item_cache.borrow_mut().take_room(context.index);
     let (roots, main_axis_size, cross_axis_size) =
         measure_item_roots(scope, node_ids, room, &context);
     let item = LazyListMeasuredItem::new(
