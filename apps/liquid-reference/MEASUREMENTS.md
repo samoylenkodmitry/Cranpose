@@ -535,7 +535,16 @@ A plain `UITableView` row 300 by 44 points, its trailing actions Delete (destruc
 
 `LiquidContextMenu` lifts its content by that rule, and `LiquidContextMenuWithPreview` lifts a preview of its own. A long press moves the content into an overlay, so it keeps its state, and dims the screen. `LiquidMenu` opens beside it under `LiquidMenuPlacement::BesideAnchor`, 16 points away. In all five variants the twin's lifted tile and preview land on native's pixels, and every menu edge lands within a third of a point of native's.
 
-The menu takes a glass of its own, fitted to the native menus. In light its face reads 235 over the dimmed solid backdrop (native 235.6) and 210 over the dimmed checkerboard (208.6), in dark 32 over black (32.9) and 96 over the checkerboard (96.3). Its chroma over the checkerboard is 22.7 in light (22.0) and 18.0 in dark (18.0). The pull-down menu shares the glass: its light face over white rises from 247 to 253 (native 254), and against native it falls from 1.242 to 0.530 in light and from 0.465 to 0.386 in dark.
+The menu takes a glass of its own, fitted to the native menus. In light its face reads 235 over the dimmed solid backdrop (native 235.6) and 210 over the dimmed checkerboard (208.6), in dark 32 over black (32.9) and 96 over the checkerboard (96.3). Its chroma over the checkerboard is 22.7 in light (22.0) and 18.0 in dark (18.0). The pull-down menu shares the glass: its light face over white rises from 247 to 253 (native 254). In dark over the undimmed checkerboard its face reads 126 as native's does; the fit through black and the dimmed checkerboard alone gave 134. Mean RGB difference of the open pull-down menus against native, y 100–700 points, main against this change:
+
+| Menu | Main | This change |
+| --- | --- | --- |
+| Light, on white | 1.242 | 0.530 |
+| Dark, on black | 0.465 | 0.386 |
+| Light, grouped | 2.208 | 0.848 |
+| Dark, grouped | 0.633 | 0.482 |
+| Light, over the checkerboard | 2.113 | 1.043 |
+| Dark, over the checkerboard | 6.433 | 3.382 |
 
 Mean RGB difference against native, x 0–402 by y 110–840 points:
 

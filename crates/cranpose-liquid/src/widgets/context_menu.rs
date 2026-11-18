@@ -226,11 +226,10 @@ fn LiftOverlay(
         },
         "context-menu-lift",
     );
-    let shown = states.shown;
     LaunchedEffect(open, async move |_| {
         if !open {
             delay(Duration::from_millis(CLOSE_MS)).await;
-            shown.set(false);
+            states.shown.set(false);
         }
     });
     let dim = Color::BLACK.with_alpha(modal_dim());

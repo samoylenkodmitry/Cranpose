@@ -344,6 +344,19 @@ class NativeControlTests: ReferenceUITests {
         app.terminate()
     }
 
+    // The pull-down menu open over the checkerboard, where its glass shows
+    // what it blurs and saturates.
+    func testCheckerboardOpenMenu() {
+        for scheme in ["light", "dark"] {
+            let app = launchControl("menu", scheme: scheme, backdrop: "checkerboard")
+            app.buttons["Options"].tap()
+            XCTAssertTrue(app.buttons["Copy"].waitForExistence(timeout: 5))
+            waitForSettledMenu(app)
+            capture("control-menu-\(scheme)-checkerboard-open", app: app)
+            app.terminate()
+        }
+    }
+
     func testGroupedMenu() {
         checkGroupedMenu(scheme: "light")
     }
