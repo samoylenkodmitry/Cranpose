@@ -9,3 +9,5 @@ previous-month = Tháng trước
 next-month = Tháng sau
 hour = Giờ
 minute = Phút
+increment = Tăng
+decrement = Giảm

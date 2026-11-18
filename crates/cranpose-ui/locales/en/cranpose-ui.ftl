@@ -9,3 +9,5 @@ previous-month = Previous month
 next-month = Next month
 hour = Hour
 minute = Minute
+increment = Increment
+decrement = Decrement

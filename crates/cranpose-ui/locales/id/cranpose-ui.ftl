@@ -9,3 +9,5 @@ previous-month = Bulan sebelumnya
 next-month = Bulan berikutnya
 hour = Jam
 minute = Menit
+increment = Tambah
+decrement = Kurangi

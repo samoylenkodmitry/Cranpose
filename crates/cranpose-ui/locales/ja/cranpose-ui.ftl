@@ -9,3 +9,5 @@ previous-month = 前の月
 next-month = 次の月
 hour = 時
 minute = 分
+increment = 増やす
+decrement = 減らす

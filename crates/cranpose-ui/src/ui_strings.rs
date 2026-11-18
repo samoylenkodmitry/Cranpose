@@ -23,6 +23,10 @@ pub enum UiString {
     Hour,
     /// Names the minute wheel of a time picker.
     Minute,
+    /// Raises a stepper's value by one step.
+    Increment,
+    /// Lowers a stepper's value by one step.
+    Decrement,
 }
 
 impl UiString {
@@ -47,6 +51,8 @@ impl UiString {
                 "Next month",
                 "Hour",
                 "Minute",
+                "Increment",
+                "Decrement",
             ][self as usize]
                 .to_owned()
         }
@@ -58,7 +64,7 @@ static SOURCE: crate::localization::SourceCatalog =
     crate::localization::SourceCatalog::new("en", include_str!("../locales/en/cranpose-ui.ftl"));
 
 #[cfg(feature = "localization")]
-static MESSAGES: [crate::localization::Message; 11] = {
+static MESSAGES: [crate::localization::Message; 13] = {
     use crate::localization::Message;
     [
         Message::new("cranpose-ui", "copy", &SOURCE),
@@ -72,6 +78,8 @@ static MESSAGES: [crate::localization::Message; 11] = {
         Message::new("cranpose-ui", "next-month", &SOURCE),
         Message::new("cranpose-ui", "hour", &SOURCE),
         Message::new("cranpose-ui", "minute", &SOURCE),
+        Message::new("cranpose-ui", "increment", &SOURCE),
+        Message::new("cranpose-ui", "decrement", &SOURCE),
     ]
 };
 

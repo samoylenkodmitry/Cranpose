@@ -9,3 +9,5 @@ previous-month = เดือนก่อนหน้า
 next-month = เดือนถัดไป
 hour = ชั่วโมง
 minute = นาที
+increment = เพิ่ม
+decrement = ลด

@@ -9,3 +9,5 @@ previous-month = الشهر السابق
 next-month = الشهر التالي
 hour = الساعة
 minute = الدقيقة
+increment = زيادة
+decrement = إنقاص
