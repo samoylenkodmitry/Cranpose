@@ -620,9 +620,10 @@ fn composing_a_row_of_boxes_allocates_within_its_budget() {
 }
 
 // A modifier holds a plain element by value: one alone takes no
-// allocation, and a chain of them built link by link takes one shared
-// allocation it extends in place.
-fn a_modifier_chain_of_plain_elements_allocates_one_shared_box() {
+// allocation. A chain of them built link by link extends one shared block
+// in place, and the block goes back to the thread when the chain drops, so
+// chains made and dropped one after another take no allocation.
+fn a_modifier_chain_of_plain_elements_reuses_its_block() {
     drop(Modifier::empty().padding(1.0).background(Color::RED));
     let region = Region::new(GLOBAL);
     let modifier = Modifier::empty().padding(1.0);
@@ -631,13 +632,17 @@ fn a_modifier_chain_of_plain_elements_allocates_one_shared_box() {
     assert_eq!(change.allocations, 0, "{change:?}");
 
     let region = Region::new(GLOBAL);
-    let modifier = Modifier::empty()
-        .padding(1.0)
-        .background(Color::RED)
-        .rounded_corners(3.0);
+    for _ in 0..8 {
+        drop(
+            Modifier::empty()
+                .padding(1.0)
+                .background(Color::RED)
+                .rounded_corners(3.0),
+        );
+    }
     let change = region.change();
-    drop(modifier);
-    assert_eq!(change.allocations, 1, "{change:?}");
+    assert_eq!(change.allocations, 0, "{change:?}");
+    assert_eq!(change.deallocations, 0, "{change:?}");
 }
 
 // A node whose chain draws one background collects its slices into their
@@ -806,7 +811,7 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     a_rest_gives_back_a_long_paragraph_glyph_room();
     composing_a_row_of_boxes_allocates_within_its_budget();
     if !cfg!(feature = "inspection") {
-        a_modifier_chain_of_plain_elements_allocates_one_shared_box();
+        a_modifier_chain_of_plain_elements_reuses_its_block();
     }
     slices_of_one_background_allocate_their_block_and_one_list();
     slices_of_a_text_with_a_background_keep_their_list();
