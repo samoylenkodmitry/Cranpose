@@ -159,13 +159,16 @@ events carry the same facts, so the scope takes the callback. A surface with no 
 events and costs nothing for them.
 
 The compositor draws layers in list order, and the last one covers the others. The frame loop
-lists the layers of the room, the streamed scenes and the curved panels first. Then come the flat
-panels and the surfaces, sorted back to front by the distance from the head to each one's plane,
-so a panel in front of a surface shows over it. The plane's distance, not the distance to the
-layer's center, keeps a small panel at the edge of a large surface in front of it. The handles and
-the rays follow, so they show over everything. The sort runs in place on the panels' list and
-allocates nothing. The session keeps the raw structs of the frame's layers in lists that it reuses
-from frame to frame. A curved panel still draws under every flat panel and surface.
+lists the layer of the room and the streamed scenes first. Then come the flat panels, the curved
+panels and the surfaces, sorted back to front by the distance from the head to the plane of each
+one, so a panel in front of a surface shows over it. The plane's distance keeps a small panel at
+the edge of a large surface in front of it, where the distance to the layer's center would put it
+behind. A curved panel sorts by the plane at its center. Its arc leaves that plane by 2 cm for a
+panel of 0.4 m on a cylinder of 1 m. A distance that follows the arc changes when the head steps
+aside, and it would sink a flat panel that stands 3 cm in front of a curved panel under that
+panel. The handles and the rays follow, so they show over everything. The sort runs in place on
+the panels' list and allocates nothing. The session keeps the raw structs of the frame's layers in
+lists that it reuses from frame to frame.
 
 ## Video decoding
 
