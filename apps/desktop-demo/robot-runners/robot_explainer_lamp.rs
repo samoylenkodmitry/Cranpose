@@ -14,6 +14,8 @@ const HEADLINE: &str = "Words can light";
 const PARAGRAPH: &str = "Each letter is a hole in the wall with a lamp behind it. Cranpose works \
                          the light out from the letters, so when they change, it changes. Select \
                          some words to color the room.";
+// The words the lamp selects by itself.
+const ASKED: &str = "Select some words";
 // View heights of the lamp section.
 const LAMP_PAGES: f32 = 1.9;
 const STEPS: u32 = 3;
@@ -40,12 +42,14 @@ pub(crate) fn main() {
             walk.walk_to(&robot, 0.0);
             save(&robot, &shots, "lamp_00.png");
             let held = text_bounds(&robot, HEADLINE).1;
+            let floor = (0.0, HEIGHT * 0.7, WIDTH, HEIGHT * 0.3);
+            walk.walk_to(&robot, 0.5);
+            selects_by_itself(&robot, &shots, wall(text_bounds(&robot, "Each letter")), floor);
             for step in 1..=STEPS {
                 walk.walk_to(&robot, step as f32 / STEPS as f32);
                 save(&robot, &shots, &format!("lamp_{step:02}.png"));
             }
             check_held(&robot, HEADLINE, held);
-            let floor = (0.0, HEIGHT * 0.7, WIDTH, HEIGHT * 0.3);
             let lit_floor = pixels(&robot, WIDTH, floor, is_lit);
             let lit_holes = pixels(&robot, WIDTH, text_bounds(&robot, HEADLINE), is_lit);
             println!("  lit pixels: {lit_floor} on the floor, {lit_holes} in the headline");
@@ -62,11 +66,55 @@ pub(crate) fn main() {
         .run(robot_launch::counter_demo);
 }
 
+// The wall around the paragraph at `paragraph`.
+fn wall((x, y, width, height): Area) -> Area {
+    (x - 60.0, y - 40.0, width + 120.0, height + 120.0)
+}
+
+// With no input, the stage held in view selects the words the paragraph
+// asks for, and their glass colours the light on the floor. Escape then
+// clears them.
+fn selects_by_itself(robot: &Robot, shots: &Path, wall: Area, floor: Area) {
+    let mut glass = 0;
+    for _ in 0..20 {
+        glass = pixels(robot, WIDTH, wall, is_glass);
+        if glass >= GLASS_PIXELS {
+            break;
+        }
+        wait(robot, Duration::from_millis(250));
+    }
+    if glass < GLASS_PIXELS {
+        robot_exit::fail(robot, "the lamp selected no words by itself");
+    }
+    wait(robot, Duration::from_millis(1200));
+    save(robot, shots, "asked.png");
+    let tinted = pixels(robot, WIDTH, floor, is_glass);
+    let copied = copy_selection(robot);
+    println!("  by itself: glass light on the floor {tinted}; copied {copied:?}");
+    if tinted < GLASS_PIXELS {
+        robot_exit::fail(robot, "the words the lamp selected coloured no light on the floor");
+    }
+    if copied != ASKED {
+        robot_exit::fail(robot, "the lamp selected other words than the paragraph asks for");
+    }
+    press(robot, "Escape");
+    wait(robot, Duration::from_millis(300));
+    if pixels(robot, WIDTH, wall, is_glass) >= GLASS_PIXELS {
+        robot_exit::fail(robot, "Escape left the words the lamp selected");
+    }
+}
+
+fn press(robot: &Robot, key: &str) {
+    if let Err(err) = robot.send_key(key).and_then(|()| robot.release_key(key)) {
+        robot_exit::fail(robot, &format!("press {key}: {err}"));
+    }
+}
+
 // Selects words of the paragraph: their holes turn to coloured glass, and
 // the light they let into the room changes with them.
 fn glaze(robot: &Robot, shots: &Path, paragraph: Area, floor: Area) {
     let (x, y, width, height) = paragraph;
-    let wall = (x - 60.0, y - 40.0, width + 120.0, height + 120.0);
+    let wall = wall(paragraph);
     let floor_before = brightness(robot, WIDTH, floor);
     let wall_before = brightness(robot, WIDTH, wall);
     let glass_before = pixels(robot, WIDTH, wall, is_glass);

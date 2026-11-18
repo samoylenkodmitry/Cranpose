@@ -42,7 +42,9 @@ pub(crate) fn current_selection_registrar() -> Option<SelectionRegistrar> {
 /// selection and a release opens the text menu. Ctrl+C and Ctrl+A use the copy and
 /// select-all actions; macOS uses Cmd. Escape clears the selection.
 ///
-/// Wrap excluded content in [`DisableSelection`].
+/// Wrap excluded content in [`DisableSelection`]. The content reads its
+/// container through [`local_selection_registrar`], whose
+/// [`select`](SelectionRegistrar::select) selects text from code.
 ///
 /// # Example
 ///

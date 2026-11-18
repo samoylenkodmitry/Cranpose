@@ -57,6 +57,7 @@ mod scroll_in_progress_test;
 mod secure_text_field_test;
 mod seekable_crossfade_test;
 mod selection_container_button_test;
+mod selection_container_select_test;
 mod shared_element_test;
 mod size_animation_test;
 mod support_text_field;

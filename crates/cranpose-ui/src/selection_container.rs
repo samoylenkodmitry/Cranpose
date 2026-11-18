@@ -15,6 +15,7 @@ use std::{
 };
 
 use cranpose_core::MutableState;
+use cranpose_foundation::text::TextRange;
 use cranpose_ui_graphics::{
     Point, ProjectiveTransform, Rect, Size, WindowCoordinates, shared_sort,
 };
@@ -371,6 +372,80 @@ impl SelectionRegistrar {
         .flatten()
     }
 
+    /// Every text of the container in reading order, joined by line breaks:
+    /// what select all and copy put on the clipboard.
+    pub fn text(&self) -> String {
+        let order = self.reading_order();
+        let selectables = self.inner.selectables.borrow();
+        let mut text = String::new();
+        for (index, key) in order.iter().enumerate() {
+            if index > 0 {
+                text.push('\n');
+            }
+            if let Some(held) = selectables.iter().find(|held| held.key == *key) {
+                text.push_str(held.text.text());
+            }
+        }
+        text
+    }
+
+    /// Selects `range` of [`text`](Self::text), as a person's drag would:
+    /// the selection starts at `range.start` and ends at `range.end`, so a
+    /// range whose start is past its end selects backward. The selection
+    /// becomes the one copy takes, which clears the selection of any other
+    /// container. An offset past the end selects to the end, an offset
+    /// inside a character moves to the character's start, and an offset on
+    /// the line break between two texts lands at the end of the first.
+    pub fn select(&self, range: TextRange) {
+        let order = self.reading_order();
+        let edge = |offset| self.edge_for(&order, offset);
+        let (Some(anchor), Some(focus)) = (edge(range.start), edge(range.end)) else {
+            return;
+        };
+        self.activate();
+        self.set_selection(Some(TextSelection { anchor, focus }));
+    }
+
+    // The edge at byte `offset` of `text()`, whose texts come in `order`.
+    fn edge_for(&self, order: &[u64], offset: usize) -> Option<SelectionEdge> {
+        let selectables = self.inner.selectables.borrow();
+        let mut rest = offset;
+        let mut last = None;
+        for key in order {
+            let Some(held) = selectables.iter().find(|held| held.key == *key) else {
+                continue;
+            };
+            let text = held.text.text();
+            if rest <= text.len() {
+                return Some(SelectionEdge {
+                    selectable: *key,
+                    offset: text.floor_char_boundary(rest),
+                });
+            }
+            rest -= text.len() + 1;
+            last = Some(SelectionEdge {
+                selectable: *key,
+                offset: text.len(),
+            });
+        }
+        last
+    }
+
+    // Makes this container the one a copy acts on, clearing the selection of
+    // the container that held it before.
+    fn activate(&self) {
+        crate::thread_state::with(|state| {
+            let active = &state.active_selection;
+            let previous = active.borrow().upgrade();
+            if let Some(previous) = previous
+                && !Rc::ptr_eq(&previous, &self.inner)
+            {
+                previous.selection.set(None);
+            }
+            *active.borrow_mut() = Rc::downgrade(&self.inner);
+        });
+    }
+
     /// What is selected, the texts joined by line breaks in reading order.
     pub fn selected_text(&self) -> String {
         let Some(selection) = self.inner.selection.get_non_reactive() else {
@@ -550,21 +625,6 @@ impl SelectionGesture {
         self.window.get().local_to_window.map_point(event.position)
     }
 
-    /// Makes this container the one a copy acts on, clearing the selection of
-    /// the container pressed before it.
-    fn activate(&self) {
-        crate::thread_state::with(|state| {
-            let active = &state.active_selection;
-            let previous = active.borrow().upgrade();
-            if let Some(previous) = previous
-                && !Rc::ptr_eq(&previous, &self.registrar.inner)
-            {
-                previous.selection.set(None);
-            }
-            *active.borrow_mut() = Rc::downgrade(&self.registrar.inner);
-        });
-    }
-
     fn is_active(&self) -> bool {
         crate::thread_state::with(|state| {
             state
@@ -576,7 +636,7 @@ impl SelectionGesture {
     }
 
     pub(crate) fn on_down(self: &Rc<Self>, event: &crate::PointerEvent) {
-        self.activate();
+        self.registrar.activate();
         crate::text_field_focus::clear_focus();
         self.menu_open.set(false);
         let touch = event.source.is_touch_like();
