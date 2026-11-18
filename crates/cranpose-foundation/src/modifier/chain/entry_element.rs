@@ -83,7 +83,7 @@ impl<'a> From<&'a DynModifierElement> for HeldElement<'a> {
                 fns: value.fns(),
                 words: value.words(),
             },
-            Repr::Shared(shared) => Held::Element(shared),
+            Repr::Shared { element, .. } => Held::Element(element),
         })
     }
 }
@@ -149,13 +149,19 @@ impl HeldElement<'_> {
 
     /// Whether `element` is this element itself, or one equal to it that
     /// asks for no update.
+    #[inline]
     pub fn matches(&self, element: &DynModifierElement) -> bool {
         // The two kinds that most pairs are compare directly: decoding the
         // element once each way and calling through `dyn` cost a text's set
         // a third more on the gauntlet.
         match (self.0, element.repr()) {
             (Held::Plain { fns, words }, Repr::Plain(value)) => value.equals_plain(fns, words),
-            (Held::Element(held), Repr::Shared(shared)) => {
+            (
+                Held::Element(held),
+                Repr::Shared {
+                    element: shared, ..
+                },
+            ) => {
                 Rc::ptr_eq(held, shared)
                     || (!held.requires_update()
                         && !shared.requires_update()

@@ -321,7 +321,12 @@ where
 /// Convenience helper for callers to construct a type-erased modifier
 /// element without having to mention the internal wrapper type.
 pub fn modifier_element<E: ModifierNodeElement>(element: E) -> DynModifierElement {
-    DynModifierElement(Repr::Shared(Rc::new(TypedModifierElement::new(element))))
+    let element = TypedModifierElement::new(element);
+    let provides_locals = element.provides_locals;
+    DynModifierElement(Repr::Shared {
+        element: Rc::new(element),
+        provides_locals,
+    })
 }
 
 /// A type-erased modifier element, as a modifier holds it: a plain
@@ -330,11 +335,16 @@ pub fn modifier_element<E: ModifierNodeElement>(element: E) -> DynModifierElemen
 #[derive(Clone)]
 pub struct DynModifierElement(Repr);
 
-// What a `DynModifierElement` holds.
+// What a `DynModifierElement` holds. A shared element keeps beside it
+// whether it has composition locals, in bytes the plain value's room leaves,
+// so a modifier of one element tells without a call.
 #[derive(Clone)]
 pub(crate) enum Repr {
     Plain(PlainWords),
-    Shared(Rc<dyn AnyModifierElement>),
+    Shared {
+        element: Rc<dyn AnyModifierElement>,
+        provides_locals: bool,
+    },
 }
 
 impl DynModifierElement {
@@ -343,7 +353,11 @@ impl DynModifierElement {
     }
 
     pub(crate) fn of_shared(element: Rc<dyn AnyModifierElement>) -> Self {
-        Self(Repr::Shared(element))
+        let provides_locals = element.provides_composition_locals();
+        Self(Repr::Shared {
+            element,
+            provides_locals,
+        })
     }
 
     pub(crate) fn repr(&self) -> &Repr {
@@ -354,7 +368,7 @@ impl DynModifierElement {
     pub(crate) fn shared(&self) -> Option<&Rc<dyn AnyModifierElement>> {
         match &self.0 {
             Repr::Plain(_) => None,
-            Repr::Shared(element) => Some(element),
+            Repr::Shared { element, .. } => Some(element),
         }
     }
 
@@ -363,7 +377,7 @@ impl DynModifierElement {
     pub(crate) fn to_shared(&self) -> Rc<dyn AnyModifierElement> {
         match &self.0 {
             Repr::Plain(words) => Rc::new(*words),
-            Repr::Shared(element) => Rc::clone(element),
+            Repr::Shared { element, .. } => Rc::clone(element),
         }
     }
 
@@ -373,7 +387,9 @@ impl DynModifierElement {
     pub fn provides_composition_locals(&self) -> bool {
         match &self.0 {
             Repr::Plain(_) => false,
-            Repr::Shared(element) => element.provides_composition_locals(),
+            Repr::Shared {
+                provides_locals, ..
+            } => *provides_locals,
         }
     }
 
@@ -381,7 +397,7 @@ impl DynModifierElement {
     /// plain elements are values, which are never one element.
     pub fn is(&self, other: &Self) -> bool {
         match (&self.0, &other.0) {
-            (Repr::Shared(a), Repr::Shared(b)) => Rc::ptr_eq(a, b),
+            (Repr::Shared { element: a, .. }, Repr::Shared { element: b, .. }) => Rc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -394,7 +410,7 @@ impl std::ops::Deref for DynModifierElement {
     fn deref(&self) -> &Self::Target {
         match &self.0 {
             Repr::Plain(words) => words,
-            Repr::Shared(element) => &**element,
+            Repr::Shared { element, .. } => &**element,
         }
     }
 }
