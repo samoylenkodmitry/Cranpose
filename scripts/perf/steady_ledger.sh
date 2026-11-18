@@ -74,6 +74,12 @@ readonly START_ROW=wall-t20
 # The layouts whose counted frames an A/B also runs under callgrind, beside
 # the start of START_ROW and the dashboard.
 readonly INSTRUCTION_ROWS=" gauntlet-t12 patchwork-t17 feed "
+# The layouts whose scene changes in the counted window: nodes come and go,
+# texts change and caches fill. The blocks that their window leaves live
+# follow the scene's phase (from -101 to +2 a frame on the gauntlet t16 at
+# one commit), so the comparison prints that count and leaves it out of the
+# verdict. Every other row must leave nothing live.
+readonly PHASED_ROWS=" patchwork-t17 gauntlet-t16 gauntlet-t12 feed ticker "
 
 # What the A/Bs of all lanes on a host share: the lock that lets one fat LTO
 # build run at a time, and the measured bases. STEADY_LEDGER_SHARED moves
@@ -306,7 +312,7 @@ while [ $# -gt 0 ]; do
 done
 
 case $mode in
-compare) ledger compare "${args[@]}"; exit ;;
+compare) ledger compare "${args[@]}" "$PHASED_ROWS"; exit ;;
 job) job "${args[@]}"; exit ;;
 build-base)
     # Under the fat LTO lock; a lane can have built this base while this one
@@ -455,7 +461,8 @@ else
         jobs_of main.1 main | run_jobs
         rows_of main.1 > "$dir/rows.txt"
         echo "steady ledger: a steady frame ($COUNTED_FRAMES after $WARMUP_FRAMES); $START_ROW-start a layout node"
-        ledger compare "$dir/rows.txt" "$tools/steady_ledger_budget.txt" "$tools/steady_ledger_groups.txt"
+        ledger compare "$dir/rows.txt" "$tools/steady_ledger_budget.txt" "$tools/steady_ledger_groups.txt" \
+            "$PHASED_ROWS"
         ;;
     esac
 fi

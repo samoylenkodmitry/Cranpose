@@ -16,6 +16,8 @@ wall-t20 malloc 2.00 0.00
 wall-t20 copied 31556 10
 wall-t20-start group:node 4.00 0.02
 dashboard malloc 33.90 0.50
+wall-t20 live 0.00 0.00
+feed live 8.83 0.00
 BUDGET
 cat > "$work_dir/groups.txt" <<'GROUPS'
 node 1.0 new_with_virtual.* @ crates/cranpose-ui/
@@ -45,7 +47,9 @@ expect() {
 at_budget="wall-t20 malloc 2.00
 wall-t20 copied 31556
 wall-t20-start group:node 4.00
-dashboard malloc 33.90"
+dashboard malloc 33.90
+wall-t20 live 0.00
+feed live 8.83"
 
 expect "values at their budgets pass" 0 "wall-t20 .* ok" "$at_budget"
 expect "a rise inside the spread passes" 0 "dashboard .* ok" "${at_budget/33.90/34.30}"
@@ -57,6 +61,12 @@ expect "a group that rises fails" 1 "wall-t20-start .* ROSE group:node" "${at_bu
 expect "the start row prints its groups with their targets" 0 "node 4.00 \[1\]" "$at_budget"
 expect "a fall passes and names the value" 0 "wall-t20 .* fell malloc" \
     "${at_budget/2.00/1.00}"
+# The feed's scene changes in its window, so its live count follows the
+# scene's phase; the still wall must leave nothing live.
+expect "a phased row's live count stays out of the verdict" 0 "feed .* ok" \
+    "${at_budget/8.83/30.00}"
+expect "a still row that leaves blocks live fails" 1 "wall-t20 .* ROSE live" \
+    "${at_budget/live 0.00/live 0.50}"
 expect "a value with no budget fails" 1 "feed .* ROSE malloc (no budget)" "$at_budget
 feed malloc 500.00"
 expect "a budget with no value fails" 1 "dashboard .*missing from the run: malloc" \
