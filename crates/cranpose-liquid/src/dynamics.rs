@@ -29,7 +29,7 @@ use std::{cell::Cell, rc::Rc};
 use cranpose_core::{RuntimeHandle, with_current_composer};
 use cranpose_macros::composable;
 
-use crate::material::GlassDeformation;
+use crate::GlassDeformation;
 
 const STRETCH_PER_SPEED: f32 = 3.2e-4;
 const STRETCH_PER_ACCEL: f32 = 3.5e-5;

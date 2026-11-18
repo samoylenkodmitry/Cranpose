@@ -1,4 +1,5 @@
 use super::*;
+use crate::GlassDeformation;
 
 #[test]
 fn backdrop_blur_validates_radius_and_opacity() {

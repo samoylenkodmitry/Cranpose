@@ -105,7 +105,7 @@ pub(crate) fn floating_dynamics(
         1.0
     };
     GlassDynamics {
-        morph: Some(crate::material::GlassMorph {
+        morph: Some(crate::GlassMorph {
             node_size: (size.width, size.height),
             primary: (
                 size.width * 0.5,

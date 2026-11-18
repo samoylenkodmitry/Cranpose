@@ -1,7 +1,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use cranpose::{
-    liquid::{material::GlassMorph, prelude::*},
+    liquid::{prelude::*, GlassMorph},
     widgets::{Box as CBox, BoxSpec},
     AppLauncher, Brush, Color, GraphicsLayer, Modifier, Size,
 };

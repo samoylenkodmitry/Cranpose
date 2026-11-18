@@ -12,7 +12,8 @@ use cranpose_ui_graphics::{Brush, Color, ColorFilter, CornerRadii, GraphicsLayer
 use cranpose_ui_layout::Alignment;
 
 use crate::{
-    material::{GlassDynamics, GlassMorph, LiquidModifierExt},
+    glass_morph::GlassMorph,
+    material::{GlassDynamics, LiquidModifierExt},
     motion::LiquidMotion,
     theme::{LiquidSegmentedStyle, liquid_segmented_style},
     widgets::content_scope::ScopeContent,

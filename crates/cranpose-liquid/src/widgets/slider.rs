@@ -10,7 +10,8 @@ use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer};
 
 use super::slider_motion::{SliderDrag, remember_slider_fling};
 use crate::{
-    material::{Glass, GlassDynamics, GlassMorph, LiquidModifierExt, LiquidShape},
+    glass_morph::GlassMorph,
+    material::{Glass, GlassDynamics, LiquidModifierExt, LiquidShape},
     theme::liquid_colors,
 };
 

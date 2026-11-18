@@ -3,6 +3,7 @@
 
 pub mod appearance;
 pub mod dynamics;
+pub mod glass_morph;
 pub mod icons;
 mod inverted_colors;
 pub mod material;
@@ -14,11 +15,11 @@ pub mod widgets;
 
 pub use appearance::{GlassTintAmount, InvalidGlassTintAmount};
 pub use dynamics::{LiquidDynamics, LiquidPose, rememberLiquidDynamics};
+pub use glass_morph::{GlassDeformation, GlassMorph};
 pub use material::{
-    Glass, GlassContourHighlight, GlassDeformation, GlassDynamics, GlassFaceResponse,
-    GlassFaceTone, GlassKeyFill, GlassMorph, GlassRefraction, GlassShadow, GlassSpectrum,
-    GlassSpecularHighlight, GlassVariant, LiquidModifierExt, LiquidShape, glass_light_direction,
-    set_glass_light_direction,
+    Glass, GlassContourHighlight, GlassDynamics, GlassFaceResponse, GlassFaceTone, GlassKeyFill,
+    GlassRefraction, GlassShadow, GlassSpectrum, GlassSpecularHighlight, GlassVariant,
+    LiquidModifierExt, LiquidShape, glass_light_direction, set_glass_light_direction,
 };
 pub use motion::{LiquidMotion, liquid_press_scale};
 pub use palette::LiquidPalette;
@@ -35,11 +36,12 @@ pub mod prelude {
         LiquidPalette,
         appearance::{GlassTintAmount, InvalidGlassTintAmount},
         dynamics::{LiquidDynamics, LiquidPose, rememberLiquidDynamics},
+        glass_morph::{GlassDeformation, GlassMorph},
         icons,
         material::{
-            Glass, GlassContourHighlight, GlassDeformation, GlassDynamics, GlassFaceResponse,
-            GlassFaceTone, GlassKeyFill, GlassMorph, GlassRefraction, GlassShadow, GlassSpectrum,
-            GlassSpecularHighlight, GlassVariant, LiquidModifierExt, LiquidShape,
+            Glass, GlassContourHighlight, GlassDynamics, GlassFaceResponse, GlassFaceTone,
+            GlassKeyFill, GlassRefraction, GlassShadow, GlassSpectrum, GlassSpecularHighlight,
+            GlassVariant, LiquidModifierExt, LiquidShape,
         },
         motion::{LiquidMotion, liquid_press_scale},
         theme::{
