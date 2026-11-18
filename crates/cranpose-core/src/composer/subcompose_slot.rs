@@ -34,7 +34,9 @@ pub(super) fn subcompose_slot_at<R>(
         leaked: false,
     };
     let root_group_key = crate::location_key!();
-    let (result, commands, side_effects, compact_applier) = composer.install(|composer| {
+    // The closure returns no command queue: its result moves out of
+    // `install`, and a queue is 312 bytes.
+    let (result, compact_applier) = composer.install(|composer| {
         let (output, outcome) = composer.try_with_slot_host_pass(
             Rc::clone(slots),
             crate::slot::SlotPassMode::Compose,
@@ -46,10 +48,10 @@ pub(super) fn subcompose_slot_at<R>(
                 output
             },
         )?;
-        let commands = composer.take_commands();
-        let side_effects = composer.take_side_effects();
-        Ok((output, commands, side_effects, outcome.compacted))
+        Ok((output, outcome.compacted))
     })?;
+    let commands = composer.take_commands();
+    let side_effects = composer.take_side_effects();
     let frame = {
         let frame = take_subcompose_frame(&guard.core, "subcompose_slot");
         guard.leaked = true;

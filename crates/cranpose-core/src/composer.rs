@@ -282,7 +282,7 @@ pub(crate) struct ComposerCore {
     pub(crate) applier: Rc<dyn ApplierHost>,
     pub(crate) runtime: RuntimeHandle,
     pub(crate) parent_stack: RefCell<Vec<ParentFrame>>,
-    pub(crate) subcompose_stack: RefCell<Vec<SubcomposeFrame>>,
+    pub(crate) subcompose_stack: RefCell<SmallVec<[SubcomposeFrame; 1]>>,
     pub(crate) root: Cell<Option<NodeId>>,
     pub(crate) commands: RefCell<CommandQueue>,
     pub(crate) scope_stack: RefCell<Vec<ScopeFrame>>,
@@ -401,7 +401,7 @@ impl ComposerCore {
             applier,
             runtime,
             parent_stack: RefCell::new(parent_stack),
-            subcompose_stack: RefCell::new(Vec::new()),
+            subcompose_stack: RefCell::new(SmallVec::new()),
             root: Cell::new(root),
             commands: RefCell::new(spare_commands()),
             scope_stack: RefCell::new(scope_stack),
@@ -959,7 +959,7 @@ impl Composer {
         stack_hint.or_else(|| self.core.recompose_parent_hint.get())
     }
 
-    pub(crate) fn subcompose_stack(&self) -> RefMut<'_, Vec<SubcomposeFrame>> {
+    pub(crate) fn subcompose_stack(&self) -> RefMut<'_, SmallVec<[SubcomposeFrame; 1]>> {
         self.core.subcompose_stack.borrow_mut()
     }
 
