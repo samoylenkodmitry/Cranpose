@@ -8,7 +8,6 @@
 use std::{fmt, rc::Rc};
 
 mod alignment;
-mod anchored_draggable;
 mod background;
 mod blur;
 mod border;

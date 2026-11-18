@@ -1,8 +1,8 @@
 // `Modifier::anchored_draggable` through the public shell: a slow release
 // settles at the closest anchor, a fast one goes on to the next anchor in
 // its direction, the offset stays within the anchors, a vertical drag leaves
-// a horizontal state at rest, and `animate_to` and `snap_to` land on an
-// anchor.
+// a horizontal state at rest, a press that stops a settle settles again
+// when it lifts, and `animate_to` and `snap_to` land on an anchor.
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -196,4 +196,23 @@ fn animate_to_and_snap_to_land_on_an_anchor() {
     row.state.snap_to(Side::TrailingOpen);
     assert_eq!(row.state.offset(), Some(-150.0));
     assert_eq!(row.state.current_value(), Side::TrailingOpen);
+}
+
+#[test]
+fn a_press_that_stops_a_settle_settles_again_when_it_lifts() {
+    let mut row = Row::new();
+    row.state.animate_to(Side::TrailingOpen);
+    row.advance(3);
+    let stopped = row.state.require_offset();
+    assert!(
+        stopped < -1.0 && stopped > -149.0,
+        "the spring is under way: {stopped}"
+    );
+    row.drag((200.0, 30.0), (200.0, 30.0), 1, 0);
+    let rest = row.state.require_offset();
+    let on_anchor = [0.0_f32, -150.0]
+        .iter()
+        .any(|anchor| (rest - anchor).abs() < 0.01);
+    assert!(on_anchor, "it rests on an anchor: {rest}");
+    assert!(!row.state.is_animation_running());
 }

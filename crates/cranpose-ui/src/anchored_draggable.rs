@@ -14,15 +14,15 @@
 
 use std::{
     cell::{Cell, RefCell},
-    rc::Rc,
+    rc::{Rc, Weak},
 };
 
-use cranpose_core::{MutableState, RuntimeHandle};
+use cranpose_core::OwnedMutableState;
 
 use crate::fling_animation::{SettleAnimation, SpringParams};
 
-// Compose's `AnchoredDraggableMinFlingVelocity` and default positional
-// threshold: a release this fast goes on to the next anchor.
+// Compose's `AnchoredDraggableMinFlingVelocity`: a release this fast goes on
+// to the next anchor.
 const VELOCITY_THRESHOLD: f32 = 125.0;
 
 /// The positions a drag rests at, each named by a value of `T`: Compose's
@@ -90,15 +90,23 @@ impl<T: Copy + PartialEq> DraggableAnchors<T> {
             self.anchors
                 .iter()
                 .find(|(_, at)| *at > position + 0.5)
-                .or(self.anchors.last())
+                .or_else(|| self.anchors.last())
         } else {
             self.anchors
                 .iter()
                 .rev()
                 .find(|(_, at)| *at < position - 0.5)
-                .or(self.anchors.first())
+                .or_else(|| self.anchors.first())
         }
         .map(|(value, _)| *value)
+    }
+
+    // The anchor that sits at `position`.
+    fn at(&self, position: f32) -> Option<T> {
+        self.anchors
+            .iter()
+            .find(|(_, at)| (*at - position).abs() < 0.01)
+            .map(|(value, _)| *value)
     }
 }
 
@@ -121,15 +129,42 @@ impl<T: Copy> Clone for AnchoredDraggableState<T> {
 
 struct AnchoredDraggableInner<T: Copy + 'static> {
     anchors: RefCell<DraggableAnchors<T>>,
-    offset: MutableState<Option<f32>>,
-    current: MutableState<T>,
-    settled: MutableState<T>,
+    offset: OwnedMutableState<Option<f32>>,
+    current: OwnedMutableState<T>,
+    settled: OwnedMutableState<T>,
     // The anchor that a running settle moves toward.
-    animation_target: MutableState<Option<T>>,
+    animation_target: OwnedMutableState<Option<T>>,
     dragging: Cell<bool>,
     last_velocity: Cell<f32>,
-    runtime: RuntimeHandle,
-    settle: RefCell<SettleAnimation>,
+    settle: SettleAnimation,
+}
+
+impl<T: Copy + PartialEq + 'static> AnchoredDraggableInner<T> {
+    // Moves the offset by `delta`, held within the anchors, and returns how
+    // far it moved.
+    fn dispatch_raw_delta(&self, delta: f32) -> f32 {
+        let anchors = self.anchors.borrow();
+        let (Some(min), Some(max), Some(offset)) = (
+            anchors.min_position(),
+            anchors.max_position(),
+            self.offset.get_non_reactive(),
+        ) else {
+            return 0.0;
+        };
+        let moved = (offset + delta).clamp(min, max);
+        if let Some(reached) = anchors.at(moved) {
+            self.current.set(reached);
+        }
+        drop(anchors);
+        self.offset.set(Some(moved));
+        moved - offset
+    }
+
+    fn rest_at(&self, value: T, position: f32) {
+        self.offset.set(Some(position));
+        self.current.set(value);
+        self.settled.set(value);
+    }
 }
 
 impl<T: Copy + PartialEq + 'static> AnchoredDraggableState<T> {
@@ -138,38 +173,28 @@ impl<T: Copy + PartialEq + 'static> AnchoredDraggableState<T> {
     pub fn new(initial_value: T, anchors: DraggableAnchors<T>) -> Self {
         let runtime = cranpose_core::current_runtime_handle()
             .expect("AnchoredDraggableState::new requires an active runtime");
-        Self::with_runtime(initial_value, anchors, runtime)
-    }
-
-    fn with_runtime(
-        initial_value: T,
-        anchors: DraggableAnchors<T>,
-        runtime: RuntimeHandle,
-    ) -> Self {
         let offset = anchors.position_of(initial_value);
         Self {
             inner: Rc::new(AnchoredDraggableInner {
                 anchors: RefCell::new(anchors),
-                offset: MutableState::with_runtime(offset, runtime.clone()),
-                current: MutableState::with_runtime(initial_value, runtime.clone()),
-                settled: MutableState::with_runtime(initial_value, runtime.clone()),
-                animation_target: MutableState::with_runtime(None, runtime.clone()),
+                offset: OwnedMutableState::with_runtime_structural_eq(offset, runtime.clone()),
+                current: OwnedMutableState::with_runtime_structural_eq(
+                    initial_value,
+                    runtime.clone(),
+                ),
+                settled: OwnedMutableState::with_runtime_structural_eq(
+                    initial_value,
+                    runtime.clone(),
+                ),
+                animation_target: OwnedMutableState::with_runtime_structural_eq(
+                    None,
+                    runtime.clone(),
+                ),
                 dragging: Cell::new(false),
                 last_velocity: Cell::new(0.0),
-                settle: RefCell::new(SettleAnimation::new(
-                    runtime.clone(),
-                    SpringParams::SETTLE_POLICY,
-                )),
-                runtime,
+                settle: SettleAnimation::new(runtime, SpringParams::SETTLE_POLICY),
             }),
         }
-    }
-
-    /// Returns the state with `spring` as the motion that settles it.
-    pub fn with_snap_spring(self, spring: SpringParams) -> Self {
-        self.stop_animation();
-        *self.inner.settle.borrow_mut() = SettleAnimation::new(self.inner.runtime.clone(), spring);
-        self
     }
 
     /// The anchor the state last passed through or rests at.
@@ -239,54 +264,45 @@ impl<T: Copy + PartialEq + 'static> AnchoredDraggableState<T> {
         ((offset - start) / (end - start)).clamp(0.0, 1.0)
     }
 
-    /// Replaces the anchors and moves the state to `new_target` among them,
-    /// as a layout that measured new rest positions does. A running settle
-    /// stops.
-    pub fn update_anchors(&self, new_anchors: DraggableAnchors<T>, new_target: T) {
-        if *self.inner.anchors.borrow() == new_anchors
-            && self.inner.current.get_non_reactive() == new_target
-        {
+    /// Replaces the anchors, as a layout that measured new rest positions
+    /// does, and keeps the state at the new anchor closest to its offset. A
+    /// running settle stops.
+    pub fn update_anchors(&self, new_anchors: DraggableAnchors<T>) {
+        if *self.inner.anchors.borrow() == new_anchors {
             return;
         }
+        let target = self
+            .inner
+            .offset
+            .get_non_reactive()
+            .and_then(|offset| new_anchors.closest_anchor(offset))
+            .unwrap_or_else(|| self.inner.settled.get_non_reactive());
+        self.update_anchors_to(new_anchors, target);
+    }
+
+    /// Replaces the anchors and moves the state to `new_target` among them.
+    /// A running settle stops.
+    pub fn update_anchors_to(&self, new_anchors: DraggableAnchors<T>, new_target: T) {
         self.stop_animation();
         let position = new_anchors.position_of(new_target);
         *self.inner.anchors.borrow_mut() = new_anchors;
         if let Some(position) = position {
-            self.rest_at(new_target, position);
+            self.inner.rest_at(new_target, position);
         }
     }
 
     /// Moves the offset by `delta`, held within the anchors, and returns how
     /// far it moved.
     pub fn dispatch_raw_delta(&self, delta: f32) -> f32 {
-        let anchors = self.inner.anchors.borrow();
-        let (Some(min), Some(max), Some(offset)) = (
-            anchors.min_position(),
-            anchors.max_position(),
-            self.inner.offset.get_non_reactive(),
-        ) else {
-            return 0.0;
-        };
-        let moved = (offset + delta).clamp(min, max);
-        if let Some(reached) = anchors
-            .anchors
-            .iter()
-            .find(|(_, at)| (*at - moved).abs() < 0.01)
-            .map(|(value, _)| *value)
-            && self.inner.current.get_non_reactive() != reached
-        {
-            self.inner.current.set(reached);
-        }
-        drop(anchors);
-        self.inner.offset.set(Some(moved));
-        moved - offset
+        self.inner.dispatch_raw_delta(delta)
     }
 
     /// Moves the state to `target` at once. A running settle stops.
     pub fn snap_to(&self, target: T) {
         self.stop_animation();
-        if let Some(position) = self.inner.anchors.borrow().position_of(target) {
-            self.rest_at(target, position);
+        let position = self.inner.anchors.borrow().position_of(target);
+        if let Some(position) = position {
+            self.inner.rest_at(target, position);
         }
     }
 
@@ -295,80 +311,67 @@ impl<T: Copy + PartialEq + 'static> AnchoredDraggableState<T> {
         self.settle_to(target, 0.0);
     }
 
-    // Where a release at `velocity` settles.
-    fn release_target(&self, offset: f32, velocity: f32) -> Option<T> {
-        let anchors = self.inner.anchors.borrow();
-        if velocity.abs() > VELOCITY_THRESHOLD {
-            anchors.next_toward(offset, velocity)
-        } else {
-            anchors.closest_anchor(offset)
-        }
-    }
-
-    // Settles a release at `velocity` and returns the velocity it took.
-    pub(crate) fn settle_release(&self, velocity: f32) -> f32 {
+    // Settles the release of a drag at `velocity`: a release faster than
+    // the threshold goes on to the next anchor its way, a slower one to the
+    // closest.
+    pub(crate) fn settle_release(&self, velocity: f32) {
         self.inner.last_velocity.set(velocity);
         let Some(offset) = self.inner.offset.get_non_reactive() else {
-            return 0.0;
+            return;
         };
-        if let Some(target) = self.release_target(offset, velocity) {
+        let target = {
+            let anchors = self.inner.anchors.borrow();
+            if velocity.abs() > VELOCITY_THRESHOLD {
+                anchors.next_toward(offset, velocity)
+            } else {
+                anchors.closest_anchor(offset)
+            }
+        };
+        if let Some(target) = target {
             self.settle_to(target, velocity);
         }
-        velocity
     }
 
     fn settle_to(&self, target: T, velocity: f32) {
-        let (Some(position), Some(offset)) = (
-            self.inner.anchors.borrow().position_of(target),
-            self.inner.offset.get_non_reactive(),
-        ) else {
+        let position = self.inner.anchors.borrow().position_of(target);
+        let (Some(position), Some(offset)) = (position, self.inner.offset.get_non_reactive())
+        else {
             return;
         };
         if (position - offset).abs() < 0.01 {
-            self.rest_at(target, position);
+            self.inner.rest_at(target, position);
             return;
         }
         self.inner.animation_target.set(Some(target));
-        let settle = self.inner.settle.borrow().clone();
-        let (moving, landing) = (self.clone(), self.clone());
-        settle.start_settle(
+        // The spring holds the state weakly: a row removed while it settles
+        // ends the spring rather than outliving it.
+        let (moving, landing) = (Rc::downgrade(&self.inner), Rc::downgrade(&self.inner));
+        self.inner.settle.start_settle(
             offset,
             velocity,
             position,
-            move |delta| moving.dispatch_raw_delta(delta),
+            move |delta| {
+                Weak::upgrade(&moving).map_or(0.0, |inner| inner.dispatch_raw_delta(delta))
+            },
             move |_| {
-                landing.inner.animation_target.set(None);
-                landing.rest_at(target, position);
+                if let Some(inner) = Weak::upgrade(&landing) {
+                    inner.animation_target.set(None);
+                    inner.rest_at(target, position);
+                }
             },
         );
     }
 
-    fn rest_at(&self, value: T, position: f32) {
-        self.inner.offset.set(Some(position));
-        if self.inner.current.get_non_reactive() != value {
-            self.inner.current.set(value);
-        }
-        if self.inner.settled.get_non_reactive() != value {
-            self.inner.settled.set(value);
-        }
-    }
-
     // Stops a running settle where it is, and returns whether one ran.
     pub(crate) fn stop_animation(&self) -> bool {
-        let settle = self.inner.settle.borrow().clone();
-        let running = settle.is_running();
-        settle.cancel();
-        if self.inner.animation_target.get_non_reactive().is_some() {
-            self.inner.animation_target.set(None);
-        }
+        let running = self.inner.settle.is_running();
+        self.inner.settle.cancel();
+        self.inner.animation_target.set(None);
         running
     }
 
     pub(crate) fn set_dragging(&self, dragging: bool) {
         self.inner.dragging.set(dragging);
-        if dragging {
-            self.stop_animation();
-        }
     }
 
     pub(crate) fn offset_non_reactive(&self) -> Option<f32> {

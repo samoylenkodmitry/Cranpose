@@ -5,8 +5,9 @@ use std::{cell::RefCell, rc::Rc};
 use cranpose_liquid::prelude::{LiquidTheme, LiquidThemeSpec};
 use cranpose_testing::{
     PlacedSemanticsNode, RobotTestRule, TestRenderer, create_headless_robot_test,
-    placed_semantics_from_shell,
+    placed_semantics_from_shell, robot_assertions::find_semantics_node,
 };
+use cranpose_ui::{SemanticsCustomAction, SemanticsNode};
 
 pub(crate) type Robot = RobotTestRule<TestRenderer>;
 
@@ -62,4 +63,19 @@ pub(crate) fn tap_node(robot: &mut Robot, label: &str) {
         bounds.x + bounds.width * 0.5,
         bounds.y + bounds.height * 0.5,
     );
+}
+
+// The custom action named `label` that a node of the screen offers a reader.
+pub(crate) fn custom_action(robot: &mut Robot, label: &str) -> SemanticsCustomAction {
+    let named = |node: &SemanticsNode| {
+        node.details()
+            .custom_actions
+            .iter()
+            .find(|action| action.label == label)
+            .cloned()
+    };
+    let tree = robot.shell_mut().semantics_tree().expect("semantics");
+    find_semantics_node(tree.root(), &|node| named(node).is_some())
+        .and_then(named)
+        .unwrap_or_else(|| panic!("no node offers a {label} action"))
 }

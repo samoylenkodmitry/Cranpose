@@ -13,7 +13,7 @@ use cranpose_ui::{
     widgets::{Box, BoxSpec, Text},
 };
 
-use crate::reader::{Log, Robot, liquid_screen, node, nodes, tap_node};
+use crate::reader::{Log, Robot, custom_action, liquid_screen, node, nodes, tap_node};
 
 const ROW_Y: f32 = 122.0;
 
@@ -37,10 +37,10 @@ fn row() -> (Robot, Log) {
                         let (delete, flag, pin) =
                             (Rc::clone(&delete), Rc::clone(&flag), Rc::clone(&pin));
                         scope.trailing("Delete", colors.destructive, move || {
-                            delete.borrow_mut().push("delete")
+                            delete.borrow_mut().push("delete");
                         });
                         scope.trailing("Flag", colors.warning, move || {
-                            flag.borrow_mut().push("flag")
+                            flag.borrow_mut().push("flag");
                         });
                         scope.leading("Pin", colors.accent, move || pin.borrow_mut().push("pin"));
                     },
@@ -144,13 +144,6 @@ fn readers_find_every_action_on_the_row() {
     let row = find_semantics_node(tree.root(), &|node| !labels(node).is_empty())
         .expect("the row offers its actions");
     assert_eq!(labels(row), ["Delete", "Flag", "Pin"]);
-    let flag = row
-        .details()
-        .custom_actions
-        .iter()
-        .find(|action| action.label == "Flag")
-        .cloned()
-        .expect("a Flag action");
-    flag.invoke();
+    custom_action(&mut robot, "Flag").invoke();
     assert_eq!(*log.borrow(), ["flag"]);
 }

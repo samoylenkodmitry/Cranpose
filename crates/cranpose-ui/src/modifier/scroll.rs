@@ -10,10 +10,11 @@ use cranpose_foundation::{
 };
 use cranpose_ui_layout::Axis;
 
-pub(super) mod drag_gesture;
+mod anchored_draggable;
+mod drag_gesture;
 mod release_motion;
-pub(super) mod scroll_target;
-use drag_gesture::{DragGesture, drag_gesture_input, nested_drag_gesture_input};
+mod scroll_target;
+use drag_gesture::{DragGesture, draggable_impl, nested_drag_gesture_input};
 use scroll_target::{NestedTarget, ScrollTarget};
 
 use super::{Modifier, Point, PointerEvent, PointerEventKind, inspector_metadata};
@@ -32,8 +33,7 @@ use crate::{
     scroll_semantics::lazy_scroll_semantics,
 };
 
-/// Returns the velocity of the last fling that started in the current app context, in dp per
-/// second.
+/// The velocity of the last fling that started in the current app context, in dp per second.
 #[cfg(feature = "test-helpers")]
 pub fn last_fling_velocity() -> f32 {
     crate::render_state::debug_last_fling_velocity()
@@ -1031,7 +1031,7 @@ impl Modifier {
     /// Deltas are logical pixels, positive to the right for [`Axis::Horizontal`]
     /// and downwards for [`Axis::Vertical`].
     pub fn draggable(self, axis: Axis, state: DraggableState) -> Self {
-        self.then(draggable_impl(axis, state, None))
+        self.then(draggable_impl(axis, state.identity(), state, None))
     }
 
     /// Scrolls content with custom placement along `axis`.
@@ -1071,7 +1071,12 @@ impl Modifier {
         state: DraggableState,
         guard: impl Fn() -> bool + 'static,
     ) -> Self {
-        self.then(draggable_impl(axis, state, Some(Rc::new(guard))))
+        self.then(draggable_impl(
+            axis,
+            state.identity(),
+            state,
+            Some(Rc::new(guard)),
+        ))
     }
 }
 
@@ -1212,25 +1217,4 @@ fn lazy_scroll_impl(
             reverse_scrolling,
             content_padding,
         ))
-}
-
-fn draggable_impl(
-    axis: Axis,
-    state: DraggableState,
-    guard: Option<Rc<dyn Fn() -> bool>>,
-) -> Modifier {
-    let identity = state.identity();
-    drag_gesture_input(
-        (identity, axis),
-        DragGesture {
-            target: state,
-            axis,
-            reverse_input: false,
-            motion_context: scroll_motion_context_for_key(ScrollMotionContextKey::Draggable {
-                state_identity: identity,
-                axis,
-            }),
-            guard,
-        },
-    )
 }
