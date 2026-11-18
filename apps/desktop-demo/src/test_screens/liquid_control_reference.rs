@@ -35,7 +35,7 @@ pub(crate) enum Control {
     PopUp,
     ColorWell,
     Unavailable,
-    ControlGroup,
+    Group,
     Alert,
 }
 
@@ -68,7 +68,7 @@ const NAMES: [(&str, Control); 29] = [
     ("pop-up", Control::PopUp),
     ("color-well", Control::ColorWell),
     ("unavailable", Control::Unavailable),
-    ("control-group", Control::ControlGroup),
+    ("control-group", Control::Group),
     ("alert", Control::Alert),
 ];
 
@@ -162,7 +162,7 @@ fn ControlContent(control: Control, initial: f32, activations: cranpose::Mutable
         | Control::Time12
         | Control::PopUp
         | Control::ColorWell => ReferencePicker(control, initial),
-        Control::Unavailable | Control::ControlGroup | Control::Alert => {
+        Control::Unavailable | Control::Group | Control::Alert => {
             ReferenceContainer(control);
         }
         _ => ReferenceSurface(control, initial, activations),
@@ -243,7 +243,7 @@ fn ReferenceContainer(control: Control) {
         );
         return;
     }
-    if control == Control::ControlGroup {
+    if control == Control::Group {
         LiquidControlGroup(Modifier::empty().width(300.0), |scope| {
             scope.button("Previous", || {});
             scope.button("Next", || {});
