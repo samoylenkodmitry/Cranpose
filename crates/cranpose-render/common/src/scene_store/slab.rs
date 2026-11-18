@@ -71,8 +71,12 @@ impl<T> Slab<T> {
         self.entries.iter().flatten()
     }
 
-    pub(crate) fn values_mut(&mut self) -> impl Iterator<Item = &mut T> {
-        self.entries.iter_mut().flatten()
+    // Each value with its index.
+    pub(crate) fn indexed(&self) -> impl Iterator<Item = (usize, &T)> {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| Some((index, entry.as_ref()?)))
     }
 
     pub(crate) fn heap_bytes(&self) -> usize {

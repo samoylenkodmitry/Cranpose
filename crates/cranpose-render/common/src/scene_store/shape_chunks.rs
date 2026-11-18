@@ -123,9 +123,7 @@ pub(super) struct ShapeChunks {
     // The chunks no item names, which take shapes again once no packet
     // holds them.
     empty: Vec<ChunkId>,
-    // One bit a segment of the chunk that drops its dead shapes, set for
-    // the segments a run names: room the next such chunk takes again.
-    live: Vec<u64>,
+    live: LiveRuns,
     // Whether an item went since a look for a chunk of many dead shapes
     // found none.
     released: bool,
@@ -137,6 +135,57 @@ struct ShapeChunk {
     // How many items name the chunk, and how many shapes they draw.
     items: u32,
     shapes: u32,
+}
+
+// The runs of the chunk that drops its dead shapes, by index among the
+// runs, and one bit a segment of it, set for the segments they name: room
+// the next such chunk takes again.
+#[derive(Clone, Default)]
+struct LiveRuns {
+    runs: Vec<usize>,
+    segments: Vec<u64>,
+}
+
+impl LiveRuns {
+    // Notes the runs of `chunk`, a chunk of `segments` segments, and the
+    // segments they name.
+    fn mark(&mut self, chunk: ChunkId, segments: u32, runs: &Slab<ShapeRun>) {
+        self.runs.clear();
+        self.segments.clear();
+        self.segments.resize(segments.div_ceil(64) as usize, 0);
+        for (index, run) in runs.indexed().filter(|(_, run)| run.chunk == chunk) {
+            self.runs.push(index);
+            for segment in run.segments.clone() {
+                self.segments[segment as usize / 64] |= 1 << (segment % 64);
+            }
+        }
+    }
+
+    fn keeps(&self, segment: u32) -> bool {
+        self.segments[segment as usize / 64] & (1 << (segment % 64)) != 0
+    }
+
+    // Starts each run noted past the segments before it that the chunk
+    // keeps, once it kept those alone.
+    fn renumber(&self, runs: &mut Slab<ShapeRun>) {
+        for &index in &self.runs {
+            let run = &mut runs[index];
+            let (word, bit) = (run.segments.start as usize / 64, run.segments.start % 64);
+            let start = self.segments[..word]
+                .iter()
+                .map(|bits| bits.count_ones())
+                .sum::<u32>()
+                + self
+                    .segments
+                    .get(word)
+                    .map_or(0, |bits| (bits & ((1 << bit) - 1)).count_ones());
+            run.segments = start..start + (run.segments.end - run.segments.start);
+        }
+    }
+
+    fn heap_bytes(&self) -> usize {
+        self.runs.capacity() * size_of::<usize>() + self.segments.capacity() * size_of::<u64>()
+    }
 }
 
 impl ShapeChunks {
@@ -265,7 +314,7 @@ impl ShapeChunks {
             keep_live_runs(id, recorder, runs, &mut self.live);
             return;
         }
-        mark_live_segments(id, chunk.recorder.all_segments().end, runs, &mut self.live);
+        self.live.mark(id, chunk.recorder.all_segments().end, runs);
         let spare = self.empty_chunk();
         let [chunk, empty] = self
             .chunks
@@ -279,8 +328,8 @@ impl ShapeChunks {
         let live = &self.live;
         Arc::get_mut(&mut chunk.recorder)
             .expect("no packet holds an empty chunk taken")
-            .keep_segments_from(&empty.recorder, |segment| is_live(live, segment));
-        renumber_runs(id, runs, live);
+            .keep_segments_from(&empty.recorder, |segment| live.keeps(segment));
+        live.renumber(runs);
         if self.empty.len() < KEPT_EMPTY_CHUNKS {
             self.empty.push(spare);
         } else {
@@ -377,14 +426,14 @@ impl ShapeChunks {
             self.chunks.pop();
         }
         self.chunks.trim_growth_slack();
-        self.live = Vec::new();
+        self.live = LiveRuns::default();
     }
 
     // The heap the chunks hold: their lists and every chunk's recorder.
     fn heap_bytes(&self) -> usize {
         self.chunks.capacity() * size_of::<Option<ShapeChunk>>()
             + self.empty.capacity() * size_of::<ChunkId>()
-            + self.live.capacity() * size_of::<u64>()
+            + self.live.heap_bytes()
             + self
                 .chunks
                 .iter()
@@ -402,51 +451,18 @@ impl ShapeChunks {
 }
 
 // Moves the shapes of the runs in `chunk` to the front of its recorder, in
-// record order, and drops the shapes no run names. `live` is room for one
-// bit a segment.
+// record order, and drops the shapes no run names.
 #[cold]
 #[inline(never)]
 fn keep_live_runs(
     chunk: ChunkId,
     recorder: &mut ShapeRecorder,
     runs: &mut Slab<ShapeRun>,
-    live: &mut Vec<u64>,
+    live: &mut LiveRuns,
 ) {
-    mark_live_segments(chunk, recorder.all_segments().end, runs, live);
-    recorder.keep_segments(|segment| is_live(live, segment));
-    renumber_runs(chunk, runs, live);
-}
-
-// Sets in `live` the bit of each of the `segments` segments of `chunk`
-// that a run names.
-fn mark_live_segments(chunk: ChunkId, segments: u32, runs: &Slab<ShapeRun>, live: &mut Vec<u64>) {
-    live.clear();
-    live.resize(segments.div_ceil(64) as usize, 0);
-    for run in runs.values().filter(|run| run.chunk == chunk) {
-        for segment in run.segments.clone() {
-            live[segment as usize / 64] |= 1 << (segment % 64);
-        }
-    }
-}
-
-fn is_live(live: &[u64], segment: u32) -> bool {
-    live[segment as usize / 64] & (1 << (segment % 64)) != 0
-}
-
-// Starts each run of `chunk` past the segments before it that `live`
-// keeps, once the chunk kept those alone.
-fn renumber_runs(chunk: ChunkId, runs: &mut Slab<ShapeRun>, live: &[u64]) {
-    for run in runs.values_mut().filter(|run| run.chunk == chunk) {
-        let (word, bit) = (run.segments.start as usize / 64, run.segments.start % 64);
-        let start = live[..word]
-            .iter()
-            .map(|bits| bits.count_ones())
-            .sum::<u32>()
-            + live
-                .get(word)
-                .map_or(0, |bits| (bits & ((1 << bit) - 1)).count_ones());
-        run.segments = start..start + (run.segments.end - run.segments.start);
-    }
+    live.mark(chunk, recorder.all_segments().end, runs);
+    recorder.keep_segments(|segment| live.keeps(segment));
+    live.renumber(runs);
 }
 
 #[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
