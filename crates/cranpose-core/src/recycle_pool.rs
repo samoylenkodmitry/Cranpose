@@ -95,16 +95,18 @@ impl RecyclePool {
     // The shell that came back last, then the warm ones, then the ones of
     // nodes made fresh. The pool's pass ends only at a compaction of the
     // applier, after a pass removed many nodes: until then a removed node
-    // made fresh waits in the cold list.
+    // made fresh waits in the cold list. One pop, from the list its length
+    // picks: the first emits of a tree find every list empty.
     pub(crate) fn take(&mut self) -> Option<RecycledNode> {
-        let taken = self
-            .returning
-            .pop_back()
-            .or_else(|| self.warm.pop_back())
-            .or_else(|| self.cold.pop_back());
-        if taken.is_some() {
-            self.demand.frame += 1;
-        }
+        let list = if !self.returning.is_empty() {
+            &mut self.returning
+        } else if !self.warm.is_empty() {
+            &mut self.warm
+        } else {
+            &mut self.cold
+        };
+        let taken = list.pop_back();
+        self.demand.frame += usize::from(taken.is_some());
         taken
     }
 
