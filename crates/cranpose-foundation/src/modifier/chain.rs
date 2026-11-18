@@ -141,7 +141,7 @@ fn detach_node_tree(node: &mut dyn ModifierNode) {
 /// same type. Removed nodes detach automatically so callers do not need
 /// to manually manage their lifetimes.
 pub struct ModifierNodeChain {
-    entries: Vec<ModifierNodeEntry>,
+    entries: smallvec::SmallVec<[ModifierNodeEntry; 1]>,
     pub(super) aggregated_capabilities: NodeCapabilities,
     // While a node of the chain delegates: the chain's nodes in order,
     // delegates after the node that delegates to them, each with its
@@ -356,7 +356,7 @@ impl ModifierNodeChain {
     /// layout node's do once the node has its id.
     pub fn detached() -> Self {
         Self {
-            entries: Vec::new(),
+            entries: smallvec::SmallVec::new(),
             aggregated_capabilities: NodeCapabilities::empty(),
             delegated_order: None,
             attached: false,
@@ -671,7 +671,7 @@ impl ModifierNodeChain {
     /// `kept_room` entries.
     pub fn release(&mut self, kept_room: usize) {
         if self.entries.capacity() > kept_room {
-            self.entries = Vec::new();
+            self.entries = smallvec::SmallVec::new();
         }
         self.entries.clear();
         self.aggregated_capabilities = NodeCapabilities::empty();

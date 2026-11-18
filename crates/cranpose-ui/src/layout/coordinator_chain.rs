@@ -293,7 +293,7 @@ impl SyncedInputs {
 
 #[derive(Default)]
 pub(super) struct CoordinatorChain {
-    nodes: Vec<CoordinatorNode>,
+    nodes: SmallVec<[CoordinatorNode; 1]>,
     /// The size the node's own measure policy measured its content at.
     inner_size: Cell<Size>,
     /// The constraints the node's own measure policy last measured under.
@@ -434,7 +434,7 @@ impl CoordinatorChain {
     pub(super) fn release_for_recycle(&mut self, kept_room: usize) {
         let mut nodes = std::mem::take(&mut self.nodes);
         if nodes.capacity() > kept_room {
-            nodes = Vec::new();
+            nodes = SmallVec::new();
         }
         nodes.clear();
         *self = Self {
