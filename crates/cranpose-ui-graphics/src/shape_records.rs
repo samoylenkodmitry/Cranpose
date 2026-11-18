@@ -229,7 +229,8 @@ impl ShapeRecords {
             .take_while(|source| (source.index as usize) < range.end)
         {
             self.sources.push(RecordSource {
-                index: (source.index as usize - range.start + to) as u32,
+                index: u32::try_from(source.index as usize - range.start + to)
+                    .expect("a recording holds fewer than 2^32 records"),
                 ..*source
             });
         }
