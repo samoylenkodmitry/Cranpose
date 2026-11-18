@@ -16,6 +16,7 @@ use entry::ModifierNodeEntry;
 use entry_element::EntryElement;
 pub use entry_element::HeldElement;
 use in_place::{InPlace, update_entry_in_place};
+pub(crate) use plain::PlainWords;
 pub use plain::{
     PLAIN_WORDS_MAX, PlainElement, PlainFns, PlainIntrinsic, PlainLayout, PlainLayoutFns,
     PlainValue, PrepareAt, plain_element,
@@ -221,7 +222,7 @@ fn find_match(
                 .chain(unkeyed)
                 .find(|(_, entry)| {
                     let held = entry.held();
-                    held.hash_code() == query.hash_code && held.equals(query.element.as_ref())
+                    held.hash_code() == query.hash_code && held.equals(&**query.element)
                 })
                 .map_or(Some(first.0), |(index, _)| Some(index))
         }
@@ -239,8 +240,7 @@ fn new_entry(
     match element.maker() {
         ElementMaker::Plain(value) => (ModifierNodeEntry::of_plain(value), false),
         ElementMaker::Node(maker) => {
-            let entry =
-                ModifierNodeEntry::of_node(Rc::clone(element), maker, element.capabilities());
+            let entry = ModifierNodeEntry::of_node(element, maker, element.capabilities());
             let delegating = entry.node().is_some_and(|node| {
                 let mut node = node.borrow_mut();
                 if attach {
@@ -312,7 +312,7 @@ fn reconcile_element(
             let held = &mut words[..fns.words()];
             if !value.equals_words(held) {
                 value.write_words(held);
-                request_update_auto_invalidations(element.as_ref(), context, capabilities);
+                request_update_auto_invalidations(&*element, context, capabilities);
             }
         }
         (
@@ -324,11 +324,11 @@ fn reconcile_element(
             },
             ElementMaker::Node(maker),
         ) if maker.can_update_node(&*node.borrow()) => {
-            let same_element = held.view(node, *held_capabilities).equals(element.as_ref());
+            let same_element = held.view(node, *held_capabilities).equals(&*element);
             if !same_element || element.requires_update() {
                 maker.update_node(&mut *node.borrow_mut());
-                request_update_auto_invalidations(element.as_ref(), context, capabilities);
-                *held = EntryElement::new(Rc::clone(&element), maker);
+                request_update_auto_invalidations(&*element, context, capabilities);
+                *held = EntryElement::new(&element, maker);
             }
             *held_capabilities = capabilities;
             node.borrow().node_state().set_capabilities(capabilities);
@@ -538,7 +538,7 @@ impl ModifierNodeChain {
                 }
                 fast_path_failed_at = Some(idx);
             }
-            scratch.elements.push(Rc::clone(element));
+            scratch.elements.push(element.clone());
         }
 
         if fast_path_failed_at.is_none() && scratch.elements.is_empty() {

@@ -13,8 +13,8 @@ use cranpose_foundation::{
 };
 
 use super::{
-    DimensionConstraint, EdgeInsets, Elements, LayoutProperties, Modifier, ModifierInspectorRecord,
-    ModifierKind, ModifierLocalAncestorResolver, ModifierLocalToken, Point, ResolvedModifiers,
+    DimensionConstraint, EdgeInsets, LayoutProperties, Modifier, ModifierInspectorRecord,
+    ModifierLocalAncestorResolver, ModifierLocalToken, Point, ResolvedModifiers,
     element_match::{self, ElementMatch},
     layout_data::LayoutDataNode,
     local::ModifierLocalManager,
@@ -80,10 +80,7 @@ pub struct ModifierChainHandle {
 // The inspector metadata `modifier` carries.
 #[cfg(feature = "inspection")]
 fn inspector_of(modifier: &Modifier) -> Option<Rc<Vec<super::InspectorMetadata>>> {
-    match &modifier.kind {
-        ModifierKind::Empty => None,
-        ModifierKind::Single { inspector, .. } => inspector.clone(),
-    }
+    modifier.inspector().cloned()
 }
 
 /// What an update in place of a modifier element changes beyond its own
@@ -385,18 +382,19 @@ impl ModifierChainHandle {
 
     // Whether the chain holds `modifier`'s elements, as `rule` compares them.
     pub(crate) fn holds(&self, modifier: &Modifier, rule: ElementMatch) -> bool {
-        element_match::elements_match(self.chain.held_elements(), modifier, rule)
+        element_match::elements_match(self.chain.held_elements(), modifier.as_elements(), rule)
     }
 
     // The node after `modifier`'s elements, when the chain holds them, as
     // they compare equal, and that one node more.
     pub(crate) fn node_after(&self, modifier: &Modifier) -> Option<&Rc<RefCell<dyn ModifierNode>>> {
+        let elements = modifier.as_elements();
         element_match::elements_match_but_last(
             self.chain.held_elements(),
-            modifier,
+            elements,
             ElementMatch::Equal,
         )
-        .then(|| self.chain.get_node_rc(modifier.element_count()))
+        .then(|| self.chain.get_node_rc(elements.len()))
         .flatten()
     }
 
@@ -409,32 +407,19 @@ impl ModifierChainHandle {
     // updated from. It carries the modifier's inspector metadata only where
     // inspection is built in.
     pub(crate) fn modifier(&self) -> Modifier {
-        let mut held = self.chain.held_elements();
-        let Some(first) = held.next() else {
-            return Modifier::empty();
-        };
-        let elements = if held.len() == 0 {
-            Elements::One(first.to_element())
-        } else {
-            Elements::Many(Rc::new(
-                std::iter::once(first)
-                    .chain(held)
-                    .map(|element| element.to_element())
-                    .collect(),
-            ))
-        };
-        Modifier {
-            provides_composition_locals: elements
-                .iter()
-                .any(|element| element.provides_composition_locals()),
-            kind: ModifierKind::Single {
-                elements,
-                #[cfg(feature = "inspection")]
-                inspector: self.inspector.clone(),
-                #[cfg(not(feature = "inspection"))]
-                inspector: None,
-            },
+        // Pushed one by one: a list collected from an iterator brings in a
+        // copy of the list's extension code.
+        let mut elements = smallvec::SmallVec::new();
+        for element in self.chain.held_elements() {
+            elements.push(element.to_element());
         }
+        Modifier::of_elements(
+            elements,
+            #[cfg(feature = "inspection")]
+            self.inspector.clone(),
+            #[cfg(not(feature = "inspection"))]
+            None,
+        )
     }
 
     /// Returns the aggregated capability mask for the reconciled chain.

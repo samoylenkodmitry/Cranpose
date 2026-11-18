@@ -600,8 +600,8 @@ fn rows_of_boxes_allocations(count: usize, headroom: MemoryHeadroom) -> usize {
 }
 
 // Composing a row of two boxes makes its three layout nodes, each with its
-// box and parts, the size modifiers of the boxes, one allocation each, and
-// the row's list of children. The rows and the boxes share their measure
+// box and parts, and the row's list of children. The size modifiers of the
+// boxes take no allocation. The rows and the boxes share their measure
 // policies.
 // With little memory left the recycle pool keeps no shells, so a node made
 // fresh makes no shell to seed it with either.
@@ -613,16 +613,23 @@ fn composing_a_row_of_boxes_allocates_within_its_budget() {
             / 20;
         println!("allocations of composing a row of two boxes, {headroom:?} memory: {per_row}");
         assert!(
-            per_row <= 11,
+            per_row <= 9,
             "{per_row} allocations a row, {headroom:?} memory"
         );
     }
 }
 
-/// A modifier chain built link by link keeps its elements in one shared
-/// allocation it extends in place, so each link costs its element alone.
-fn a_modifier_chain_allocates_its_elements_and_one_shared_box() {
+// A modifier holds a plain element by value: one alone takes no
+// allocation, and a chain of them built link by link takes one shared
+// allocation it extends in place.
+fn a_modifier_chain_of_plain_elements_allocates_one_shared_box() {
     drop(Modifier::empty().padding(1.0).background(Color::RED));
+    let region = Region::new(GLOBAL);
+    let modifier = Modifier::empty().padding(1.0);
+    let change = region.change();
+    drop(modifier);
+    assert_eq!(change.allocations, 0, "{change:?}");
+
     let region = Region::new(GLOBAL);
     let modifier = Modifier::empty()
         .padding(1.0)
@@ -630,7 +637,70 @@ fn a_modifier_chain_allocates_its_elements_and_one_shared_box() {
         .rounded_corners(3.0);
     let change = region.change();
     drop(modifier);
-    assert_eq!(change.allocations, 4, "{change:?}");
+    assert_eq!(change.allocations, 1, "{change:?}");
+}
+
+// A node whose chain draws one background collects its slices into their
+// block and a list of exactly that draw, with no growth.
+fn slices_of_one_background_allocate_their_block_and_one_list() {
+    let context = cranpose_ui::AppContext::new();
+    let _scope = context.enter_scope();
+    let node = || {
+        cranpose_ui::LayoutNode::new(
+            Modifier::empty().background(Color::RED).padding(1.0),
+            Rc::new(StackedRows { reversed: false }),
+        )
+    };
+    drop(node().modifier_slices_snapshot());
+    let fresh = node();
+    let region = Region::new(GLOBAL);
+    let slices = fresh.modifier_slices_snapshot();
+    let change = region.change();
+    assert_eq!(slices.draw_commands().len(), 1);
+    assert_eq!(change.allocations, 2, "{change:?}");
+    assert_eq!(change.reallocations, 0, "{change:?}");
+}
+
+// A text that draws one background keeps that draw in a list of one, made
+// at its exact length: its first collection grows no list, and collecting
+// its slices again for another color takes no new list.
+fn slices_of_a_text_with_a_background_keep_their_list() {
+    use cranpose_ui::text::{AnnotatedString, TextLayoutOptions, TextStyle};
+
+    let context = cranpose_ui::AppContext::new();
+    let _scope = context.enter_scope();
+    let modifier = |color| {
+        Modifier::empty()
+            .background(color)
+            .then(Modifier::with_element(
+                cranpose_ui::TextModifierElement::new(
+                    AnnotatedString::from("Behind"),
+                    TextStyle::default(),
+                    TextLayoutOptions::default(),
+                    cranpose_ui::Density::new(2.0, 1.0),
+                ),
+            ))
+    };
+    let mut node = cranpose_ui::LayoutNode::new(
+        modifier(Color::RED),
+        Rc::new(StackedRows { reversed: false }),
+    );
+    let region = Region::new(GLOBAL);
+    let slices = node.modifier_slices_snapshot();
+    let first = region.change();
+    assert_eq!(slices.draw_commands().len(), 1);
+    drop(slices);
+
+    let blue = modifier(Color::BLUE);
+    let region = Region::new(GLOBAL);
+    node.set_modifier(blue);
+    let slices = node.modifier_slices_snapshot();
+    let again = region.change();
+    assert_eq!(slices.draw_commands().len(), 1);
+    println!("allocations of a text's slices: first {first:?}, again {again:?}");
+    assert_eq!(first.reallocations, 0, "{first:?}");
+    assert_eq!(again.reallocations, 0, "{again:?}");
+    assert_eq!(again.allocations, 0, "{again:?}");
 }
 
 fn resolving_text_direction_does_not_allocate() {
@@ -736,8 +806,10 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     a_rest_gives_back_a_long_paragraph_glyph_room();
     composing_a_row_of_boxes_allocates_within_its_budget();
     if !cfg!(feature = "inspection") {
-        a_modifier_chain_allocates_its_elements_and_one_shared_box();
+        a_modifier_chain_of_plain_elements_allocates_one_shared_box();
     }
+    slices_of_one_background_allocate_their_block_and_one_list();
+    slices_of_a_text_with_a_background_keep_their_list();
     resolving_text_direction_does_not_allocate();
     owned_bitmaps_allocate_only_metadata_and_clones_share_storage();
     owned_bitmaps_do_not_retain_spare_pixel_capacity();

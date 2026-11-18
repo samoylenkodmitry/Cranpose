@@ -14,6 +14,7 @@ use cranpose_core::{PackedU64, ProvidedValue, hash::default};
 
 use super::{
     InvalidationKind, ModifierNode, ModifierNodeElement, NodeCapabilities, PlainFns, PlainValue,
+    PlainWords,
 };
 
 /// Type-erased modifier element used by the runtime to reconcile chains.
@@ -320,8 +321,102 @@ where
 /// Convenience helper for callers to construct a type-erased modifier
 /// element without having to mention the internal wrapper type.
 pub fn modifier_element<E: ModifierNodeElement>(element: E) -> DynModifierElement {
-    Rc::new(TypedModifierElement::new(element))
+    let element = TypedModifierElement::new(element);
+    let provides_locals = element.provides_locals;
+    DynModifierElement(Repr::Shared {
+        element: Rc::new(element),
+        provides_locals,
+    })
 }
 
-/// Boxed type-erased modifier element.
-pub type DynModifierElement = Rc<dyn AnyModifierElement>;
+/// A type-erased modifier element, as a modifier holds it: a plain
+/// element's value in place, or a shared element that makes a node. A plain
+/// element takes no allocation of its own.
+#[derive(Clone)]
+pub struct DynModifierElement(Repr);
+
+// What a `DynModifierElement` holds. A shared element keeps beside it
+// whether it has composition locals, in bytes the plain value's room leaves,
+// so a modifier of one element tells without a call.
+#[derive(Clone)]
+pub(crate) enum Repr {
+    Plain(PlainWords),
+    Shared {
+        element: Rc<dyn AnyModifierElement>,
+        provides_locals: bool,
+    },
+}
+
+impl DynModifierElement {
+    pub(crate) fn plain(words: PlainWords) -> Self {
+        Self(Repr::Plain(words))
+    }
+
+    pub(crate) fn of_shared(element: Rc<dyn AnyModifierElement>) -> Self {
+        let provides_locals = element.provides_composition_locals();
+        Self(Repr::Shared {
+            element,
+            provides_locals,
+        })
+    }
+
+    pub(crate) fn repr(&self) -> &Repr {
+        &self.0
+    }
+
+    // The shared element, or `None` for a plain one, which is a value.
+    pub(crate) fn shared(&self) -> Option<&Rc<dyn AnyModifierElement>> {
+        match &self.0 {
+            Repr::Plain(_) => None,
+            Repr::Shared { element, .. } => Some(element),
+        }
+    }
+
+    // The element as a shared one, which a plain value becomes by a copy in
+    // an allocation of its own.
+    pub(crate) fn to_shared(&self) -> Rc<dyn AnyModifierElement> {
+        match &self.0 {
+            Repr::Plain(words) => Rc::new(*words),
+            Repr::Shared { element, .. } => Rc::clone(element),
+        }
+    }
+
+    /// Whether this element has composition locals for its content. A plain
+    /// element has none, which this tells without a call.
+    #[inline]
+    pub fn provides_composition_locals(&self) -> bool {
+        match &self.0 {
+            Repr::Plain(_) => false,
+            Repr::Shared {
+                provides_locals, ..
+            } => *provides_locals,
+        }
+    }
+
+    /// Whether `other` is this element itself, not only an equal one: two
+    /// plain elements are values, which are never one element.
+    pub fn is(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (Repr::Shared { element: a, .. }, Repr::Shared { element: b, .. }) => Rc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+impl std::ops::Deref for DynModifierElement {
+    type Target = dyn AnyModifierElement;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        match &self.0 {
+            Repr::Plain(words) => words,
+            Repr::Shared { element, .. } => &**element,
+        }
+    }
+}
+
+impl fmt::Debug for DynModifierElement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
