@@ -209,6 +209,23 @@ private struct ReferenceControl: View {
             TextField("Name", text: $text).textFieldStyle(.roundedBorder).frame(width: 300)
                 .accessibilityIdentifier("reference-text-field")
                 .onAppear { if value == 1 { text = "Ada" } }
+        case "wheel":
+            Picker("Fruit", selection: $selection) {
+                ForEach(Array(ReferenceChoices.fruits.enumerated()), id: \.offset) { index, fruit in
+                    Text(fruit).tag(index)
+                }
+            }
+            .pickerStyle(.wheel).frame(width: 300).accessibilityIdentifier("reference-wheel")
+        case "pop-up":
+            Picker("Fruit", selection: $selection) {
+                ForEach(Array(ReferenceChoices.fruits.enumerated()), id: \.offset) { index, fruit in
+                    Text(fruit).tag(index)
+                }
+            }
+            .pickerStyle(.menu).accessibilityIdentifier("reference-pop-up")
+        case "color-well":
+            ColorPicker("Color", selection: .constant(ReferenceChoices.colors[selection % ReferenceChoices.colors.count]))
+                .labelsHidden().accessibilityIdentifier("reference-color-well")
         case "page-control":
             ReferencePageControl(page: selection).frame(width: 300, height: 28)
                 .accessibilityIdentifier("reference-page-control")
@@ -216,6 +233,12 @@ private struct ReferenceControl: View {
             Text("Unknown reference control: \(component)")
         }
     }
+}
+
+// The choices the picker references offer, shared with the Cranpose app.
+private enum ReferenceChoices {
+    static let fruits = ["Apple", "Banana", "Cherry", "Grape", "Lemon", "Mango", "Orange"]
+    static let colors: [Color] = [.blue, .red, .green]
 }
 
 // Five pages with `page` current, as a pager under a carousel shows them.

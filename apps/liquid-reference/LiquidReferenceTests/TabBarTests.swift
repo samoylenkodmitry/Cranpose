@@ -239,6 +239,9 @@ class NativeControlTests: ReferenceUITests {
     func testDisclosure() { captureStates("disclosure", values: ["0", "1"]) }
     func testTextField() { captureStates("text-field", values: ["0", "1"]) }
     func testPageControl() { captureStates("page-control", values: ["0", "2"]) }
+    func testWheel() { captureStates("wheel", values: ["0", "3"]) }
+    func testPopUp() { captureStates("pop-up", values: ["0", "3"]) }
+    func testColorWell() { captureStates("color-well", values: ["0", "1"]) }
 
     private func captureStates(_ component: String, values: [String]) {
         for scheme in ["light", "dark"] {
