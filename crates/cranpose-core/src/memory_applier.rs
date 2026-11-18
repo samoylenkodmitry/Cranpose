@@ -557,9 +557,14 @@ impl MemoryApplier {
                 .sum::<usize>()
     }
 
+    // One lookup of the pool: a limit makes the pool, and no limit clears
+    // the limit of a pool that exists.
     fn remember_recycle_pool_limit(&mut self, key: TypeId, recycle_pool_limit: Option<usize>) {
-        if recycle_pool_limit.is_some() || self.state.recycle_pools.contains_key(&key) {
-            self.state.recycle_pools.entry(key).or_default().limit = recycle_pool_limit;
+        let pools = &mut self.state.recycle_pools;
+        if recycle_pool_limit.is_some() {
+            pools.entry(key).or_default().limit = recycle_pool_limit;
+        } else if let Some(pool) = pools.get_mut(&key) {
+            pool.limit = None;
         }
     }
 
