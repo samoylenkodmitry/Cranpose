@@ -74,7 +74,7 @@ Cranpose developers too:
 - `local_haptics()`: the `Haptics` handle that vibrates a hand's controller.
 - `Orbiter`: content attached to the edge of a panel, such as a handle or a toolbar.
 - `SubspaceModifier`: `width`, `height`, `depth`, `size`, `offset`, `rotate`, `with_pose`,
-  `movable`, `movable_with`, `resizable`, `fill_max_size`, `padding`.
+  `movable`, `movable_with`, `resizable`, `resizable_with`, `fill_max_size`, `padding`.
 - `SpatialRoundedCornerShape`: the shape of a panel.
 
 Jetpack XR Compose shows 3D models through SceneCore entities. Cranpose has its own 3D: a
@@ -177,6 +177,78 @@ The panel keeps the pose that the user gave it, relative to its subspace's origi
 the composition. `SubspaceModifier::with_pose` takes the pose of an event, so an app that saves the
 last `End` pose places the panel there when it starts again.
 
+## Resizing a panel
+
+A panel or surface with `resizable` or `resizable_with` has a second handle at its bottom right
+corner. It is a sphere of the carry handle's size: a quad layer with one static picture of a lit
+sphere, amber where the carry handle is bluish white. Its center stands 4 cm to the right of the
+panel's right edge and 4 cm below its bottom edge, so the grab sphere stays clear of the panel's
+rectangle. A press next to the handle, on the panel's corner, still presses. A ray that points at
+the handle takes priority over the panel, as the carry handle does. A panel that carries and
+resizes has both handles, and the one that the ray meets first is active and shows larger. A
+panel on a curve has no corner handle, because its corner does not lie on the tangent plane that
+the resize measures on.
+
+A pull on the handle grabs the corner. While the trigger stays down, the pointer takes the point
+where the ray meets the panel's plane, with no clip to the panel's rectangle. The panel's center
+stays where it is, so the pose does not change. The corner moves by the shift of that point, and
+the size changes by twice the shift. The grab keeps the offset between the ray's point and the
+handle's center, so the first step does not jump. A ray that is parallel to the plane, or that
+points away from it, leaves the size as it was. The pointer rounds each size to whole dp, and it
+reports a size only when it differs from the size before. A hand that holds still reports nothing.
+The pointer reads the ray after the aim filter, which cuts the shake of a resting hand and follows
+a fast turn with little lag.
+
+`ResizeLimits` holds the parameters of Jetpack XR's `resizable` that are not the policy: the
+smallest size, the largest size and `maintain_aspect_ratio`, which defaults to false as in
+Jetpack XR. Each side is clamped to its limits after the rounding. The pointer never makes a side
+smaller than 20 dp, so that a minimum of zero leaves a panel that the user can still grab. It
+never makes a side larger than 4000 dp, because a ray that grazes the panel's plane meets it far
+away and a maximum of infinity would take that size to the atlas. A maximum below the minimum
+becomes the minimum. With `maintain_aspect_ratio` the pointer takes the
+ratio of the size at the grab and clamps one scale factor of that size, so the size stays on the
+line of its proportions. Limits that the proportions cannot meet hold, and the proportions give
+way. Surfaces follow the same rule and default to a free ratio. The picture of a decoder fills the
+whole surface, so a free resize stretches it. A surface that shows a video of one ratio calls
+`maintain_aspect_ratio(true)`, as the demo's clip surface does.
+
+`resizable_with(limits, policy)` follows Jetpack XR 1.0.0-beta02's `resizable(enabled,
+minimumSize, maximumSize, maintainAspectRatio, resizePolicy)`. Rust has no named or default
+arguments, so the three limits come in one `ResizeLimits` value, and `resizable(policy)` is the
+call with no limits. Jetpack XR's `enabled` is the app's own `if`. The alpha releases had
+`onSizeChange: (IntVolumeSize) -> Boolean` in its place, which `ResizePolicy` replaced.
+`ResizePolicy::custom` is the shape of `MovePolicy::custom`: the headset reports the steps, and
+the app applies the size. Jetpack XR's `ResizePolicy.system`, where the headset applies the size
+itself, has no counterpart. A `SpatialResizeEvent` has the phase (`Start`, `Resizing` or `End`)
+and the size in dp, where Jetpack XR reports integer pixels. The `Start` event has the size at the
+grab. The `End` event has the size of the last step. A controller that the runtime stops tracking
+ends the resize. The callback sets the state that feeds `SubspaceModifier::size`, and the next
+composition lays the content out at that size and moves the handle to the new corner.
+
+The size of a content panel costs more than the size of a quad. A change of size changes the
+panel's part of the atlas, so the panels below it stack again, the atlas grows or shrinks, and the
+panel's swapchain is made anew. An app that applies the size in each frame of a drag would pay for
+all of that in each frame. A panel in a resize holds a room instead: its size, rounded up to the
+next 128 dp whenever the size outgrows the room. The room never shrinks during the resize. The
+room, not the size, takes part of the atlas, and the room's pixels make the panel's swapchain. The
+layer shows the rectangle of the panel's size from the image's top left corner. The copy takes two
+more pixels of the atlas's empty margin, so that the filter at the rectangle's edge finds clear
+pixels and no leftover of a larger size. A drag therefore stacks the panels and makes a swapchain
+once for each 128 dp of growth in a direction. A drag that only shrinks the panel does neither.
+At the release the room settles to the size that the app applied, which stacks the panels once
+more and makes one swapchain at that size. The settling runs in the release step, so it does not
+depend on a recomposition. The composition draws the content at the new size in each frame in
+which the app applies a size. That draw is the cost of any animated layout.
+
+A surface has no part of the atlas, and `SurfaceLayers::sync` makes its swapchain once, at the
+panel's size when it appears. A resize changes only the size of the surface's quad, so it costs
+nothing. The decoder keeps writing buffers of the size that it got.
+
+No measurement on a device backs this design, and 128 dp and 20 dp are choices. The crate's tests
+run the pointer's math and the space's rooms on a desktop. The cost of a swapchain, the
+compositor's filter at the rectangle's edge and the feel of the aim filter in a drag have not run
+on a headset.
+
 ## External surfaces
 
 `SpatialExternalSurface` makes a surface swapchain with `XR_KHR_android_surface_swapchain`. The
@@ -213,8 +285,8 @@ the edge of a large surface in front of it, where the distance to the layer's ce
 behind. A curved panel sorts by the plane at its center. Its arc leaves that plane by 2 cm for a
 panel of 0.4 m on a cylinder of 1 m. A distance that follows the arc changes when the head steps
 aside, and it would sink a flat panel that stands 3 cm in front of a curved panel under that
-panel. The handle of a movable panel follows the panel's own layers, so a panel in front of the
-handle shows over it. The rays follow all of them, so they show over everything. The sort runs in
+panel. The handles of a panel follow the panel's own layers, so a panel in front of a handle shows
+over it. The rays follow all of them, so they show over everything. The sort runs in
 place on the panels' list and allocates nothing. The session keeps the raw structs of the frame's
 layers in lists that it reuses from frame to frame.
 

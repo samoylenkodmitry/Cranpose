@@ -3,11 +3,13 @@
 use std::time::Duration;
 
 use crate::{
-    Hand as Side, Pose, Ray, SpatialMoveEventType,
+    Hand as Side, Pose, Ray, SpatialMoveEventType, SpatialResizeEventType,
     aim_filter::{AimFilter, angle_between},
-    carry::{Carry, handle_hit},
+    carry::Carry,
+    handle::HandleKind,
     ray::Beam,
-    space::{Cursor, Mobility, PanelKind, PanelMove, PanelSlot, Ride},
+    resize::Resize,
+    space::{Cursor, PanelKind, PanelMove, PanelResize, PanelSlot, Ride},
     surface_input::{Gesture, SurfaceGesture},
 };
 
@@ -103,6 +105,13 @@ impl Hit {
     }
 }
 
+// A handle that a ray meets: which panel's, and what it does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Handle {
+    slot: PanelSlot,
+    kind: HandleKind,
+}
+
 // One controller across frames.
 #[derive(Clone, Copy, Debug, Default)]
 struct Hand {
@@ -110,13 +119,13 @@ struct Hand {
     down: bool,
     // The ray in the last frame where the trigger rested, and that frame's time
     rest: Option<(Duration, Ray)>,
-    // This frame's ray, the panel it meets and the movable panel whose handle it meets. A panel
+    // This frame's ray, the panel it meets and the panel whose handle it meets. A panel
     // that holds no content, such as a video surface, stops the ray as a panel does.
     ray: Option<Ray>,
     hit: Option<Hit>,
     // The hit, if the panel has content, which shows the cursor's dot
     content_hit: Option<Hit>,
-    handle: Option<(PanelSlot, f32)>,
+    handle: Option<(Handle, f32)>,
     // The controller's own pose and its thumbstick, which carry a panel
     pose: Option<Pose>,
     stick: f32,
@@ -184,13 +193,12 @@ impl Hand {
         self.hit.is_some() || self.handle.is_some()
     }
 
-    // The movable panel that a pull in this frame carries: one whose handle is nearer than any
-    // panel.
-    fn grab(&self) -> Option<PanelSlot> {
-        let (slot, distance) = self.handle?;
+    // The handle that a pull in this frame grabs: one that is nearer than any panel.
+    fn grab(&self) -> Option<Handle> {
+        let (handle, distance) = self.handle?;
         self.hit
             .is_none_or(|hit| distance < hit.distance)
-            .then_some(slot)
+            .then_some(handle)
     }
 
     // The ray up to the nearest panel or handle that it meets.
@@ -231,6 +239,34 @@ struct Carried {
     pose: Pose,
 }
 
+// A panel the user resizes.
+#[derive(Clone, Copy, Debug)]
+struct Resized {
+    panel: u64,
+    resize: Resize,
+    // The panel's size in dp in the last step, which a step that ends the resize repeats when the
+    // controller is lost
+    size: [f32; 2],
+    // The highest pull of the trigger since the grab
+    peak: f32,
+}
+
+// What the user holds by a handle.
+#[derive(Clone, Copy, Debug)]
+enum Held {
+    Carry(Carried),
+    Resize(Resized),
+}
+
+impl Held {
+    fn handle(&self) -> (u64, HandleKind) {
+        match self {
+            Self::Carry(carried) => (carried.panel, HandleKind::Move),
+            Self::Resize(resized) => (resized.panel, HandleKind::Resize),
+        }
+    }
+}
+
 // The pointer. One controller drives it at a time: the one whose trigger went down last, or
 // the other one while only that one points at a panel or a handle.
 #[derive(Debug, Default)]
@@ -239,9 +275,10 @@ pub(crate) struct Pointer {
     hand: usize,
     hands: [Hand; 2],
     press: Option<Press>,
-    carried: Option<Carried>,
-    // The steps of the carry in this frame, kept so a frame does not allocate
+    held: Option<Held>,
+    // The steps of the carry and of the resize in this frame, kept so a frame does not allocate
     moves: Vec<PanelMove>,
+    resizes: Vec<PanelResize>,
     // The time of the frame before
     time: Option<Duration>,
     // The target that the pointer is over and its place there, in the target's dp
@@ -263,6 +300,7 @@ impl Pointer {
         self.events.clear();
         self.surface_events.clear();
         self.moves.clear();
+        self.resizes.clear();
         let dt = self
             .time
             .map_or(0.0, |last| time.saturating_sub(last).as_secs_f32());
@@ -273,12 +311,12 @@ impl Pointer {
         let hand = self.hands[self.hand];
         match triggers[self.hand] {
             Trigger::Pulled => match hand.grab() {
-                Some(slot) => self.grab(&hand, &slot),
+                Some(handle) => self.grab(&hand, &handle),
                 None => self.pull(&hand, time, panels),
             },
-            Trigger::Up if self.carried.is_some() => self.put_down(&hand),
+            Trigger::Up if self.held.is_some() => self.put_down(&hand),
             Trigger::Up if self.press.is_some() => self.release(&hand),
-            _ if self.carried.is_some() => self.carry(&hand, dt),
+            _ if self.held.is_some() => self.hold(&hand, dt, panels),
             _ => self.follow(&hand, time),
         }
         let cursor = self.cursor(&hand);
@@ -292,7 +330,7 @@ impl Pointer {
             Some(Press {
                 held: Some(held), ..
             }) => held.on_content().then(|| held.cursor(true)),
-            _ if self.carried.is_some() => None,
+            _ if self.held.is_some() => None,
             press => {
                 let pressed = press.is_some_and(|press| press.target == Target::Atlas);
                 hand.content_hit.map(|hit| hit.cursor(pressed))
@@ -314,16 +352,23 @@ impl Pointer {
         &self.moves
     }
 
+    // The steps of the user's resize in this frame: the grab, the new size of each frame in which
+    // it changed, and the release.
+    pub(crate) fn resizes(&self) -> &[PanelResize] {
+        &self.resizes
+    }
+
     // The pointer's gestures on surfaces in this frame.
     pub(crate) fn surface_events(&self) -> &[SurfaceGesture] {
         &self.surface_events
     }
 
-    // The panel whose handle the pointer carries or would grab.
-    pub(crate) fn handle(&self) -> Option<u64> {
-        self.carried
-            .map(|carried| carried.panel)
-            .or_else(|| self.hands[self.hand].grab().map(|slot| slot.id))
+    // The panel whose handle the pointer holds or would grab, and which of its handles.
+    pub(crate) fn handle(&self) -> Option<(u64, HandleKind)> {
+        self.held.map(|held| held.handle()).or_else(|| {
+            let handle = self.hands[self.hand].grab()?;
+            Some((handle.slot.id, handle.kind))
+        })
     }
 
     // The rays to show, left then right.
@@ -335,7 +380,7 @@ impl Pointer {
     // controller that points at a panel or a handle takes it from one that points at neither. A press keeps
     // its controller until the trigger goes up.
     fn choose_hand(&mut self, triggers: [Trigger; 2]) {
-        if self.press.is_some() || self.carried.is_some() {
+        if self.press.is_some() || self.held.is_some() {
             return;
         }
         let pulled = (0..2).rev().find(|&hand| triggers[hand] == Trigger::Pulled);
@@ -368,24 +413,51 @@ impl Pointer {
         }
     }
 
-    // A pull on a handle takes the panel along with the controller. The panel's composition sees
-    // the pointer leave.
-    fn grab(&mut self, hand: &Hand, slot: &PanelSlot) {
-        let Some(aim) = hand.pose else {
-            return;
+    // A pull on a handle takes hold of its panel: a move handle carries the panel along with the
+    // controller, and a corner handle resizes it. The panel's composition sees the pointer leave.
+    fn grab(&mut self, hand: &Hand, handle: &Handle) {
+        let slot = &handle.slot;
+        let grabbed = match handle.kind {
+            HandleKind::Move => hand.pose.map(|aim| {
+                self.step(slot.id, SpatialMoveEventType::Start, slot.pose);
+                Held::Carry(Carried {
+                    panel: slot.id,
+                    carry: Carry::grab(&aim, &slot.pose),
+                    pose: slot.pose,
+                })
+            }),
+            HandleKind::Resize => hand
+                .ray
+                .and_then(|ray| Resize::grab(&ray, slot))
+                .map(|resize| {
+                    let size = slot.size();
+                    self.resize_step(slot.id, SpatialResizeEventType::Start, size);
+                    Held::Resize(Resized {
+                        panel: slot.id,
+                        resize,
+                        size,
+                        peak: hand.trigger,
+                    })
+                }),
         };
-        self.carried = Some(Carried {
-            panel: slot.id,
-            carry: Carry::grab(&aim, &slot.pose),
-            pose: slot.pose,
-        });
-        self.step(slot.id, SpatialMoveEventType::Start, slot.pose);
-        self.hover(None);
+        if grabbed.is_some() {
+            self.held = grabbed;
+            self.hover(None);
+        }
+    }
+
+    // The held panel follows the controller.
+    fn hold(&mut self, hand: &Hand, dt: f32, panels: &[PanelSlot]) {
+        match self.held {
+            Some(Held::Carry(_)) => self.carry(hand, dt),
+            Some(Held::Resize(_)) => self.resize(hand, panels),
+            None => {}
+        }
     }
 
     // The carried panel follows the controller. The thumbstick pushes it away or pulls it near.
     fn carry(&mut self, hand: &Hand, dt: f32) {
-        let (Some(carried), Some(aim)) = (&mut self.carried, hand.pose) else {
+        let (Some(Held::Carry(carried)), Some(aim)) = (&mut self.held, hand.pose) else {
             return;
         };
         let carry = &mut carried.carry;
@@ -398,10 +470,43 @@ impl Pointer {
         }
     }
 
-    // The trigger went up while the user carried a panel, or the controller was lost.
+    // The resized panel takes the size that the ray gives it. A ray that meets the panel's plane
+    // nowhere leaves the size as it was. So does a trigger that is on its way up: letting go turns
+    // the controller as a pull does.
+    fn resize(&mut self, hand: &Hand, panels: &[PanelSlot]) {
+        let (Some(Held::Resize(resized)), Some(ray)) = (&mut self.held, hand.ray) else {
+            return;
+        };
+        resized.peak = resized.peak.max(hand.trigger);
+        if hand.trigger < resized.peak - LET_GO {
+            return;
+        }
+        let Some(slot) = panels.iter().find(|slot| slot.id == resized.panel) else {
+            return;
+        };
+        let Some(size) = resized.resize.size(&ray, &slot.pose) else {
+            return;
+        };
+        // Sizes are whole dp, so two equal sizes compare equal
+        #[expect(clippy::float_cmp, reason = "the sizes are rounded to whole dp")]
+        let changed = size != resized.size;
+        if changed {
+            resized.size = size;
+            let panel = resized.panel;
+            self.resize_step(panel, SpatialResizeEventType::Resizing, size);
+        }
+    }
+
+    // The trigger went up while the user held a panel by a handle, or the controller was lost.
     fn put_down(&mut self, hand: &Hand) {
-        if let Some(carried) = self.carried.take() {
-            self.step(carried.panel, SpatialMoveEventType::End, carried.pose);
+        match self.held.take() {
+            Some(Held::Carry(carried)) => {
+                self.step(carried.panel, SpatialMoveEventType::End, carried.pose);
+            }
+            Some(Held::Resize(resized)) => {
+                self.resize_step(resized.panel, SpatialResizeEventType::End, resized.size);
+            }
+            None => {}
         }
         self.hover(hand.hit);
     }
@@ -411,6 +516,14 @@ impl Pointer {
             panel,
             event_type,
             pose,
+        });
+    }
+
+    fn resize_step(&mut self, panel: u64, event_type: SpatialResizeEventType, size: [f32; 2]) {
+        self.resizes.push(PanelResize {
+            panel,
+            event_type,
+            size,
         });
     }
 
@@ -496,13 +609,17 @@ fn reachable(slot: &PanelSlot, side: Side) -> bool {
     }
 }
 
-// The movable panel whose handle the ray of `side` meets first, and how far along the ray.
-fn nearest_handle(ray: &Ray, panels: &[PanelSlot], side: Side) -> Option<(PanelSlot, f32)> {
+// The handle that the ray of `side` meets first, and how far along the ray.
+fn nearest_handle(ray: &Ray, panels: &[PanelSlot], side: Side) -> Option<(Handle, f32)> {
     panels
         .iter()
         .filter(|slot| reachable(slot, side))
-        .filter(|slot| slot.mobility == Mobility::Movable)
-        .filter_map(|slot| Some((*slot, handle_hit(ray, slot)?)))
+        .flat_map(|slot| {
+            HandleKind::ALL
+                .into_iter()
+                .filter(|kind| kind.offered_by(slot))
+                .filter_map(move |kind| Some((Handle { slot: *slot, kind }, kind.hit(ray, slot)?)))
+        })
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 

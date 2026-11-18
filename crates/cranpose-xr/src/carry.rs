@@ -1,22 +1,13 @@
 //! The math of carrying a movable panel with a controller.
 
 use crate::{
-    Pose, Ray,
+    Pose,
+    handle::{HANDLE_GAP, HANDLE_RADIUS},
     pose::turn_degrees,
     space::PanelSlot,
     subspace_modifier::METERS_PER_DP,
-    vector::{cross, dot, sub},
+    vector::{cross, dot},
 };
-
-// The space between the bottom edge of a panel and its handle, in meters.
-const HANDLE_GAP: f32 = 0.02;
-
-// The radius of a handle, which is a sphere, in meters.
-pub(crate) const HANDLE_RADIUS: f32 = 0.02;
-
-// How far from the handle a ray still grabs it, in meters. The margin stays under the gap, so
-// the grab does not reach the panel's bottom edge. A press on that edge still presses.
-const HANDLE_MARGIN: f32 = 0.015;
 
 // The nearest and the farthest a carried panel gets from the controller, in meters.
 const MIN_DISTANCE: f32 = 0.3;
@@ -31,21 +22,6 @@ pub(crate) fn handle_center(slot: &PanelSlot) -> [f32; 3] {
     let height = slot.size()[1] * METERS_PER_DP;
     let below = [0.0, -(height / 2.0 + HANDLE_GAP + HANDLE_RADIUS), 0.0];
     slot.pose.then(&Pose::at(below)).position
-}
-
-// The distance along `ray` to the handle under `slot`'s panel, if the ray comes within the margin
-// of it. The ray meets the sphere from the panel's front, from its back or from any other side. A
-// ray that starts inside the margin meets it at distance 0.
-pub(crate) fn handle_hit(ray: &Ray, slot: &PanelSlot) -> Option<f32> {
-    let reach = HANDLE_RADIUS + HANDLE_MARGIN;
-    let from_center = sub(ray.origin, handle_center(slot));
-    let along = dot(from_center, ray.direction);
-    let discriminant = along * along - (dot(from_center, from_center) - reach * reach);
-    if discriminant < 0.0 {
-        return None;
-    }
-    let root = discriminant.sqrt();
-    (root >= along).then(|| (-along - root).max(0.0))
 }
 
 // A panel held by a controller: the panel's pose in the controller's frame at the grab.

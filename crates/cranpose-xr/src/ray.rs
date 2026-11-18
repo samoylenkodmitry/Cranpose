@@ -23,6 +23,20 @@ impl Ray {
     /// Where the ray meets a flat panel of `size` meters centered on `panel`, which faces its
     /// +z. Either face of the panel stops the ray.
     pub fn hit_panel(&self, panel: &Pose, size: [f32; 2]) -> Option<PanelHit> {
+        let (distance, [x, y]) = self.plane_point(panel)?;
+        let (u, v) = (x / size[0] + 0.5, 0.5 - y / size[1]);
+        ((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v)).then_some(PanelHit {
+            distance,
+            u,
+            v,
+        })
+    }
+
+    // Where the ray meets the plane of a panel centered on `panel`, which faces its +z: how far
+    // along the ray, and the place from the panel's center to the right and up, in meters. The
+    // place may lie outside the panel. A ray parallel to the plane, or one that points away from
+    // it, meets it nowhere.
+    pub(crate) fn plane_point(&self, panel: &Pose) -> Option<(f32, [f32; 2])> {
         let start = panel.unrotate([
             self.origin[0] - panel.position[0],
             self.origin[1] - panel.position[1],
@@ -36,14 +50,13 @@ impl Ray {
         if distance <= 0.0 {
             return None;
         }
-        let x = start[0] + distance * direction[0];
-        let y = start[1] + distance * direction[1];
-        let (u, v) = (x / size[0] + 0.5, 0.5 - y / size[1]);
-        ((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v)).then_some(PanelHit {
+        Some((
             distance,
-            u,
-            v,
-        })
+            [
+                start[0] + distance * direction[0],
+                start[1] + distance * direction[1],
+            ],
+        ))
     }
 
     /// Where the ray meets a panel of `size` meters bent around a cylinder of `radius` meters.

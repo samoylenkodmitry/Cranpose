@@ -4,7 +4,9 @@
 //! one panel under the other in the order the panels registered. Each panel becomes a layer of
 //! the headset's compositor that shows its part of the atlas. A panel keeps its part while its
 //! size and the sizes of the panels above it stay. When a panel changes its size or leaves, the
-//! panels stack again from the top, so the atlas needs no more room than its panels.
+//! panels stack again from the top, so the atlas needs no more room than its panels. A panel that
+//! the user resizes holds more room than its size, so that the panels stack again once for each
+//! step of growth and not in each frame.
 
 use std::{
     cell::{Cell, RefCell},
@@ -16,8 +18,9 @@ use cranpose::{ExternalSurface, MutableState, mutableStateOf};
 use cranpose_core::CompositionLocal;
 
 use crate::{
-    FollowTarget, Hand, METERS_PER_DP, MovePolicy, PanelHit, Pose, Ray, Recenter, SpatialMoveEvent,
-    SpatialMoveEventType, StereoMode,
+    FollowTarget, Hand, METERS_PER_DP, MovePolicy, PanelHit, Pose, Ray, Recenter, ResizeLimits,
+    ResizePolicy, SpatialMoveEvent, SpatialMoveEventType, SpatialResizeEvent,
+    SpatialResizeEventType, StereoMode,
     follow_origin::{FollowOrigins, Standing},
     locals::with_locals,
     stream_source::StreamSource,
@@ -27,6 +30,11 @@ use crate::{
 // The space between two panels in the atlas, in dp, so the compositor's filter never reaches a
 // neighbor's pixels.
 const ATLAS_GAP: f32 = 8.0;
+
+// The steps in dp by which a panel's room in the atlas grows while the user resizes it. Each
+// growth stacks the panels again and makes the atlas and the panel's image anew, so a resize that
+// grows a little at each frame makes them once for every ROOM_STEP dp of growth.
+const ROOM_STEP: f32 = 128.0;
 
 // The step in dp by which the dot of a cursor moves. A smaller move leaves the dot where it is.
 const CURSOR_STEP: f32 = 0.5;
@@ -94,18 +102,29 @@ pub(crate) struct PanelSlot {
     pub(crate) mobility: Mobility,
     // The shape the panel shows on. A surface panel is flat.
     pub(crate) shape: Shape,
+    // The sizes that the user may give the panel, if the content set a resize.
+    pub(crate) resize: Option<ResizeLimits>,
+    // The width and height in dp of the room that the panel holds in the atlas and in its image:
+    // its size, or more while the user resizes it.
+    pub(crate) room: [f32; 2],
     // Whether a controller places the panel
     pub(crate) ride: Ride,
 }
 
 impl PanelSlot {
+    // The panel's width and height in dp.
+    pub(crate) fn size(&self) -> [f32; 2] {
+        [self.atlas[2], self.atlas[3]]
+    }
+
     #[cfg_attr(
         not(any(test, headset)),
         expect(dead_code, reason = "the headset backend calls it")
     )]
-    // The panel's width and height in dp.
-    pub(crate) fn size(&self) -> [f32; 2] {
-        [self.atlas[2], self.atlas[3]]
+    // The sizes that the user may give the panel with its corner handle, or `None` for a panel
+    // that has none. A panel on a curve has none: its corner does not lie on its tangent plane.
+    pub(crate) fn resize_limits(&self) -> Option<ResizeLimits> {
+        self.resize.filter(|_| self.shape == Shape::Flat)
     }
 
     #[cfg_attr(
@@ -177,6 +196,15 @@ pub(crate) struct PanelMove {
     pub(crate) pose: Pose,
 }
 
+// A step of the user's resize of a panel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PanelResize {
+    pub(crate) panel: u64,
+    pub(crate) event_type: SpatialResizeEventType,
+    // The panel's size in dp
+    pub(crate) size: [f32; 2],
+}
+
 // A panel of the app and the states that its composition reads while it draws. A change of a
 // state moves or draws the panel again without composing its content again.
 #[derive(Clone, Copy)]
@@ -227,6 +255,10 @@ struct Entry {
     follow: Option<Following>,
     // What the panel does when the user carries it, or `None` for a panel that stays
     policy: Option<MovePolicy>,
+    // Who hears of the user's resize, or `None` for a panel that has no corner handle
+    resize_policy: Option<ResizePolicy>,
+    // Whether the user resizes the panel now: from the grab to the release
+    resizing: bool,
     // For a surface: where the app takes the pointer's events, and what the surface knows of
     // the pointer
     sink: Option<PointerSink>,
@@ -415,8 +447,16 @@ impl Space {
                 entry.origin = origin;
                 entry.slot.pose = entry.carried.map_or(pose, |carried| origin.then(&carried));
                 let slot = &mut entry.slot;
-                let changed = slot.atlas[2..] != size;
                 slot.atlas = [slot.atlas[0], slot.atlas[1], size[0], size[1]];
+                let room = if entry.resizing && kind == PanelKind::Content {
+                    grown(slot.room, size)
+                } else {
+                    size
+                };
+                // A room is the size or a multiple of ROOM_STEP, so two equal rooms compare equal
+                #[expect(clippy::float_cmp, reason = "a room is not a computed float")]
+                let changed = slot.room != room;
+                slot.room = room;
                 (index, changed)
             }
             None => {
@@ -428,6 +468,8 @@ impl Space {
                         pose,
                         mobility: Mobility::Fixed,
                         shape: Shape::Flat,
+                        resize: None,
+                        room: size,
                         ride: Ride::Free,
                     },
                     panel,
@@ -437,6 +479,8 @@ impl Space {
                     moving: None,
                     follow: None,
                     policy: None,
+                    resize_policy: None,
+                    resizing: false,
                     sink: None,
                     input: SurfaceInput::default(),
                 });
@@ -470,6 +514,23 @@ impl Space {
                 Mobility::Fixed
             };
             entry.policy = policy.cloned();
+        }
+    }
+
+    // Sets the sizes that the user may give the panel `id` and who hears of the resize, or `None`
+    // for a panel that has no corner handle. A panel that loses its handle ends a resize in
+    // progress.
+    pub(crate) fn set_resizable(&self, id: u64, resize: Option<(ResizeLimits, &ResizePolicy)>) {
+        let mut entries = self.inner.entries.borrow_mut();
+        let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == id) else {
+            return;
+        };
+        entry.slot.resize = resize.map(|(limits, _)| limits);
+        entry.resize_policy = resize.map(|(_, policy)| policy.clone());
+        if resize.is_none() && entry.resizing {
+            entry.resizing = false;
+            settle(entry);
+            restack(&mut entries);
         }
     }
 
@@ -538,6 +599,43 @@ impl Space {
         // The callback runs with no borrow held, so that it may call the space
         if let Some((listener, event)) = heard {
             listener(event);
+        }
+    }
+
+    #[cfg_attr(
+        not(any(test, headset)),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    // Reports a step of a resize to its panel's policy. The app applies the size: the panel keeps
+    // its size until the content places it at another one. From the grab to the release the
+    // panel's room in the atlas only grows, in steps. At the release it shrinks to the size that
+    // the app applied.
+    pub(crate) fn resize(&self, step: &PanelResize) {
+        let heard = {
+            let mut entries = self.inner.entries.borrow_mut();
+            let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == step.panel) else {
+                return;
+            };
+            entry.resizing = step.event_type != SpatialResizeEventType::End;
+            let event = SpatialResizeEvent {
+                event_type: step.event_type,
+                size: step.size,
+            };
+            entry
+                .resize_policy
+                .as_ref()
+                .map(|policy| (policy.listener(), event))
+        };
+        // The callback runs with no borrow held, so that it may call the space
+        if let Some((listener, event)) = heard {
+            listener(event);
+        }
+        if step.event_type == SpatialResizeEventType::End {
+            let mut entries = self.inner.entries.borrow_mut();
+            if let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == step.panel) {
+                settle(entry);
+            }
+            restack(&mut entries);
         }
     }
 
@@ -621,7 +719,8 @@ impl Space {
             .iter()
             .filter(|entry| entry.slot.kind == PanelKind::Content)
             .fold([0.0, 0.0], |size, entry| {
-                let [x, y, width, height] = entry.slot.atlas;
+                let [x, y, _, _] = entry.slot.atlas;
+                let [width, height] = entry.slot.room;
                 [size[0].max(x + width), size[1].max(y + height)]
             })
     }
@@ -653,7 +752,8 @@ fn restack(entries: &mut [Entry]) {
         .iter_mut()
         .filter(|entry| entry.slot.kind == PanelKind::Content)
     {
-        let [left, old_top, _, height] = entry.slot.atlas;
+        let [left, old_top, _, _] = entry.slot.atlas;
+        let height = entry.slot.room[1];
         // Tops lie on even dp, so a change is always more than half a dp
         if (old_top - top).abs() > 0.5 {
             entry.slot.atlas[1] = top;
@@ -662,6 +762,23 @@ fn restack(entries: &mut [Entry]) {
         // Tops on even dp stay on whole pixels at the densities of one and a half and two
         top = ((top + height + ATLAS_GAP) / 2.0).ceil() * 2.0;
     }
+}
+
+// The room for a panel of `size` that holds `room` now: the same room if it holds the size,
+// else the size rounded up to the next ROOM_STEP.
+fn grown(room: [f32; 2], size: [f32; 2]) -> [f32; 2] {
+    [0, 1].map(|axis| {
+        if size[axis] <= room[axis] {
+            room[axis]
+        } else {
+            (size[axis] / ROOM_STEP).ceil() * ROOM_STEP
+        }
+    })
+}
+
+// Gives the entry's panel the room of its size.
+fn settle(entry: &mut Entry) {
+    entry.slot.room = entry.slot.size();
 }
 
 fn dot_of(cursor: Cursor) -> Dot {

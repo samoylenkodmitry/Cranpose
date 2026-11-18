@@ -1,5 +1,9 @@
 use super::*;
-use crate::space::{Mobility, PanelKind, Ride, Shape};
+use crate::{
+    Ray,
+    handle::HandleKind,
+    space::{Mobility, PanelKind, Ride, Shape},
+};
 
 fn close(a: [f32; 3], b: [f32; 3]) -> bool {
     a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-4)
@@ -21,6 +25,8 @@ fn slot() -> PanelSlot {
         pose: Pose::at([0.0, 0.0, -2.0]),
         mobility: Mobility::Movable,
         shape: Shape::Flat,
+        resize: None,
+        room: [800.0, 500.0],
         ride: Ride::Free,
     }
 }
@@ -85,41 +91,57 @@ fn the_handle_catches_a_ray_from_any_side_and_misses_a_ray_beside_it() {
     assert!(close(center, [0.0, -0.29, -2.0]));
     let ray = |origin: [f32; 3], direction: [f32; 3]| Ray { origin, direction };
     // From the front, looking at the panel
-    let hit = handle_hit(&ray([0.0, -0.29, 0.0], [0.0, 0.0, -1.0]), &slot).expect("front");
+    let hit = HandleKind::Move
+        .hit(&ray([0.0, -0.29, 0.0], [0.0, 0.0, -1.0]), &slot)
+        .expect("front");
     assert!(
         (hit - (2.0 - 0.035)).abs() < 1e-4,
         "the grab sphere's near side"
     );
     // From behind the panel, looking back at it
-    let hit = handle_hit(&ray([0.0, -0.29, -4.0], [0.0, 0.0, 1.0]), &slot).expect("behind");
+    let hit = HandleKind::Move
+        .hit(&ray([0.0, -0.29, -4.0], [0.0, 0.0, 1.0]), &slot)
+        .expect("behind");
     assert!((hit - (2.0 - 0.035)).abs() < 1e-4);
     // From below, from the side and from above at a slant
-    assert!(handle_hit(&ray([0.0, -1.29, -2.0], [0.0, 1.0, 0.0]), &slot).is_some());
-    assert!(handle_hit(&ray([1.0, -0.29, -2.0], [-1.0, 0.0, 0.0]), &slot).is_some());
+    assert!(
+        HandleKind::Move
+            .hit(&ray([0.0, -1.29, -2.0], [0.0, 1.0, 0.0]), &slot)
+            .is_some()
+    );
+    assert!(
+        HandleKind::Move
+            .hit(&ray([1.0, -0.29, -2.0], [-1.0, 0.0, 0.0]), &slot)
+            .is_some()
+    );
     let slant = [0.0, -0.6, -0.8];
-    assert!(handle_hit(&ray([0.0, 0.31, -1.2], slant), &slot).is_some());
+    assert!(
+        HandleKind::Move
+            .hit(&ray([0.0, 0.31, -1.2], slant), &slot)
+            .is_some()
+    );
     // A ray inside the margin meets the handle at once
     assert_eq!(
-        handle_hit(&ray([0.0, -0.29, -2.0], [0.0, 0.0, -1.0]), &slot),
+        HandleKind::Move.hit(&ray([0.0, -0.29, -2.0], [0.0, 0.0, -1.0]), &slot),
         Some(0.0)
     );
     // Misses: the panel itself, beside the margin, far to the side, and a handle behind the ray
     assert_eq!(
-        handle_hit(&ray([0.0, 0.0, 0.0], [0.0, 0.0, -1.0]), &slot),
+        HandleKind::Move.hit(&ray([0.0, 0.0, 0.0], [0.0, 0.0, -1.0]), &slot),
         None,
         "the panel itself"
     );
     assert_eq!(
-        handle_hit(&ray([0.0, -0.29 - 0.04, 0.0], [0.0, 0.0, -1.0]), &slot),
+        HandleKind::Move.hit(&ray([0.0, -0.29 - 0.04, 0.0], [0.0, 0.0, -1.0]), &slot),
         None,
         "4 cm beside the center, past the 3.5 cm grab"
     );
     assert_eq!(
-        handle_hit(&ray([1.0, -0.29, 0.0], [0.0, 0.0, -1.0]), &slot),
+        HandleKind::Move.hit(&ray([1.0, -0.29, 0.0], [0.0, 0.0, -1.0]), &slot),
         None
     );
     assert_eq!(
-        handle_hit(&ray([0.0, -0.29, -4.0], [0.0, 0.0, -1.0]), &slot),
+        HandleKind::Move.hit(&ray([0.0, -0.29, -4.0], [0.0, 0.0, -1.0]), &slot),
         None,
         "the handle lies behind the ray"
     );

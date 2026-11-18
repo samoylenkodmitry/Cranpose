@@ -89,6 +89,11 @@ impl SpatialExternalSurfaceScope {
 /// controller's ray stops on the surface. Its trigger does nothing there, unless the content sets
 /// [`on_pointer_event`].
 ///
+/// The modifier's [`resizable`](SubspaceModifier::resizable) lets the user resize the surface. The
+/// picture fills the whole surface, so a resize that does not
+/// [maintain the aspect ratio](crate::ResizeLimits::maintain_aspect_ratio) stretches it. The
+/// surface's buffers keep the size that they had when the surface appeared.
+///
 /// Outside a headset the surface draws as an empty box of its size, and the callbacks never run.
 ///
 /// [`on_surface_created`]: SpatialExternalSurfaceScope::on_surface_created
@@ -136,6 +141,7 @@ fn PlacedSurface(
     );
     let id = panel.id;
     space.set_move_policy(id, modifier.move_policy());
+    space.set_resizable(id, modifier.resize());
     let callbacks = remember(Callbacks::default).with(Clone::clone);
     let mut content = content;
     content(&SpatialExternalSurfaceScope {

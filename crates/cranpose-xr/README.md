@@ -52,6 +52,35 @@ SpatialPanel(
 `MovePolicy::custom` leaves the pose to the app: the headset reports the steps, and the app feeds
 them into the panel's modifier.
 
+A panel or a surface with `SubspaceModifier::resizable_with(limits, policy)` has a second handle at
+its bottom right corner, an amber sphere. A controller grabs it, and the panel's size follows the
+point where the ray meets the panel's plane while the trigger stays down. The center stays where it
+is, so the pose does not change. The app owns the size, as with `MovePolicy::custom`. The policy
+receives a `SpatialResizeEvent` for the grab (`Start`), each new size (`Resizing`) and the release
+(`End`), with the size in dp. The app sets the state that feeds `SubspaceModifier::size`.
+`ResizeLimits` sets the smallest size, the largest size and `maintain_aspect_ratio`, which keeps the
+proportions of the size at the grab. A video surface usually keeps them, because its picture fills
+the whole surface. The modifier composes with `movable`.
+
+```rust,ignore
+let size = rememberMutableStateOf(|| [800.0_f32, 500.0]);
+let [width, height] = size.get();
+SpatialPanel(
+    SubspaceModifier::new()
+        .size(width, height)
+        .movable()
+        .resizable_with(
+            ResizeLimits::new()
+                .minimum_size(400.0, 300.0)
+                .maximum_size(1600.0, 1200.0),
+            ResizePolicy::custom(move |event| size.set(event.size)),
+        ),
+    || {},
+);
+```
+
+A panel inside a `SpatialCurvedRow` has no corner handle.
+
 A `Subspace` stands a meter ahead of where the head was when the app started. A
 `FollowingSubspace(FollowTarget::View(FollowMode::Snap), ...)` stands a meter ahead of the head as
 it is when the subspace first composes, and again after the user recenters. Its panels stay

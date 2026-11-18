@@ -1,8 +1,10 @@
 // A Cranpose app for headsets. In a Meta Quest its panels stand in the room, and a controller's
 // trigger presses the buttons: one counts, the other shows or hides the room around the panels.
 // A strip above them is bent around the viewer. A ball above the left controller shows or hides
-// the strip when the right controller's ray presses it. On the desktop the panels draw flat, and a panel
-// plays two clips through the platform's decoder and a player surface.
+// the strip when the right controller's ray presses it. The counter panel and the video surface
+// have a handle at their bottom right corner that resizes them, and the counter panel one under it
+// that carries it. On the desktop the panels draw flat, and a panel plays two clips through the
+// platform's decoder and a player surface.
 
 use std::{
     cell::{OnceCell, RefCell},
@@ -13,10 +15,10 @@ use std::{
 use cranpose::{CropRect, DecodedFrames, prelude::*};
 use cranpose_ui::text::FontWeight;
 use cranpose_xr::{
-    FieldOfView, FollowMode, FollowTarget, FollowingSubspace, Hand, Pose, SpatialCurvedRow,
-    SpatialExternalSurface, SpatialPanel, StereoMode, StreamStats, StreamedScene, StreamedView,
-    StreamedViews, Subspace, SubspaceModifier, local_headset_properties,
-    local_spatial_capabilities, local_spatial_environment,
+    DEFAULT_PANEL_SIZE, FieldOfView, FollowMode, FollowTarget, FollowingSubspace, Hand, Pose,
+    ResizeLimits, ResizePolicy, SpatialCurvedRow, SpatialExternalSurface, SpatialPanel, StereoMode,
+    StreamStats, StreamedScene, StreamedView, StreamedViews, Subspace, SubspaceModifier,
+    local_headset_properties, local_spatial_capabilities, local_spatial_environment,
 };
 #[cfg(not(target_os = "android"))]
 use player_demo::Clips;
@@ -59,11 +61,13 @@ pub fn XrDemo() {
         FlatStreamedClip(logs.clip.clone());
         #[cfg(not(target_os = "android"))]
         FlatClips();
+        // The surface's corner handle stands behind its right edge, so the surface stands far
+        // enough to the left that the counter panel does not cover the handle
         ClipSurface(
             StereoMode::Mono,
             SubspaceModifier::new()
                 .size(640.0, 360.0)
-                .offset(-760.0, 0.0, 50.0)
+                .offset(-860.0, 0.0, 50.0)
                 .rotate(0.0, 25.0, 0.0),
             clock.clone(),
             logs.clip.clone(),
@@ -142,7 +146,7 @@ fn ClipLabel() {
     SpatialPanel(
         SubspaceModifier::new()
             .size(260.0, 70.0)
-            .offset(-923.7, 130.0, 148.4)
+            .offset(-1023.7, 130.0, 148.4)
             .rotate(0.0, 25.0, 0.0),
         || {
             Box(
@@ -209,11 +213,22 @@ fn FlatStreamedClip(stats: StreamStats) {
     }
 }
 
-// The panel with the counter and the button for the room. A handle under it carries it.
+// The panel with the counter and the button for the room. A handle under it carries it, and a
+// handle at its bottom right corner resizes it. The size is the state that the resize sets.
 #[composable]
 fn CounterPanel(presses: MutableState<u32>) {
+    let size = rememberMutableStateOf(|| [800.0_f32, 500.0]);
+    let [width, height] = size.get();
     SpatialPanel(
-        SubspaceModifier::new().size(800.0, 500.0).movable(),
+        SubspaceModifier::new()
+            .size(width, height)
+            .movable()
+            .resizable_with(
+                ResizeLimits::new()
+                    .minimum_size(400.0, 300.0)
+                    .maximum_size(1600.0, 1200.0),
+                ResizePolicy::custom(move |event| size.set(event.size)),
+            ),
         move || {
             Column(
                 Modifier::empty()
@@ -418,10 +433,11 @@ fn PatternSurface(stereo_mode: StereoMode, modifier: SubspaceModifier, split: Sp
     });
 }
 
-// A surface that the hardware decoder plays the clip into. The decoder's second output, its
-// frames, goes to a streamed scene: the left half of the clip is the left eye's picture, and the
-// right half the right eye's, rendered from fixed poses. Each frame carries the time at which it
-// should reach the display.
+// A surface that the hardware decoder plays the clip into. A handle at its bottom right corner
+// resizes it, and it keeps the clip's proportions, because the picture fills the whole surface.
+// The decoder's second output, its frames, goes to a streamed scene: the left half of the clip is
+// the left eye's picture, and the right half the right eye's, rendered from fixed poses. Each
+// frame carries the time at which it should reach the display.
 #[composable]
 fn ClipSurface(
     stereo_mode: StereoMode,
@@ -429,6 +445,15 @@ fn ClipSurface(
     clock: HeadsetClock,
     stats: StreamStats,
 ) {
+    let size = rememberMutableStateOf(|| modifier.size_or(DEFAULT_PANEL_SIZE));
+    let [width, height] = size.get();
+    let modifier = modifier.size(width, height).resizable_with(
+        ResizeLimits::new()
+            .minimum_size(320.0, 180.0)
+            .maximum_size(1280.0, 720.0)
+            .maintain_aspect_ratio(true),
+        ResizePolicy::custom(move |event| size.set(event.size)),
+    );
     let frames = rememberMutableStateOf(|| None::<(DecodedFrames, Duration)>);
     let player = remember(|| Rc::new(RefCell::new(None::<ClipPlayer>))).with(Clone::clone);
     SpatialExternalSurface(stereo_mode, modifier, move |scope| {
