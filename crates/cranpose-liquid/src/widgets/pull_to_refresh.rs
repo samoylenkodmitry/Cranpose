@@ -203,11 +203,11 @@ fn spinner(
         let left = (scope.size().width - wheel.side) * 0.5;
         let top = (travel - wheel.side) * 0.5;
         scope.translate(left, top, &mut |scope| match head {
-            Some(head) => wheel.draw(scope, color, head.get(), SPOKES as u8),
+            Some(head) => wheel.draw(scope, color, head.get(), SPOKES),
             None => {
                 let shown = (SPOKES * travel / THRESHOLD).ceil().min(SPOKES);
                 // The newest spoke leads.
-                wheel.draw(scope, color, shown - 1.0, shown as u8);
+                wheel.draw(scope, color, shown - 1.0, shown);
             }
         });
     }

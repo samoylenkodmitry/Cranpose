@@ -57,13 +57,16 @@ impl Wheel {
         }
     }
 
-    // Draws the first `shown` spokes in `color`, the one at `head` leading.
-    pub(super) fn draw(self, scope: &mut dyn DrawScope, color: Color, head: f32, shown: u8) {
+    // Draws the spokes before `shown` in `color`, the one at `head` leading.
+    pub(super) fn draw(self, scope: &mut dyn DrawScope, color: Color, head: f32, shown: f32) {
         let center = Point::new(self.center, self.center);
         let stroke = Stroke::new(self.width).with_cap(StrokeCap::Round);
         let reach = (self.outer - self.inner - self.width).max(0.0);
         let spokes = f32::from(SPOKES);
-        for spoke in (0..shown.min(SPOKES)).map(f32::from) {
+        for spoke in (0..SPOKES)
+            .map(f32::from)
+            .take_while(|&spoke| spoke < shown)
+        {
             let behind = (head - spoke).rem_euclid(spokes);
             let alpha = (1.0 - (1.0 - FAINTEST) * (behind + 1.0) / FADE_STEPS).max(FAINTEST);
             // Spoke 0 points straight up; the rest follow clockwise.
@@ -142,7 +145,7 @@ pub fn LiquidActivityIndicator(
             .semantics(|config: &mut SemanticsConfiguration| {
                 config.role = Some(SemanticsWidgetRole::ProgressBar);
             })
-            .draw_behind(move |scope| wheel.draw(scope, color, head.get(), SPOKES)),
+            .draw_behind(move |scope| wheel.draw(scope, color, head.get(), f32::from(SPOKES))),
         BoxSpec::default(),
         || {},
     );
