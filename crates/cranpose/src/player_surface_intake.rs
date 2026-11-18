@@ -17,7 +17,8 @@ use crate::player_surface::Picture;
 /// `intake` runs on the thread of the composition each time `frames` holds pictures. It takes the
 /// pictures that it wants with [`next_frame`](DecodedFrames::next_frame), and gives the one to
 /// show to [`FramePresenter::present`]. The surface drops the pictures that `intake` leaves in
-/// `frames` when it returns. The surface calls `intake` also where it cannot draw, so that the
+/// `frames` when it returns. A picture that the decoder outputs while `intake` runs stays for the
+/// next call, which comes at once. The surface calls `intake` also where it cannot draw, so that the
 /// app drains the decoder and counts what it could not show. The surface keeps the `intake` of
 /// the composition in which `frames` last changed.
 ///
@@ -126,10 +127,14 @@ pub(crate) fn pump_with(
         let mut intake = intake;
         loop {
             frames.wait_for_frame().await;
+            let output = frames.stats().decoded;
             intake(&frames, &mut presenter);
             // A picture that waits ends the next wait at once, so a loop that left one would
-            // never yield
-            while frames.next_frame().is_some() {}
+            // never yield. A picture that the decoder output while the intake ran is newer than
+            // the ones the intake saw: it waits for the next call.
+            if frames.stats().decoded == output {
+                while frames.next_frame().is_some() {}
+            }
         }
     });
 }
