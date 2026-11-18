@@ -33,7 +33,8 @@ fn activate(robot: &mut Robot, label: &str) {
     assert!(
         robot
             .shell_mut()
-            .accessibility_activate(target.node_id, None)
+            .accessibility_activate(target.node_id, None),
+        "{label} takes the activation"
     );
     robot.wait_for_motion();
 }
