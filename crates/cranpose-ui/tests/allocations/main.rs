@@ -38,11 +38,13 @@ const LONG_PARAGRAPH_ALLOCATIONS: usize = 10;
 // The allocations of a lazy row measured again at a new width: what a debug
 // build allocates to compose its kept slot again for the check of
 // `SubcomposeMeasureScope::subcompose`.
-const LAZY_ROW_ALLOCATIONS: f64 = 10.0;
+const LAZY_ROW_ALLOCATIONS: f64 = 8.0;
 // The allocations of a pass of a lazy column scrolled a little.
-const LAZY_SCROLL_ALLOCATIONS: usize = 20;
+const LAZY_SCROLL_ALLOCATIONS: usize = 19;
 // The allocations of a pass of a lazy column scrolled by a row.
-const LAZY_ROW_SCROLL_ALLOCATIONS: usize = 44;
+const LAZY_ROW_SCROLL_ALLOCATIONS: usize = 39;
+// The allocations of a measure pass of an empty lazy column at a new width.
+const EMPTY_LAZY_PASS_ALLOCATIONS: usize = 11;
 
 // Rows of 10 points as tall as their parent is wide.
 fn rows(count: usize) {
@@ -273,6 +275,26 @@ fn remeasuring_a_wide_column_allocates_nothing_more() {
     assert_eq!(
         wide, narrow,
         "a column of 300 rows allocates as it measures again"
+    );
+}
+
+// A lazy column measures in a subcomposition of its own each pass; with no
+// rows, the pass allocates what that subcomposition needs.
+fn an_empty_lazy_column_pass_allocates_within_its_budget() {
+    let allocations = pass_allocations(run_test_composition(|| {
+        LazyColumn(
+            Modifier::empty().fill_max_size(),
+            rememberLazyListState(),
+            LazyColumnSpec::default(),
+            |scope| {
+                scope.items(LazyItems::new(0), |_| {});
+            },
+        );
+    }));
+    println!("allocations a pass of an empty lazy column: {allocations}");
+    assert!(
+        allocations <= EMPTY_LAZY_PASS_ALLOCATIONS,
+        "{allocations} allocations a pass of an empty lazy column"
     );
 }
 
@@ -855,6 +877,7 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     remeasuring_a_row_allocates_nothing();
     remeasuring_lazy_rows_allocates_no_root_lists();
     scrolling_lazy_rows_allocates_within_its_budget();
+    an_empty_lazy_column_pass_allocates_within_its_budget();
     remeasuring_deeply_nested_rows_and_columns_allocates_nothing_more();
     wide_nested_columns_leave_a_bounded_set_of_lists();
     remeasuring_a_wide_column_allocates_nothing_more();
