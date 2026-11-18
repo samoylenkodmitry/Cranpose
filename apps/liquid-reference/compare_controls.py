@@ -74,6 +74,9 @@ def compare(native, cranpose, output, native_extra=(), cranpose_extra=(), prefix
                 region = (0, 100, 402, 700)
             elif name.startswith("control-nav-bar-"):
                 region = (0, 60, 402, 250)
+            elif name.startswith("control-confirmation-"):
+                # The popover sits above or beside its source anywhere on the screen.
+                region = (0, 60, 402, 840)
             else:
                 region = (0, 317, 402, 587)
             crop = tuple(round(coordinate * scale) for coordinate in region)

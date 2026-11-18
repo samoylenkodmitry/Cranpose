@@ -3,6 +3,7 @@ use std::rc::Rc;
 use cranpose_macros::composable;
 use cranpose_ui::{
     Modifier, VerticalAlignment,
+    text::TextStyle,
     widgets::{Column, ColumnSpec, DialogSpec, DialogWithScrim, DismissReason, Row, RowSpec, Text},
 };
 use cranpose_ui_graphics::{Brush, Color, CornerRadii};
@@ -70,10 +71,15 @@ impl LiquidAlertScope {
     }
 }
 
-struct AlertAction {
+pub(super) struct AlertAction {
     label: String,
-    role: LiquidAlertRole,
-    on_click: Rc<dyn Fn()>,
+    pub(super) role: LiquidAlertRole,
+    pub(super) on_click: Rc<dyn Fn()>,
+}
+
+// The actions declared in `actions`, in their order.
+pub(super) fn collect_actions(actions: impl FnOnce(&LiquidAlertScope)) -> Vec<AlertAction> {
+    ScopeContent::collect(|actions| LiquidAlertScope { actions }, actions)
 }
 
 /// A modal alert: `title`, `text` under it, then the actions declared in
@@ -96,7 +102,7 @@ pub fn LiquidAlertDialog(
         Rc::new(on_dismiss_request),
         title.to_owned(),
         text.to_owned(),
-        ScopeContent::collect(|actions| LiquidAlertScope { actions }, actions),
+        collect_actions(actions),
     );
 }
 
@@ -133,17 +139,10 @@ fn AlertCard(on_dismiss: Rc<dyn Fn()>, title: String, text: String, actions: Vec
         SCRIM_LIGHT
     };
     DialogWithScrim(spec, Color::BLACK.with_alpha(scrim), back, move || {
-        let colors = liquid_colors();
-        let typography = liquid_typography();
-        let mut title_style = typography.headline.clone();
-        title_style.span_style.color = Some(colors.label);
-        let mut text_style = typography.subheadline;
-        text_style.span_style.color = Some(colors.secondary_label);
-        // The message's lines stand 20 points apart.
-        text_style.paragraph_style.line_height = cranpose_ui::text::TextUnit::Sp(MESSAGE_LINE);
+        let (title_style, text_style) = text_styles();
         let face = Modifier::empty()
             .width(CARD_WIDTH)
-            .glass_effect(face_material(&colors));
+            .glass_effect(card_material(&liquid_colors()));
         let (title, text) = (title.clone(), text.clone());
         let (actions, on_dismiss) = (Rc::clone(&actions), Rc::clone(&on_dismiss));
         Column(
@@ -163,23 +162,40 @@ fn AlertCard(on_dismiss: Rc<dyn Fn()>, title: String, text: String, actions: Vec
     });
 }
 
-// The card's frosted face, fitted to the native card over a solid and a
-// checkered backdrop: the backdrop blurred by 12 points with its color
-// raised, under white at 64% in light mode or gray 100 at 32% in dark mode,
+// The title's and the message's styles: the semibold headline in the label
+// color over the subheadline in the secondary color, its lines 20 points
+// apart.
+pub(super) fn text_styles() -> (TextStyle, TextStyle) {
+    let colors = liquid_colors();
+    let typography = liquid_typography();
+    let mut title_style = typography.headline.clone();
+    title_style.span_style.color = Some(colors.label);
+    let mut text_style = typography.subheadline;
+    text_style.span_style.color = Some(colors.secondary_label);
+    text_style.paragraph_style.line_height = cranpose_ui::text::TextUnit::Sp(MESSAGE_LINE);
+    (title_style, text_style)
+}
+
+// The frosted face of an alert's card and a popover's, fitted to the native
+// alert over a solid and a checkered backdrop: the backdrop blurred by 22
+// points under white at 64% in light mode, or by 26 points under gray 133 at
+// 24% in dark mode, which keeps 32 over black; its saturation at 1.8 and no
+// local exposure correction, which would bring back the backdrop's detail;
 // and a soft shadow.
-fn face_material(colors: &LiquidColors) -> Glass {
-    let tint = if colors.is_dark {
-        Color::from_rgba_u8(100, 100, 100, 82)
+pub(super) fn card_material(colors: &LiquidColors) -> Glass {
+    let (blur, tint) = if colors.is_dark {
+        (26.0, Color::from_rgba_u8(133, 133, 133, 61))
     } else {
-        Color::from_rgba_u8(255, 255, 255, 163)
+        (22.0, Color::from_rgba_u8(255, 255, 255, 163))
     };
     Glass::regular()
         .face_lighting(false)
         .lift(0.0)
         .contrast(1.0)
-        .blur_radius(12.0)
+        .adaptive_frost(colors.label, 0.0)
+        .blur_radius(blur)
         .tint(tint)
-        .saturation(1.4)
+        .saturation(1.8)
         .shadow_style(GlassShadow::new(
             Color::BLACK.with_alpha(0.162),
             32.0,
@@ -192,21 +208,28 @@ fn face_material(colors: &LiquidColors) -> Glass {
 // The actions: side by side when there are two, else stacked.
 #[composable(no_skip)]
 fn AlertActions(actions: &Rc<Vec<AlertAction>>, on_dismiss: &Rc<dyn Fn()>) {
-    let (actions, on_dismiss) = (Rc::clone(actions), Rc::clone(on_dismiss));
-    if actions.len() == 2 {
-        Row(
-            Modifier::empty().fill_max_width(),
-            RowSpec::default()
-                .horizontal_arrangement(LinearArrangement::spaced_by(BUTTON_SPACING))
-                .vertical_alignment(VerticalAlignment::CenterVertically),
-            move || {
-                for index in 0..actions.len() {
-                    AlertButton(Modifier::empty().weight(1.0), &actions, index, &on_dismiss);
-                }
-            },
-        );
+    if actions.len() != 2 {
+        StackedActions(actions, on_dismiss);
         return;
     }
+    let (actions, on_dismiss) = (Rc::clone(actions), Rc::clone(on_dismiss));
+    Row(
+        Modifier::empty().fill_max_width(),
+        RowSpec::default()
+            .horizontal_arrangement(LinearArrangement::spaced_by(BUTTON_SPACING))
+            .vertical_alignment(VerticalAlignment::CenterVertically),
+        move || {
+            for index in 0..actions.len() {
+                AlertButton(Modifier::empty().weight(1.0), &actions, index, &on_dismiss);
+            }
+        },
+    );
+}
+
+// The actions stacked, each the card's width.
+#[composable(no_skip)]
+pub(super) fn StackedActions(actions: &Rc<Vec<AlertAction>>, on_dismiss: &Rc<dyn Fn()>) {
+    let (actions, on_dismiss) = (Rc::clone(actions), Rc::clone(on_dismiss));
     Column(
         Modifier::empty().fill_max_width(),
         ColumnSpec::default()
@@ -226,7 +249,7 @@ fn AlertActions(actions: &Rc<Vec<AlertAction>>, on_dismiss: &Rc<dyn Fn()>) {
 
 // One action's capsule: its label in the color of its role.
 #[composable(no_skip)]
-fn AlertButton(
+pub(super) fn AlertButton(
     modifier: Modifier,
     actions: &Rc<Vec<AlertAction>>,
     index: usize,

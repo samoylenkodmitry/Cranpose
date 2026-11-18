@@ -8,6 +8,7 @@ mod card;
 mod checkbox;
 mod chip;
 mod color_well;
+mod confirmation_dialog;
 mod content_scope;
 mod content_unavailable_view;
 mod control_group;
@@ -28,6 +29,7 @@ mod menu;
 mod nav_bar;
 mod page_control;
 mod pop_up_button;
+mod popover;
 mod progress;
 mod pull_to_refresh;
 mod search_field;
@@ -62,6 +64,7 @@ pub use card::{Card, LiquidCard, LiquidListRow, LiquidListRowSpec, LiquidListSec
 pub use checkbox::{LiquidCheckbox, LiquidRadioButton, LiquidTriStateCheckbox};
 pub use chip::{LiquidActionChip, LiquidChip};
 pub use color_well::LiquidColorWell;
+pub use confirmation_dialog::LiquidConfirmationDialog;
 pub use content_unavailable_view::LiquidContentUnavailableView;
 pub use control_group::{LiquidControlGroup, LiquidControlGroupScope};
 pub use date_picker::{
@@ -85,6 +88,7 @@ pub use menu::{
 pub use nav_bar::{LiquidNavBar, LiquidNavBarSpec, liquid_nav_bar_expanded_height};
 pub use page_control::LiquidPageControl;
 pub use pop_up_button::LiquidPopUpButton;
+pub use popover::LiquidPopover;
 pub use progress::LiquidLinearProgressIndicator;
 pub use pull_to_refresh::LiquidPullToRefreshBox;
 pub use search_field::{LiquidSearchField, LiquidSearchFieldSpec, SearchBar, SearchField};

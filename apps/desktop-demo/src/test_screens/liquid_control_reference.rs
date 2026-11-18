@@ -37,10 +37,11 @@ pub(crate) enum Control {
     Unavailable,
     Group,
     Alert,
+    Confirmation,
 }
 
 // The names shared with the native app's `REFERENCE_COMPONENT`.
-const NAMES: [(&str, Control); 29] = [
+const NAMES: [(&str, Control); 30] = [
     ("slider", Control::Slider),
     ("toggle", Control::Toggle),
     ("segmented", Control::Segmented),
@@ -70,6 +71,7 @@ const NAMES: [(&str, Control); 29] = [
     ("unavailable", Control::Unavailable),
     ("control-group", Control::Group),
     ("alert", Control::Alert),
+    ("confirmation", Control::Confirmation),
 ];
 
 impl Control {
@@ -165,6 +167,7 @@ fn ControlContent(control: Control, initial: f32, activations: cranpose::Mutable
         Control::Unavailable | Control::Group | Control::Alert => {
             ReferenceContainer(control);
         }
+        Control::Confirmation => ReferenceConfirmation(initial as usize),
         _ => ReferenceSurface(control, initial, activations),
     }
 }
@@ -227,6 +230,42 @@ const FRUITS: [&str; 7] = [
 const SAME: [&str; 7] = ["Grape"; 7];
 // The native time picker's frame on this simulator, on either clock.
 const TIME_WIDTH: f32 = 320.0;
+
+// The confirmation dialog points at a source where the native app puts one:
+// 300 by 44 points in the centre for value 0, a 44 point square near the
+// top-left corner for 1 and near the bottom-right corner for 2, 24 points in
+// from the sides and 100 from the safe area's edges.
+#[composable]
+fn ReferenceConfirmation(placement: usize) {
+    // The box around the control sits halfway between the insets already.
+    let insets = local_safe_area_insets().current();
+    let edge = 100.0 + (insets.top + insets.bottom) * 0.5;
+    let (alignment, width, horizontal, vertical) = match placement {
+        1 => (Alignment::TOP_START, 44.0, 24.0, edge),
+        2 => (Alignment::BOTTOM_END, 44.0, 24.0, edge),
+        _ => (Alignment::CENTER, 300.0, 0.0, 0.0),
+    };
+    Box(
+        Modifier::empty()
+            .fill_max_size()
+            .padding_each(horizontal, vertical, horizontal, vertical),
+        BoxSpec::default().content_alignment(alignment),
+        move || {
+            LiquidConfirmationDialog(
+                Modifier::empty().width(width).height(44.0),
+                true,
+                || {},
+                "Delete Photo?",
+                "This photo will be deleted from all your devices.",
+                |scope| {
+                    scope.action("Delete", LiquidAlertRole::Destructive, || {});
+                    scope.action("Cancel", LiquidAlertRole::Cancel, || {});
+                },
+                || {},
+            );
+        },
+    );
+}
 
 // The containers of other controls, as the native app shows them.
 #[composable]

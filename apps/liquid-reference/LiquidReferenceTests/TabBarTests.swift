@@ -225,9 +225,11 @@ class NativeControlTests: ReferenceUITests {
         app.launchEnvironment["REFERENCE_SCHEME"] = scheme
         app.launchEnvironment["REFERENCE_BACKDROP"] = backdrop
         app.launch()
-        // A modal dialog hides the screen behind it from readers.
-        let marker = ["alert", "confirmation"].contains(component) ? "Delete Photo?" : "Reference control"
-        XCTAssertTrue(app.staticTexts[marker].waitForExistence(timeout: 10))
+        // A modal dialog hides the screen behind it from readers; both apps
+        // show its Delete button.
+        let marker = ["alert", "confirmation"].contains(component)
+            ? app.buttons["Delete"] : app.staticTexts["Reference control"]
+        XCTAssertTrue(marker.waitForExistence(timeout: 10))
         return app
     }
 
@@ -249,7 +251,7 @@ class NativeControlTests: ReferenceUITests {
     func testPopUp() { captureStates("pop-up", values: ["0", "3"]) }
     func testColorWell() { captureStates("color-well", values: ["0", "1"]) }
     func testAlert() { captureStates("alert", values: ["0"]) }
-    func testConfirmationDialog() { captureStates("confirmation", values: ["0"]) }
+    func testConfirmationDialog() { captureStates("confirmation", values: ["0", "1", "2"]) }
     func testContentUnavailable() { captureStates("unavailable", values: ["0"]) }
     func testControlGroup() { captureStates("control-group", values: ["0"]) }
 

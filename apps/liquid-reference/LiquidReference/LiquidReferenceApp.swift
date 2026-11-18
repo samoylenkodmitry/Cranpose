@@ -248,13 +248,18 @@ private struct ReferenceControl: View {
                     Text("This photo will be deleted from all your devices.")
                 }
         case "confirmation":
-            Color.clear.frame(width: 300, height: 44)
+            // Value 0 centres a 300 by 44 source; 1 puts a 44 by 44 source near
+            // the top-left corner and 2 near the bottom-right one.
+            Color.clear.frame(width: selection == 0 ? 300 : 44, height: 44)
                 .confirmationDialog("Delete Photo?", isPresented: .constant(true), titleVisibility: .visible) {
                     Button("Delete", role: .destructive) {}
                     Button("Cancel", role: .cancel) {}
                 } message: {
                     Text("This photo will be deleted from all your devices.")
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity,
+                       alignment: [Alignment.center, .topLeading, .bottomTrailing][min(selection, 2)])
+                .padding(.horizontal, selection == 0 ? 0 : 24).padding(.vertical, selection == 0 ? 0 : 100)
         case "unavailable":
             ContentUnavailableView {
                 Text("No Photos")
