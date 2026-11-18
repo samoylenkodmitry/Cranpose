@@ -84,6 +84,18 @@ fn no_minimum_still_leaves_a_panel_that_the_user_can_grab() {
 }
 
 #[test]
+fn a_ray_that_grazes_the_plane_cannot_take_the_size_past_the_ceiling() {
+    let free = ResizeLimits::new();
+    assert_eq!(dragged(free, 1.0e4, 0.0), [4000.0, 500.0]);
+    assert_eq!(dragged(free, 1.0e4, -1.0e4), [4000.0, 4000.0]);
+    let kept = ResizeLimits::new().maintain_aspect_ratio(true);
+    assert_eq!(dragged(kept, 1.0e4, 0.0), [4000.0, 2500.0]);
+    // The ceiling is a maximum, so a minimum above it still wins
+    let tall = ResizeLimits::new().minimum_size(5000.0, 0.0);
+    assert_eq!(dragged(tall, 1.0, 0.0), [5000.0, 500.0]);
+}
+
+#[test]
 fn kept_proportions_put_the_size_on_the_line_of_the_start_size() {
     let kept = ResizeLimits::new().maintain_aspect_ratio(true);
     // A drag to the right alone grows both sides by the share that is nearest to the drag

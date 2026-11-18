@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 
 use cranpose::prelude::*;
-use cranpose_core::{CompositionLocalProvider, rememberMutableStateOf};
+use cranpose_core::{CompositionLocalProvider, remember, rememberMutableStateOf};
 use cranpose_testing::{
     create_headless_robot_test,
     robot::{RobotTestRule, TestRenderer},
@@ -432,9 +432,9 @@ fn resizable_pair(space: &Space) -> (Panel, Panel) {
     (first, second)
 }
 
-fn resize_step(panel: Panel, event_type: SpatialResizeEventType, size: [f32; 2]) -> PanelResize {
+fn resize_step(panel: u64, event_type: SpatialResizeEventType, size: [f32; 2]) -> PanelResize {
     PanelResize {
-        panel: panel.id,
+        panel,
         event_type,
         size,
     }
@@ -444,7 +444,7 @@ fn resize_step(panel: Panel, event_type: SpatialResizeEventType, size: [f32; 2])
 fn a_panel_in_a_resize_holds_its_room_in_steps_and_settles_at_the_release() {
     with_space(|space| {
         let (first, second) = resizable_pair(&space);
-        let step = |event_type, size| resize_step(first, event_type, size);
+        let step = |event_type, size| resize_step(first.id, event_type, size);
         space.resize(&step(SpatialResizeEventType::Start, [400.0, 300.0]));
         assert_eq!(part(&space, second.id)[1], 308.0, "the grab stacks nothing");
 
@@ -481,7 +481,7 @@ fn a_panel_in_a_resize_holds_its_room_in_steps_and_settles_at_the_release() {
 fn a_panel_that_shrinks_in_a_resize_keeps_its_room_until_the_release() {
     with_space(|space| {
         let (first, second) = resizable_pair(&space);
-        let step = |event_type, size| resize_step(first, event_type, size);
+        let step = |event_type, size| resize_step(first.id, event_type, size);
         space.resize(&step(SpatialResizeEventType::Start, [400.0, 300.0]));
         space.place(first, [200.0, 100.0], Pose::IDENTITY, Pose::IDENTITY);
         assert_eq!(part(&space, second.id)[1], 308.0);
@@ -498,7 +498,7 @@ fn a_panel_that_stops_being_resizable_in_a_resize_settles() {
     with_space(|space| {
         let (first, second) = resizable_pair(&space);
         space.resize(&resize_step(
-            first,
+            first.id,
             SpatialResizeEventType::Start,
             [400.0, 300.0],
         ));
@@ -509,4 +509,67 @@ fn a_panel_that_stops_being_resizable_in_a_resize_settles() {
         assert_eq!(part(&space, second.id)[1], 408.0);
         assert_eq!(space.panels()[0].resize, None);
     });
+}
+
+// A panel whose size is a state that its resize policy sets, as an app feeds it.
+#[composable]
+fn StatefulPanel(size: MutableState<[f32; 2]>) {
+    let [width, height] = size.get();
+    let policy = ResizePolicy::custom(move |event| size.set(event.size));
+    SpatialPanel(
+        SubspaceModifier::new()
+            .size(width, height)
+            .resizable(policy),
+        || {},
+    );
+}
+
+#[test]
+fn an_app_that_applies_each_size_resizes_its_panel_through_the_composition() {
+    let held = Rc::new(RefCell::new(None));
+    let keep = Rc::clone(&held);
+    let mut robot = create_headless_robot_test(500, 1000, move || {
+        let space = remember(Space::new).with(Clone::clone);
+        let size = rememberMutableStateOf(|| [400.0, 300.0]);
+        keep.replace(Some(space.clone()));
+        CompositionLocalProvider([local_space().provides(Some(space))], move || {
+            StatefulPanel(size);
+        });
+    });
+    robot.wait_for_idle();
+    let space = held.take().expect("the content composed");
+    let id = space.panels()[0].id;
+    let step = |event_type, size| resize_step(id, event_type, size);
+
+    space.resize(&step(SpatialResizeEventType::Start, [400.0, 300.0]));
+    for grown in 1..=30_u16 {
+        let size = [
+            400.0 + 10.0 * f32::from(grown),
+            300.0 + 10.0 * f32::from(grown),
+        ];
+        space.resize(&step(SpatialResizeEventType::Resizing, size));
+        robot.wait_for_idle();
+        let panel = space.panels()[0];
+        assert_eq!(
+            panel.size(),
+            size,
+            "the policy set the state that sizes the panel"
+        );
+        assert!(panel.room[0] >= size[0] && panel.room[1] >= size[1]);
+    }
+    assert_eq!(
+        space.panels()[0].room,
+        [768.0, 640.0],
+        "the room grew in steps"
+    );
+
+    space.resize(&step(SpatialResizeEventType::End, [700.0, 600.0]));
+    robot.wait_for_idle();
+    let panel = space.panels()[0];
+    assert_eq!(panel.size(), [700.0, 600.0]);
+    assert_eq!(
+        panel.room,
+        [700.0, 600.0],
+        "the room settles at the release"
+    );
 }

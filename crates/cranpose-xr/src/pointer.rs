@@ -241,6 +241,8 @@ struct Resized {
     // The panel's size in dp in the last step, which a step that ends the resize repeats when the
     // controller is lost
     size: [f32; 2],
+    // The highest pull of the trigger since the grab
+    peak: f32,
 }
 
 // What the user holds by a handle.
@@ -424,6 +426,7 @@ impl Pointer {
                         panel: slot.id,
                         resize,
                         size,
+                        peak: hand.trigger,
                     })
                 }),
         };
@@ -458,11 +461,16 @@ impl Pointer {
     }
 
     // The resized panel takes the size that the ray gives it. A ray that meets the panel's plane
-    // nowhere leaves the size as it was.
+    // nowhere leaves the size as it was. So does a trigger that is on its way up: letting go turns
+    // the controller as a pull does.
     fn resize(&mut self, hand: &Hand, panels: &[PanelSlot]) {
         let (Some(Held::Resize(resized)), Some(ray)) = (&mut self.held, hand.ray) else {
             return;
         };
+        resized.peak = resized.peak.max(hand.trigger);
+        if hand.trigger < resized.peak - LET_GO {
+            return;
+        }
         let Some(slot) = panels.iter().find(|slot| slot.id == resized.panel) else {
             return;
         };

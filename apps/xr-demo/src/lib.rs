@@ -56,11 +56,13 @@ pub fn XrDemo() {
         FlatStreamedClip(logs.clip.clone());
         #[cfg(not(target_os = "android"))]
         FlatClips();
+        // The surface's corner handle stands behind its right edge, so the surface stands far
+        // enough to the left that the counter panel does not cover the handle
         ClipSurface(
             StereoMode::Mono,
             SubspaceModifier::new()
                 .size(640.0, 360.0)
-                .offset(-760.0, 0.0, 50.0)
+                .offset(-860.0, 0.0, 50.0)
                 .rotate(0.0, 25.0, 0.0),
             clock.clone(),
             logs.clip.clone(),
@@ -96,7 +98,7 @@ fn ClipLabel() {
     SpatialPanel(
         SubspaceModifier::new()
             .size(260.0, 70.0)
-            .offset(-923.7, 130.0, 148.4)
+            .offset(-1023.7, 130.0, 148.4)
             .rotate(0.0, 25.0, 0.0),
         || {
             Box(
@@ -400,7 +402,7 @@ fn ClipSurface(
     let modifier = modifier.size(width, height).resizable_with(
         ResizeLimits::new()
             .minimum_size(320.0, 180.0)
-            .maximum_size(1920.0, 1080.0)
+            .maximum_size(1280.0, 720.0)
             .maintain_aspect_ratio(true),
         ResizePolicy::custom(move |event| size.set(event.size)),
     );

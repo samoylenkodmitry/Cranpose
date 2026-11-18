@@ -16,6 +16,11 @@ const CORNER_OFFSET: f32 = HANDLE_GAP + HANDLE_RADIUS;
 // leaves a panel that the user can still see and grab.
 const MIN_SIZE: f32 = 20.0;
 
+// The largest width and height that the pointer gives a panel, in dp. A ray that grazes the
+// panel's plane meets it far away, and a maximum of infinity would take that size to the atlas.
+// At 1.5 pixels in a dp the panel's image stays within the 8192 pixels that a GPU texture holds.
+const MAX_SIZE: f32 = 4000.0;
+
 // The center of the handle at the bottom right corner of `slot`'s panel.
 pub(crate) fn corner_center(slot: &PanelSlot) -> [f32; 3] {
     let [width, height] = slot.size().map(|dp| dp * METERS_PER_DP);
@@ -74,13 +79,13 @@ impl Resize {
         Some(self.limit(wanted))
     }
 
-    // `wanted` within the limits. A minimum wins over a maximum below it. With the proportions
-    // kept, one scale of the start size is limited, so that the size stays on the proportions'
-    // line.
+    // `wanted` within the limits. A minimum wins over a maximum below it, and the ceiling bounds a
+    // maximum above it. With the proportions kept, one scale of the start size is limited, so that
+    // the size stays on the proportions' line.
     fn limit(&self, wanted: [f32; 2]) -> [f32; 2] {
         let (minimum, maximum) = self.limits.bounds();
         let low = minimum.map(|dp| dp.max(MIN_SIZE));
-        let high = [maximum[0].max(low[0]), maximum[1].max(low[1])];
+        let high = [0, 1].map(|axis| maximum[axis].min(MAX_SIZE).max(low[axis]));
         let fit =
             |size: [f32; 2]| [0, 1].map(|axis| size[axis].round().max(low[axis]).min(high[axis]));
         let [width, height] = self.start;

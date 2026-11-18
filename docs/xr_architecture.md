@@ -160,8 +160,10 @@ a fast turn with little lag.
 `ResizeLimits` holds the parameters of Jetpack XR's `resizable` that are not the policy: the
 smallest size, the largest size and `maintain_aspect_ratio`, which defaults to false as in
 Jetpack XR. Each side is clamped to its limits after the rounding. The pointer never makes a side
-smaller than 20 dp, so that a minimum of zero leaves a panel that the user can still grab. A
-maximum below the minimum becomes the minimum. With `maintain_aspect_ratio` the pointer takes the
+smaller than 20 dp, so that a minimum of zero leaves a panel that the user can still grab. It
+never makes a side larger than 4000 dp, because a ray that grazes the panel's plane meets it far
+away and a maximum of infinity would take that size to the atlas. A maximum below the minimum
+becomes the minimum. With `maintain_aspect_ratio` the pointer takes the
 ratio of the size at the grab and clamps one scale factor of that size, so the size stays on the
 line of its proportions. Limits that the proportions cannot meet hold, and the proportions give
 way. Surfaces follow the same rule and default to a free ratio. The picture of a decoder fills the

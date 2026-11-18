@@ -551,6 +551,27 @@ fn a_pull_beside_the_corner_handle_neither_resizes_nor_presses() {
 }
 
 #[test]
+fn a_trigger_on_its_way_up_leaves_the_size_as_it_was() {
+    let panel = RESIZABLE;
+    let mut frames = Frames::default();
+    frames.update([None, corner_aim(&panel, [0.0; 2], 0.0)], &[panel]);
+    frames.update([None, corner_aim(&panel, [0.0; 2], 1.0)], &[panel]);
+    hold(&mut frames, panel, corner_aim(&panel, [0.05, -0.05], 1.0));
+    // Letting go turns the controller, so a ray that swings away as the trigger falls resizes
+    // nothing. A trigger that falls only a little is still held.
+    let falling = hold(&mut frames, panel, corner_aim(&panel, [0.3, -0.3], 0.8));
+    assert_eq!(falling, [], "the ray swings while the trigger falls");
+    frames.update([None, corner_aim(&panel, [0.3, -0.3], 0.0)], &[panel]);
+    assert_eq!(
+        frames.pointer.resizes(),
+        [PanelResize {
+            event_type: SpatialResizeEventType::End,
+            ..resizing([900.0, 600.0])
+        }]
+    );
+}
+
+#[test]
 fn a_lost_controller_ends_the_resize_at_its_last_size() {
     let panel = RESIZABLE;
     let mut frames = Frames::default();

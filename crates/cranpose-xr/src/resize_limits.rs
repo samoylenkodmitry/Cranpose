@@ -5,8 +5,8 @@
 /// named or default arguments, so they come in one value, and `SubspaceModifier::resizable_with`
 /// takes it.
 ///
-/// The user cannot make the content smaller than 20 dp in either direction, whatever the
-/// minimum is. A maximum below the minimum is the minimum.
+/// The user cannot make the content smaller than 20 dp or larger than 4000 dp in either
+/// direction, whatever the limits are. A maximum below the minimum is the minimum.
 ///
 /// ```
 /// use cranpose_xr::ResizeLimits;
