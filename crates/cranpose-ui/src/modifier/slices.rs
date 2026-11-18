@@ -5,6 +5,7 @@ use cranpose_ui_graphics::{
     ColorFilter, GraphicsLayer, LayerShape, PointerIcon, Rect, RenderEffect, RoundedCornerShape,
     Size,
 };
+use smallvec::SmallVec;
 
 mod snapshot;
 
@@ -22,7 +23,8 @@ use crate::{
 /// Snapshot of modifier node slices that impact draw and pointer subsystems.
 #[derive(Clone, Default)]
 pub struct ModifierNodeSlices {
-    draw_commands: Vec<DrawCommand>,
+    // Room for one command in the block: most chains that draw draw once.
+    draw_commands: SmallVec<[DrawCommand; 1]>,
     // What the chain's clips and graphics layers give, boxed: few nodes
     // carry either.
     layer: Option<Box<LayerSlices>>,
@@ -698,7 +700,11 @@ impl ModifierNodeSlices {
 
     /// Returns counts and capacities of the slices' data, for memory diagnostics.
     pub fn debug_stats(&self) -> ModifierNodeSlicesDebugStats {
-        let draw_command_bytes = self.draw_commands.capacity() * size_of::<DrawCommand>();
+        let draw_command_bytes = if self.draw_commands.spilled() {
+            self.draw_commands.capacity() * size_of::<DrawCommand>()
+        } else {
+            0
+        };
         let pointer_input_capacity = self.rare().map_or(0, |rare| rare.pointer_inputs.capacity());
         let pointer_input_bytes = pointer_input_capacity * size_of::<Rc<dyn Fn(PointerEvent)>>();
         ModifierNodeSlicesDebugStats {
