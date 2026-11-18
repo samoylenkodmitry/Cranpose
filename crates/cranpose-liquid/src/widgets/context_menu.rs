@@ -1,10 +1,10 @@
-use std::{rc::Rc, time::Duration};
+use std::rc::Rc;
 
 use cranpose_animation::{
     AnimationSpec, AnimationType, Easing, Lerp, animate_float_as_state_with_initial, spring,
 };
 use cranpose_core::{
-    LaunchedEffect, MovableContent, MutableState, delay, mutableStateOf, remember,
+    MovableContent, MutableState, SideEffect, derivedStateOf, mutableStateOf, remember,
     rememberMovableContentOf, rememberMutableStateOf,
 };
 use cranpose_macros::composable;
@@ -226,9 +226,10 @@ fn LiftOverlay(
         },
         "context-menu-lift",
     );
-    LaunchedEffect(open, async move |_| {
-        if !open {
-            delay(Duration::from_millis(CLOSE_MS)).await;
+    // The overlay leaves once the close has brought the preview back.
+    let returned = derivedStateOf(move || !states.open.get() && progress.get() <= 0.0).get();
+    SideEffect(move || {
+        if returned {
             states.shown.set(false);
         }
     });

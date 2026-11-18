@@ -8,10 +8,7 @@
 // and comes back with its state; a custom preview lifts at its own size;
 // readers open the menu through the long press action.
 
-use std::{
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::rc::Rc;
 
 use cranpose_core::{CompositionLocalProvider, mutableStateOf, remember};
 use cranpose_liquid::prelude::*;
@@ -166,20 +163,17 @@ fn placed_text(robot: &mut Robot, text: &str) -> Vec<Rect> {
 }
 
 // Frames on until the menu has closed and the content stands at `place`
-// again; the closing motion waits on the clock, so the frames take real time.
-// Every frame shows the content once.
+// again, within half a second. Every frame shows the content once.
 fn settle_back(robot: &mut Robot, text: &str, place: Rect) {
-    let deadline = Instant::now() + Duration::from_secs(3);
-    loop {
+    for _ in 0..30 {
         robot.advance_time(FRAME_NANOS);
         let placed = placed_text(robot, text);
         assert_eq!(placed.len(), 1, "a frame of the return shows {text} once");
         if placed[0] == place && shown(robot, "Copy") == 0 {
             return;
         }
-        assert!(Instant::now() < deadline, "the content came back");
-        std::thread::sleep(Duration::from_millis(5));
     }
+    panic!("the content came back within half a second");
 }
 
 #[test]
