@@ -235,6 +235,19 @@ impl NodeLayouts {
         self.layouts.push(NodeLayout::Retired(layout));
     }
 
+    // Whether the node holds a layout nothing else holds.
+    pub(crate) fn holds_unique(&self) -> bool {
+        self.layouts.iter().any(|layout| match layout {
+            NodeLayout::Live(live) => Rc::strong_count(&live.layout) == 1,
+            NodeLayout::Retired(layout) => Rc::strong_count(layout) == 1,
+        })
+    }
+
+    // Every layout the node holds, which it gives up.
+    pub(crate) fn into_layouts(self) -> impl Iterator<Item = Rc<PreparedTextLayout>> {
+        self.layouts.into_iter().map(NodeLayout::into_layout)
+    }
+
     // The latest layout. Panics when the node holds none: a reader asks
     // after `prepare` or a hit.
     pub(crate) fn latest(&self) -> &Rc<PreparedTextLayout> {
