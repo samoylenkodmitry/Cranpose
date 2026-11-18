@@ -108,6 +108,7 @@ private struct ReferenceControl: View {
     @State private var selection = Int(ProcessInfo.processInfo.environment["REFERENCE_VALUE"] ?? "0") ?? 0
     @State private var checked = ProcessInfo.processInfo.environment["REFERENCE_VALUE"] == "1"
     @State private var activations = 0
+    @State private var text = ProcessInfo.processInfo.environment["REFERENCE_TEXT"] ?? ""
     private let environment = ProcessInfo.processInfo.environment
 
     var body: some View {
@@ -191,9 +192,45 @@ private struct ReferenceControl: View {
                     Button("Delete", role: .destructive) {}
                 }
             }.buttonStyle(.glass)
+        case "stepper":
+            Stepper("Quantity", value: $value, in: 0...1, step: 0.1).labelsHidden()
+                .accessibilityIdentifier("reference-stepper")
+        case "progress":
+            ProgressView(value: value).frame(width: 300).accessibilityIdentifier("reference-progress")
+        case "activity":
+            ProgressView().controlSize(value > 0.5 ? .large : .regular)
+                .accessibilityIdentifier("reference-activity")
+        case "gauge":
+            Gauge(value: value) { Text("Level") }.frame(width: 300).accessibilityIdentifier("reference-gauge")
+        case "disclosure":
+            DisclosureGroup("Details", isExpanded: $checked) { Text("More information") }
+                .frame(width: 300).accessibilityIdentifier("reference-disclosure")
+        case "text-field":
+            TextField("Name", text: $text).textFieldStyle(.roundedBorder).frame(width: 300)
+                .accessibilityIdentifier("reference-text-field")
+                .onAppear { if value == 1 { text = "Ada" } }
+        case "page-control":
+            ReferencePageControl(page: selection).frame(width: 300, height: 28)
+                .accessibilityIdentifier("reference-page-control")
         default:
             Text("Unknown reference control: \(component)")
         }
+    }
+}
+
+// Five pages with `page` current, as a pager under a carousel shows them.
+private struct ReferencePageControl: UIViewRepresentable {
+    let page: Int
+
+    func makeUIView(context: Context) -> UIPageControl {
+        let control = UIPageControl()
+        control.numberOfPages = 5
+        control.currentPage = page
+        return control
+    }
+
+    func updateUIView(_ control: UIPageControl, context: Context) {
+        control.currentPage = page
     }
 }
 

@@ -415,3 +415,27 @@ The dark card is far from iOS at every tint, so its excess color is no setting a
 Two captures of the same Cranpose build give 11.5 and 13.5 for the mean difference after the release, with the frames aligned on the release. In the second, the touch-down reached the app 25 ms late: UIKit stamped the release 167 ms after the touch-down, while the app received it 142 ms after. The motions start from the delivery time, so the 225 ms minimum lift ended 20 ms later. One toggle tap capture cannot resolve a change smaller than 2 levels.
 
 The branch's final build on the same simulator, mean RGB difference against native at 50%: the light card on white 0.85 (3.32 on main), the light card on the checkerboard 6.03 (5.65), the dark card on the checkerboard 19.17 (19.17). The 41 states hold 5,729,403 unequal pixels against 6,063,197 on main. The toggle tap scores 9.20 over the whole capture and 11.47 after the release (11.70 and 16.11 on main); the segmented tap 0.685 and 0.862 (0.867 and 0.997 on main).
+
+## Standard controls, 2026-11-18
+
+The same simulator captured the stepper, page control, progress bar, spinner, gauge, disclosure group and text field in both apps: light and dark, solid and checkerboard, at the values the tests name. `pixel_probe.py` read the geometry and fitted the fills below.
+
+- Stepper: a 93 × 32 capsule. The fill is (58, 58, 71) at 8.6% in light mode and (231, 231, 241) at 7.7% in dark mode, fitted over the checkerboard with an RMS under 0.3 levels. It is not a semantic iOS fill: `tertiarySystemFill` darkened the dark checkerboard where iOS lightens it. A 1 point rule 24 points tall splits the halves. The minus and plus are 40/3 points long and 5/3 thick, centered at x 23 and 209/3, y 16.
+- Progress bar and gauge: the tracks are `systemFill` and `tertiarySystemFill`, fitted within 0.002 of alpha. The bar is 4 points tall; the gauge track is 16, with the label's line ending 32/3 points above it.
+- Spinner: the medium wheel is 20 points with spokes 2.5 wide from radius 10/3 to 10. The large wheel is 35 points with spokes 5 wide from radius 29/6 to 17.5, at the top leading corner of a 37 point frame. The spoke alphas step by 0.146 from 0.854 to the 0.27 floor; no spoke is opaque.
+- Disclosure group: the closed chevron ends 2/3 point from the trailing edge and turns about the center of a 32/3 point frame. The label row is 27 points and the content starts 1 point below it.
+- Text field: the system background fills it, white or black. The placeholder starts 22/3 points from the leading edge. iOS curves the 5 point corners over 23/3 points of each edge; Cranpose draws circular arcs.
+- Page control: dots 23/3 points across at a 53/3 pitch, the others white at 45%. On a light solid backdrop the dots are invisible in both apps.
+
+Mean RGB difference against native, before and after the fixes:
+
+| State | First build | Fixed |
+| --- | --- | --- |
+| Text field, light checkerboard | 7.98 | 0.045 |
+| Text field, dark checkerboard | 15.81 | 0.054 |
+| Disclosure group open, light solid | 1.4 | 0.116 |
+| Stepper, dark checkerboard at 0.5 | 0.35 | 0.038 |
+| Large spinner, light solid | 0.2 | 0.165 |
+| Gauge full, dark solid | 0.371 | 0.077 |
+
+The gauge's label gap was 2/3 point short, which moved its track 1/3 point up across all 300 points; the gap is now 32/3. All 68 states are within 0.18. The worst are the large spinner's four states, whose remainder is the animation phase at the capture. The page control dots sit 1/3 point higher than native, because UIKit snaps each dot to the pixel grid.

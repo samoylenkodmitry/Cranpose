@@ -34,7 +34,7 @@ The Rust builder accepts `aarch64-apple-ios` for a device binary. Physical insta
 
 ### Control captures
 
-`REFERENCE_COMPONENT` selects `slider`, `toggle`, `segmented`, `button`, `prominent-button`, `chip`, `card`, `menu`, `icon-button`, `search`, `nav-bar`, or `list-row`. Both apps center controls in the safe area; the navigation header occupies the top of the screen. `REFERENCE_VALUE` sets the initial slider value, toggle state, or segment index; value `1` selects the grouped menu fixture. The reference binary registers the system font's normal, medium and semibold faces at optical size 17, including the normal face before automatic font loading.
+`REFERENCE_COMPONENT` selects `slider`, `toggle`, `segmented`, `button`, `prominent-button`, `chip`, `card`, `menu`, `icon-button`, `search`, `nav-bar`, `list-row`, `stepper`, `progress`, `activity`, `gauge`, `disclosure`, `text-field`, or `page-control`. Both apps center controls in the safe area; the navigation header occupies the top of the screen. `REFERENCE_VALUE` sets the initial slider value, toggle state, or segment index; value `1` selects the grouped menu fixture. It also sets the stepper, progress and gauge value, the current page, the open disclosure group (`1`) and the large spinner (above 0.5); `1` fills the text field. The reference binary registers the system font's normal, medium and semibold faces at optical size 17, including the normal face before automatic font loading.
 
 `NativeControlTests` and `CranposeControlTests` share geometry and interaction assertions. They capture 41 states across light/dark appearance, slider endpoints, selection, plain/grouped menus, navigation headers, search fields, list rows, icon buttons, and checkerboard surfaces. Menu tests wait for settled bounds and verify action order, centered placement and 42-point rows. Search tests verify the 44-point field and keyboard entry. Geometry assertions use a half-point tolerance; the image report applies no pixel tolerance.
 
@@ -49,6 +49,14 @@ just test-liquid-motion
 ```
 
 The final `never` argument disables Xcode's slow failure diagnostic collection while preserving test results and attachments. Omit it to collect diagnostics on failure. Keep the same simulator and viewport for both captures. `compare_controls.py` rejects different devices, incomplete case sets and duplicate screenshots or attachments marked as failures. Verify XCTest success separately: a capture can precede a later test failure. It preserves the original full screenshots and compares unmodified RGBA pixels in fixed regions: x 0–402 and y 317–587 points for controls, y 100–700 for menus, and y 60–250 for navigation headers. The report counts every unequal pixel and retains absolute differences; successful capture is not a claim of pixel parity. Its `--native-extra` and `--cranpose-extra` options combine disjoint captures without dropping states.
+
+Each standard control has its own test method, so one run stays inside XCTest's two-minute limit. `capture_reference_tests.sh` runs named tests in one `xcodebuild` and exports their attachments. `control_crops.py` prints each state's control box in points and writes a contact sheet. `pixel_probe.py` reads one state: the pixels along a row or a column, the box and centroid of a glyph in a region, or the color and opacity of a flat fill over the checkerboard.
+
+```sh
+scripts/dev/capture_reference_tests.sh YOUR_SIMULATOR_UDID ../evidence/native NativeControlTests/testStepper NativeControlTests/testGauge
+python3 apps/liquid-reference/control_crops.py ../evidence/native/attachments ../evidence/native-sheet.png control-stepper
+python3 apps/liquid-reference/pixel_probe.py ../evidence/native/attachments control-stepper-light-solid-0p5 box 160 195 445 458
+```
 
 ### Continuous control motion
 
