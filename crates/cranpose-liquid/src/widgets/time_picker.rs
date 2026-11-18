@@ -8,15 +8,26 @@ use cranpose_ui::{
     LazyListState, Modifier, UiString, VerticalAlignment, rememberLazyListStateWithPosition,
     widgets::{Row, RowSpec},
 };
-use cranpose_ui_layout::LinearArrangement;
+use cranpose_ui_layout::{HorizontalAlignment, LinearArrangement};
 
-use super::wheel::{PICKER_HEIGHT, Wheel, draw_band, wheel_value};
+use super::wheel::{PICKER_HEIGHT, Wheel, WheelAlign, draw_band, wheel_value};
 use crate::theme::liquid_colors;
 
-// The widths of the hour, minute and day-half wheels.
-const HOUR_WIDTH: f32 = 64.0;
-const MINUTE_WIDTH: f32 = 64.0;
-const PERIOD_WIDTH: f32 = 72.0;
+// The iOS 27 time picker, read off the native accessibility frames and
+// captures at 3x: wheels 5 points apart, centered as a group. The hour wheel
+// is 59 points wide on a 24-hour clock and 55 on a 12-hour one, the minute
+// wheel 50 and the day-half wheel 65. Minutes and day halves sit centered in
+// their wheels. Hours end 26 points from the left of their wheel above and
+// below the lens and 28.6 points from it inside the lens.
+const GAP: f32 = 5.0;
+const HOUR_WIDTH_24: f32 = 59.0;
+const HOUR_WIDTH_12: f32 = 55.0;
+const MINUTE_WIDTH: f32 = 50.0;
+const PERIOD_WIDTH: f32 = 65.0;
+const HOURS: WheelAlign = WheelAlign::End {
+    outer: 26.0,
+    lens: 28.6,
+};
 
 /// The time a [`LiquidTimePicker`] shows.
 #[derive(Clone, Copy, PartialEq)]
@@ -117,25 +128,35 @@ pub fn LiquidTimePicker(state: LiquidTimePickerState, modifier: Modifier) {
     let periods: Rc<[String]> = day_periods().into_iter().collect();
     let (hour_name, minute_name) = (UiString::Hour.resolve(), UiString::Minute.resolve());
     let band = liquid_colors().quaternary_fill;
+    let hour_width = if state.twelve_hour {
+        HOUR_WIDTH_12
+    } else {
+        HOUR_WIDTH_24
+    };
     Row(
         modifier
             .height(PICKER_HEIGHT)
             .draw_behind(move |scope| draw_band(scope, band)),
         RowSpec::default()
             .vertical_alignment(VerticalAlignment::CenterVertically)
-            .horizontal_arrangement(LinearArrangement::Center),
+            .horizontal_arrangement(LinearArrangement::spaced_by_aligned(
+                GAP,
+                HorizontalAlignment::CenterHorizontally,
+            )),
         move || {
             Wheel(
-                Modifier::empty().width(HOUR_WIDTH),
+                Modifier::empty().width(hour_width),
                 state.hours,
                 Rc::clone(&hours),
                 Some(hour_name.clone()),
+                HOURS,
             );
             Wheel(
                 Modifier::empty().width(MINUTE_WIDTH),
                 state.minutes,
                 Rc::clone(&minutes),
                 Some(minute_name.clone()),
+                WheelAlign::Center,
             );
             if state.twelve_hour {
                 Wheel(
@@ -143,6 +164,7 @@ pub fn LiquidTimePicker(state: LiquidTimePickerState, modifier: Modifier) {
                     state.periods,
                     Rc::clone(&periods),
                     None,
+                    WheelAlign::Center,
                 );
             }
         },

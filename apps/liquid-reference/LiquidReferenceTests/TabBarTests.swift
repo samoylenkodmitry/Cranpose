@@ -243,6 +243,7 @@ class NativeControlTests: ReferenceUITests {
     func testWheelSame() { captureStates("wheel-same", values: ["0"]) }
     func testWheelHeld() { captureStates("wheel-held", values: ["0"]) }
     func testTimeWheel() { captureStates("time", values: ["0"]) }
+    func testTimeWheel12() { captureStates("time-12", values: ["0"]) }
     func testPopUp() { captureStates("pop-up", values: ["0", "3"]) }
     func testColorWell() { captureStates("color-well", values: ["0", "1"]) }
 

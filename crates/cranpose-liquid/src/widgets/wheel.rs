@@ -101,8 +101,44 @@ pub(super) fn draw_band(scope: &mut dyn DrawScope, fill: Color) {
 // The height of a picker: the height of its wheels.
 pub(super) const PICKER_HEIGHT: f32 = FRAME;
 
-// The wheel's text at `size` points, centered on its row.
-fn wheel_text(size: f32) -> DrawTextStyle {
+// Where a wheel's labels sit across it.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum WheelAlign {
+    // Centered on the wheel.
+    Center,
+    // Right-aligned, ending `outer` points from the wheel's left edge above
+    // and below the lens and `lens` points from it inside the lens.
+    End { outer: f32, lens: f32 },
+}
+
+impl WheelAlign {
+    fn text_align(self) -> TextAlign {
+        match self {
+            Self::Center => TextAlign::Center,
+            Self::End { .. } => TextAlign::Right,
+        }
+    }
+
+    // The right edge of the outer labels' box in a wheel `width` wide.
+    fn outer_end(self, width: f32) -> f32 {
+        match self {
+            Self::Center => width,
+            Self::End { outer, .. } => outer,
+        }
+    }
+
+    // The right edge of the lens labels' box in a wheel `width` wide.
+    fn lens_end(self, width: f32) -> f32 {
+        match self {
+            Self::Center => width,
+            Self::End { lens, .. } => lens,
+        }
+    }
+}
+
+// The wheel's text at `size` points, centered on its row and aligned across
+// it by `align`.
+fn wheel_text(size: f32, align: TextAlign) -> DrawTextStyle {
     // The body weight, which bold text raises.
     let weight = liquid_typography()
         .body
@@ -111,7 +147,7 @@ fn wheel_text(size: f32) -> DrawTextStyle {
         .map_or(FontWeight::NORMAL, |weight| FontWeight(weight.0));
     DrawTextStyle {
         font_weight: weight,
-        align: TextAlign::Center,
+        align,
         vertical_align: TextVerticalAlign::Center,
         ..DrawTextStyle::new(size)
     }
@@ -137,6 +173,7 @@ pub(super) fn Wheel(
     list: LazyListState,
     labels: Rc<[String]>,
     name: Option<String>,
+    align: WheelAlign,
 ) {
     DisposableEffect((), move |scope| {
         // A release rests on the nearer row.
@@ -168,12 +205,16 @@ pub(super) fn Wheel(
         }));
     };
     let drawn = Labels(labels);
-    let (outer, lens) = (wheel_text(OUTER_SIZE), wheel_text(LENS_SIZE));
+    let text = WheelText {
+        outer: wheel_text(OUTER_SIZE, align.text_align()),
+        lens: wheel_text(LENS_SIZE, align.text_align()),
+        align,
+    };
     Box(
         modifier
             .height(FRAME)
             .clip_to_bounds()
-            .draw_behind(move |scope| draw_wheel(scope, list, &drawn.0, color, &outer, &lens))
+            .draw_behind(move |scope| draw_wheel(scope, list, &drawn.0, color, &text))
             .value_picker()
             .semantics(semantics),
         BoxSpec::default(),
@@ -201,6 +242,13 @@ pub(super) fn Wheel(
 // of the cylinder, 93 * pi / 2 points of the flat list.
 const REACH: usize = 5;
 
+// The wheel's two text styles and where its labels sit.
+struct WheelText {
+    outer: DrawTextStyle,
+    lens: DrawTextStyle,
+    align: WheelAlign,
+}
+
 // Draws the labels: on the cylinder above and below the lens, flat and larger
 // inside it.
 fn draw_wheel(
@@ -208,10 +256,13 @@ fn draw_wheel(
     list: LazyListState,
     labels: &[String],
     color: Color,
-    outer: &DrawTextStyle,
-    lens: &DrawTextStyle,
+    text: &WheelText,
 ) {
     let size = scope.size();
+    let (outer_end, lens_end) = (
+        text.align.outer_end(size.width),
+        text.align.lens_end(size.width),
+    );
     let middle = size.height * 0.5;
     let first = list.first_visible_item_index();
     let scrolled = list.first_visible_item_scroll_offset();
@@ -246,7 +297,15 @@ fn draw_wheel(
                     projection.scale_x,
                     projection.scale_y,
                     center,
-                    &mut |scope| draw_row(scope, center.y, brush.clone(), label, outer),
+                    &mut |scope| {
+                        draw_row(
+                            scope,
+                            Point::new(outer_end, center.y),
+                            brush.clone(),
+                            label,
+                            &text.outer,
+                        );
+                    },
                 );
             }
         });
@@ -259,26 +318,26 @@ fn draw_wheel(
         for (row, label) in near(1) {
             draw_row(
                 scope,
-                middle + offset(row),
+                Point::new(lens_end, middle + offset(row)),
                 Brush::solid(color),
                 label,
-                lens,
+                &text.lens,
             );
         }
     });
 }
 
-// Draws one label centered on `center_y`, across the scope.
+// Draws one label centered on `end.y`, in the box from the scope's left edge
+// to `end.x`.
 fn draw_row(
     scope: &mut dyn DrawScope,
-    center_y: f32,
+    end: Point,
     brush: Brush,
     label: &str,
     style: &DrawTextStyle,
 ) {
-    let width = scope.size().width;
     scope.draw_text_at(
-        Rect::from_origin_size(Point::new(0.0, center_y - ROW), Size::new(width, 2.0 * ROW)),
+        Rect::from_origin_size(Point::new(0.0, end.y - ROW), Size::new(end.x, 2.0 * ROW)),
         brush,
         label,
         style,

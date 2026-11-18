@@ -225,6 +225,10 @@ private struct ReferenceControl: View {
         case "time":
             DatePicker("Time", selection: .constant(ReferenceChoices.time), displayedComponents: .hourAndMinute)
                 .datePickerStyle(.wheel).labelsHidden().accessibilityIdentifier("reference-time")
+        case "time-12":
+            DatePicker("Time", selection: .constant(ReferenceChoices.time), displayedComponents: .hourAndMinute)
+                .datePickerStyle(.wheel).labelsHidden().environment(\.locale, Locale(identifier: "en_US"))
+                .accessibilityIdentifier("reference-time")
         case "pop-up":
             Picker("Fruit", selection: $selection) {
                 ForEach(Array(ReferenceChoices.fruits.enumerated()), id: \.offset) { index, fruit in

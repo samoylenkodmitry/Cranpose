@@ -31,12 +31,13 @@ pub(crate) enum Control {
     Wheel,
     WheelSame,
     Time,
+    Time12,
     PopUp,
     ColorWell,
 }
 
 // The names shared with the native app's `REFERENCE_COMPONENT`.
-const NAMES: [(&str, Control); 25] = [
+const NAMES: [(&str, Control); 26] = [
     ("slider", Control::Slider),
     ("toggle", Control::Toggle),
     ("segmented", Control::Segmented),
@@ -60,6 +61,7 @@ const NAMES: [(&str, Control); 25] = [
     ("wheel", Control::Wheel),
     ("wheel-same", Control::WheelSame),
     ("time", Control::Time),
+    ("time-12", Control::Time12),
     ("pop-up", Control::PopUp),
     ("color-well", Control::ColorWell),
 ];
@@ -151,6 +153,7 @@ fn ControlContent(control: Control, initial: f32, activations: cranpose::Mutable
         Control::Wheel
         | Control::WheelSame
         | Control::Time
+        | Control::Time12
         | Control::PopUp
         | Control::ColorWell => ReferencePicker(control, initial),
         _ => ReferenceSurface(control, initial, activations),
@@ -213,16 +216,17 @@ const FRUITS: [&str; 7] = [
     "Apple", "Banana", "Cherry", "Grape", "Lemon", "Mango", "Orange",
 ];
 const SAME: [&str; 7] = ["Grape"; 7];
-// The native time picker's frame on this simulator, 24 hours.
-const TIME_WIDTH: f32 = 938.0 / 3.0;
+// The native time picker's frame on this simulator, on either clock.
+const TIME_WIDTH: f32 = 320.0;
 
 // The pickers, at the native app's `REFERENCE_VALUE`.
 #[composable]
 fn ReferencePicker(control: Control, initial: f32) {
     let selected = rememberMutableStateOf(move || initial as usize);
     match control {
-        Control::Time => {
-            let state = rememberLiquidTimePickerState(10, 42, Some(true));
+        Control::Time | Control::Time12 => {
+            let is_24_hour = matches!(control, Control::Time);
+            let state = rememberLiquidTimePickerState(10, 42, Some(is_24_hour));
             LiquidTimePicker(state, Modifier::empty().width(TIME_WIDTH));
         }
         Control::PopUp => LiquidPopUpButton(

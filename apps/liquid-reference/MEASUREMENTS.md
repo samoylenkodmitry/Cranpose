@@ -451,3 +451,18 @@ Cranpose draws the wheel's text in one draw pass: the outer rows twice, clipped 
 The pop-up button is the accent body text, then after 19/3 points an up chevron over a down chevron 26/3 points wide and 38/3 tall with a 4/3 point stroke. The color well is 28 points across: a 3 point ring of every hue, its hue turning clockwise from red at three o'clock, a clear 2 point gap and a swatch of radius 9. Its states differ by at most 0.041.
 
 The native 24-hour time picker right-aligns its hours, ending at x 171.67, and left-aligns its minutes from x 220. It pads its hours to two digits and shows no colon.
+
+## Time picker columns, 2026-11-18
+
+The native accessibility tree gives the time picker's wheels. The picker is 320 points wide. Its wheels stand 5 points apart, centered as a group: on a 24-hour clock hours take 59 points and minutes 50; on a 12-hour clock (en_US) hours take 55, minutes 50 and the day half 65. Minutes and day halves sit centered in their wheels. Hours sit right-aligned: their ink ends 25 points from the left of their wheel above and below the lens and 27.67 points from it inside the lens, on both clocks. Liquid ends the hours' text box at 26 and 28.6 points. A box ending at 26.2 and 29.3 puts the ink edge on native's but raises every state's difference by 0.01 to 0.03, because Liquid's "1" is narrower than native's.
+
+| State | Centered wheels | Measured wheels |
+| --- | --- | --- |
+| 24 hours, light solid | 1.466 | 0.980 |
+| 24 hours, dark solid | 1.643 | 1.121 |
+| 24 hours, dark checkerboard | | 0.535 |
+| 12 hours, light solid | | 1.107 |
+| 12 hours, dark solid | | 1.242 |
+| 12 hours, dark checkerboard | | 0.597 |
+
+The remainder is glyph shape: the reference binary's font differs from native at these sizes, and Liquid's lens text sits 2/3 point below native's.
