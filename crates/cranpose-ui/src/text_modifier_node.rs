@@ -11,13 +11,12 @@ use cranpose_foundation::{
     Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement, NodeCapabilities,
     NodeState, SemanticsConfiguration, SemanticsNode, Size,
 };
+use smallvec::SmallVec;
 
 use crate::{
     density::Density,
     text::{
-        AnnotatedString, TextLayoutOptions, TextStyle,
-        layout_cache::CacheAdmission,
-        node_layouts::{LiveLayout, NodeLayouts},
+        AnnotatedString, TextLayoutOptions, TextStyle, layout_cache::CacheAdmission,
         recent_values::RecentValues,
     },
 };
@@ -38,6 +37,43 @@ pub struct TextModifierNode {
     state: NodeState,
 }
 
+const PREPARED_LAYOUT_CACHE_CAPACITY: usize = 4;
+
+#[derive(Clone, Debug)]
+struct TextPreparedLayoutCacheEntry {
+    min_width: f32,
+    // The max widths at which the text laid out from `min_width` gives
+    // `layout` again.
+    max_widths: cranpose_ui_layout::BoundRange,
+    text_generation: PackedU64,
+    font_scale_fingerprint: u32,
+    layout: Rc<crate::text::PreparedTextLayout>,
+}
+
+impl TextPreparedLayoutCacheEntry {
+    fn new(
+        min_width: f32,
+        (text_generation, font_scale_fingerprint): (u64, u32),
+        layout: Rc<crate::text::PreparedTextLayout>,
+    ) -> Self {
+        Self {
+            min_width,
+            max_widths: layout.max_widths_kept(min_width),
+            text_generation: PackedU64::new(text_generation),
+            font_scale_fingerprint,
+            layout,
+        }
+    }
+
+    // Whether the layout stands for the text laid out between `min_width`
+    // and `max_width` as it is: its lines and size the same.
+    fn keeps(&self, (min_width, max_width): (f32, f32), stamp: (u64, u32)) -> bool {
+        self.min_width.to_bits() == min_width.to_bits()
+            && (self.text_generation.get(), self.font_scale_fingerprint) == stamp
+            && self.max_widths.contains(max_width)
+    }
+}
+
 /// A text node's text and its prepared layouts. The node and the slices
 /// built from it share one owner for the node's life: an update changes its
 /// source in place, so the slices read the new text without being rebuilt.
@@ -45,7 +81,7 @@ pub struct TextModifierNode {
 struct TextPreparedLayoutOwner {
     source: RefCell<TextLayoutSource>,
     measured_widths: Cell<Option<(f32, f32)>>,
-    cache: RefCell<NodeLayouts>,
+    cache: RefCell<SmallVec<[TextPreparedLayoutCacheEntry; 1]>>,
     // Whether the text changed in place since a hold was last asked of it:
     // a text that changes as a ticker's does measures again each frame,
     // which no hold spares, so it gives none.
@@ -94,15 +130,15 @@ impl TextPreparedLayoutOwner {
             }),
             measured_widths: Cell::new(None),
             changed: Cell::new(false),
-            cache: RefCell::new(NodeLayouts::default()),
+            cache: RefCell::new(SmallVec::new()),
         }
     }
 
     /// Lays the text out from `text`, `style` and normalized `options` from
-    /// now on; the old layouts go but the one drawn last, which a later layout
-    /// takes once nothing else holds it. The source takes the element's style
-    /// even when it equals the current one, so the element, the source and the
-    /// layouts prepared next share one copy; the old one leaves with them.
+    /// now on, dropping the layouts prepared from the old ones. The source
+    /// takes the element's style even when it equals the current one, so
+    /// the element, the source and the layouts prepared next share one
+    /// copy; the old one leaves with the layouts that hold it.
     fn update(&self, text: AnnotatedString, style: &Arc<TextStyle>, options: TextLayoutOptions) {
         let mut source = self.source.borrow_mut();
         let shared_style = Arc::ptr_eq(&source.style, style);
@@ -120,12 +156,15 @@ impl TextPreparedLayoutOwner {
         source.options = options;
         source.admission = CacheAdmission::Changed;
         drop(source);
-        let context = crate::render_state::current_app_context();
-        let pool = context.as_ref().map(|context| &context.text);
-        self.cache.borrow_mut().retire_text(pool);
-        if let Some(pool) = pool {
-            pool.retire_string(replaced);
+        let mut cache = self.cache.borrow_mut();
+        let retired = crate::render_state::current_app_context().map(|context| {
+            let layouts = cache.drain(..).map(|entry| entry.layout);
+            context.text.retire(replaced, layouts);
+        });
+        if retired.is_none() {
+            cache.clear();
         }
+        drop(cache);
         self.changed.set(true);
     }
 
@@ -147,15 +186,44 @@ impl TextPreparedLayoutOwner {
     // while it is.
     fn prepared(&self, widths: (f32, f32)) -> Ref<'_, Rc<crate::text::PreparedTextLayout>> {
         let stamp = crate::render_state::text_layout_stamp();
-        if let Ok(latest) = Ref::filter_map(self.cache.borrow(), |cache| {
-            cache.latest_keeping(widths, stamp)
-        }) {
-            return latest;
+        {
+            let cache = self.cache.borrow();
+            if cache
+                .first()
+                .is_some_and(|latest| latest.keeps(widths, stamp))
+            {
+                return Ref::map(cache, |cache| &cache[0].layout);
+            }
         }
-        if !self.cache.borrow_mut().bring_kept(widths, stamp) {
+        if !self.bring_kept(widths, stamp) {
             self.prepare(widths, stamp);
         }
-        Ref::map(self.cache.borrow(), NodeLayouts::latest)
+        Ref::map(self.cache.borrow(), |cache| &cache[0].layout)
+    }
+
+    // Puts first a cached layout that takes `widths`: the latest one, which
+    // nothing else holds, realigned in place where it breaks into the same
+    // lines there, as a width that animates asks for each frame, or one the
+    // cache keeps. False when none does.
+    fn bring_kept(&self, widths: (f32, f32), stamp: (u64, u32)) -> bool {
+        let mut cache = self.cache.borrow_mut();
+        let Some(latest) = cache.first_mut() else {
+            return false;
+        };
+        // Its style, equal to the source's, gives the alignment.
+        if (latest.text_generation.get(), latest.font_scale_fingerprint) == stamp
+            && let Some(prepared) = Rc::get_mut(&mut latest.layout)
+            && prepared.try_realign(widths, prepared.visual_style.paragraph_style.text_align)
+        {
+            latest.min_width = widths.0;
+            latest.max_widths = prepared.max_widths_kept(widths.0);
+            return true;
+        }
+        let Some(index) = cache.iter().position(|entry| entry.keeps(widths, stamp)) else {
+            return false;
+        };
+        cache[..=index].rotate_right(1);
+        true
     }
 
     // Prepares a layout at `widths` that no cached one keeps, which the
@@ -165,36 +233,37 @@ impl TextPreparedLayoutOwner {
         let source = self.source.borrow();
         let frame = source.frame(widths);
         let align = source.style.paragraph_style.text_align;
-        let aligned = self.cache.borrow_mut().aligned_latest(widths, stamp, align);
-        let prepared = match aligned {
-            Some(aligned) => aligned,
-            None => {
-                let text = crate::text::measure::SharedText {
-                    text: &source.text,
-                    style: &source.style,
-                    style_hash: source.style_hash.get(),
-                };
-                let cache = self.cache.borrow();
-                match cache.latest_on(stamp) {
-                    // The latest layout on the fonts of now gives its glyphs.
-                    Some(latest) => crate::text::measure::prepare_shared(
-                        &text,
-                        frame,
-                        (source.admission, Some(&latest.layout)),
-                        None,
-                    ),
-                    // A changed text that the shared cache misses lays out
-                    // into a layout of a text it showed before that nothing
-                    // else holds any more.
-                    None => {
-                        drop(cache);
-                        crate::text::measure::prepare_shared(
-                            &text,
-                            frame,
-                            (source.admission, None),
-                            Some(&self.cache),
-                        )
-                    }
+        // A layout at new widths takes the allocation of the one the full
+        // cache lets go, as a width that animates asks for one every frame.
+        let spare = {
+            let mut cache = self.cache.borrow_mut();
+            (cache.len() >= PREPARED_LAYOUT_CACHE_CAPACITY)
+                .then(|| cache.pop())
+                .flatten()
+                .map(|entry| entry.layout)
+        };
+        let prepared = {
+            // The cache holds layouts of this source only: the latest one, on
+            // the fonts of now, takes the widths when it breaks into the same
+            // lines there, as a width animates, or gives its glyphs to the new
+            // one.
+            let cache = self.cache.borrow();
+            let latest = cache
+                .first()
+                .filter(|entry| {
+                    (entry.text_generation.get(), entry.font_scale_fingerprint) == stamp
+                })
+                .map(|entry| &entry.layout);
+            match latest.filter(|latest| latest.layout.holds(widths.0, widths.1)) {
+                Some(latest) => latest.at_widths(widths, align, spare),
+                None => {
+                    let text = crate::text::measure::SharedText {
+                        text: &source.text,
+                        style: &source.style,
+                        style_hash: source.style_hash.get(),
+                    };
+                    let shaped = latest.map(|latest| &latest.layout);
+                    crate::text::measure::prepare_shared(&text, frame, source.admission, shaped)
                 }
             }
         };
@@ -202,9 +271,13 @@ impl TextPreparedLayoutOwner {
             let _ = prepared.visual_style_hash.set(source.style_hash);
         }
         drop(source);
-        self.cache
-            .borrow_mut()
-            .insert_latest(LiveLayout::new(widths.0, stamp, prepared));
+
+        let mut cache = self.cache.borrow_mut();
+        cache.insert(
+            0,
+            TextPreparedLayoutCacheEntry::new(widths.0, stamp, prepared),
+        );
+        cache.truncate(PREPARED_LAYOUT_CACHE_CAPACITY);
     }
 
     /// The size of the layout the cache holds for `widths` and the max widths
@@ -212,8 +285,8 @@ impl TextPreparedLayoutOwner {
     fn cached_widths(&self, widths: (f32, f32)) -> Option<(Size, cranpose_ui_layout::BoundRange)> {
         let stamp = crate::render_state::text_layout_stamp();
         let cache = self.cache.borrow();
-        let live = cache.keeping(widths, stamp)?;
-        Some((live.layout().size(), live.max_widths()))
+        let entry = cache.iter().find(|entry| entry.keeps(widths, stamp))?;
+        Some((entry.layout.size(), entry.max_widths))
     }
 
     /// The widest word of the text: see [`crate::text::measure::min_intrinsic_text_width`].

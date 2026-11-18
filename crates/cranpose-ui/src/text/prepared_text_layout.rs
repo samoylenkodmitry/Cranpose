@@ -52,18 +52,6 @@ impl PreparedTextLayout {
         }
     }
 
-    // Whether a new text may lay out into `layout`: nothing else holds it or
-    // its lines and glyphs, as a scene that still draws it does.
-    pub(super) fn refillable(layout: &mut Rc<Self>) -> bool {
-        Rc::get_mut(layout).is_some_and(|free| !free.layout.shares_lines())
-    }
-
-    // Lets go of the text, a string that a text stopped showing, which a
-    // new text may take while the layout waits to be laid out into.
-    pub(super) fn let_go_of_text(&mut self) {
-        self.text = Arc::clone(AnnotatedString::default().render_string());
-    }
-
     // Takes `text` in `style`, which its layout holds laid out already, in
     // place of what it held.
     pub(super) fn retext(
