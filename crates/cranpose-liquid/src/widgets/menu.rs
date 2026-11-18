@@ -10,10 +10,7 @@ use cranpose_ui::{
     Modifier, PointerEventKind, PointerInputScope, PressInteractionPress, SemanticsSpec,
     SemanticsWidgetRole, Size, rememberMutableInteractionSource,
     text::{FontWeight, SpanStyle, TextStyle, TextUnit},
-    widgets::{
-        Box, BoxSpec, Column, ColumnSpec, PopupDismissableWhen, Row, RowSpec, Text,
-        popup::local_popup_viewport,
-    },
+    widgets::{Box, BoxSpec, Column, ColumnSpec, PopupDismissableWhen, Row, RowSpec, Text},
 };
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer, Point, Rect, RenderEffect};
 use cranpose_ui_layout::VerticalAlignment;
@@ -25,7 +22,7 @@ use super::{
         menu_ellipse_blend, menu_geometry_phase, menu_morph_geometry, menu_surface_phase,
         menu_vertical_rebound, smoothstep,
     },
-    menu_placement::{LiquidMenuPlacement, MenuPlacement},
+    menu_placement::{LiquidMenuPlacement, MenuArea, MenuPlacement},
 };
 use crate::{
     material::{GlassDynamics, LiquidModifierExt},
@@ -331,9 +328,9 @@ impl LiquidMenuSpec {
     }
 
     // Where a menu of this spec and `height` stands against `anchor` in
-    // `viewport`.
-    fn place(self, anchor: Rect, viewport: Size, height: f32) -> MenuPlacement {
-        self.placement.place(anchor, viewport, self.width, height)
+    // `area`.
+    fn place(self, anchor: Rect, area: Option<MenuArea>, height: f32) -> MenuPlacement {
+        self.placement.place(anchor, area, self.width, height)
     }
 }
 
@@ -873,7 +870,7 @@ pub fn LiquidMenu(
 ) {
     let items = Rc::new(collect_entries(content));
     let motion = MenuMotion::of(expanded);
-    let viewport = local_popup_viewport().current().get();
+    let area = MenuArea::current();
     let visible = remember(|| mutableStateOf(false)).with(|s| *s);
     if expanded && !visible.get_non_reactive() {
         visible.set(true);
@@ -996,7 +993,7 @@ pub fn LiquidMenu(
         grows_up,
         rows_up,
         source,
-    } = spec.place(anchor, viewport, menu_height);
+    } = spec.place(anchor, area, menu_height);
     let menu_width = bounds.width;
     let menu_left = bounds.x;
     let pivot_y = u8::from(grows_up) as f32;
@@ -1027,7 +1024,7 @@ pub fn LiquidMenu(
                 );
                 let absorbed_shapes: Vec<MenuShape> = absorbed
                     .iter()
-                    .filter_map(|source| MenuShape::from_window_rect(source.rect, node_origin))
+                    .filter_map(|absorbed| MenuShape::from_window_rect(absorbed.rect, node_origin))
                     .collect();
                 let morph_size = node_size;
                 let glass = super::glass_surface::menu_material(colors.label, MENU_RADIUS);
@@ -1207,8 +1204,8 @@ pub fn LiquidMenu(
                                             scale_y: content_scale,
                                             transform_origin:
                                                 cranpose_ui_graphics::TransformOrigin {
-                                                    pivot_fraction_x: ((anchor.x
-                                                        + anchor.width * 0.5
+                                                    pivot_fraction_x: ((source.x
+                                                        + source.width * 0.5
                                                         - menu_left)
                                                         / menu_width)
                                                         .clamp(0.0, 1.0),

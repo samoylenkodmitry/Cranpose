@@ -419,9 +419,6 @@ private struct ReferenceToolbar: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UINavigationController, context: Context) {}
 }
 
-// A list row with Flag and a destructive Delete at its trailing edge and Pin
-// at its leading edge. A full swipe only opens the row, so a test's drag
-// shows the actions instead of running one.
 // A 160 by 100 tile with a context menu of three actions. Variant 0 sits
 // in the middle of the screen, 1 near its bottom edge and 2 against its left
 // edge. Variant 3 lifts a custom 240 by 160 preview in place of the tile.
@@ -452,6 +449,9 @@ private struct ReferenceContextMenu: View {
     }
 }
 
+// A list row with Flag and a destructive Delete at its trailing edge and Pin
+// at its leading edge. A full swipe only opens the row, so a test's drag
+// shows the actions instead of running one.
 private struct ReferenceSwipeRow: UIViewRepresentable {
     final class Coordinator: NSObject, UITableViewDataSource, UITableViewDelegate {
         func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 1 }

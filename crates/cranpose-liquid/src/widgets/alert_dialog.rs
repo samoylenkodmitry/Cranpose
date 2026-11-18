@@ -106,6 +106,15 @@ pub fn LiquidAlertDialog(
     );
 }
 
+// The black over the screen behind a modal dialog or a context menu.
+pub(super) fn modal_dim() -> f32 {
+    if liquid_colors().is_dark {
+        SCRIM_DARK
+    } else {
+        SCRIM_LIGHT
+    }
+}
+
 // The dialog, its card and the actions.
 #[composable(no_skip)]
 fn AlertCard(on_dismiss: Rc<dyn Fn()>, title: String, text: String, actions: Vec<AlertAction>) {
@@ -133,33 +142,34 @@ fn AlertCard(on_dismiss: Rc<dyn Fn()>, title: String, text: String, actions: Vec
         dismiss_on_outside_tap: false,
         ..DialogSpec::default()
     };
-    let scrim = if liquid_colors().is_dark {
-        SCRIM_DARK
-    } else {
-        SCRIM_LIGHT
-    };
-    DialogWithScrim(spec, Color::BLACK.with_alpha(scrim), back, move || {
-        let (title_style, text_style) = text_styles();
-        let face = Modifier::empty()
-            .width(CARD_WIDTH)
-            .glass_effect(card_material(&liquid_colors()));
-        let (title, text) = (title.clone(), text.clone());
-        let (actions, on_dismiss) = (Rc::clone(&actions), Rc::clone(&on_dismiss));
-        Column(
-            face.padding_each(BUTTON_INSET, TOP_PADDING, BUTTON_INSET, BOTTOM_PADDING),
-            ColumnSpec::default(),
-            move || {
-                let text_padding = Modifier::empty().padding_each(TEXT_INSET, 0.0, TEXT_INSET, 0.0);
-                Text(title.clone(), text_padding.clone(), title_style.clone());
-                Text(
-                    text.clone(),
-                    text_padding.padding_each(0.0, MESSAGE_GAP, 0.0, BUTTONS_GAP),
-                    text_style.clone(),
-                );
-                AlertActions(&actions, &on_dismiss);
-            },
-        );
-    });
+    DialogWithScrim(
+        spec,
+        Color::BLACK.with_alpha(modal_dim()),
+        back,
+        move || {
+            let (title_style, text_style) = text_styles();
+            let face = Modifier::empty()
+                .width(CARD_WIDTH)
+                .glass_effect(card_material(&liquid_colors()));
+            let (title, text) = (title.clone(), text.clone());
+            let (actions, on_dismiss) = (Rc::clone(&actions), Rc::clone(&on_dismiss));
+            Column(
+                face.padding_each(BUTTON_INSET, TOP_PADDING, BUTTON_INSET, BOTTOM_PADDING),
+                ColumnSpec::default(),
+                move || {
+                    let text_padding =
+                        Modifier::empty().padding_each(TEXT_INSET, 0.0, TEXT_INSET, 0.0);
+                    Text(title.clone(), text_padding.clone(), title_style.clone());
+                    Text(
+                        text.clone(),
+                        text_padding.padding_each(0.0, MESSAGE_GAP, 0.0, BUTTONS_GAP),
+                        text_style.clone(),
+                    );
+                    AlertActions(&actions, &on_dismiss);
+                },
+            );
+        },
+    );
 }
 
 // The title's and the message's styles: the semibold headline in the label

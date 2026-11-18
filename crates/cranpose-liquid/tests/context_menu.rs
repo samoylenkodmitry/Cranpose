@@ -10,13 +10,15 @@ use std::rc::Rc;
 
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_liquid::prelude::*;
-use cranpose_testing::robot_assertions::{assert_approx_eq, find_semantics_node};
+use cranpose_testing::robot_assertions::assert_approx_eq;
 use cranpose_ui::{
     Alignment, Modifier, Size,
     widgets::{Box, BoxSpec, Text},
 };
 
-use crate::reader::{Log, Robot, liquid_screen, node, nodes, tap, tap_node};
+use crate::reader::{
+    Log, Robot, hold, liquid_screen, long_press_action, node, nodes, tap, tap_node,
+};
 
 const TILE: Size = Size {
     width: 160.0,
@@ -73,11 +75,7 @@ fn tile(alignment: Alignment) -> (Robot, Log) {
 
 // Holds the pointer on (`x`, `y`) past the long press time, then lifts it.
 fn long_press(robot: &mut Robot, x: f32, y: f32) {
-    robot.mouse_move(x, y);
-    robot.mouse_down();
-    for _ in 0..12 {
-        robot.advance_time(50_000_000);
-    }
+    hold(robot, x, y, 600);
     robot.mouse_up();
     robot.wait_for_motion();
 }
@@ -174,12 +172,7 @@ fn the_lifted_content_keeps_its_state() {
 #[test]
 fn readers_open_the_menu_through_the_long_press_action() {
     let (mut robot, _) = tile(Alignment::CENTER);
-    let tree = robot.shell_mut().semantics_tree().expect("semantics");
-    let owner = find_semantics_node(tree.root(), &|node| {
-        node.details().on_long_click_label.as_deref() == Some("Photo options")
-    })
-    .expect("the tile offers its menu");
-    let open = owner.details().on_long_click.clone().expect("long press");
+    let open = long_press_action(&mut robot, "Photo options");
     assert!(open.invoke(), "the tile took the long press");
     robot.wait_for_motion();
     assert!(shown(&mut robot, "Copy") > 0, "the menu opened");

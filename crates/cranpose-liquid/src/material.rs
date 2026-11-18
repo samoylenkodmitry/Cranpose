@@ -287,7 +287,7 @@ impl GlassDynamics {
     }
 }
 
-fn foreground_is_dark(foreground: Color) -> bool {
+pub(crate) fn foreground_is_dark(foreground: Color) -> bool {
     let foreground_luma =
         0.2126 * foreground.r() + 0.7152 * foreground.g() + 0.0722 * foreground.b();
     foreground_luma < 0.5

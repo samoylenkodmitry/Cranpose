@@ -3,7 +3,7 @@ use cranpose::{
     liquid::prelude::*,
     local_safe_area_insets, rememberMutableStateOf,
     widgets::{Box, BoxSpec, Text},
-    Alignment, Brush, Color, CornerRadii, Modifier, Size,
+    Alignment, Color, Modifier, Size,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -679,9 +679,10 @@ fn ReferenceContextMenu(variant: usize) {
 #[composable]
 fn ReferenceTile(label: &'static str, size: Size, fill: Color, radius: f32) {
     Box(
-        Modifier::empty().size(size).draw_behind(move |scope| {
-            scope.draw_round_rect(Brush::solid(fill), CornerRadii::uniform(radius));
-        }),
+        Modifier::empty()
+            .size(size)
+            .background(fill)
+            .rounded_corners(radius),
         BoxSpec::default().content_alignment(Alignment::CENTER),
         move || {
             let mut style = liquid_typography().body;

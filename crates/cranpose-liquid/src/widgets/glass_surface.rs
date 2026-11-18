@@ -8,13 +8,8 @@ use cranpose_ui_layout::Alignment;
 
 use crate::material::{
     Glass, GlassDynamics, GlassFaceResponse, GlassFaceTone, GlassKeyFill, GlassRefraction,
-    GlassShadow, GlassSpecularHighlight, LiquidModifierExt, LiquidShape,
+    GlassShadow, GlassSpecularHighlight, LiquidModifierExt, LiquidShape, foreground_is_dark,
 };
-
-// A light foreground marks a dark scheme.
-fn is_light(foreground: Color) -> bool {
-    foreground.r() * 0.2126 + foreground.g() * 0.7152 + foreground.b() * 0.0722 > 0.5
-}
 
 pub(crate) fn surface_material(foreground: Color) -> Glass {
     Glass::regular()
@@ -64,20 +59,14 @@ pub(crate) fn control_surface_material(foreground: Color) -> Glass {
 // checkerboard. Over the checkerboard its chroma averages 22 levels in light
 // and 18 in dark.
 pub(crate) fn menu_material(foreground: Color, radius: f32) -> Glass {
-    let dark = is_light(foreground);
-    control_surface_material(foreground)
+    let dark = !foreground_is_dark(foreground);
+    // The card's face response keeps 254 over white.
+    card_surface_material(foreground)
         .face_tone(GlassFaceTone {
             black: if dark { 0.131 } else { 0.517 },
             white: if dark { 1.0065 } else { 1.035 },
             saturation: 0.93,
             max_luminance: if dark { 0.6 } else { 0.96 },
-        })
-        .face_response(GlassFaceResponse {
-            // The native light menu face on white keeps 254.
-            gain: if dark { 0.97 } else { 0.996 },
-            start_dp: 1.0 / 3.0,
-            end_dp: 2.0 / 3.0,
-            illumination: 0.0,
         })
         .shape(LiquidShape::RoundedRect(radius))
         .blur_radius(22.0)
@@ -95,7 +84,7 @@ pub(crate) fn card_surface_material(foreground: Color) -> Glass {
 }
 
 pub(crate) fn floating_material(foreground: Color, height: f32) -> Glass {
-    let dark = is_light(foreground);
+    let dark = !foreground_is_dark(foreground);
     let mut glass = control_surface_material(foreground)
         .blur_radius(0.0)
         .tint_amount(
@@ -171,7 +160,7 @@ pub(crate) fn floating_dynamics(
 }
 
 fn control_material(foreground: Color, card: bool) -> Glass {
-    let dark = is_light(foreground);
+    let dark = !foreground_is_dark(foreground);
     surface_material(foreground)
         .key_fill(GlassKeyFill {
             height_dp: 0.533_333_36,
