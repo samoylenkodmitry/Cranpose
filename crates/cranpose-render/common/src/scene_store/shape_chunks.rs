@@ -8,14 +8,17 @@
 // shape would grow it, or that is full, first drops the shapes no item
 // draws once they are a quarter of it and at least `MIN_DEAD_SHAPES`.
 // When it cannot take the next shape, an empty chunk that no packet holds
-// takes the shapes. Without one, the chunk with the most shapes no item
-// draws, at least as many as its live ones and `MIN_DEAD_SHAPES`, drops
-// them and takes the shapes, before a new chunk does. So the store makes a
-// chunk only while every chunk holds fewer such shapes than live ones or
-// `MIN_DEAD_SHAPES`, however long a few items of a chunk live, and a move
-// frees room for as many new shapes as it moves or more. A packet that
-// holds such a chunk reads it as it was: a new recorder takes in the live
-// shapes and the chunk's place.
+// takes the shapes. Without one, once the chunks hold room for more than
+// `SLACK_CHUNKS` full chunks past the live shapes, the chunk with the most
+// shapes no item draws, at least as many as its live ones and
+// `MIN_DEAD_SHAPES`, drops them and takes the shapes, before a new chunk
+// does. So the store makes a chunk only while the chunks hold little room
+// past the live shapes, or while every chunk holds fewer dead shapes than
+// live ones or `MIN_DEAD_SHAPES`, however long a few items of a chunk live.
+// A move frees room for as many new shapes as it moves or more, and a store
+// of few chunks moves nothing: their shapes go as the chunks empty. A
+// packet that holds such a chunk reads it as it was: a new recorder takes
+// in the live shapes and the chunk's place.
 
 use std::{num::NonZeroU32, ops::Range, sync::Arc};
 
@@ -35,6 +38,9 @@ const KEPT_EMPTY_CHUNKS: usize = 4;
 // The fewest shapes no item draws for which a chunk moves the others: a
 // chunk of a few shapes grows to room for this many before it does.
 const MIN_DEAD_SHAPES: usize = 16;
+// The full chunks of room past the live shapes that the chunks hold before
+// a chunk of many dead shapes drops them in place of a new chunk.
+const SLACK_CHUNKS: usize = 4;
 
 // A chunk's place in the store's list of chunks, past 0, so a slab of
 // runs needs no room for the absence of one.
@@ -276,26 +282,37 @@ impl ShapeChunks {
 
     // The chunk of the most shapes no item draws, among those that hold at
     // least as many of them as live ones and `MIN_DEAD_SHAPES`: a move of
-    // its live shapes frees room for as many new ones or more. None is
-    // looked for while no item went since a look found none.
+    // its live shapes frees room for as many new ones or more. None while
+    // the chunks hold room for `SLACK_CHUNKS` full chunks or fewer past the
+    // live shapes. None is looked for while no item went since a look found
+    // no such chunk.
     fn sparse_chunk(&mut self) -> Option<ChunkId> {
         if !self.released {
             return None;
         }
-        let sparse = self
+        let (mut room, mut live_shapes, mut sparse) = (0, 0, None);
+        for (index, chunk) in self
             .chunks
             .iter()
             .enumerate()
-            .filter_map(|(index, slot)| {
-                let chunk = slot.as_ref().filter(|chunk| chunk.items > 0)?;
-                let live = chunk.shapes as usize;
-                let dead = chunk.recorder.tables().shapes.len() - live;
-                (dead >= live.max(MIN_DEAD_SHAPES)).then_some((dead, index))
-            })
-            .max()
-            .map(|(_, index)| ChunkId::at(index));
+            .filter_map(|(index, slot)| Some((index, slot.as_ref()?)))
+        {
+            let live = chunk.shapes as usize;
+            room += chunk.recorder.shape_capacity();
+            live_shapes += live;
+            let dead = chunk.recorder.tables().shapes.len() - live;
+            if chunk.items > 0
+                && dead >= live.max(MIN_DEAD_SHAPES)
+                && sparse.is_none_or(|(most, _)| dead >= most)
+            {
+                sparse = Some((dead, index));
+            }
+        }
         self.released = sparse.is_some();
-        sparse
+        (room > live_shapes + SLACK_CHUNKS * CHUNK_SHAPES)
+            .then_some(sparse)
+            .flatten()
+            .map(|(_, index)| ChunkId::at(index))
     }
 
     // Drops the shapes no item draws from the chunk `id`, its live shapes

@@ -19,11 +19,12 @@ const STAYING: u32 = 192;
 const ADDED_A_PASS: u32 = 128;
 const PASSES_A_BOX_STAYS: u32 = 4;
 const PASSES: u32 = 100;
-// The pass after which the store's heap holds still, and the bytes by which
-// the room its hash tables report shifts from pass to pass with the entries
-// they removed: far fewer than the 30 KB of a full chunk of shapes.
-const SETTLED: usize = 30;
-const SLACK: usize = 1024;
+// The pass after which the store's heap holds still: the chunks may first
+// take a few chunks of room past their live shapes. Then the bytes by which
+// the room of its hash tables and scratch lists shifts from pass to pass:
+// far fewer than the 30 KB of a full chunk of shapes.
+const SETTLED: usize = 50;
+const SLACK: usize = 4096;
 
 fn tint(index: u32, of: u32) -> f32 {
     (index % of) as f32 / of as f32
