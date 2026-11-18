@@ -3,33 +3,20 @@
 
 use std::rc::Rc;
 
-use cranpose_core::DisposableEffect;
 use cranpose_macros::composable;
 use cranpose_ui::{
-    Alignment, LazyColumn, LazyColumnSpec, LazyItems, LazyListScope, LazyListState, Modifier,
-    ProgressBarRangeInfo, SemanticsSetProgress, Size, TextStyle, UiString, VerticalAlignment,
-    rememberLazyListStateWithPosition,
-    text::TextAlign,
-    widgets::{Box, BoxSpec, Row, RowSpec, Text},
+    LazyListState, Modifier, UiString, VerticalAlignment, rememberLazyListStateWithPosition,
+    widgets::{Row, RowSpec},
 };
-use cranpose_ui_graphics::{Brush, CornerRadii, Point, Rect};
+use cranpose_ui_layout::LinearArrangement;
 
-use crate::theme::{liquid_colors, liquid_typography};
+use super::wheel::{PICKER_HEIGHT, Wheel, draw_band, wheel_value};
+use crate::theme::liquid_colors;
 
-/// The height of one row of a wheel.
-const ROW: f32 = 40.0;
-/// Rows a wheel shows: the picked one in the middle and two on each side.
-const VISIBLE_ROWS: usize = 5;
-/// Empty rows before the first value and after the last, so both can sit
-/// in the middle.
-const PAD: usize = VISIBLE_ROWS / 2;
-
-/// The value a wheel's list rests on: the row in its middle.
-fn wheel_value(list: LazyListState, count: usize) -> usize {
-    let index = list.first_visible_item_index();
-    let past_half = list.first_visible_item_scroll_offset() > ROW / 2.0;
-    (index + usize::from(past_half)).min(count.saturating_sub(1))
-}
+// The widths of the hour, minute and day-half wheels.
+const HOUR_WIDTH: f32 = 64.0;
+const MINUTE_WIDTH: f32 = 64.0;
+const PERIOD_WIDTH: f32 = 72.0;
 
 /// The time a [`LiquidTimePicker`] shows.
 #[derive(Clone, Copy, PartialEq)]
@@ -74,7 +61,7 @@ impl LiquidTimePickerState {
     }
 }
 
-/// Whether the app's locale counts hours through 24.
+// Whether the app's locale counts hours through 24.
 fn locale_uses_24_hours() -> bool {
     #[cfg(feature = "localization-formatting")]
     if let Ok(formatters) = cranpose_ui::localization::local_formatters() {
@@ -83,7 +70,7 @@ fn locale_uses_24_hours() -> bool {
     false
 }
 
-/// The names of the two halves of a 12-hour day.
+// The names of the two halves of a 12-hour day.
 fn day_periods() -> [String; 2] {
     #[cfg(feature = "localization-formatting")]
     if let Ok(periods) = cranpose_ui::localization::local_formatters()
@@ -124,151 +111,40 @@ pub fn LiquidTimePicker(state: LiquidTimePickerState, modifier: Modifier) {
             .map(|hour| if hour == 0 { 12 } else { hour }.to_string())
             .collect()
     } else {
-        (0..24).map(|hour: u8| hour.to_string()).collect()
+        (0..24).map(|hour: u8| format!("{hour:02}")).collect()
     };
     let minutes: Rc<[String]> = (0..60).map(|minute: u8| format!("{minute:02}")).collect();
     let periods: Rc<[String]> = day_periods().into_iter().collect();
     let (hour_name, minute_name) = (UiString::Hour.resolve(), UiString::Minute.resolve());
-    let title = liquid_typography().title3;
-    let style = TextStyle {
-        paragraph_style: cranpose_ui::ParagraphStyle {
-            text_align: TextAlign::Center,
-            ..title.paragraph_style
-        },
-        ..title
-    };
+    let band = liquid_colors().quaternary_fill;
     Row(
-        modifier,
-        RowSpec::default().vertical_alignment(VerticalAlignment::CenterVertically),
+        modifier
+            .height(PICKER_HEIGHT)
+            .draw_behind(move |scope| draw_band(scope, band)),
+        RowSpec::default()
+            .vertical_alignment(VerticalAlignment::CenterVertically)
+            .horizontal_arrangement(LinearArrangement::Center),
         move || {
             Wheel(
+                Modifier::empty().width(HOUR_WIDTH),
                 state.hours,
                 Rc::clone(&hours),
                 Some(hour_name.clone()),
-                64.0,
-                style.clone(),
-            );
-            Text(
-                ":",
-                Modifier::empty().hide_from_accessibility(),
-                style.clone(),
             );
             Wheel(
+                Modifier::empty().width(MINUTE_WIDTH),
                 state.minutes,
                 Rc::clone(&minutes),
                 Some(minute_name.clone()),
-                64.0,
-                style.clone(),
             );
             if state.twelve_hour {
                 Wheel(
+                    Modifier::empty().width(PERIOD_WIDTH),
                     state.periods,
                     Rc::clone(&periods),
                     None,
-                    72.0,
-                    style.clone(),
                 );
             }
-        },
-    );
-}
-
-/// The labels a wheel shows, compared by identity.
-#[derive(Clone)]
-struct Labels(Rc<[String]>);
-
-impl PartialEq for Labels {
-    fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-#[composable]
-fn Wheel(
-    list: LazyListState,
-    labels: Rc<[String]>,
-    name: Option<String>,
-    width: f32,
-    style: TextStyle,
-) {
-    DisposableEffect((), move |scope| {
-        // A release rests on the nearer row.
-        list.set_settle_policy(Some(Rc::new(
-            |proposed, _velocity| {
-                if proposed > ROW / 2.0 { ROW } else { 0.0 }
-            },
-        )));
-        scope.on_dispose(move || list.set_settle_policy(None))
-    });
-    let count = labels.len();
-    let value = wheel_value(list, count);
-    let current = labels.get(value).cloned().unwrap_or_default();
-    let band = liquid_colors().fill;
-    let semantics = move |config: &mut cranpose_ui::SemanticsConfiguration| {
-        config.content_description.clone_from(&name);
-        config.state_description = Some(current.clone());
-        config.progress = Some(ProgressBarRangeInfo::new(
-            value as f32,
-            0.0,
-            count.saturating_sub(1) as f32,
-            count.saturating_sub(2) as u32,
-        ));
-        config.set_progress = Some(SemanticsSetProgress::new(move |next: f32| {
-            let row = next.round().clamp(0.0, count.saturating_sub(1) as f32) as usize;
-            list.scroll_to_item(row, 0.0);
-            true
-        }));
-    };
-    let labels = Labels(labels);
-    Box(
-        Modifier::empty()
-            .size(Size::new(width, ROW * VISIBLE_ROWS as f32))
-            .draw_behind(move |scope| {
-                let size = scope.size();
-                scope.draw_round_rect_at(
-                    Rect::from_origin_size(
-                        Point::new(0.0, ROW * PAD as f32),
-                        Size::new(size.width, ROW),
-                    ),
-                    Brush::solid(band),
-                    CornerRadii::uniform(8.0),
-                );
-            })
-            .value_picker()
-            .semantics(semantics),
-        BoxSpec::default(),
-        move || {
-            let labels = labels.clone();
-            let style = style.clone();
-            LazyColumn(
-                Modifier::empty().fill_max_size(),
-                list,
-                LazyColumnSpec::default(),
-                move |scope| {
-                    let labels = labels.clone();
-                    let style = style.clone();
-                    scope.items(LazyItems::new(count + 2 * PAD), move |row| {
-                        let label = row
-                            .checked_sub(PAD)
-                            .and_then(|value| labels.0.get(value))
-                            .cloned();
-                        let style = style.clone();
-                        Box(
-                            Modifier::empty().fill_max_width().height(ROW),
-                            BoxSpec::default().content_alignment(Alignment::CENTER),
-                            move || {
-                                if let Some(label) = label.clone() {
-                                    Text(
-                                        label,
-                                        Modifier::empty().hide_from_accessibility(),
-                                        style.clone(),
-                                    );
-                                }
-                            },
-                        );
-                    });
-                },
-            );
         },
     );
 }

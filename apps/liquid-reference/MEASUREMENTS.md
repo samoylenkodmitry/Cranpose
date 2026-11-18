@@ -439,3 +439,15 @@ Mean RGB difference against native, before and after the fixes:
 | Gauge full, dark solid | 0.371 | 0.077 |
 
 The gauge's label gap was 2/3 point short, which moved its track 1/3 point up across all 300 points; the gap is now 32/3. All 68 states are within 0.18. The worst are the large spinner's four states, whose remainder is the animation phase at the capture. The page control dots sit 1/3 point higher than native, because UIKit snaps each dot to the pixel grid.
+
+## Wheel, pop-up and color well, 2026-11-18
+
+iOS draws a picker wheel twice. Rows outside the band sit on a cylinder seen in perspective, in the label color at 36%, which falls to nothing between 50 and 108 points from the middle. Inside a lens 34 points tall the same rows lie flat, larger and opaque, so a row crossing the lens edge changes size and color at that edge. A UIKit wheel held half a row off rest shows both halves of one label at once. Both layers turn together at a 32 point pitch.
+
+A fixture whose seven rows all read "Grape" fixed the cylinder: one least-squares fit of the row offsets, heights and widths gives radius 93 and camera distance 1340. Outer labels are 21 points and lens labels 23.5. The band behind the lens is 30 points tall with 13 point corners, 9 points in from the picker's sides, in the quaternary fill: (116, 116, 128) at 8% light and (118, 118, 128) at 18% dark.
+
+Cranpose draws the wheel's text in one draw pass: the outer rows twice, clipped above and below the lens, then the lens rows clipped to it. A flat list of empty rows takes the drags and flings. Row positions match native within 1 point and their darkest pixels within 5 levels. Each label is about 2 points wider than native: the reference binary registers the system font at optical size 17, so 21 and 23.5 point text keeps the wider spacing of that size. The wheel states differ by 0.67 to 2.15 mean RGB.
+
+The pop-up button is the accent body text, then after 19/3 points an up chevron over a down chevron 26/3 points wide and 38/3 tall with a 4/3 point stroke. The color well is 28 points across: a 3 point ring of every hue, its hue turning clockwise from red at three o'clock, a clear 2 point gap and a swatch of radius 9. Its states differ by at most 0.041.
+
+The native 24-hour time picker right-aligns its hours, ending at x 171.67, and left-aligns its minutes from x 220. It pads its hours to two digits and shows no colon.
