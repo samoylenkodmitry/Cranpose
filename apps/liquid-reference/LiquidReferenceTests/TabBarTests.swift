@@ -255,6 +255,7 @@ class NativeControlTests: ReferenceUITests {
     func testContentUnavailable() { captureStates("unavailable", values: ["0"]) }
     func testControlGroup() { captureStates("control-group", values: ["0"]) }
     func testToolbar() { captureStates("toolbar", values: ["0", "1", "2", "3"]) }
+    func testFilterChip() { captureStates("filter-chip", values: ["0", "1"]) }
 
     private func captureStates(_ component: String, values: [String]) {
         for scheme in ["light", "dark"] {

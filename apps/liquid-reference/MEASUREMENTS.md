@@ -507,5 +507,5 @@ Adjacent image items share one capsule. One is a circle of 48 points, two take 1
 
 `LiquidToolbar` lays the capsules out by that rule; its icons split their capsule equally. A text item is a glass button with the toolbar's height and padding, so it presses like one. Against native over 4 variants, 2 schemes and 2 backdrops, the text and prominent variants differ by 0.46 to 2.60 and the icon variants by 3.06 to 5.67. Liquid's filled Material glyphs explain the icon variants; native draws outline SF Symbols. The light capsules also lack native's gray rim.
 
-The dark prominent fill now keeps the accent at full strength over a dark backdrop. It was 65% of the accent, (0, 94, 166). The dark prominent button moves from 2.06 to 0.13 against native, and the dark prominent toolbar item reads 0.46.
+The dark prominent fill now keeps the accent at full strength over a dark backdrop. It was 65% of the accent, (0, 94, 166). The dark prominent button moves from 2.06 to 0.13 against native, and the dark prominent toolbar item reads 0.46. The filter chip, whose selected glass is the prominent one, differs by 0.12 to 0.34 over its eight states; the dark selected chip reads 0.12.
 
