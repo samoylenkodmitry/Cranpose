@@ -2,12 +2,12 @@ use std::rc::Rc;
 
 use cranpose_macros::composable;
 use cranpose_ui::{
-    Modifier, SemanticsConfiguration, SemanticsWidgetRole, VerticalAlignment,
-    widgets::{Box, BoxSpec, Row, RowSpec, Text},
+    Modifier, VerticalAlignment,
+    widgets::{Row, RowSpec},
 };
 use cranpose_ui_graphics::{Brush, CornerRadii};
-use cranpose_ui_layout::Alignment;
 
+use super::label_button::LabelButton;
 use crate::{
     theme::{liquid_colors, liquid_typography},
     widgets::content_scope::ScopeContent,
@@ -67,26 +67,12 @@ fn ControlGroupCapsule(modifier: Modifier, buttons: Vec<ControlGroupButton>) {
         move || {
             for button in &buttons {
                 let on_click = Rc::clone(&button.on_click);
-                let label = button.label.clone();
-                let reader_label = label.clone();
                 let style = style.clone();
-                Box(
-                    Modifier::empty()
-                        .weight(1.0)
-                        .fill_max_height()
-                        .clickable(move |_| on_click())
-                        .semantics(move |config: &mut SemanticsConfiguration| {
-                            config.role = Some(SemanticsWidgetRole::Button);
-                            config.content_description = Some(reader_label.clone());
-                        }),
-                    BoxSpec::default().content_alignment(Alignment::CENTER),
-                    move || {
-                        Text(
-                            label.clone(),
-                            Modifier::empty().hide_from_accessibility(),
-                            style.clone(),
-                        );
-                    },
+                LabelButton(
+                    Modifier::empty().weight(1.0).fill_max_height(),
+                    &button.label,
+                    style,
+                    move || on_click(),
                 );
             }
         },

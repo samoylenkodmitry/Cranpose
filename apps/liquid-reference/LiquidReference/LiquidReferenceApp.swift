@@ -239,6 +239,22 @@ private struct ReferenceControl: View {
         case "color-well":
             ColorPicker("Color", selection: .constant(ReferenceChoices.colors[selection % ReferenceChoices.colors.count]))
                 .labelsHidden().accessibilityIdentifier("reference-color-well")
+        case "alert":
+            Color.clear.frame(width: 300, height: 44)
+                .alert("Delete Photo?", isPresented: .constant(true)) {
+                    Button("Delete", role: .destructive) {}
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This photo will be deleted from all your devices.")
+                }
+        case "confirmation":
+            Color.clear.frame(width: 300, height: 44)
+                .confirmationDialog("Delete Photo?", isPresented: .constant(true), titleVisibility: .visible) {
+                    Button("Delete", role: .destructive) {}
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This photo will be deleted from all your devices.")
+                }
         case "unavailable":
             ContentUnavailableView {
                 Text("No Photos")
