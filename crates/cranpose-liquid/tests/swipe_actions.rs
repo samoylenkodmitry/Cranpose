@@ -2,14 +2,14 @@
 // leading edge shows the trailing actions, the first at the edge, all as wide
 // as the widest; a tap on one runs it and closes the row; a tap on the open
 // row's content closes it; readers find every action among the row's custom
-// actions.
+// actions. A right-to-left row mirrors all of it.
 
 use std::rc::Rc;
 
 use cranpose_liquid::prelude::*;
 use cranpose_testing::robot_assertions::{assert_approx_eq, find_semantics_node};
 use cranpose_ui::{
-    Alignment, Modifier, SemanticsNode,
+    Alignment, LayoutDirection, Modifier, ProvideLayoutDirection, SemanticsNode,
     widgets::{Box, BoxSpec, Text},
 };
 
@@ -20,40 +20,48 @@ const ROW_Y: f32 = 122.0;
 // A 300 by 44 row at (50, 100) in a 400 by 800 window, with Delete and Flag
 // at its trailing edge and Pin at its leading edge.
 fn row() -> (Robot, Log) {
+    row_in(LayoutDirection::Ltr)
+}
+
+fn row_in(direction: LayoutDirection) -> (Robot, Log) {
     liquid_screen(move |log| {
         let record = Rc::clone(log);
-        Box(
-            Modifier::empty()
-                .fill_max_size()
-                .padding_each(50.0, 100.0, 50.0, 0.0),
-            BoxSpec::default().content_alignment(Alignment::TOP_START),
-            move || {
-                let colors = liquid_colors();
-                let (delete, flag, pin) =
-                    (Rc::clone(&record), Rc::clone(&record), Rc::clone(&record));
-                LiquidSwipeActions(
-                    Modifier::empty().width(300.0).height(44.0),
-                    move |scope| {
-                        let (delete, flag, pin) =
-                            (Rc::clone(&delete), Rc::clone(&flag), Rc::clone(&pin));
-                        scope.trailing("Delete", colors.destructive, move || {
-                            delete.borrow_mut().push("delete");
-                        });
-                        scope.trailing("Flag", colors.warning, move || {
-                            flag.borrow_mut().push("flag");
-                        });
-                        scope.leading("Pin", colors.accent, move || pin.borrow_mut().push("pin"));
-                    },
-                    || {
-                        Text(
-                            "Content",
-                            Modifier::empty().padding(12.0),
-                            liquid_typography().body,
-                        );
-                    },
-                );
-            },
-        );
+        ProvideLayoutDirection(direction, || {
+            Box(
+                Modifier::empty()
+                    .fill_max_size()
+                    .padding_each(50.0, 100.0, 50.0, 0.0),
+                BoxSpec::default().content_alignment(Alignment::TOP_START),
+                move || {
+                    let colors = liquid_colors();
+                    let (delete, flag, pin) =
+                        (Rc::clone(&record), Rc::clone(&record), Rc::clone(&record));
+                    LiquidSwipeActions(
+                        Modifier::empty().width(300.0).height(44.0),
+                        move |scope| {
+                            let (delete, flag, pin) =
+                                (Rc::clone(&delete), Rc::clone(&flag), Rc::clone(&pin));
+                            scope.trailing("Delete", colors.destructive, move || {
+                                delete.borrow_mut().push("delete");
+                            });
+                            scope.trailing("Flag", colors.warning, move || {
+                                flag.borrow_mut().push("flag");
+                            });
+                            scope.leading("Pin", colors.accent, move || {
+                                pin.borrow_mut().push("pin");
+                            });
+                        },
+                        || {
+                            Text(
+                                "Content",
+                                Modifier::empty().padding(12.0),
+                                liquid_typography().body,
+                            );
+                        },
+                    );
+                },
+            );
+        });
     })
 }
 
@@ -100,6 +108,15 @@ fn a_swipe_shows_the_trailing_actions_with_the_first_at_the_edge() {
         1.0,
         "a pill is 9 points shorter than the row",
     );
+    assert!(!shown(&mut robot, "Pin"), "the leading action stays hidden");
+}
+
+#[test]
+fn a_right_to_left_row_shows_its_trailing_actions_on_the_left() {
+    let (mut robot, _) = row_in(LayoutDirection::Rtl);
+    robot.drag(80.0, ROW_Y, 280.0, ROW_Y);
+    let delete = node(&mut robot, "Delete").target_bounds();
+    assert_approx_eq(delete.x, 60.0, 0.01, "Delete starts 10 from the left edge");
     assert!(!shown(&mut robot, "Pin"), "the leading action stays hidden");
 }
 
