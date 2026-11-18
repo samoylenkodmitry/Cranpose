@@ -8,7 +8,7 @@ budget a line, `ROW METRIC BUDGET SPREAD`.
 
   valgrind --trace-malloc=yes ... 2>&1 | steady_ledger.py trace > LOG
   steady_ledger.py rows RUN_DIR FRAMES START_ROW GROUPS TREE > ROWS
-  steady_ledger.py compare ROWS BUDGET GROUPS
+  steady_ledger.py compare ROWS BUDGET GROUPS PHASED
   steady_ledger.py spread ROWS...
   steady_ledger.py diff BUDGET GROUPS BASE_ROWS HEAD_ROWS
 """
@@ -350,16 +350,20 @@ def group_line(row, values, groups, extra=lambda name: ""):
     return f"{row} by group, calls a node [target]: " + "  ".join(parts)
 
 
-def compare(rows_path, budget_path, groups_path):
+def compare(rows_path, budget_path, groups_path, phased):
     """Prints every row with its verdict; exits 1 when a value passes its
     budget plus its spread and its slack, or a row and its budget do not
-    match up."""
+    match up. The rows named in PHASED, whose scene changes in the window,
+    print their live count and leave it out of the verdict."""
     table, budget, groups = read_rows(rows_path), read_budget(budget_path), load_groups(groups_path)
+    phased = set(phased.split())
     failed = False
     print(header() + "   verdict")
     for row, values in table.items():
         rose, fell = [], []
         for metric, value in values.items():
+            if metric == "live" and row in phased:
+                continue
             if row not in budget or metric not in budget[row]:
                 rose.append(f"{metric} (no budget)")
                 continue
@@ -447,7 +451,7 @@ def main(argv):
     if command == "trace":
         return trace_filter(sys.stdin, sys.stdout)
     if command == "compare":
-        return compare(argv[2], argv[3], argv[4])
+        return compare(argv[2], argv[3], argv[4], argv[5])
     if command == "spread":
         return spread(argv[2:])
     if command == "diff":
