@@ -78,8 +78,8 @@ pub(super) struct Air {
 
 #[derive(Clone, Copy)]
 struct Link {
-    a: u32,
-    b: u32,
+    a: usize,
+    b: usize,
     rest: f32,
     stiffness: f32,
 }
@@ -174,7 +174,7 @@ impl Cloth {
         let wall = self.hang.wall - WALL_GAP;
         for _ in 0..SOLVER_ITERATIONS {
             for link in &self.links {
-                let (a, b) = (link.a as usize, link.b as usize);
+                let (a, b) = (link.a, link.b);
                 let (free_a, free_b) = (self.freedom[a], self.freedom[b]);
                 let total = free_a + free_b;
                 if total == 0.0 {
@@ -238,7 +238,7 @@ impl Cloth {
 // The springs between the cloth's points: along each row and column, across
 // each cell and over every second point, which resists bending.
 fn links((columns, rows): (usize, usize), (rest_x, rest_y): (f32, f32)) -> Vec<Link> {
-    let index = |column: usize, row: usize| grid_mesh::vertex(row * columns + column);
+    let index = |column: usize, row: usize| row * columns + column;
     let mut links = Vec::new();
     let mut link = |a: (usize, usize), b: (usize, usize), rest: f32, stiffness: f32| {
         links.push(Link {
@@ -357,19 +357,19 @@ fn fine_size(columns: usize, rows: usize) -> (usize, usize) {
 // the end point, so the curve starts and ends on the end points.
 fn spline_at(points: &[Vec3], stride: usize, at: f32) -> Vec3 {
     let count = points.len().div_ceil(stride);
-    let last = count as isize - 1;
-    let point_at =
-        |index: isize| points[usize::try_from(index).expect("a point of the curve") * stride];
-    let point = |index: isize| -> Vec3 {
-        if index < 0 {
-            points[0] * 2.0 - point_at(-index)
-        } else if index > last {
-            point_at(last) * 2.0 - point_at(2 * last - index)
-        } else {
-            point_at(index)
+    let last = count - 1;
+    let base = whole::count(at.floor()).min(last);
+    // `shifted` is the index plus one: counting from one keeps the point
+    // before the curve, which has no index, at zero.
+    let point = |shifted: usize| -> Vec3 {
+        match shifted.checked_sub(1) {
+            None => points[0] * 2.0 - points[stride],
+            Some(index) if index > last => {
+                points[last * stride] * 2.0 - points[(2 * last - index) * stride]
+            }
+            Some(index) => points[index * stride],
         }
     };
-    let base = whole::offset(at.floor()).min(last);
     let t = at - base as f32;
     let (t2, t3) = (t * t, t * t * t);
     let weights = [
@@ -379,8 +379,8 @@ fn spline_at(points: &[Vec3], stride: usize, at: f32) -> Vec3 {
         t3 / 6.0,
     ];
     let mut sum = Vec3::ZERO;
-    for (offset, weight) in (-1..=2).zip(weights) {
-        sum = sum + point(base + offset) * weight;
+    for (shifted, weight) in (base..base + 4).zip(weights) {
+        sum = sum + point(shifted) * weight;
     }
     sum
 }

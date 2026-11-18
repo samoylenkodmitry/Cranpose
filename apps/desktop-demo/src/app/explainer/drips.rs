@@ -434,8 +434,7 @@ impl Placed {
         let in_head = root.y < split;
         let block = if in_head { head } else { copy };
         let line = block.line_of(root.y);
-        let seed = i32::try_from(line).expect("a block has far fewer lines than an i32 counts") * 7
-            + if in_head { 1 } else { 2 };
+        let seed = whole::narrow(line) * 7 + if in_head { 1 } else { 2 };
         Self {
             root,
             in_head,
@@ -488,11 +487,11 @@ fn thin_out<'a>(roots: &'a [Placed], block: &TypeBlock, in_head: bool) -> Vec<&'
     clippy::cast_possible_truncation,
     reason = "the cell of a coordinate is a whole number far inside an i32, and the hash mixes its bits"
 )]
-fn hash(a: f32, b: i32, c: i32) -> f32 {
-    let mut h = (a as i32).wrapping_mul(374_761_393)
+fn hash(a: f32, b: u32, c: u32) -> f32 {
+    let mut h = (a as i32).cast_unsigned().wrapping_mul(374_761_393)
         ^ b.wrapping_mul(668_265_263)
         ^ c.wrapping_add(11).wrapping_mul(2_147_483_642);
-    h = (h ^ (h.cast_unsigned() >> 13).cast_signed()).wrapping_mul(1_274_126_177);
-    h ^= (h.cast_unsigned() >> 16).cast_signed();
-    h.cast_unsigned() as f32 / 4_294_967_296.0
+    h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
+    h ^= h >> 16;
+    h as f32 / 4_294_967_296.0
 }
