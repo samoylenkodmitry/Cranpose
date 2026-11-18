@@ -2,10 +2,8 @@ use std::any::TypeId;
 
 use cranpose_core::{Node, NodeId};
 
-use super::{LayoutEnvironment, LayoutNode, unregister_layout_node};
-use crate::widgets::nodes::node_pool_limit::{
-    KEPT_CHILD_ROOM, KEPT_MODIFIER_ROOM, node_pool_limit,
-};
+use super::{LayoutEnvironment, LayoutNode, ModifierChainHandle, unregister_layout_node};
+use crate::widgets::nodes::node_pool_limit::{KEPT_CHILD_ROOM, node_pool_limit};
 
 impl Node for LayoutNode {
     fn mount(&mut self) {
@@ -191,8 +189,7 @@ impl Node for LayoutNode {
         } else {
             children.clear();
         }
-        modifier_chain
-            .release_for_recycle(LayoutEnvironment::default().direction, KEPT_MODIFIER_ROOM);
+        *modifier_chain = ModifierChainHandle::detached(LayoutEnvironment::default().direction);
         *modifier_slices_snapshot = crate::modifier::SlicesSnapshot::default();
         parent.set(None);
         folded_parent.set(None);

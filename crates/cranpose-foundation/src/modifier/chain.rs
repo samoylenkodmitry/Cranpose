@@ -666,19 +666,6 @@ impl ModifierNodeChain {
         self.sync_chain_links();
     }
 
-    /// Lets go of every entry, as a drop would, and leaves the chain detached
-    /// and empty. The entry list keeps its room while that holds at most
-    /// `kept_room` entries.
-    pub fn release(&mut self, kept_room: usize) {
-        if self.entries.capacity() > kept_room {
-            self.entries = Vec::new();
-        }
-        self.entries.clear();
-        self.aggregated_capabilities = NodeCapabilities::empty();
-        self.delegated_order = None;
-        self.attached = false;
-    }
-
     /// The number of entries in the chain: its nodes and its plain elements.
     pub fn len(&self) -> usize {
         self.entries.len()
