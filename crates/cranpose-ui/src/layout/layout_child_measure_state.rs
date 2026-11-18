@@ -569,7 +569,8 @@ impl LayoutRuntimeState {
     }
 
     // Binds the children's frame of the node `parent` to `builder` for a
-    // pass over `count` children. A node that never had one binds nothing.
+    // pass over `count` children. A node with no children binds nothing and
+    // holds no lists: one that took the shell of a parent lets its lists go.
     pub(super) fn bind_children(
         &mut self,
         builder: &Rc<LayoutBuilderState>,
@@ -577,7 +578,10 @@ impl LayoutRuntimeState {
         pass: ChildPass,
         count: usize,
     ) -> Option<&mut LayoutChildren> {
-        if count == 0 && self.children.is_none() {
+        if count == 0 {
+            if let Some(mut children) = self.children.take() {
+                children.truncate(0);
+            }
             return None;
         }
         let children = self

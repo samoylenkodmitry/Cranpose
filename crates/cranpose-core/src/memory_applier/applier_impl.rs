@@ -218,7 +218,7 @@ impl Applier for MemoryApplier {
             .recycle_pools
             .entry(key)
             .or_default()
-            .fresh_creations += 1;
+            .note_fresh_creation();
     }
 
     fn clear_recycled_nodes(&mut self) {
