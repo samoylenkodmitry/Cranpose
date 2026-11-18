@@ -43,6 +43,14 @@ use super::{
 // wanted. The wait ends at once when an output comes.
 const OUTPUT_WAIT: Duration = Duration::from_millis(20);
 
+// How long the draining thread waits for an output while a rendered picture's image has not
+// reached the reader. The image comes a few milliseconds after the render. A reader that does not
+// take it before the next picture's image comes can lose it.
+const IMAGE_WAIT: Duration = Duration::from_millis(1);
+
+// How long a rendered picture's image may take before the decoder counts the picture as dropped.
+const IMAGE_LIMIT: Duration = Duration::from_millis(100);
+
 // The reports of the pictures sent to a surface that the decoder keeps for the app.
 const REPORTS: usize = 32;
 
@@ -217,6 +225,13 @@ fn configure(
     Err(DecoderError::Configure(failure))
 }
 
+// A picture that left the codec for the reader, and waits for its image.
+struct Rendered {
+    pts_us: u64,
+    info: FrameInfo,
+    at: Instant,
+}
+
 // The draining thread's state.
 struct Output {
     codec: Arc<Codec>,
@@ -227,10 +242,14 @@ struct Output {
 impl Output {
     fn run(self) {
         // The pictures that left the codec and wait for their images, with their reports
-        let mut released: VecDeque<(u64, FrameInfo)> =
-            VecDeque::with_capacity(self.shared.depth + 4);
+        let mut released: VecDeque<Rendered> = VecDeque::with_capacity(self.shared.depth + 4);
         while !self.shared.stop.load(Ordering::Acquire) {
-            match self.codec.0.dequeue_output_buffer(OUTPUT_WAIT) {
+            let wait = if released.is_empty() {
+                OUTPUT_WAIT
+            } else {
+                IMAGE_WAIT
+            };
+            match self.codec.0.dequeue_output_buffer(wait) {
                 Ok(DequeuedOutputBufferInfoResult::Buffer(buffer)) => {
                     self.release(buffer, &mut released);
                 }
@@ -249,7 +268,7 @@ impl Output {
     }
 
     // Renders the picture of `buffer` and records it.
-    fn release(&self, buffer: OutputBuffer<'_>, released: &mut VecDeque<(u64, FrameInfo)>) {
+    fn release(&self, buffer: OutputBuffer<'_>, released: &mut VecDeque<Rendered>) {
         let pts_us = u64::try_from(buffer.info().presentation_time_us()).unwrap_or(0);
         let unit = self.shared.pending.lock().take(pts_us);
         let info = unit.map_or_else(
@@ -276,18 +295,24 @@ impl Output {
         }
         if released.len() == released.capacity() {
             released.pop_front();
+            self.shared.queue.stats.dropped();
         }
-        released.push_back((pts_us, info));
+        released.push_back(Rendered {
+            pts_us,
+            info,
+            at: Instant::now(),
+        });
         self.collect(released);
-        // A picture whose image has not come yet reaches the app one picture late
-        if released.iter().any(|(pts, _)| *pts == pts_us) {
+        // A picture whose image has not come yet reaches the app after the draining thread's
+        // next short wait
+        if released.iter().any(|rendered| rendered.pts_us == pts_us) {
             self.shared.queue.stats.late();
         }
     }
 
     // Takes the images that the decoder rendered into the reader, and queues them for the app
     // with their reports.
-    fn collect(&self, released: &mut VecDeque<(u64, FrameInfo)>) {
+    fn collect(&self, released: &mut VecDeque<Rendered>) {
         let Some(reader) = &self.reader else {
             return;
         };
@@ -321,22 +346,29 @@ impl Output {
                 }
             }
         }
+        // The reader lost the image of a picture that waits this long
+        while released
+            .front()
+            .is_some_and(|rendered| rendered.at.elapsed() > IMAGE_LIMIT)
+        {
+            released.pop_front();
+            self.shared.queue.stats.dropped();
+        }
     }
 }
 
 // The report of the picture whose image has `timestamp_ns`. The codec's presentation time in
 // microseconds is the image's time in nanoseconds divided by a thousand. An image whose time
 // matches no report takes the oldest report.
-fn take_info(released: &mut VecDeque<(u64, FrameInfo)>, timestamp_ns: i64) -> FrameInfo {
+fn take_info(released: &mut VecDeque<Rendered>, timestamp_ns: i64) -> FrameInfo {
     let pts_us = u64::try_from(timestamp_ns / 1000).unwrap_or(0);
     let index = released
         .iter()
-        .position(|(pts, _)| *pts == pts_us)
+        .position(|rendered| rendered.pts_us == pts_us)
         .unwrap_or(0);
-    let (_, info) = released
+    released
         .remove(index)
-        .unwrap_or_else(|| (pts_us, orphan(pts_us)));
-    info
+        .map_or_else(|| orphan(pts_us), |rendered| rendered.info)
 }
 
 // The report of a picture that no submitted unit claims.

@@ -322,17 +322,106 @@ fn a_surface_refuses_a_part_that_reaches_outside_the_picture() {
 }
 
 #[test]
-fn a_surface_drops_the_pictures_that_its_intake_leaves() {
-    // An intake that takes nothing must not keep the surface's task from yielding
-    let mut player = Player::with_surface(VideoCodec::H264, H264_CLIP, (WIDTH, HEIGHT), |frames| {
-        PlayerSurfaceIntake(
-            frames,
-            Modifier::empty().fill_max_size(),
-            ContentScale::Fit,
-            |_frames, _presenter| {},
-        );
-    });
+fn a_picture_that_the_intake_leaves_reaches_its_next_call() {
+    // The first call takes nothing. The surface must still yield to the window, and the next
+    // call must get the picture.
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&calls);
+    let mut player = Player::with_surface(
+        VideoCodec::H264,
+        H264_CLIP,
+        (WIDTH, HEIGHT),
+        move |frames| {
+            let log = Rc::clone(&log);
+            PlayerSurfaceIntake(
+                frames,
+                Modifier::empty().fill_max_size(),
+                ContentScale::Fit,
+                move |frames, _presenter| {
+                    let first = log.borrow().is_empty();
+                    let taken = if first { None } else { frames.next_frame() };
+                    log.borrow_mut()
+                        .push(taken.map(|frame| frame.info().metadata));
+                },
+            );
+        },
+    );
     player.feed();
-    assert!(!player.view.draw(&mut player.pixels).expect("frame"));
-    assert!(player.decoder.frames().next_frame().is_none());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while calls.borrow().len() < 2 && Instant::now() < deadline {
+        player.view.draw(&mut player.pixels).expect("frame");
+    }
+    assert_eq!(*calls.borrow(), [None, Some(0)]);
+    // With no picture left, the surface asks for no more frames
+    draw_settled(&mut player.view, &mut player.pixels);
+    assert_eq!(calls.borrow().len(), 2);
+}
+
+#[test]
+fn a_picture_that_comes_while_the_intake_runs_reaches_its_next_call() {
+    // The intake takes the first picture. While it runs, the decoder outputs the second, as a
+    // stream's next picture comes while the surface converts the one before it.
+    let decoder = Rc::new(RefCell::new(
+        VideoDecoder::new(DecoderConfig::new(
+            VideoCodec::H264,
+            WIDTH,
+            HEIGHT,
+            DecoderOutput::Frames { depth: 6 },
+        ))
+        .expect("a decoder"),
+    ));
+    let units = split_access_units(VideoCodec::H264, H264_CLIP);
+    let submit = {
+        let decoder = Rc::clone(&decoder);
+        move |index: usize| {
+            let before = decoder.borrow().frames().stats().decoded;
+            decoder
+                .borrow_mut()
+                .submit(AccessUnit {
+                    data: units[index],
+                    timestamp: STEP * u32::try_from(index).expect("small"),
+                    metadata: u64::try_from(index).expect("small"),
+                })
+                .expect("a unit");
+            let frames = decoder.borrow().frames();
+            assert!(
+                wait_until(|| frames.stats().decoded > before),
+                "the decoder output no picture"
+            );
+        }
+    };
+    let submit = Rc::new(submit);
+    let taken = Rc::new(RefCell::new(Vec::new()));
+    let frames = decoder.borrow().frames();
+    let mut view = AppLauncher::new()
+        .create_embedded_view(WIDTH, HEIGHT, 1.0, {
+            let (submit, taken) = (Rc::clone(&submit), Rc::clone(&taken));
+            move || {
+                let (submit, taken) = (Rc::clone(&submit), Rc::clone(&taken));
+                PlayerSurfaceIntake(
+                    frames.clone(),
+                    Modifier::empty().fill_max_size(),
+                    ContentScale::Fit,
+                    move |frames, presenter| {
+                        while let Some(frame) = frames.next_frame() {
+                            taken.borrow_mut().push(frame.info().metadata);
+                            presenter.present(frame, None).expect("a shown picture");
+                        }
+                        if taken.borrow().len() == 1 {
+                            submit(1);
+                        }
+                    },
+                );
+            }
+        })
+        .expect("GPU embedded component");
+    let mut pixels = Vec::new();
+    draw_settled(&mut view, &mut pixels);
+    submit(0);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while taken.borrow().len() < 2 && Instant::now() < deadline {
+        view.draw(&mut pixels).expect("frame");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(*taken.borrow(), [0, 1]);
 }
