@@ -7,7 +7,7 @@ use cranpose_ui_graphics::{
     Brush, Color, GradientBlurDirection, GradientBlurLevels, GradientBlurProfile, Rect, TileMode,
 };
 
-use crate::{material::foreground_is_dark, theme::liquid_colors};
+use crate::theme::liquid_colors;
 
 // The iOS 27 scroll edge effects, measured on the simulator at 3x over
 // black and white columns and stripes 3 and 12 points wide, scrolled under
@@ -81,7 +81,7 @@ pub fn LiquidScrollEdgeEffect(
     edge: LiquidScrollEdge,
     style: LiquidScrollEdgeEffectStyle,
 ) {
-    let dark = !foreground_is_dark(liquid_colors().label);
+    let dark = liquid_colors().is_dark;
     // The effect is decoration: readers reach the content under it.
     let modifier = modifier.hide_from_accessibility();
     let modifier = match style {
@@ -92,17 +92,15 @@ pub fn LiquidScrollEdgeEffect(
 }
 
 fn soft(modifier: Modifier, edge: LiquidScrollEdge, dark: bool) -> Modifier {
-    let (radius, direction) = (
-        if dark {
-            SOFT_RADIUS_DARK
-        } else {
-            SOFT_RADIUS_LIGHT
-        },
-        match edge {
-            LiquidScrollEdge::Top => GradientBlurDirection::TopToBottom,
-            LiquidScrollEdge::Bottom => GradientBlurDirection::BottomToTop,
-        },
-    );
+    let radius = if dark {
+        SOFT_RADIUS_DARK
+    } else {
+        SOFT_RADIUS_LIGHT
+    };
+    let direction = match edge {
+        LiquidScrollEdge::Top => GradientBlurDirection::TopToBottom,
+        LiquidScrollEdge::Bottom => GradientBlurDirection::BottomToTop,
+    };
     let blurred = modifier.backdrop_gradient_blur(Dp(radius), Dp(0.0), direction, SOFT_PROFILE);
     if !dark {
         return blurred;
