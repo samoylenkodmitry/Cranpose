@@ -25,12 +25,14 @@ mod parent_frame;
 mod runtime_state;
 mod scope_frame;
 mod subcompose_slot;
+mod subcompose_stack;
 pub use composable_group::{ComposableGroup, ParameterChange};
 use parent_frame::{InitialParentFrame, push_root_frame};
 pub(crate) use parent_frame::{ParentAttachMode, ParentFrame};
 pub(crate) use runtime_state::ComposerRuntimeState;
 pub(crate) use scope_frame::ScopeFrame;
 use subcompose_slot::{measure_slot_state, subcompose_slot_at};
+use subcompose_stack::{SubcomposeFrame, SubcomposeStack};
 
 /// A typed reference to a value stored in a slot, made by `Composer::use_value_slot`. It is valid
 /// for the composition pass that made it, and `Composer::with_slot_value` reads through it.
@@ -247,12 +249,6 @@ pub(crate) fn recycle_commands(commands: CommandQueue) {
     });
 }
 
-#[derive(Default)]
-pub(crate) struct SubcomposeFrame {
-    pub(crate) nodes: Vec<NodeId>,
-    pub(crate) scopes: Vec<RecomposeScope>,
-}
-
 /// The values one provider supplies, over the frames of the providers around
 /// it.
 pub(crate) struct LocalFrame {
@@ -282,7 +278,7 @@ pub(crate) struct ComposerCore {
     pub(crate) applier: Rc<dyn ApplierHost>,
     pub(crate) runtime: RuntimeHandle,
     pub(crate) parent_stack: RefCell<Vec<ParentFrame>>,
-    pub(crate) subcompose_stack: RefCell<SmallVec<[SubcomposeFrame; 1]>>,
+    pub(crate) subcompose_stack: RefCell<SubcomposeStack>,
     pub(crate) root: Cell<Option<NodeId>>,
     pub(crate) commands: RefCell<CommandQueue>,
     pub(crate) scope_stack: RefCell<Vec<ScopeFrame>>,
@@ -401,7 +397,7 @@ impl ComposerCore {
             applier,
             runtime,
             parent_stack: RefCell::new(parent_stack),
-            subcompose_stack: RefCell::new(SmallVec::new()),
+            subcompose_stack: RefCell::default(),
             root: Cell::new(root),
             commands: RefCell::new(spare_commands()),
             scope_stack: RefCell::new(scope_stack),
@@ -959,7 +955,7 @@ impl Composer {
         stack_hint.or_else(|| self.core.recompose_parent_hint.get())
     }
 
-    pub(crate) fn subcompose_stack(&self) -> RefMut<'_, SmallVec<[SubcomposeFrame; 1]>> {
+    pub(crate) fn subcompose_stack(&self) -> RefMut<'_, SubcomposeStack> {
         self.core.subcompose_stack.borrow_mut()
     }
 
