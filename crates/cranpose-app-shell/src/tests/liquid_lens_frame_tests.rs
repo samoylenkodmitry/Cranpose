@@ -155,11 +155,13 @@ fn a_released_slider_streams_native_inertia_then_stops_requesting_frames() {
             PointerEventTime {
                 platform_time_ms: Some(0),
                 animation_time_nanos: origin,
+                ..host.shell.exact_pointer_event_time(None)
             },
         );
         assert!(host.shell.pointer_pressed_at_event_time(PointerEventTime {
             platform_time_ms: Some(0),
             animation_time_nanos: origin,
+            ..host.shell.exact_pointer_event_time(None)
         }));
         for (ms, x) in [(600, 217.0), (610, 221.0), (620, 225.0), (630, 229.0)] {
             clock = origin + ms * 1_000_000;
@@ -169,6 +171,7 @@ fn a_released_slider_streams_native_inertia_then_stops_requesting_frames() {
                 PointerEventTime {
                     platform_time_ms: Some(ms as i64),
                     animation_time_nanos: clock,
+                    ..host.shell.exact_pointer_event_time(None)
                 },
             );
             host.shell.update_at_frame_time_nanos(clock);
@@ -179,6 +182,7 @@ fn a_released_slider_streams_native_inertia_then_stops_requesting_frames() {
         assert!(host.shell.pointer_released_at_event_time(PointerEventTime {
             platform_time_ms: Some(1430),
             animation_time_nanos: clock,
+            ..host.shell.exact_pointer_event_time(None)
         }));
         let frames = run_until_idle(&mut host, &mut clock, "slider inertia");
         assert!(

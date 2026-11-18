@@ -1,6 +1,7 @@
 use cranpose_foundation::PointerSource;
 use cranpose_render_common::Renderer;
 use cranpose_ui::mouse_input::MouseInputTarget;
+use web_time::Instant;
 
 use crate::{AppShell, PointerEventTime, RootId};
 
@@ -36,6 +37,7 @@ where
                     PointerEventTime {
                         platform_time_ms: None,
                         animation_time_nanos: frame_time,
+                        received_at: Instant::now(),
                     },
                 );
             }

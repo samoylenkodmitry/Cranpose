@@ -11,6 +11,8 @@ pub struct PointerEventTime {
     pub platform_time_ms: Option<i64>,
     /// Timestamp in the animation frame-clock domain.
     pub animation_time_nanos: u64,
+    /// The instant at which the shell received the sample.
+    pub received_at: Instant,
 }
 
 impl PointerEventTime {
@@ -18,6 +20,7 @@ impl PointerEventTime {
         event
             .with_time_ms(self.platform_time_ms)
             .with_animation_time_nanos(self.animation_time_nanos)
+            .with_received_at(self.received_at)
     }
 }
 
@@ -26,11 +29,13 @@ impl ShellApp {
         &self,
         platform_time_ms: Option<i64>,
     ) -> PointerEventTime {
+        let received_at = Instant::now();
         PointerEventTime {
             platform_time_ms,
             animation_time_nanos: self
-                .frame_time_nanos_at(Instant::now())
+                .frame_time_nanos_at(received_at)
                 .max(self.last_frame_time_nanos),
+            received_at,
         }
     }
 }
@@ -45,11 +50,13 @@ where
         self.app.realtime_pointer_event_time(platform_time_ms)
     }
 
-    /// Timestamp deterministic input at the most recently processed frame.
+    /// Timestamp deterministic input at the most recently processed frame. The sample counts as
+    /// received at the time of the call.
     pub fn exact_pointer_event_time(&self, platform_time_ms: Option<i64>) -> PointerEventTime {
         PointerEventTime {
             platform_time_ms,
             animation_time_nanos: self.app.last_frame_time_nanos,
+            received_at: Instant::now(),
         }
     }
 }

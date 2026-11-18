@@ -1,6 +1,6 @@
 //! The velocity of a finger along one axis. A sample takes the platform's
 //! event time where the platform gives one. Desktop, iOS and watchOS give
-//! none, so there a sample takes the time of its handling.
+//! none, so there a sample takes the instant at which the shell received it.
 
 mod arrival_clock;
 
@@ -8,9 +8,15 @@ use arrival_clock::ArrivalClock;
 use cranpose_foundation::{PointerEvent, VelocityTracker1D, velocity_tracker::ASSUME_STOPPED_MS};
 use web_time::Instant;
 
+// The instant at which the shell received `event`. An event built without the
+// shell has none: it counts as received by the call that handles it.
+fn received_at(event: &PointerEvent) -> Instant {
+    event.received_at.unwrap_or_else(Instant::now)
+}
+
 pub(crate) struct GestureVelocity {
     tracker: VelocityTracker1D,
-    // When the gesture began, by the clock of the handling and by the
+    // When the gesture began, by the clock of the shell's receipt and by the
     // platform's event clock.
     start: Option<Instant>,
     start_event_ms: Option<i64>,
@@ -33,7 +39,7 @@ impl GestureVelocity {
     // Starts a gesture at `position`, with the down `event`.
     pub(crate) fn begin(&mut self, event: &PointerEvent, position: f32) {
         self.tracker.reset();
-        self.start = Some(Instant::now());
+        self.start = Some(received_at(event));
         self.arrival_clock = ArrivalClock::default();
         self.start_event_ms = event.time_ms;
         self.tracker.add_data_point(0, position);
@@ -54,7 +60,7 @@ impl GestureVelocity {
         } else {
             self.start.map(|start| {
                 self.arrival_clock
-                    .sample_ms(Instant::now(), start, self.last_sample_ms)
+                    .sample_ms(received_at(event), start, self.last_sample_ms)
             })
         };
         if let Some(sample_ms) = sample_ms {
@@ -75,7 +81,11 @@ impl GestureVelocity {
             return 0.0;
         };
         let release_sample_ms = event.time_ms.zip(self.start_event_ms).map_or_else(
-            || start.elapsed().as_millis() as i64,
+            || {
+                received_at(event)
+                    .saturating_duration_since(start)
+                    .as_millis() as i64
+            },
             |(release_ms, start_ms)| release_ms - start_ms,
         );
         let rested_before_release = self

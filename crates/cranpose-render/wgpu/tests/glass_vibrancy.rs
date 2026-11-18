@@ -1061,6 +1061,7 @@ fn replay_tab_drag(trace: &str, mut inspect: impl FnMut(usize, f64, Rect, Rect, 
                         cranpose_app_shell::PointerEventTime {
                             platform_time_ms: Some((nanos / 1_000_000) as i64),
                             animation_time_nanos: origin + nanos,
+                            ..shell.exact_pointer_event_time(None)
                         },
                     ));
                     continue;
@@ -1072,6 +1073,7 @@ fn replay_tab_drag(trace: &str, mut inspect: impl FnMut(usize, f64, Rect, Rect, 
                         cranpose_app_shell::PointerEventTime {
                             platform_time_ms: Some((nanos / 1_000_000) as i64),
                             animation_time_nanos: origin + nanos,
+                            ..shell.exact_pointer_event_time(None)
                         },
                     ));
                     continue;
