@@ -42,7 +42,7 @@ pub(super) fn measure_lazy_list_retained(
     context.measured_item_cache.borrow_mut().begin_pass(
         frame.axis,
         frame.item_cross_axis_size,
-        |slot| scope.slot_is_retained(slot),
+        &|slot| scope.slot_is_retained(slot),
     );
     let near = state.nearest_range();
     if items_count > 0

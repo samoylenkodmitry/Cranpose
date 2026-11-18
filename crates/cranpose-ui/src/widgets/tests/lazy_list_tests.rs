@@ -176,7 +176,7 @@ fn measured_item_cache_keeps_only_items_whose_slots_are_retained() {
         );
     }
 
-    cache.retain_retained_slots(|slot| slot.raw() % 2 == 0);
+    cache.retain_retained_slots(&|slot| slot.raw() % 2 == 0);
 
     let mut kept: Vec<u64> = cache
         .entries

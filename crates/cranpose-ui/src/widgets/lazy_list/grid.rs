@@ -793,7 +793,7 @@ pub(super) fn measure_grid_viewport(
     context
         .measured_item_cache
         .borrow_mut()
-        .begin_pass(frame.axis, available, |slot| scope.slot_is_retained(slot));
+        .begin_pass(frame.axis, available, &|slot| scope.slot_is_retained(slot));
     let near_lines = state.nearest_range();
     let last = lines.line(near_lines.end.saturating_sub(1));
     let near = lines.line(near_lines.start).first..last.first + last.count;

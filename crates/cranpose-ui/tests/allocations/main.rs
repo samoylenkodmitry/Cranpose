@@ -39,6 +39,9 @@ const LONG_PARAGRAPH_ALLOCATIONS: usize = 10;
 // build allocates to compose its kept slot again for the check of
 // `SubcomposeMeasureScope::subcompose`.
 const LAZY_ROW_ALLOCATIONS: f64 = 8.0;
+// The allocations of a pass of a lazy column of rows with one root and six
+// roots in turn, at a new width.
+const MIXED_LAZY_ROW_ALLOCATIONS: usize = 179;
 // The allocations of a pass of a lazy column scrolled a little.
 const LAZY_SCROLL_ALLOCATIONS: usize = 19;
 // The allocations of a pass of a lazy column scrolled by a row.
@@ -323,6 +326,43 @@ fn lazy_remeasure_allocations(visible: usize) -> usize {
             },
         );
     }))
+}
+
+// Allocations per pass of a lazy column whose rows have one root and six
+// roots in turn, at a new width each pass.
+fn mixed_lazy_rows_allocations() -> usize {
+    pass_allocations(run_test_composition(|| {
+        LazyColumn(
+            Modifier::empty().fill_max_width().height(400.0),
+            rememberLazyListState(),
+            LazyColumnSpec::default(),
+            |scope| {
+                scope.items(LazyItems::new(1_000), |index| {
+                    rows(if index % 2 == 0 { 1 } else { 6 });
+                });
+            },
+        );
+    }))
+}
+
+// A list lets its measured rows go in the order of its hash map, which
+// differs from list to list, and the rows it measures next fill what they
+// left, each its own where it left one: every list of the same rows
+// allocates alike.
+fn mixed_lazy_rows_allocate_alike_in_every_list() {
+    let first = mixed_lazy_rows_allocations();
+    println!("allocations a pass of a lazy column of mixed rows: {first}");
+    assert!(
+        first <= MIXED_LAZY_ROW_ALLOCATIONS,
+        "{first} allocations a pass of a lazy column of mixed rows"
+    );
+    for _ in 0..7 {
+        let allocations = mixed_lazy_rows_allocations();
+        assert_eq!(
+            allocations, first,
+            "a list of the same rows allocated {allocations} a pass, another {first}"
+        );
+    }
 }
 
 // A lazy column measured at a new width composes none of its rows again:
@@ -1034,6 +1074,7 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     a_first_measure_allocates_at_most_one_per_row();
     remeasuring_a_row_allocates_nothing();
     remeasuring_lazy_rows_allocates_no_root_lists();
+    mixed_lazy_rows_allocate_alike_in_every_list();
     scrolling_lazy_rows_allocates_within_its_budget();
     an_empty_lazy_column_pass_allocates_within_its_budget();
     remeasuring_deeply_nested_rows_and_columns_allocates_nothing_more();

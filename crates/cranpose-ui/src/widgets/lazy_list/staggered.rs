@@ -290,7 +290,7 @@ pub(super) fn measure_staggered_viewport(
     context
         .measured_item_cache
         .borrow_mut()
-        .begin_pass(frame.axis, available, |slot| scope.slot_is_retained(slot));
+        .begin_pass(frame.axis, available, &|slot| scope.slot_is_retained(slot));
     let count = content.item_count();
     let near = state.nearest_range();
     if count > 0 {

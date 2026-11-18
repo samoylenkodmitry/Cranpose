@@ -21,9 +21,9 @@ pub(super) struct LazyMeasuredItemCache {
     telemetry: LazyCacheTelemetry,
     pub(super) entries: HashMap<usize, CachedLazyMeasuredItem>,
     focused: Option<(u64, usize)>,
-    // The roots of the items that the pass let go of, which the items it
-    // measures fill again; empty between passes.
-    rooms: Vec<Rc<LazyItemRoots>>,
+    // The roots of the items that the pass let go of, by the index of each
+    // item, which the items it measures fill again; empty between passes.
+    rooms: Vec<(usize, Rc<LazyItemRoots>)>,
     // The list of the items the last pass placed, emptied, for the next.
     item_list: Vec<LazyListMeasuredItem>,
 }
@@ -84,14 +84,8 @@ impl LazyMeasuredItemCache {
         }
     }
 
-    #[expect(
-        clippy::iter_over_hash_type,
-        reason = "each item's rooms go back to the pool, in any order"
-    )]
     pub(super) fn clear(&mut self) {
-        for (_, cached) in self.entries.drain() {
-            keep_room(&mut self.rooms, cached.item.roots);
-        }
+        self.retain_retained_slots(&|_| false);
     }
 
     /// Drops what a new measure pass cannot reuse: everything, when the
@@ -101,7 +95,7 @@ impl LazyMeasuredItemCache {
         &mut self,
         axis: Axis,
         cross_axis_size: f32,
-        retained: impl Fn(SlotId) -> bool,
+        retained: &dyn Fn(SlotId) -> bool,
     ) {
         self.retain_constraint_scope(axis, cross_axis_size);
         self.retain_retained_slots(retained);
@@ -111,12 +105,12 @@ impl LazyMeasuredItemCache {
     /// An item whose composition was disposed can never be reused, and its
     /// entry would keep the item's whole measured tree alive: an endless list
     /// scrolled past thousands of items kept them all.
-    pub(super) fn retain_retained_slots(&mut self, is_retained: impl Fn(SlotId) -> bool) {
+    pub(super) fn retain_retained_slots(&mut self, is_retained: &dyn Fn(SlotId) -> bool) {
         let gone = self
             .entries
             .extract_if(|_, cached| !is_retained(SlotId(cached.item.key)));
-        for (_, cached) in gone {
-            keep_room(&mut self.rooms, cached.item.roots);
+        for (index, cached) in gone {
+            keep_room(&mut self.rooms, index, cached.item.roots);
         }
     }
 
@@ -150,7 +144,7 @@ impl LazyMeasuredItemCache {
 
     pub(super) fn remove(&mut self, index: usize) {
         if let Some(cached) = self.entries.remove(&index) {
-            keep_room(&mut self.rooms, cached.item.roots);
+            keep_room(&mut self.rooms, index, cached.item.roots);
         }
     }
 
@@ -161,13 +155,21 @@ impl LazyMeasuredItemCache {
             cross_axis_bits: normalized_axis_bits(cross_axis_size),
         };
         if let Some(replaced) = self.entries.insert(index, cached) {
-            keep_room(&mut self.rooms, replaced.item.roots);
+            keep_room(&mut self.rooms, index, replaced.item.roots);
         }
     }
 
-    // The roots of an item the pass let go of, for an item it measures.
-    pub(super) fn take_room(&mut self) -> Option<Rc<LazyItemRoots>> {
-        self.rooms.pop()
+    // The roots of an item the pass let go of, for the item it measures at
+    // `index`: the item's own, or else those of the nearest item. The hash
+    // order in which the pass let its items go then decides nothing.
+    pub(super) fn take_room(&mut self, index: usize) -> Option<Rc<LazyItemRoots>> {
+        let nearest = self
+            .rooms
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, (kept, _))| (kept.abs_diff(index), *kept))
+            .map(|(position, _)| position)?;
+        Some(self.rooms.swap_remove(nearest).1)
     }
 
     pub(super) fn take_item_list(&mut self) -> Vec<LazyListMeasuredItem> {
@@ -268,10 +270,15 @@ fn log_lazy_cache_telemetry(
     log::warn!("{message}");
 }
 
-// Keeps `roots` for an item to fill again when nothing else holds them.
-fn keep_room(rooms: &mut Vec<Rc<LazyItemRoots>>, mut roots: Rc<LazyItemRoots>) {
+// Keeps `roots`, of the item at `index`, for an item to fill again when
+// nothing else holds them.
+fn keep_room(
+    rooms: &mut Vec<(usize, Rc<LazyItemRoots>)>,
+    index: usize,
+    mut roots: Rc<LazyItemRoots>,
+) {
     if Rc::get_mut(&mut roots).is_some() {
-        rooms.push(roots);
+        rooms.push((index, roots));
     }
 }
 
