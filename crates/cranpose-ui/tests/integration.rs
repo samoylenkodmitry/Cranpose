@@ -25,6 +25,7 @@ mod lazy_reuse_pool;
 #[path = "support/lazy_screen.rs"]
 mod lazy_screen;
 mod lazy_scroll_from_retained;
+mod lazy_width_change;
 #[cfg(feature = "localization")]
 mod localization;
 mod modifier_local_inheritance;

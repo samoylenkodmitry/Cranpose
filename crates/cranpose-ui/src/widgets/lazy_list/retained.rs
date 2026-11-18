@@ -13,7 +13,7 @@ use cranpose_ui_layout::{Axis, Constraints, MeasureResult};
 
 use super::{
     BeyondBoundsComposition, LazyFrame, LazyItemMeasureContext, LazyListItemMeasureInputs,
-    LazyListMeasureContext, beyond_composition, log_lazy_cache_telemetry, place_lazy_list,
+    LazyListMeasureContext, beyond_composition, end_lazy_cache_pass, place_lazy_list,
     request_beyond_items,
 };
 use crate::subcompose_layout::RetainedMeasureScope;
@@ -87,7 +87,7 @@ pub(super) fn measure_lazy_list_retained(
         .record_retained_reuses(items.reused);
     request_beyond_items(items.beyond, items.scope.root_id());
     let result = list.publish(state);
-    log_lazy_cache_telemetry(&result, context.measured_item_cache);
+    end_lazy_cache_pass(&result, context.measured_item_cache);
     Some(place_lazy_list(
         items.scope,
         constraints,

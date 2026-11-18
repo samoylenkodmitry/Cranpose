@@ -6,7 +6,6 @@
 #![expect(non_snake_case, reason = "names follow Compose's casing")]
 
 use std::{
-    any::Any,
     cell::{Cell, RefCell},
     rc::Rc,
 };
@@ -14,8 +13,7 @@ use std::{
 use cranpose_core::{NodeId, SlotId};
 use cranpose_foundation::lazy::{
     LazyItemRoots, LazyListIntervalContent, LazyListMeasureConfig, LazyListMeasureResult,
-    LazyListMeasuredItem, LazyListState, SmallNodeVec, SmallOffsetVec,
-    measure_lazy_list_with_beyond_bounds_policy,
+    LazyListMeasuredItem, LazyListState, SmallNodeVec, measure_lazy_list_with_beyond_bounds_policy,
 };
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo};
 use cranpose_ui_layout::{Axis, Constraints, LinearArrangement, MeasureResult, round_to_px};
@@ -27,7 +25,7 @@ use crate::{
     MemoryHeadroom, composable,
     layout::MeasuredNode,
     layout_direction::LayoutDirection,
-    modifier::{Modifier, Size},
+    modifier::Modifier,
     scroll::{OverscrollEffect, ScrollMotionContextKey, scroll_motion_context_for_key},
     subcompose_layout::{
         MeasurePolicy, PlacedRootsScope, RetainedMeasurePolicy, RetainedMeasureScope,
@@ -186,6 +184,7 @@ mod focused_item;
 mod frame;
 mod grid;
 mod item_cache;
+mod item_roots;
 mod item_source;
 mod placements;
 mod retained;
@@ -198,7 +197,8 @@ pub use grid::{
     GridCells, LazyGridState, LazyHorizontalGrid, LazyHorizontalGridSpec, LazyVerticalGrid,
     LazyVerticalGridSpec, rememberLazyGridState,
 };
-use item_cache::{LazyMeasuredItemCache, log_lazy_cache_telemetry};
+use item_cache::{LazyMeasuredItemCache, end_lazy_cache_pass};
+use item_roots::measure_item_roots;
 use placements::push_lazy_list_placements;
 use skipped_slots::{recycle_out_of_reach, recycle_skipped_active_slots};
 pub use staggered::{
@@ -498,54 +498,16 @@ fn measure_lazy_list_children(
     context: LazyItemMeasureContext,
     measure_start: Instant,
 ) -> LazyListMeasuredItem {
-    let child_constraints = lazy_list_child_constraints(context.axis, context.cross_axis_size);
-
-    let mut total_main_size: f32 = 0.0;
-    let mut max_cross_size: f32 = 0.0;
-    let mut child_offsets: SmallOffsetVec = SmallVec::new();
-    let mut child_cross_axis_sizes: SmallOffsetVec = SmallVec::new();
-    let roots = node_ids.len();
-    let mut measurements = RootMeasurements::with_capacity(roots);
-
-    for &node_id in &node_ids {
-        let (placeable, retained) = scope.measure_retained(node_id, child_constraints);
-        let size = retained.as_ref().map_or_else(
-            || Size {
-                width: placeable.width(),
-                height: placeable.height(),
-            },
-            MeasuredNode::size,
-        );
-        let (main, cross) = if context.axis.is_vertical() {
-            (size.height, size.width)
-        } else {
-            (size.width, size.height)
-        };
-
-        child_offsets.push(total_main_size);
-        child_cross_axis_sizes.push(cross);
-        if let Some(retained) = retained {
-            measurements.push(retained);
-        }
-
-        total_main_size += main;
-        max_cross_size = max_cross_size.max(cross);
-    }
-
-    let main_axis_size = total_main_size.max(1.0);
+    let room = measured_item_cache.borrow_mut().take_room();
+    let (roots, main_axis_size, cross_axis_size) =
+        measure_item_roots(scope, node_ids, room, &context);
     let item = LazyListMeasuredItem::new(
         context.index,
         context.key_slot_id,
         context.content_type,
-        main_axis_size,
-        max_cross_size,
-        Rc::new(LazyItemRoots {
-            node_ids,
-            child_offsets,
-            child_cross_axis_sizes,
-            measurements: (measurements.len() == roots)
-                .then(|| Rc::new(measurements) as Rc<dyn Any>),
-        }),
+        main_axis_size.max(1.0),
+        cross_axis_size,
+        roots,
     );
 
     measured_item_cache
@@ -655,7 +617,7 @@ fn measure_lazy_list_internal(
             content.item_count(),
         ),
     };
-    log_lazy_cache_telemetry(&result, context.measured_item_cache);
+    end_lazy_cache_pass(&result, context.measured_item_cache);
     place_lazy_list(scope, constraints, &result, count, &context, &frame)
 }
 
