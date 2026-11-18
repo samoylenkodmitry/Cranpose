@@ -946,6 +946,11 @@ web-music-check site output:
 web-boot-check site output:
     python3 scripts/a11y/web_robot.py --check boot --site {{quote(site)}} --output {{quote(output)}}
 
+# Kill a script that started headless Chrome with SIGKILL, as a CI cancel does.
+# Check that its Chrome exits as well.
+web-chrome-lifeline:
+    node scripts/a11y/tests/chrome-lifeline.mjs
+
 # Build and package the web demo, then open every page on WebGPU and on WebGL2,
 # play the Music tab and open the page without WebAssembly and without scripts.
 web-backends: web
@@ -957,6 +962,7 @@ web-backends: web
     just web-webgl-smoke "$run/site" "$run/webgl"
     just web-music-check "$run/site" "$run/music"
     just web-boot-check "$run/site" "$run/boot"
+    just web-chrome-lifeline
 
 test-web-ime-webdriver endpoint browser url output *args:
     python3 scripts/a11y/web_ime_robot.py --endpoint {{quote(endpoint)}} --browser {{quote(browser)}} --url {{quote(url)}} --output {{quote(output)}} {{args}}

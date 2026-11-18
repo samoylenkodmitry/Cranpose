@@ -449,6 +449,12 @@ jobs:
         # Safari's Lockdown Mode removes WebAssembly, and a reader can turn
         # scripts off: the page must say why the demo cannot start.
         run: just web-boot-check "$RUNNER_TEMP/web-demo" "$RUNNER_TEMP/boot-check"
+      - name: Check headless Chrome exits with the script that started it
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
+        # A Chrome that outlives its script keeps rendering until someone
+        # kills it. On a measuring host its compositing moves the display
+        # under every later measurement.
+        run: just web-chrome-lifeline
 
       - name: Remember that this tree passed
         if: ${{ success() && steps.memo.outputs.passed != 'true' }}
