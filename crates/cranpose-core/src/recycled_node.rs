@@ -10,6 +10,16 @@ pub enum RecycleOrigin {
     Warm,
 }
 
+/// The node that [`Composer::emit_recyclable_node`](crate::Composer::emit_recyclable_node) hands
+/// its `reset`: where it comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecyclableShell {
+    /// A bare node that `init` made in a new box.
+    Fresh,
+    /// A removed node of the same type that the recycle pool kept.
+    Pooled,
+}
+
 /// A removed node kept in a pool with its old id, so that a later node of the same type can reuse
 /// it.
 pub struct RecycledNode {

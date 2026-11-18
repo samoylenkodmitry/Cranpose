@@ -210,8 +210,8 @@ fn emit_layout_node(
 ) -> (NodeId, Vec<cranpose_core::ProvidedValue>, HeldChildren) {
     let provided = modifier.provided_locals();
     let emitted = Cell::new(Emitted::Kept);
-    let fill = |node: &mut LayoutNode| {
-        node.fill(&modifier.to_modifier(), policy.held(), environment);
+    let fill = |node: &mut LayoutNode, shell| {
+        node.fill(&modifier.to_modifier(), policy.held(), environment, shell);
         let reads_locals = node
             .modifier_capabilities()
             .contains(NodeCapabilities::MODIFIER_LOCALS);

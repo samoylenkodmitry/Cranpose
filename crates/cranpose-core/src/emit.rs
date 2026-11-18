@@ -5,8 +5,8 @@ use smallvec::SmallVec;
 use crate::{
     Applier, CHILD_LIST_INLINE, ChildList, Command, CommandQueue, Composer, DirtyBubble,
     EmittedNode, MutableState, Node, NodeError, NodeId, OwnedMutableState, ParentAttachMode,
-    ParentFrame, debug_scope_label, join_made_children, recompose::RecomposeChildCursor,
-    slot::NodeSlotUpdate,
+    ParentFrame, RecyclableShell, debug_scope_label, join_made_children,
+    recompose::RecomposeChildCursor, slot::NodeSlotUpdate,
 };
 
 #[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
@@ -256,19 +256,19 @@ impl Composer {
 
     /// Emits a node of type `N` as `emit_node` does, reusing a pooled node when one exists. With
     /// no pooled `N`, `init` makes a bare one in a new box. `reset` then makes the pooled or bare
-    /// node this emit's node, where it lies.
+    /// node, which [`RecyclableShell`] names, this emit's node, where it lies.
     #[track_caller]
     pub fn emit_recyclable_node<N: Node + 'static>(
         &self,
         init: impl FnOnce() -> N,
-        reset: impl FnOnce(&mut N),
+        reset: impl FnOnce(&mut N, RecyclableShell),
     ) -> NodeId {
         let source = crate::caller_location_key();
         self.emit_node_box::<N>(source, |applier| {
             let key = TypeId::of::<N>();
             if let Some(mut recycled) = applier.take_recycled_node(key) {
                 if let Some(typed) = recycled.node_mut().as_any_mut().downcast_mut::<N>() {
-                    reset(typed);
+                    reset(typed, RecyclableShell::Pooled);
                     return EmittedNode::Recycled(recycled);
                 }
                 log::warn!(
@@ -282,7 +282,7 @@ impl Composer {
             let mut node = Box::write(Box::new_uninit(), init());
             applier.record_fresh_recyclable_creation(key);
             applier.seed_recycled_node_shell(key, &*node);
-            reset(&mut node);
+            reset(&mut node, RecyclableShell::Fresh);
             EmittedNode::Fresh(node)
         })
     }

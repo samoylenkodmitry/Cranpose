@@ -1081,7 +1081,7 @@ fn recyclable_emit_discards_mismatched_recycled_shell() {
                         initialized: true,
                         reset_calls: 0,
                     },
-                    |node| {
+                    |node, _| {
                         node.reset_calls += 1;
                     },
                 )
@@ -1155,7 +1155,7 @@ fn recyclable_emit_creates_fresh_id_when_recycled_stable_id_is_live() {
                         from_recycled_shell: false,
                         reset_calls: 0,
                     },
-                    |node| {
+                    |node, _| {
                         node.reset_calls += 1;
                     },
                 )

@@ -124,7 +124,7 @@ pub use recompose_scope::{RecomposeOptions, RecomposeScope, RecomposeScopeRegist
 mod recycle_pool;
 mod recycled_node;
 use recycle_pool::RecyclePool;
-pub use recycled_node::{RecycleOrigin, RecycledNode, RecycledNodeInsertion};
+pub use recycled_node::{RecyclableShell, RecycleOrigin, RecycledNode, RecycledNodeInsertion};
 mod retention;
 /// The runtime in which a composition runs: state cells, UI tasks, frame callbacks and the queue of
 /// invalidated scopes.
