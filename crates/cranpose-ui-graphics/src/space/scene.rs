@@ -148,13 +148,19 @@ impl Light {
     }
 
     /// The map from scene space to a shadow map of this light that holds
-    /// `casters`: x and y from -1 to 1 across the map, and depth from 0 at
-    /// the caster nearest the light to 1 at the farthest. A point farther
-    /// along the light than a caster's depth there lies in its shadow.
-    /// `None` without casters, or for a light with no direction.
+    /// the shadows `casters` cast on the part of `receivers` that `camera`
+    /// shows in bounds of `size`. x and y run from -1 to 1 across the part
+    /// of the light where casters and that part overlap, with room for the
+    /// softest penumbra; depth runs from 0 at the caster nearest the light
+    /// to 1 at the farthest receiver the camera shows. A point farther along
+    /// the light than a caster's depth there lies in its shadow. `None` when
+    /// no caster overlaps a receiver the camera shows, or for a light with
+    /// no direction.
     pub fn shadow_projection<'a>(
         &self,
         casters: impl IntoIterator<Item = &'a MeshSurface>,
+        receivers: impl IntoIterator<Item = &'a MeshSurface>,
+        (camera, size): (&Camera, Size),
     ) -> Option<Mat4> {
         const MARGIN: f32 = 0.02;
         let forward = self.direction.normalized()?;
@@ -171,14 +177,25 @@ impl Light {
             [forward.x, forward.y, forward.z, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ]);
-        let mut low = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
-        let mut high = -low;
-        for caster in casters {
-            let (caster_low, caster_high) = caster.mesh.bounds_in(&caster.transform.then(&view));
-            (low, high) = (low.min(caster_low), high.max(caster_high));
-        }
+        let (caster_low, caster_high) = bounds_along(casters, &view);
+        let (seen_low, seen_high) = seen_receivers(receivers, &view, (camera, size))?;
+        // A caster darkens only what lies behind it along the light, and its
+        // penumbra reaches past it by the light's spread over the depth
+        // between them.
+        let reach = self.size.max(0.0).tan() * (seen_high.z - caster_low.z);
+        let low = Vec3::new(
+            caster_low.x.max(seen_low.x - reach),
+            caster_low.y.max(seen_low.y - reach),
+            caster_low.z,
+        );
+        let high = Vec3::new(
+            caster_high.x.min(seen_high.x + reach),
+            caster_high.y.min(seen_high.y + reach),
+            seen_high.z,
+        );
         let extent = high - low;
-        if !(extent.x.is_finite() && extent.y.is_finite() && extent.z.is_finite()) {
+        let spans = |length: f32| length.is_finite() && length >= 0.0;
+        if !(spans(extent.x) && spans(extent.y) && spans(extent.z)) {
             return None;
         }
         let pad = |extent: f32| (extent * MARGIN).max(1.0);
@@ -195,6 +212,66 @@ impl Light {
         ]);
         Some(view.then(&fit))
     }
+}
+
+// The box, in the light's frame `light`, of what `camera` shows of
+// `receivers` in bounds of `size`: their own box, cut to the camera's view
+// between the nearest and the farthest of them. `None` when the camera
+// shows none of them.
+fn seen_receivers<'a>(
+    receivers: impl IntoIterator<Item = &'a MeshSurface>,
+    light: &Mat4,
+    (camera, size): (&Camera, Size),
+) -> Option<(Vec3, Vec3)> {
+    let empty = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+    let (low, high, nearest, farthest) = receivers.into_iter().fold(
+        (empty, -empty, f32::INFINITY, f32::NEG_INFINITY),
+        |(low, high, nearest, farthest), surface| {
+            let (surface_low, surface_high) =
+                surface.mesh.bounds_in(&surface.transform.then(light));
+            let (seen_low, seen_high) = surface
+                .mesh
+                .bounds_in(&surface.transform.then(&camera.view));
+            (
+                low.min(surface_low),
+                high.max(surface_high),
+                nearest.min(seen_low.z),
+                farthest.max(seen_high.z),
+            )
+        },
+    );
+    let near = nearest.max(camera.near());
+    if !farthest.is_finite() || farthest < near {
+        return None;
+    }
+    let mut view = (empty, -empty);
+    for (x, y) in [
+        (0.0, 0.0),
+        (size.width, 0.0),
+        (0.0, size.height),
+        (size.width, size.height),
+    ] {
+        let ray = camera.ray(Point::new(x, y), size)?;
+        for depth in [near, farthest] {
+            let corner = light.transform_point(ray.origin + ray.direction * depth);
+            view = (view.0.min(corner), view.1.max(corner));
+        }
+    }
+    Some((low.max(view.0), high.min(view.1)))
+}
+
+// The box that holds `surfaces` in the coordinates of `view`.
+fn bounds_along<'a>(
+    surfaces: impl IntoIterator<Item = &'a MeshSurface>,
+    view: &Mat4,
+) -> (Vec3, Vec3) {
+    let empty = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+    surfaces
+        .into_iter()
+        .fold((empty, -empty), |(low, high), surface| {
+            let (surface_low, surface_high) = surface.mesh.bounds_in(&surface.transform.then(view));
+            (low.min(surface_low), high.max(surface_high))
+        })
 }
 
 /// A scene's camera and light, which a `scene3d` modifier shows its

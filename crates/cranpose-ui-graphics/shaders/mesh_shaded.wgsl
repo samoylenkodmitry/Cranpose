@@ -103,7 +103,7 @@ fn mesh_shaded_shadowed_fs(input: ShadedVaryings) -> @location(0) vec4<f32> {
     if (color.a < 1.0 / 255.0) {
         discard;
     }
-    let visibility = shadow_visibility(input.light_position);
+    let visibility = shadow_visibility(input.light_position, input.clip_position.xy);
     return shade(shaded_surface(input, color, visibility)) * (mesh.params.x * coverage);
 }
 

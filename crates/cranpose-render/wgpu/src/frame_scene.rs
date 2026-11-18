@@ -15,7 +15,7 @@ use cranpose_ui_graphics::{
 
 use super::{DeviceRect, Event, FrameExecutor, LayerPass, SurfaceRender, composites_nothing};
 use crate::{
-    collect::{ChildLayer, MeshChild},
+    collect::{ChildLayer, MeshChild, SceneDraw},
     frame_graph::{FrameCommandRecorder, UploadAllocatorId},
     offscreen::OffscreenTarget,
     scene_pass::{
@@ -100,6 +100,33 @@ enum StepPipeline {
 fn casts_shadow(mesh: &MeshChild) -> bool {
     let surface = &mesh.surface;
     mesh.seen == 0 && surface.casts_shadow && !matches!(surface.material, Material::Volume(_))
+}
+
+// Whether a shadow can fall on `mesh`: a surface that emits its colour or
+// glows takes none, nor does a volume, nor a space seen through a doorway.
+fn takes_shadow(mesh: &MeshChild) -> bool {
+    mesh.seen == 0
+        && !matches!(
+            mesh.surface.material,
+            Material::Emissive | Material::Glow | Material::Volume(_)
+        )
+}
+
+// The map of `scene`'s light into its shadow map, for the shadows the
+// space the eye stands in casts onto itself; `None` without shadows.
+fn shadow_projection(scene: &SceneDraw, meshes: &[PendingMesh]) -> Option<Mat4> {
+    let light = scene.light.filter(|light| light.shadows)?;
+    light.shadow_projection(
+        meshes
+            .iter()
+            .filter(|held| casts_shadow(&held.mesh))
+            .map(|held| &held.mesh.surface),
+        meshes
+            .iter()
+            .filter(|held| takes_shadow(&held.mesh))
+            .map(|held| &held.mesh.surface),
+        (&scene.camera, scene.rect.size()),
+    )
 }
 
 /// The light and the cut of the space `mesh` lies in, as the scene's eye
@@ -213,16 +240,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             return Ok(());
         };
         let page = target.page;
-        // The space the eye stands in casts shadows, onto itself.
-        let shadowing = scene.light.filter(|light| light.shadows);
-        let light_projection = shadowing.and_then(|light| {
-            light.shadow_projection(
-                meshes
-                    .iter()
-                    .filter(|held| casts_shadow(&held.mesh))
-                    .map(|held| &held.mesh.surface),
-            )
-        });
+        let light_projection = shadow_projection(&scene, meshes);
         let backdrop = glass_backdrop(meshes, page);
         let backdrop_region = backdrop.map_or([0.0; 4], |rect| {
             [

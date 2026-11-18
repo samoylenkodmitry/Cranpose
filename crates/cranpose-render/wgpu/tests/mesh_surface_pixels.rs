@@ -26,6 +26,9 @@ const NEAR_PANEL: Vec3 = Vec3::new(60.0, 0.0, 0.0);
 const NEAR_PANEL_SIDE: f32 = 100.0;
 const SOFT_LIGHT: f32 = 0.1;
 const GLOW_PANEL: Vec3 = Vec3::new(-300.0, 250.0, 500.0);
+// Off the frame's left edge: the light along (1, 0, 1) throws its shadow
+// 600 to the right on the far wall, into the frame.
+const NEAR_CASTER: Vec3 = Vec3::new(-500.0, 0.0, 0.0);
 
 fn camera() -> Camera {
     Camera::look_at(
@@ -160,6 +163,23 @@ fn SoftLightScene() {
 #[composable]
 fn EmissiveScene() {
     LitScene(0.0, Material::Emissive);
+}
+
+// A panel whose shadow falls on the far wall, and a second panel far off
+// to the side whose shadow falls nowhere the wall is.
+#[composable]
+fn FarCasterScene() {
+    let (plane, _) = meshes();
+    Scene(0.0, move || {
+        for at in [NEAR_CASTER, Vec3::new(40_000.0, 0.0, 0.0)] {
+            Surface(
+                Arc::clone(&plane),
+                panel((200.0, 200.0), at),
+                (Material::Unlit, true, Color(0.0, 1.0, 0.0, 1.0)),
+            );
+        }
+        FarWall(Arc::clone(&plane));
+    });
 }
 
 #[composable]
@@ -557,6 +577,24 @@ fn a_light_of_some_size_softens_the_edge_of_a_shadow() {
     assert!(
         soft >= 2 * hard.max(4),
         "a light of some size widens the edge: {soft} pixels against {hard}"
+    );
+}
+
+#[test]
+fn a_caster_far_from_every_receiver_leaves_shadow_edges_sharp() {
+    let Some(frame) = capture(FarCasterScene) else {
+        return;
+    };
+    // The near panel's shadow ends 100 to the right of x = 600 - 500, on the
+    // wall 1400 from the eye: one pixel there is 1400 / FOCAL_LENGTH wide.
+    let pixel = (600.0 - EYE_Z) / FOCAL_LENGTH;
+    let blurred = std::iter::successors(Some(200.0 - 30.0 * pixel), |x| Some(x + pixel))
+        .take(60)
+        .filter(|&x| (70..230).contains(&pixel_at(&frame, Vec3::new(x, 0.0, 600.0))[2]))
+        .count();
+    assert!(
+        blurred <= 4,
+        "the shadow's edge stays sharp with a caster far away: {blurred} pixels wide"
     );
 }
 

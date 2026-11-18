@@ -19,7 +19,6 @@ use cranpose_ui::{
 };
 
 use super::{
-    floor::Floor,
     hover::rememberHover,
     keys::{COPY_INK, HEAD_INK, SELECTION_KEY},
     lettering::{display, strong},
@@ -79,17 +78,14 @@ fn LampStage(size: Size, walk: Walk, moving: bool) {
             StageIn(
                 size,
                 move || Scene3d {
-                    camera: room.camera(),
-                    light: Some(room.light()),
-                    eye: None,
                     multisample: Multisample::X4,
+                    ..Scene3d::new(room.camera())
                 },
                 move || {
                     let lettering = Rc::clone(&lettering);
                     Plate(room, (lettering.cuts, density), move || {
                         LampWords(Rc::clone(&lettering));
                     });
-                    Floor(room);
                     Skirting(room);
                 },
             );
@@ -155,7 +151,7 @@ impl LampLettering {
         let side = (100.0 * u).max(16.0);
         let top = 34.0 * u;
         // The words sit in the upper part of the wall, clear of the floor.
-        let bottom = room.floor_line() - size.height * 0.63;
+        let bottom = size.height * (1.0 - 0.63);
         let gap = 46.0 * u;
         let copy_width = (24.5 * 40.0 * u).min(size.width - side * 2.0);
         let measure = |text: &str, style: &TextStyle, width: f32| {
@@ -170,7 +166,7 @@ impl LampLettering {
         };
         let head_height = measure(HEADLINE, &head_style, size.width - side * 2.0);
         let copy_height = measure(PARAGRAPH, &copy_style, copy_width);
-        let free = room.floor_line() - bottom - top;
+        let free = size.height - bottom - top;
         let block = head_height + gap + copy_height;
         let head_bottom = top + (free - block).max(0.0) * 0.5 + head_height;
         Self {
