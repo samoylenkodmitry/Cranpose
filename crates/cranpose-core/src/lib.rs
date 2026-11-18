@@ -26,7 +26,8 @@ pub(crate) use command::{
 };
 mod command_queue;
 pub(crate) use command_queue::{
-    COMMAND_FLUSH_THRESHOLD, ChildList, CommandQueue, SMALL_CHILD_SYNC_LINEAR_THRESHOLD,
+    CHILD_LIST_INLINE, COMMAND_FLUSH_THRESHOLD, ChildList, CommandQueue,
+    SMALL_CHILD_SYNC_LINEAR_THRESHOLD,
 };
 #[cfg(test)]
 pub(crate) use command_queue::{CommandTag, SyncChildrenCommand};
@@ -123,7 +124,7 @@ pub use recompose_scope::{RecomposeOptions, RecomposeScope, RecomposeScopeRegist
 mod recycle_pool;
 mod recycled_node;
 use recycle_pool::RecyclePool;
-pub use recycled_node::{RecycleOrigin, RecycledNode, RecycledNodeInsertion};
+pub use recycled_node::{RecyclableShell, RecycleOrigin, RecycledNode, RecycledNodeInsertion};
 mod retention;
 /// The runtime in which a composition runs: state cells, UI tasks, frame callbacks and the queue of
 /// invalidated scopes.

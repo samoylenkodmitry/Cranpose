@@ -6,7 +6,9 @@ use crate::{
 };
 
 pub(crate) const COMMAND_FLUSH_THRESHOLD: usize = 4096;
-pub(crate) type ChildList = SmallVec<[NodeId; 4]>;
+// The children a child list holds in itself before it takes a block.
+pub(crate) const CHILD_LIST_INLINE: usize = 4;
+pub(crate) type ChildList = SmallVec<[NodeId; CHILD_LIST_INLINE]>;
 pub(crate) const SMALL_CHILD_SYNC_LINEAR_THRESHOLD: usize = 8;
 
 #[derive(Copy, Clone)]

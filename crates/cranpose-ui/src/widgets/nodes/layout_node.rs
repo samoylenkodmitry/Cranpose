@@ -3,7 +3,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{NodeId, NodeIdCell};
+use cranpose_core::{NodeId, NodeIdCell, RecyclableShell};
 use cranpose_foundation::{
     InvalidationKind, ModifierInvalidation, ModifierInvalidations, NodeCapabilities,
     SemanticsConfiguration,
@@ -131,15 +131,17 @@ impl LayoutNode {
         Self::new_recycled_shell(false)
     }
 
-    // Makes this shell the node a composition makes in `environment` with
-    // `modifier` and `measure_policy`, in the place it lies, so its box takes
-    // no new node whole. A shell holds a made node's values in every field
-    // but these.
+    // Makes this shell, which `shell` names, the node a composition makes in
+    // `environment` with `modifier` and `measure_policy`, in the place it
+    // lies, so its box takes no new node whole. A shell holds a made node's
+    // values in every field but these. A pooled shell's parts take the node
+    // when nothing else holds them; a fresh shell shares the thread's.
     pub(crate) fn fill(
         &mut self,
         modifier: &Modifier,
         measure_policy: Rc<dyn MeasurePolicy>,
         environment: LayoutEnvironment,
+        shell: RecyclableShell,
     ) {
         let Self {
             parts,
@@ -177,7 +179,11 @@ impl LayoutNode {
                 && modifier_slices_dirty.get(),
             "only a shell fills"
         );
-        if let Err(measure_policy) = LayoutParts::refill(parts, measure_policy) {
+        let measure_policy = match shell {
+            RecyclableShell::Fresh => Err(measure_policy),
+            RecyclableShell::Pooled => LayoutParts::refill(parts, measure_policy),
+        };
+        if let Err(measure_policy) = measure_policy {
             *parts = Rc::new(LayoutParts::new(LayoutRuntimeState::new(measure_policy)));
         }
         *density = crate::density::shared_density(environment.density);

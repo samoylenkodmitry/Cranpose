@@ -1,11 +1,16 @@
 //! The frames of a composer's parent stack: a node whose children the pass
 //! composes, and how they join it.
 
+use smallvec::SmallVec;
+
 use crate::{ChildList, NodeId};
 
 pub(crate) struct ParentFrame {
     pub(crate) id: NodeId,
-    pub(crate) previous: ChildList,
+    // The children the node held when the frame opened, as the node gave
+    // them: the frame compares the new children with them and reads them by
+    // place, and copies none.
+    pub(crate) previous: SmallVec<[NodeId; 8]>,
     pub(crate) new_children: ChildList,
     pub(crate) attach_mode: ParentAttachMode,
     pub(crate) synthetic_root: bool,
@@ -39,7 +44,7 @@ pub(super) fn push_root_frame(
     if let Some(root_id) = root {
         parent_stack.push(ParentFrame {
             id: root_id,
-            previous: ChildList::new(),
+            previous: SmallVec::new(),
             new_children: ChildList::new(),
             attach_mode: ParentAttachMode::DeferredSync,
             synthetic_root: matches!(initial_parent_frame, InitialParentFrame::SyntheticRoot),

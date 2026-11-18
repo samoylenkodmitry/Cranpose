@@ -604,6 +604,7 @@ fn a_filled_shell_of_a_virtual_node_is_a_plain_node() {
         &Modifier::empty(),
         Rc::new(TestMeasurePolicy),
         LayoutEnvironment::default(),
+        RecyclableShell::Pooled,
     );
     let made = fresh_node();
     assert!(!shell.is_virtual());
