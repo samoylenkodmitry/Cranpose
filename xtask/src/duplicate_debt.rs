@@ -85,9 +85,14 @@ pub(crate) const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
         family: "x11rb-protocol",
         reason: "follows the x11rb split via arboard 3.7.0",
     },
+    DuplicateDebt {
+        family: "env_filter",
+        reason: "android_logger 0.15.1 (latest) pins env_filter ^0.1 while env_logger 0.11 is past 1.0; since #2246 cranpose-xr turns on cranpose/android for its Android target, so the split is in the default graph too",
+    },
+    DuplicateDebt {
+        family: "libloading",
+        reason: "openxr 0.22, which #2246 brought with cranpose-xr, needs libloading ^0.9 and x11rb 0.14 follows it, while ash 0.38, khronos-egl 6, dlib 0.5 and the wgpu-hal fork stay on ^0.8",
+    },
 ];
 
-pub(crate) const ALL_FEATURES_EXTRA_DUPLICATE_DEBT: &[DuplicateDebt] = &[DuplicateDebt {
-    family: "env_filter",
-    reason: "android_logger 0.15.1 (latest) pins env_filter ^0.1 while env_logger 0.11 is past 1.0",
-}];
+pub(crate) const ALL_FEATURES_EXTRA_DUPLICATE_DEBT: &[DuplicateDebt] = &[];
