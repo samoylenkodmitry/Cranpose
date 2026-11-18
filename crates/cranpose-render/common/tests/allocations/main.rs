@@ -3,6 +3,7 @@
 use std::{
     alloc::System,
     cell::{Cell, RefCell},
+    fmt::Write as _,
     rc::Rc,
 };
 
@@ -256,38 +257,51 @@ enum TickerText {
 }
 
 // Allocations a frame of `texts` texts that all change each frame, showing
-// `shown`. Composition, the layout an app runs while no screen reader is
-// connected and the scene update together.
+// `shown`.
 fn ticker_frame_allocations(texts: usize, shown: TickerText) -> usize {
     const WORDS: [&str; 4] = ["alpha", "bravo", "charlie", "delta"];
     const DIGITS: [usize; 4] = [100, 1_000, 10_000, 100_000];
+    let texts = move |tick: MutableState<usize>| {
+        for index in 0..texts {
+            let style = TextStyle::default();
+            match shown {
+                TickerText::Words => Text(
+                    WORDS[(tick.get() + index) % WORDS.len()],
+                    Modifier::empty(),
+                    style,
+                ),
+                TickerText::Numbers => Text(
+                    format!("{}", 10_000 + tick.get() * 1000 + index),
+                    Modifier::empty(),
+                    style,
+                ),
+                TickerText::Digits => Text(
+                    format!("{}", DIGITS[(tick.get() + index) % DIGITS.len()] + index),
+                    Modifier::empty(),
+                    style,
+                ),
+                TickerText::State => Text(tick, Modifier::empty(), style),
+            };
+        }
+    };
+    changing_frames(texts, PASSES).allocations / PASSES
+}
+
+// What `counted` frames of a column of `texts` allocate, after eight, each
+// frame showing the texts of the next tick, which `texts` reads from the
+// state it is given. A frame is composition, the layout an app runs while
+// no screen reader is connected and the scene update together.
+fn changing_frames(
+    texts: impl Fn(MutableState<usize>) + Copy + 'static,
+    counted: usize,
+) -> stats_alloc::Stats {
     let tick_holder: Rc<RefCell<Option<MutableState<usize>>>> = Rc::default();
     let holder = Rc::clone(&tick_holder);
     let mut composition = cranpose_ui::run_test_composition(move || {
         let tick = rememberMutableStateOf(|| 0usize);
         *holder.borrow_mut() = Some(tick);
         Column(Modifier::empty(), ColumnSpec::default(), move || {
-            for index in 0..texts {
-                let style = TextStyle::default();
-                match shown {
-                    TickerText::Words => Text(
-                        WORDS[(tick.get() + index) % WORDS.len()],
-                        Modifier::empty(),
-                        style,
-                    ),
-                    TickerText::Numbers => Text(
-                        format!("{}", 10_000 + tick.get() * 1000 + index),
-                        Modifier::empty(),
-                        style,
-                    ),
-                    TickerText::Digits => Text(
-                        format!("{}", DIGITS[(tick.get() + index) % DIGITS.len()] + index),
-                        Modifier::empty(),
-                        style,
-                    ),
-                    TickerText::State => Text(tick, Modifier::empty(), style),
-                };
-            }
+            texts(tick);
         });
     });
     let root = composition.root().expect("a composed root");
@@ -324,10 +338,10 @@ fn ticker_frame_allocations(texts: usize, shown: TickerText) -> usize {
         frame(count);
     }
     let region = Region::new(GLOBAL);
-    for count in 9..9 + PASSES {
+    for count in 9..9 + counted {
         frame(count);
     }
-    region.change().allocations / PASSES
+    region.change()
 }
 
 // A fixed text that shows another string each frame takes the room of a
@@ -388,6 +402,51 @@ fn a_new_text_allocates_within_its_budget() {
     let per_text = many.saturating_sub(few) as f64 / 100.0;
     println!("allocations per new text: {per_text}");
     assert!(per_text <= 15.15, "{per_text} allocations per new text");
+}
+
+// A paragraph of 2,000 words, one of which changes each frame, under 120
+// counters of one to six digits that change in turn, a third of them each
+// frame. The texts lay out into layouts other texts gave up: one that takes
+// the paragraph's keeps no more room than a few times what its own text
+// needs, so once the pools settle, in 120 frames, the bytes the texts hold
+// grow by less than one paragraph's glyph room over 260 more frames.
+fn texts_around_a_long_paragraph_hold_bounded_room() {
+    const COUNTERS: usize = 120;
+    const WORDS: usize = 2_000;
+    let texts = |tick: MutableState<usize>| {
+        let frame = tick.get();
+        for index in 0..COUNTERS {
+            let turn = (frame + index) / 3;
+            let digits = u32::try_from(turn % 6).unwrap_or(0);
+            Text(
+                format!("{}", 10usize.pow(digits) + index),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+        }
+        let mut paragraph = String::with_capacity(WORDS * 6);
+        for word in 0..WORDS {
+            if word == WORDS / 2 {
+                let _ = write!(paragraph, "f{frame:05} ");
+            } else {
+                paragraph.push_str("word ");
+            }
+        }
+        Text(paragraph, Modifier::empty(), TextStyle::default());
+    };
+    let held = |frames: usize| {
+        let stats = changing_frames(texts, frames);
+        stats.bytes_allocated.cast_signed() - stats.bytes_deallocated.cast_signed()
+    };
+    let (settled, late) = (140, 400);
+    let growth = held(late) - held(settled);
+    // Eight bytes a glyph, five glyphs a word.
+    let glyph_room = (WORDS * 5 * 8).cast_signed();
+    println!("bytes the texts hold more from frame {settled} to {late}: {growth}");
+    assert!(
+        growth < glyph_room,
+        "the texts hold {growth} more bytes from frame {settled} to {late}: room long texts left"
+    );
 }
 
 // The recordings the runs under `layer` draw from, as a reader holds them.
@@ -505,6 +564,7 @@ fn scene_rebuilds_stay_within_their_allocation_budgets() {
     a_row_scrolling_in_reuses_the_row_that_scrolled_out();
     a_text_changing_each_frame_reuses_its_string_and_layout();
     a_new_text_allocates_within_its_budget();
+    texts_around_a_long_paragraph_hold_bounded_room();
     redraws_reuse_their_recordings(drawn_around_content, "around content");
     redraws_reuse_their_recordings(drawn_inside_a_clip, "inside a clip");
     redraws_reuse_their_recordings(
