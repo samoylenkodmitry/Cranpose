@@ -320,3 +320,19 @@ fn a_surface_refuses_a_part_that_reaches_outside_the_picture() {
     assert!(!player.view.draw(&mut player.pixels).expect("frame"));
     assert_eq!(*results.borrow(), [false]);
 }
+
+#[test]
+fn a_surface_drops_the_pictures_that_its_intake_leaves() {
+    // An intake that takes nothing must not keep the surface's task from yielding
+    let mut player = Player::with_surface(VideoCodec::H264, H264_CLIP, (WIDTH, HEIGHT), |frames| {
+        PlayerSurfaceIntake(
+            frames,
+            Modifier::empty().fill_max_size(),
+            ContentScale::Fit,
+            |_frames, _presenter| {},
+        );
+    });
+    player.feed();
+    assert!(!player.view.draw(&mut player.pixels).expect("frame"));
+    assert!(player.decoder.frames().next_frame().is_none());
+}
