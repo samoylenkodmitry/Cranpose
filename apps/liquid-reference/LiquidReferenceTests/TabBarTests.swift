@@ -257,6 +257,27 @@ class NativeControlTests: ReferenceUITests {
     func testToolbar() { captureStates("toolbar", values: ["0", "1", "2", "3"]) }
     func testFilterChip() { captureStates("filter-chip", values: ["0", "1"]) }
 
+    // A long press on the tile opens its context menu, which the capture
+    // shows at rest. Each variant's tile has its centre at the press point.
+    func testContextMenu() { captureContextMenu(variant: 0, x: 201, y: 451) }
+    func testContextMenuNearBottom() { captureContextMenu(variant: 1, x: 201, y: 781) }
+    func testContextMenuNearLeft() { captureContextMenu(variant: 2, x: 91, y: 451) }
+    func testContextMenuPreview() { captureContextMenu(variant: 3, x: 201, y: 451) }
+    func testContextMenuLeftOfMiddle() { captureContextMenu(variant: 4, x: 130, y: 451) }
+
+    private func captureContextMenu(variant: Int, x: Double, y: Double) {
+        for scheme in ["light", "dark"] {
+            for backdrop in ["solid", "checkerboard"] {
+                let app = launchControl("context-menu", scheme: scheme, backdrop: backdrop, value: "\(variant)")
+                let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+                origin.withOffset(CGVector(dx: x, dy: y)).press(forDuration: 1.2)
+                Thread.sleep(forTimeInterval: 1.0)
+                capture("control-context-menu-\(scheme)-\(backdrop)-\(variant)", app: app)
+                app.terminate()
+            }
+        }
+    }
+
     // Value 0 drags the row 200 points toward its leading edge and shows the
     // trailing actions; value 1 drags it the other way and shows Pin.
     func testSwipeActions() {
@@ -321,6 +342,19 @@ class NativeControlTests: ReferenceUITests {
         XCTAssertEqual(copy.width, 250, accuracy: 0.5)
         XCTAssertEqual(copy.height, 42, accuracy: 0.5)
         app.terminate()
+    }
+
+    // The pull-down menu open over the checkerboard, where its glass shows
+    // what it blurs and saturates.
+    func testCheckerboardOpenMenu() {
+        for scheme in ["light", "dark"] {
+            let app = launchControl("menu", scheme: scheme, backdrop: "checkerboard")
+            app.buttons["Options"].tap()
+            XCTAssertTrue(app.buttons["Copy"].waitForExistence(timeout: 5))
+            waitForSettledMenu(app)
+            capture("control-menu-\(scheme)-checkerboard-open", app: app)
+            app.terminate()
+        }
     }
 
     func testGroupedMenu() {

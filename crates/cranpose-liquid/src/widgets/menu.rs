@@ -10,22 +10,22 @@ use cranpose_ui::{
     Modifier, PointerEventKind, PointerInputScope, PressInteractionPress, SemanticsSpec,
     SemanticsWidgetRole, Size, rememberMutableInteractionSource,
     text::{FontWeight, SpanStyle, TextStyle, TextUnit},
-    widgets::{
-        Box, BoxSpec, Column, ColumnSpec, PopupDismissableWhen, Row, RowSpec, Text,
-        popup::local_popup_viewport,
-    },
+    widgets::{Box, BoxSpec, Column, ColumnSpec, PopupDismissableWhen, Row, RowSpec, Text},
 };
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer, Point, Rect, RenderEffect};
 use cranpose_ui_layout::VerticalAlignment;
 
-use super::menu_morph::{
-    MenuMotion, MenuShape, menu_absorbed_shape_presence, menu_absorbed_visual_phase,
-    menu_content_alpha, menu_content_blur, menu_content_progress, menu_content_scale,
-    menu_ellipse_blend, menu_geometry_phase, menu_morph_geometry, menu_surface_phase,
-    menu_vertical_rebound, smoothstep,
+use super::{
+    menu_morph::{
+        MenuMotion, MenuShape, menu_absorbed_shape_presence, menu_absorbed_visual_phase,
+        menu_content_alpha, menu_content_blur, menu_content_progress, menu_content_scale,
+        menu_ellipse_blend, menu_geometry_phase, menu_morph_geometry, menu_surface_phase,
+        menu_vertical_rebound, smoothstep,
+    },
+    menu_placement::{LiquidMenuPlacement, MenuArea, MenuPlacement},
 };
 use crate::{
-    material::{GlassDynamics, GlassShadow, LiquidModifierExt, LiquidShape},
+    material::{GlassDynamics, LiquidModifierExt},
     theme::{liquid_colors, liquid_typography},
     widgets::content_scope::ScopeContent,
 };
@@ -209,35 +209,6 @@ fn collect_entries(content: impl FnOnce(&LiquidMenuScope)) -> Vec<LiquidMenuEntr
     )
 }
 
-fn menu_bounds(anchor: Rect, viewport: Size, width: f32, height: f32) -> (Rect, bool) {
-    let width = if viewport.width > 0.0 {
-        width.min((viewport.width - 32.0).max(1.0))
-    } else {
-        width
-    };
-    let left = anchor.x + (anchor.width - width) * 0.5;
-    let left = if viewport.width > 0.0 {
-        left.clamp(16.0, (viewport.width - width - 16.0).max(16.0))
-    } else {
-        left
-    };
-    let opens_up = viewport.height > 0.0 && anchor.y + anchor.height * 0.5 > viewport.height * 0.5;
-    let top = if opens_up {
-        anchor.y + anchor.height - height
-    } else {
-        anchor.y
-    };
-    (
-        Rect {
-            x: left,
-            y: top,
-            width,
-            height,
-        },
-        opens_up,
-    )
-}
-
 fn menu_items_changed(
     last: &RefCell<Option<Rc<Vec<LiquidMenuEntry>>>>,
     items: &Rc<Vec<LiquidMenuEntry>>,
@@ -326,11 +297,13 @@ pub struct LiquidMenuSpec {
     /// Settled card width in dp (the reference menus vary: the App Store
     /// List/Grid menu is 250, the sort/filter menu ~66% of screen width).
     pub width: f32,
+    /// Where the menu stands against its anchor.
+    pub placement: LiquidMenuPlacement,
 }
 
 impl Default for LiquidMenuSpec {
     fn default() -> Self {
-        Self { width: MENU_WIDTH }
+        Self::new(MENU_WIDTH)
     }
 }
 
@@ -344,7 +317,20 @@ impl LiquidMenuSpec {
             } else {
                 MENU_WIDTH
             },
+            placement: LiquidMenuPlacement::OverAnchor,
         }
+    }
+
+    /// Returns the spec with the menu standing at `placement`.
+    pub fn placement(mut self, placement: LiquidMenuPlacement) -> Self {
+        self.placement = placement;
+        self
+    }
+
+    // Where a menu of this spec and `height` stands against `anchor` in
+    // `area`.
+    fn place(self, anchor: Rect, area: Option<MenuArea>, height: f32) -> MenuPlacement {
+        self.placement.place(anchor, area, self.width, height)
     }
 }
 
@@ -884,7 +870,7 @@ pub fn LiquidMenu(
 ) {
     let items = Rc::new(collect_entries(content));
     let motion = MenuMotion::of(expanded);
-    let viewport = local_popup_viewport().current().get();
+    let area = MenuArea::current();
     let visible = remember(|| mutableStateOf(false)).with(|s| *s);
     if expanded && !visible.get_non_reactive() {
         visible.set(true);
@@ -1002,11 +988,16 @@ pub fn LiquidMenu(
     }
     let resize_state = resize_anim.borrow().state();
     let menu_height = (node_size.get().height - MENU_SHADOW_PAD * 2.0).max(0.0);
-    let (bounds, opens_up) = menu_bounds(anchor, viewport, spec.width, menu_height);
+    let MenuPlacement {
+        bounds,
+        grows_up,
+        rows_up,
+        source,
+    } = spec.place(anchor, area, menu_height);
     let menu_width = bounds.width;
     let menu_left = bounds.x;
-    let pivot_y = u8::from(opens_up) as f32;
-    let content_top_inset = if menu_display_rows(&items, opens_up)
+    let pivot_y = u8::from(grows_up) as f32;
+    let content_top_inset = if menu_display_rows(&items, rows_up)
         .next()
         .is_some_and(|(index, _)| items[index].item.header)
     {
@@ -1025,32 +1016,18 @@ pub fn LiquidMenu(
             let on_item = Rc::clone(&on_item);
             let on_dismiss = Rc::clone(&on_dismiss);
             move || {
-                let anchor_center = (
-                    anchor.x + anchor.width * 0.5 - node_origin.x,
-                    anchor.y + anchor.height * 0.5 - node_origin.y,
-                );
                 let anchor_shape = MenuShape::capsule(
-                    anchor_center.0,
-                    anchor_center.1,
-                    anchor.width,
-                    anchor.height,
+                    source.x + source.width * 0.5 - node_origin.x,
+                    source.y + source.height * 0.5 - node_origin.y,
+                    source.width,
+                    source.height,
                 );
                 let absorbed_shapes: Vec<MenuShape> = absorbed
                     .iter()
-                    .filter_map(|source| MenuShape::from_window_rect(source.rect, node_origin))
+                    .filter_map(|absorbed| MenuShape::from_window_rect(absorbed.rect, node_origin))
                     .collect();
                 let morph_size = node_size;
-                let glass = super::glass_surface::control_surface_material(colors.label)
-                    .shape(LiquidShape::RoundedRect(MENU_RADIUS))
-                    .blur_radius(30.0);
-                let glass = glass
-                    .shadow_style(GlassShadow::new(
-                        Color::BLACK.with_alpha(if colors.is_dark { 0.60 } else { 0.11 }),
-                        if colors.is_dark { 32.0 } else { 26.0 },
-                        if colors.is_dark { 10.0 } else { 8.0 },
-                        0.0,
-                    ))
-                    .no_clip();
+                let glass = super::glass_surface::menu_material(colors.label, MENU_RADIUS);
                 let resize_from = Rc::clone(&resize_from_h);
                 let glow_point: Rc<Cell<Option<(f32, f32)>>> =
                     remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
@@ -1227,8 +1204,8 @@ pub fn LiquidMenu(
                                             scale_y: content_scale,
                                             transform_origin:
                                                 cranpose_ui_graphics::TransformOrigin {
-                                                    pivot_fraction_x: ((anchor.x
-                                                        + anchor.width * 0.5
+                                                    pivot_fraction_x: ((source.x
+                                                        + source.width * 0.5
                                                         - menu_left)
                                                         / menu_width)
                                                         .clamp(0.0, 1.0),
@@ -1258,7 +1235,7 @@ pub fn LiquidMenu(
                                                     let gesture = gesture.clone();
                                                     move || {
                                                         for (index, starts_section) in
-                                                            menu_display_rows(&items, opens_up)
+                                                            menu_display_rows(&items, rows_up)
                                                         {
                                                             let item = &items[index].item;
                                                             if starts_section {

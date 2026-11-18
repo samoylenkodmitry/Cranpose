@@ -3,6 +3,7 @@ mod alert_dialog;
 mod bottom_sheet;
 mod confirmation_dialog;
 mod containers;
+mod context_menu;
 mod date_picker;
 mod floating_button_interaction;
 mod glass_placeholder;

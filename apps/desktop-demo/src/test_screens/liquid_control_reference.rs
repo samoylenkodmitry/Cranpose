@@ -3,7 +3,7 @@ use cranpose::{
     liquid::prelude::*,
     local_safe_area_insets, rememberMutableStateOf,
     widgets::{Box, BoxSpec, Text},
-    Alignment, Color, Modifier,
+    Alignment, Color, Modifier, Size,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -40,10 +40,11 @@ pub(crate) enum Control {
     Confirmation,
     Toolbar,
     SwipeActions,
+    ContextMenu,
 }
 
 // The names shared with the native app's `REFERENCE_COMPONENT`.
-const NAMES: [(&str, Control); 32] = [
+const NAMES: &[(&str, Control)] = &[
     ("slider", Control::Slider),
     ("toggle", Control::Toggle),
     ("segmented", Control::Segmented),
@@ -76,6 +77,7 @@ const NAMES: [(&str, Control); 32] = [
     ("confirmation", Control::Confirmation),
     ("toolbar", Control::Toolbar),
     ("swipe-actions", Control::SwipeActions),
+    ("context-menu", Control::ContextMenu),
 ];
 
 impl Control {
@@ -177,6 +179,7 @@ fn ControlContent(control: Control, initial: f32, activations: cranpose::Mutable
         Control::Confirmation => ReferenceConfirmation(initial as usize),
         Control::Toolbar => ReferenceToolbar(initial as usize),
         Control::SwipeActions => ReferenceSwipeActions(),
+        Control::ContextMenu => ReferenceContextMenu(initial as usize),
         _ => ReferenceSurface(control, initial, activations),
     }
 }
@@ -615,6 +618,76 @@ fn ReferenceSwipeActions() {
                     Text("Content", Modifier::empty(), style);
                 },
             );
+        },
+    );
+}
+
+// A 160 by 100 tile with Copy, Share and a destructive Delete in its context
+// menu, as the native fixture shows it. Variant 0 sits in the middle of the
+// screen, 1 near its bottom edge, 2 against its left edge and 4 71 points
+// left of the middle; 3 lifts a 240 by 160 preview in place of the tile.
+#[composable]
+fn ReferenceContextMenu(variant: usize) {
+    let (x, y) = match variant {
+        1 => (0.0, 330.0),
+        2 => (-110.0, 0.0),
+        4 => (-71.0, 0.0),
+        _ => (0.0, 0.0),
+    };
+    let modifier = Modifier::empty().offset(x, y).size(Size::new(160.0, 100.0));
+    let actions = |scope: &LiquidMenuScope| {
+        scope.item(LiquidMenuItem::new("Copy"), || {});
+        scope.item(LiquidMenuItem::new("Share"), || {});
+        scope.item(LiquidMenuItem::new("Delete").destructive(), || {});
+    };
+    let photo = || {
+        ReferenceTile(
+            "Photo",
+            Size::new(160.0, 100.0),
+            liquid_colors().accent,
+            16.0,
+        );
+    };
+    if variant == 3 {
+        LiquidContextMenuWithPreview(
+            modifier,
+            "Photo options",
+            actions,
+            || {
+                ReferenceTile(
+                    "Preview",
+                    Size::new(240.0, 160.0),
+                    liquid_colors().warning,
+                    0.0,
+                );
+            },
+            photo,
+        );
+    } else {
+        LiquidContextMenu(
+            modifier,
+            LiquidShape::RoundedRect(16.0),
+            "Photo options",
+            actions,
+            photo,
+        );
+    }
+}
+
+// A `size` tile filled with `fill`, its corners rounded by `radius`, with
+// `label` in white in its middle.
+#[composable]
+fn ReferenceTile(label: &'static str, size: Size, fill: Color, radius: f32) {
+    Box(
+        Modifier::empty()
+            .size(size)
+            .background(fill)
+            .rounded_corners(radius),
+        BoxSpec::default().content_alignment(Alignment::CENTER),
+        move || {
+            let mut style = liquid_typography().body;
+            style.span_style.color = Some(Color::WHITE);
+            Text(label, Modifier::empty(), style);
         },
     );
 }

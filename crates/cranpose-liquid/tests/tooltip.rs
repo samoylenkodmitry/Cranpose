@@ -7,10 +7,10 @@
 use std::{cell::Cell, rc::Rc};
 
 use cranpose_liquid::prelude::*;
-use cranpose_testing::{
-    RobotTestRule, TestRenderer, create_headless_robot_test, robot_assertions::find_semantics_node,
-};
+use cranpose_testing::{RobotTestRule, TestRenderer, create_headless_robot_test};
 use cranpose_ui::{Box, BoxSpec, Column, ColumnSpec, FocusRequester, Modifier, Point, Rect, Size};
+
+use crate::reader::{hold, long_press_action};
 
 const WIDTH: f32 = 300.0;
 const CONTROL: f32 = 48.0;
@@ -77,14 +77,6 @@ impl Screen {
     fn tooltip(&mut self) -> Option<Rect> {
         self.robot.find_by_text("Delete").bounds()
     }
-
-    fn hold(&mut self, at: Point, millis: u64) {
-        self.robot.mouse_move(at.x, at.y);
-        self.robot.mouse_down();
-        for _ in 0..millis / 50 {
-            self.robot.advance_time(50_000_000);
-        }
-    }
 }
 
 const BELOW_TOP: Point = Point { x: 100.0, y: 100.0 };
@@ -121,7 +113,7 @@ fn the_tooltip_shows_while_the_control_has_keyboard_focus() {
 fn a_long_press_shows_the_tooltip_for_a_moment_without_a_click() {
     let mut screen = screen(BELOW_TOP);
     let center = control_center(BELOW_TOP);
-    screen.hold(center, 600);
+    hold(&mut screen.robot, center.x, center.y, 600);
     screen.robot.mouse_up();
     // Away from the control, so hover does not keep it.
     screen.robot.mouse_move(5.0, 290.0);
@@ -148,18 +140,7 @@ fn a_screen_reader_asks_for_the_tooltip_by_name() {
     let mut screen = screen(BELOW_TOP);
     screen.robot.shell_mut().set_semantics_enabled(true);
     screen.robot.wait_for_idle();
-    let tree = screen
-        .robot
-        .shell_mut()
-        .semantics_tree()
-        .expect("semantics");
-    let node = find_semantics_node(tree.root(), &|node| node.details().on_long_click.is_some())
-        .expect("the control offers its tooltip");
-    assert_eq!(
-        node.details().on_long_click_label.as_deref(),
-        Some("Show tooltip")
-    );
-    let action = node.details().on_long_click.clone().expect("long press");
+    let action = long_press_action(&mut screen.robot, "Show tooltip");
     assert!(action.invoke());
     screen.robot.wait_for_idle();
     assert!(screen.tooltip().is_some());
