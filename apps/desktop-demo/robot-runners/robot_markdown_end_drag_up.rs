@@ -325,16 +325,9 @@ fn select_bottom_probe(body: &str) -> String {
         return "Line 260".to_string();
     }
 
-    let normalized = fallback.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.len() <= 96 {
-        return normalized;
-    }
-
-    let mut probe_end = 96usize;
-    while !normalized.is_char_boundary(probe_end) {
-        probe_end -= 1;
-    }
-    normalized[..probe_end].to_string()
+    let mut normalized = fallback.split_whitespace().collect::<Vec<_>>().join(" ");
+    normalized.truncate(normalized.floor_char_boundary(96));
+    normalized
 }
 
 fn load_fixture() -> FixtureData {

@@ -1429,20 +1429,6 @@ fn set_text_selection_counted(
 }
 
 /// The byte offset at or before `byte` that starts a character.
-#[cfg(any(
-    test,
-    all(feature = "desktop-shell", feature = "renderer-wgpu"),
-    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
-    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
-))]
-fn floor_char_boundary(text: &str, byte: usize) -> usize {
-    let mut byte = byte.min(text.len());
-    while !text.is_char_boundary(byte) {
-        byte -= 1;
-    }
-    byte
-}
-
 /// How many UTF-16 units the text holds before the byte offset.
 #[cfg(any(
     test,
@@ -1450,7 +1436,7 @@ fn floor_char_boundary(text: &str, byte: usize) -> usize {
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
 pub(crate) fn utf16_offset(text: &str, byte: usize) -> usize {
-    text[..floor_char_boundary(text, byte)]
+    text[..text.floor_char_boundary(byte)]
         .encode_utf16()
         .count()
 }
@@ -1477,7 +1463,7 @@ pub(crate) fn byte_offset_for_utf16(text: &str, units: usize) -> usize {
 /// How many characters the text holds before the byte offset.
 #[cfg(any(test, all(feature = "desktop-shell", feature = "renderer-wgpu")))]
 pub(crate) fn char_offset(text: &str, byte: usize) -> usize {
-    text[..floor_char_boundary(text, byte)].chars().count()
+    text[..text.floor_char_boundary(byte)].chars().count()
 }
 
 /// The byte offset where the character at an index starts, or the end of the
