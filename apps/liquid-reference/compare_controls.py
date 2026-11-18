@@ -82,6 +82,10 @@ def compare(native, cranpose, output, native_extra=(), cranpose_extra=(), prefix
             elif name.startswith("control-toolbar-"):
                 # The capsules and their shadows, above the home indicator.
                 region = (0, 770, 402, 860)
+            elif name.startswith("control-context-menu-"):
+                # The dimmed screen below the status bar and above the home
+                # indicator: the lifted preview and the menu move over all of it.
+                region = (0, 110, 402, 840)
             elif name.startswith("control-confirmation-"):
                 # Native's popover frame for each source, with 45 points for the shadow.
                 region = CONFIRMATION_REGIONS[name.rsplit("-", 1)[1]]

@@ -22,7 +22,7 @@ fn a_scope_keeps_actions_with_their_items() {
 
 #[test]
 fn dropdown_spec_builders_preserve_menu_configuration() {
-    let menu = LiquidMenuSpec { width: 180.0 };
+    let menu = LiquidMenuSpec::new(180.0);
     let absorbed = LiquidMenuAbsorbedSource::new(
         Rect::from_origin_size(Point::ZERO, Size::new(44.0, 44.0)),
         crate::widgets::GlassButtonSpec::default(),

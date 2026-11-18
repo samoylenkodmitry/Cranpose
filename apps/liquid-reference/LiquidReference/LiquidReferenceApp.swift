@@ -281,6 +281,8 @@ private struct ReferenceControl: View {
                 .accessibilityIdentifier("reference-page-control")
         case "toolbar":
             ReferenceToolbar(variant: selection).ignoresSafeArea()
+        case "context-menu":
+            ReferenceContextMenu(variant: selection).accessibilityIdentifier("reference-context-menu")
         case "swipe-actions":
             ReferenceSwipeRow().frame(width: 300, height: 44).accessibilityIdentifier("reference-swipe-actions")
         default:
@@ -420,6 +422,36 @@ private struct ReferenceToolbar: UIViewControllerRepresentable {
 // A list row with Flag and a destructive Delete at its trailing edge and Pin
 // at its leading edge. A full swipe only opens the row, so a test's drag
 // shows the actions instead of running one.
+// A 160 by 100 tile with a context menu of three actions. Variant 0 sits
+// in the middle of the screen, 1 near its bottom edge and 2 against its left
+// edge. Variant 3 lifts a custom 240 by 160 preview in place of the tile.
+// Variant 4 sits 71 points left of the middle, so its preview fits whole
+// while a menu centred under it would not.
+private struct ReferenceContextMenu: View {
+    let variant: Int
+
+    var body: some View {
+        let tile = RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.blue)
+            .overlay(Text("Photo").foregroundStyle(.white))
+            .frame(width: 160, height: 100)
+        let actions = Group {
+            Button("Copy") {}
+            Button("Share") {}
+            Button("Delete", role: .destructive) {}
+        }
+        switch variant {
+        case 1: tile.contextMenu { actions }.offset(y: 330)
+        case 2: tile.contextMenu { actions }.offset(x: -110)
+        case 4: tile.contextMenu { actions }.offset(x: -71)
+        case 3:
+            tile.contextMenu { actions } preview: {
+                Text("Preview").foregroundStyle(.white).frame(width: 240, height: 160).background(Color.orange)
+            }
+        default: tile.contextMenu { actions }
+        }
+    }
+}
+
 private struct ReferenceSwipeRow: UIViewRepresentable {
     final class Coordinator: NSObject, UITableViewDataSource, UITableViewDelegate {
         func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 1 }

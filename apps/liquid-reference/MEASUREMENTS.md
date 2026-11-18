@@ -517,3 +517,34 @@ A plain `UITableView` row 300 by 44 points, its trailing actions Delete (destruc
 
 `LiquidSwipeActions` lays the pills out by that rule and moves its content with `Modifier::anchored_draggable`, Compose's anchored drag: a release faster than 125 points a second goes to the next anchor in its direction, a slower one to the closest. The pills ride in from their edge with the content. Against native over the open trailing and leading states, 2 schemes and 2 backdrops, the eight states differ by 0.12 to 0.24, and every pill edge lands within a third of a point. The drag phase, the release thresholds, the full swipe and what closes an open row are not captured yet.
 
+## Context menu, native, 2026-11-18
+
+`testContextMenu`, `testContextMenuNearBottom`, `testContextMenuNearLeft`, `testContextMenuPreview` and `testContextMenuLeftOfMiddle` hold a 160 by 100 tile for 1.2 seconds, then capture its context menu at rest. The tile's centre sits at the press point: (201, 451), (201, 781), (91, 451), (201, 451) under a custom 240 by 160 preview, and (130, 451).
+
+- The rest of the screen dims with black, 20% in light and 48% in dark: the checkerboard reads 0.80 and 0.52 of its undimmed value in every channel, with every square edge as sharp as before. Nothing blurs.
+- The tile lifts at 1.15 times its size about its centre, 184 by 115, and keeps its own corners, 16 points scaled to 18.4. A soft shadow follows its rounded outline: the light backdrop reads 30 levels darker at the edge, 22 levels at the corner and 7 levels 27 points out.
+- The lifted tile keeps 16 points inside the safe area. Near the bottom it rises from a centre at 781 to 766.5, its bottom edge at 824, 50 points above the screen's edge. Against the left edge it moves from x 11 to 16.
+- A custom preview keeps its own size, 240 by 160, centred on the tile, with its corners rounded by about 32 points.
+- The menu is the pull-down menu's panel: 250 by 146, rows 42 points apart, 10 points of inset at the top and bottom, labels at 29 points from its left edge, Delete in red. It sits 16 points below the lifted tile, or 16 points above it when no room is left below. Its rows keep their order on both sides.
+- The menu centres on the lifted tile when that keeps it 16 points inside the screen. Otherwise it lines up with the tile's edge on the side without room: at 38 for the tile lifted to 38..222, where a centred menu would start at 5.
+- The menu's glass samples the lifted tile: blue runs into its top edge over the tile.
+
+`testDarkOpenMenu` fails on this simulator: Copy's centre sits at x 200.33 against 201 ± 0.5. Its capture holds.
+
+## Liquid context menu, 2026-11-18
+
+`LiquidContextMenu` lifts its content by that rule, and `LiquidContextMenuWithPreview` lifts a preview of its own. A long press moves the content into an overlay, so it keeps its state, and dims the screen. `LiquidMenu` opens beside it under `LiquidMenuPlacement::BesideAnchor`, 16 points away. In all five variants the twin's lifted tile and preview land on native's pixels, and every menu edge lands within a third of a point of native's.
+
+The menu takes a glass of its own, fitted to the native menus. In light its face reads 235 over the dimmed solid backdrop (native 235.6) and 210 over the dimmed checkerboard (208.6), in dark 32 over black (32.9) and 96 over the checkerboard (96.3). Its chroma over the checkerboard is 22.7 in light (22.0) and 18.0 in dark (18.0). The pull-down menu shares the glass: its light face over white rises from 247 to 253 (native 254), and against native it falls from 1.242 to 0.530 in light and from 0.465 to 0.386 in dark.
+
+Mean RGB difference against native, x 0–402 by y 110–840 points:
+
+| Variant | Light solid | Light checkerboard | Dark solid | Dark checkerboard |
+| --- | --- | --- | --- | --- |
+| Middle | 0.96 | 1.06 | 0.77 | 1.75 |
+| Near the bottom edge | 0.80 | 0.90 | 0.88 | 1.75 |
+| Against the left edge | 0.93 | 1.04 | 0.76 | 1.70 |
+| Custom preview | 1.11 | 1.24 | 0.77 | 1.82 |
+| 71 points left of the middle | 0.95 | 1.05 | 0.76 | 1.73 |
+
+The rest: native's menu glass picks up the lifted tile's blue along its top edge and gives its face a cool cast of 4 levels; its rim draws a thin dark line; its dark Delete label over the checkerboard reads paler. No motion is captured yet: the lift, the menu's growth and the close.

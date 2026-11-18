@@ -8,8 +8,13 @@ use cranpose_ui_layout::Alignment;
 
 use crate::material::{
     Glass, GlassDynamics, GlassFaceResponse, GlassFaceTone, GlassKeyFill, GlassRefraction,
-    GlassShadow, GlassSpecularHighlight, LiquidModifierExt,
+    GlassShadow, GlassSpecularHighlight, LiquidModifierExt, LiquidShape,
 };
+
+// A light foreground marks a dark scheme.
+fn is_light(foreground: Color) -> bool {
+    foreground.r() * 0.2126 + foreground.g() * 0.7152 + foreground.b() * 0.0722 > 0.5
+}
 
 pub(crate) fn surface_material(foreground: Color) -> Glass {
     Glass::regular()
@@ -52,12 +57,45 @@ pub(crate) fn control_surface_material(foreground: Color) -> Glass {
     control_material(foreground, false)
 }
 
+// The glass of a menu panel with corners of `radius`, fitted to the iOS 27
+// menus. In light the face reads 254 over white. Over the dimmed screen of a
+// context menu it reads 235 over a backdrop of 204 and 208 over the dimmed
+// checkerboard. In dark it reads 32 over black and 96 over the dimmed
+// checkerboard. Over the checkerboard its chroma averages 22 levels in light
+// and 18 in dark.
+pub(crate) fn menu_material(foreground: Color, radius: f32) -> Glass {
+    let dark = is_light(foreground);
+    control_surface_material(foreground)
+        .face_tone(GlassFaceTone {
+            black: if dark { 0.131 } else { 0.517 },
+            white: if dark { 1.0065 } else { 1.035 },
+            saturation: 0.93,
+            max_luminance: if dark { 0.6 } else { 0.96 },
+        })
+        .face_response(GlassFaceResponse {
+            // The native light menu face on white keeps 254.
+            gain: if dark { 0.97 } else { 0.996 },
+            start_dp: 1.0 / 3.0,
+            end_dp: 2.0 / 3.0,
+            illumination: 0.0,
+        })
+        .shape(LiquidShape::RoundedRect(radius))
+        .blur_radius(22.0)
+        .shadow_style(GlassShadow::new(
+            Color::BLACK.with_alpha(if dark { 0.60 } else { 0.11 }),
+            if dark { 32.0 } else { 26.0 },
+            if dark { 10.0 } else { 8.0 },
+            0.0,
+        ))
+        .no_clip()
+}
+
 pub(crate) fn card_surface_material(foreground: Color) -> Glass {
     control_material(foreground, true)
 }
 
 pub(crate) fn floating_material(foreground: Color, height: f32) -> Glass {
-    let dark = foreground.r() * 0.2126 + foreground.g() * 0.7152 + foreground.b() * 0.0722 > 0.5;
+    let dark = is_light(foreground);
     let mut glass = control_surface_material(foreground)
         .blur_radius(0.0)
         .tint_amount(
@@ -133,7 +171,7 @@ pub(crate) fn floating_dynamics(
 }
 
 fn control_material(foreground: Color, card: bool) -> Glass {
-    let dark = foreground.r() * 0.2126 + foreground.g() * 0.7152 + foreground.b() * 0.0722 > 0.5;
+    let dark = is_light(foreground);
     surface_material(foreground)
         .key_fill(GlassKeyFill {
             height_dp: 0.533_333_36,

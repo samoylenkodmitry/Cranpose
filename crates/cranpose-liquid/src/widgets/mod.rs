@@ -11,6 +11,7 @@ mod color_well;
 mod confirmation_dialog;
 mod content_scope;
 mod content_unavailable_view;
+mod context_menu;
 mod control_group;
 mod control_lens;
 mod control_material;
@@ -27,6 +28,7 @@ mod language_picker;
 mod lens_motion;
 mod menu;
 mod menu_morph;
+mod menu_placement;
 mod nav_bar;
 mod page_control;
 mod pop_up_button;
@@ -69,6 +71,7 @@ pub use chip::{LiquidActionChip, LiquidChip};
 pub use color_well::LiquidColorWell;
 pub use confirmation_dialog::LiquidConfirmationDialog;
 pub use content_unavailable_view::LiquidContentUnavailableView;
+pub use context_menu::{LiquidContextMenu, LiquidContextMenuWithPreview};
 pub use control_group::{LiquidControlGroup, LiquidControlGroupScope};
 pub use date_picker::{
     CalendarDate, LiquidDatePicker, LiquidDatePickerState, days_in_month,
@@ -88,6 +91,7 @@ pub use menu::{
     LiquidMenuAbsorbedSource, LiquidMenuGesture, LiquidMenuIconButton, LiquidMenuItem,
     LiquidMenuScope, LiquidMenuSpec, liquid_menu_trigger_input, rememberLiquidMenuGesture,
 };
+pub use menu_placement::LiquidMenuPlacement;
 pub use nav_bar::{LiquidNavBar, LiquidNavBarSpec, liquid_nav_bar_expanded_height};
 pub use page_control::LiquidPageControl;
 pub use pop_up_button::LiquidPopUpButton;
