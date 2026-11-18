@@ -1535,6 +1535,10 @@ fn HostStatus() {
 }
 ```
 
+A screen can read `local_lifecycle_state().current()` instead, as a Compose screen reads `LocalLifecycleOwner`.
+It composes again on each transition. A screen that does not read the local stays as it is.
+No shell installs a provider. The default of the local follows the host. An app that never reads the local pays nothing.
+
 ### Pair resource use with visibility
 
 Add `cranpose-coroflow` for `LifecycleStartEffect` and `LifecycleResumeEffect`.

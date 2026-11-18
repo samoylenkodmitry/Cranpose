@@ -1,6 +1,8 @@
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 
 use cranpose_core::CompositionLocal;
+
+use crate::lifecycle_source::LifecycleSource;
 
 #[derive(Default)]
 pub(crate) struct ServiceLocals {
@@ -19,6 +21,8 @@ pub(crate) struct ServiceLocals {
     pub(crate) theme: OnceCell<CompositionLocal<crate::theme::SystemTheme>>,
     pub(crate) uri_handler: OnceCell<CompositionLocal<crate::uri_handler::UriHandlerRef>>,
     pub(crate) lifecycle: OnceCell<CompositionLocal<crate::host::LifecycleState>>,
+    // One per runtime of the thread that read `lifecycle`.
+    pub(crate) lifecycle_sources: RefCell<Vec<LifecycleSource>>,
     pub(crate) saveable_scope: OnceCell<CompositionLocal<crate::preferences::SaveableScope>>,
 }
 
