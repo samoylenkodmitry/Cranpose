@@ -1,5 +1,5 @@
 use super::*;
-use crate::space::{Mobility, PanelKind, Shape};
+use crate::space::{Mobility, PanelKind, Ride, Shape};
 
 // A panel of 800 by 500 dp a meter ahead. Its corner handle stands 0.44 meters to the right of
 // its center and 0.29 meters below it.
@@ -13,6 +13,7 @@ fn panel() -> PanelSlot {
         shape: Shape::Flat,
         resize: Some(ResizeLimits::new()),
         room: [800.0, 500.0],
+        ride: Ride::Free,
     }
 }
 

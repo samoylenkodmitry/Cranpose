@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     Ray,
     handle::HandleKind,
-    space::{Mobility, PanelKind, Shape},
+    space::{Mobility, PanelKind, Ride, Shape},
 };
 
 fn close(a: [f32; 3], b: [f32; 3]) -> bool {
@@ -27,6 +27,7 @@ fn slot() -> PanelSlot {
         shape: Shape::Flat,
         resize: None,
         room: [800.0, 500.0],
+        ride: Ride::Free,
     }
 }
 
