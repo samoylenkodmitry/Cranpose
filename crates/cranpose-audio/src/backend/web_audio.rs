@@ -1,10 +1,11 @@
 use std::{
     cell::{Cell, RefCell},
     rc::{Rc, Weak},
+    time::Duration,
 };
 
 use cranpose_services::AudioError;
-use wasm_bindgen::{JsCast, JsValue, closure::Closure};
+use wasm_bindgen::{JsCast, JsValue, closure::Closure, prelude::wasm_bindgen};
 use web_sys::{AudioContext, AudioContextState, AudioScheduledSourceNode};
 
 use crate::backend::{AudioSink, NOMINAL_CHANNELS, Renderer};
@@ -23,6 +24,21 @@ const START_MARGIN_SECONDS: f64 = 0.03;
 
 // A browser starts a context only after the user has acted on the page.
 const UNLOCK_EVENTS: [&str; 3] = ["pointerdown", "pointerup", "keydown"];
+
+// An `AudioContext` seen through the two latency properties that web-sys has no binding for. A
+// browser that lacks one gives `undefined`, which arrives as NaN.
+#[wasm_bindgen]
+extern "C" {
+    type LatencyContext;
+
+    // `AudioContext.baseLatency` in seconds
+    #[wasm_bindgen(method, getter, js_name = baseLatency)]
+    fn base_latency(this: &LatencyContext) -> f64;
+
+    // `AudioContext.outputLatency` in seconds
+    #[wasm_bindgen(method, getter, js_name = outputLatency)]
+    fn output_latency(this: &LatencyContext) -> f64;
+}
 
 thread_local! {
     // The open streams; a sink names its stream by the slot it sits in.
@@ -119,6 +135,20 @@ impl Stream {
         }
         let _ = self.context.close();
     }
+
+    // The context's own processing latency plus the latency of the browser's output, the
+    // sum that the Web Audio specification gives for the delay from a block's start time to the
+    // sound. A browser that reports neither, or only zeros, gives no latency.
+    fn output_latency(&self) -> Option<Duration> {
+        let context: &LatencyContext = self.context.unchecked_ref();
+        let seconds = [context.base_latency(), context.output_latency()]
+            .into_iter()
+            .filter(|seconds| seconds.is_finite())
+            .sum();
+        Duration::try_from_secs_f64(seconds)
+            .ok()
+            .filter(|latency| !latency.is_zero())
+    }
 }
 
 pub(crate) fn open(renderer: Box<dyn Renderer>) -> Result<Box<dyn AudioSink>, AudioError> {
@@ -193,9 +223,12 @@ struct WebAudioSink {
 }
 
 impl WebAudioSink {
+    fn stream(&self) -> Option<Rc<Stream>> {
+        STREAMS.with_borrow(|streams| streams.get(self.slot).cloned().flatten())
+    }
+
     fn with_stream(&self, run: impl FnOnce(&Stream)) {
-        let stream = STREAMS.with_borrow(|streams| streams.get(self.slot).cloned().flatten());
-        if let Some(stream) = stream {
+        if let Some(stream) = self.stream() {
             run(&stream);
         }
     }
@@ -212,6 +245,14 @@ impl AudioSink for WebAudioSink {
 
     fn park(&self) {
         self.with_stream(Stream::pause);
+    }
+
+    fn output_latency(&self) -> Option<Duration> {
+        self.stream()?.output_latency()
+    }
+
+    fn frames_per_burst(&self) -> Option<u32> {
+        Some(BLOCK_FRAMES as u32)
     }
 }
 

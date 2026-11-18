@@ -28,6 +28,7 @@ use super::{
     keyboard::{self, AndroidSoftKeyboard},
     overlay_window,
     pipeline_cache::{keep_pipeline_cache, name_pipeline_cache_file, seed_pipeline_cache},
+    shell_creation::share_gpu_context,
     surface::{AndroidSurfaceError, create_android_wgpu_surface},
     text_input::{self, AndroidImeEvent},
 };
@@ -41,12 +42,12 @@ use crate::{
     },
 };
 
-struct GpuResources {
+pub(super) struct GpuResources {
     surface: Option<wgpu::Surface<'static>>,
     native_window_ptr: Option<NonNull<c_void>>,
-    adapter: Arc<wgpu::Adapter>,
-    device: Arc<wgpu::Device>,
-    queue: Arc<wgpu::Queue>,
+    pub(super) adapter: Arc<wgpu::Adapter>,
+    pub(super) device: Arc<wgpu::Device>,
+    pub(super) queue: Arc<wgpu::Queue>,
     surface_format: wgpu::TextureFormat,
     backend: wgpu::Backend,
     config: wgpu::SurfaceConfiguration,
@@ -869,21 +870,6 @@ fn record_presented_frame(
     }
 }
 
-/// The device Cranpose asks an Android adapter for.
-pub(crate) fn android_device(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'static> {
-    wgpu::DeviceDescriptor {
-        label: Some("Android Device"),
-        // Display timing lets the frame pacer see when frames reach the
-        // screen; see `android_display_timing`.
-        required_features: cranpose_render_wgpu::optional_device_features(adapter)
-            | (adapter.features() & wgpu::Features::VULKAN_GOOGLE_DISPLAY_TIMING),
-        required_limits: crate::gpu_limits::mobile_device_limits(adapter.limits()),
-        experimental_features: wgpu::ExperimentalFeatures::disabled(),
-        memory_hints: crate::gpu_limits::mobile_memory_hints(),
-        trace: wgpu::Trace::Off,
-    }
-}
-
 struct AndroidGpuSetup {
     resources: GpuResources,
     surface: Option<wgpu::Surface<'static>>,
@@ -926,11 +912,12 @@ fn init_gpu_threaded_for_android(
 /// one drew to, and hands it to the renderer: the composition, its state and
 /// its input stay. When devices keep getting lost without a frame, the
 /// activity finishes.
-// What an app shell on Android is built from: its content, the app's
-// settings, the frame driver, the registry of host windows and whether
-// frames present on their own thread.
+// What an app shell on Android is built from: its content, the GPU context
+// that the content reads, the app's settings, the frame driver, the registry
+// of host windows and whether frames present on their own thread.
 pub(super) struct ShellInputs<'a, F> {
     pub(super) content: &'a Rc<RefCell<F>>,
+    pub(super) gpu: &'a Rc<RefCell<Option<crate::GpuContext>>>,
     pub(super) settings: &'a AppSettings,
     frame_driver: &'a AndroidFrameDriver,
     pub(super) host_window_registry: &'a Rc<android_host_window::AndroidHostWindowRegistry>,
@@ -1058,6 +1045,7 @@ where
         width,
         height,
     )?;
+    share_gpu_context(inputs.gpu, instance, &setup.resources, app_shell.as_mut());
 
     let mut surface_handed = false;
     if app_shell.is_none() {
@@ -1238,7 +1226,7 @@ fn create_android_gpu_resources(
 
     name_pipeline_cache_file(&adapter_info);
     seed_pipeline_cache();
-    let (device, queue) = pollster::block_on(adapter.request_device(&android_device(&adapter)))?;
+    let (device, queue) = super::hardware_buffer_device::request_device(&adapter)?;
 
     let device = Arc::new(device);
     let queue = Arc::new(queue);
@@ -1440,11 +1428,7 @@ pub fn run(
         log::info!("[present-runtime] threaded present enabled");
     }
 
-    super::file_picker::register(app.clone());
-    super::writable_folder::register(app.clone());
-    super::services::register(app.clone(), &settings.capabilities);
-    super::host::install_activity(app.clone());
-    crate::process_info::install();
+    super::services::register_all(&app, &settings);
 
     read_android_configuration(&app);
 
@@ -1474,6 +1458,7 @@ pub fn run(
     let host_window_registry = Rc::new(android_host_window::AndroidHostWindowRegistry::default());
     let shell_inputs = ShellInputs {
         content: &content,
+        gpu: &Rc::default(),
         settings: &settings,
         frame_driver: &android_frame_driver,
         host_window_registry: &host_window_registry,

@@ -1,8 +1,10 @@
+use std::{sync::Arc, time::Duration};
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cranpose_services::AudioError;
 
 use crate::{
-    backend::{AudioSink, Renderer},
+    backend::{AudioSink, Renderer, atomic_duration::AtomicDuration},
     mixer::RenderStatus,
 };
 
@@ -24,10 +26,13 @@ pub(crate) fn open(mut renderer: Box<dyn Renderer>) -> Result<Box<dyn AudioSink>
 
     let error_callback = |error| log::warn!("cranpose audio stream error: {error}");
 
+    let latency = Arc::new(AtomicDuration::new());
+    let callback_latency = Arc::clone(&latency);
     let stream = match sample_format {
         cpal::SampleFormat::F32 => device.build_output_stream(
             config,
-            move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+            move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
+                publish_latency(&callback_latency, info);
                 let _ = renderer.render(data);
             },
             error_callback,
@@ -37,7 +42,8 @@ pub(crate) fn open(mut renderer: Box<dyn Renderer>) -> Result<Box<dyn AudioSink>
             let mut scratch = vec![0.0f32; SCRATCH_SAMPLES];
             device.build_output_stream(
                 config,
-                move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
+                move |data: &mut [i16], info: &cpal::OutputCallbackInfo| {
+                    publish_latency(&callback_latency, info);
                     let _ = render_into_integer(
                         &mut *renderer,
                         &mut scratch,
@@ -59,7 +65,29 @@ pub(crate) fn open(mut renderer: Box<dyn Renderer>) -> Result<Box<dyn AudioSink>
     })?;
 
     log::debug!("cranpose audio: cpal stream at {sample_rate} Hz, {channels} channels");
-    Ok(Box::new(CpalSink { stream }))
+    // The buffer size is read once. Reading it again asks the platform on each call, which takes a
+    // lock that `suspend` and `resume` hold.
+    let frames_per_burst = stream.buffer_size().ok().filter(|&frames| frames > 0);
+    Ok(Box::new(CpalSink {
+        stream,
+        latency,
+        frames_per_burst,
+    }))
+}
+
+// Publishes the time from the start of this callback to the playback of its first frame. The host
+// computes it from its own device buffer and the delay of the device. Core Audio adds the device
+// latency and the safety offset to the buffer. WASAPI and ALSA read the delay of their stream. A
+// host that gives no delay reports the two instants as equal. A latency of zero is no latency, so
+// the sink keeps reporting `None`.
+fn publish_latency(latency: &AtomicDuration, info: &cpal::OutputCallbackInfo) {
+    let timestamp = info.timestamp();
+    let delay = timestamp
+        .playback
+        .saturating_duration_since(timestamp.callback);
+    if !delay.is_zero() {
+        latency.store(delay);
+    }
 }
 
 fn unwritable_sample_format(format: cpal::SampleFormat) -> AudioError {
@@ -94,6 +122,8 @@ fn render_into_integer<T>(
 
 struct CpalSink {
     stream: cpal::Stream,
+    latency: Arc<AtomicDuration>,
+    frames_per_burst: Option<u32>,
 }
 
 impl AudioSink for CpalSink {
@@ -113,5 +143,13 @@ impl AudioSink for CpalSink {
         if let Err(error) = self.stream.pause() {
             log::warn!("failed to release the idle output stream: {error}");
         }
+    }
+
+    fn output_latency(&self) -> Option<Duration> {
+        self.latency.load()
+    }
+
+    fn frames_per_burst(&self) -> Option<u32> {
+        self.frames_per_burst
     }
 }

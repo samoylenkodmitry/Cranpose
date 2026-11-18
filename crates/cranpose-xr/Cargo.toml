@@ -1,0 +1,78 @@
+[package]
+name = "cranpose-xr"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+description = "Cranpose composables for headsets: panels in 3D through OpenXR"
+
+[lints]
+workspace = true
+
+[features]
+# The OpenXR backend: an app that starts as an immersive app on a headset. On
+# Android it runs on a headset such as a Meta Quest and draws through GLES. On
+# Linux and Windows it runs on the headset of any OpenXR runtime (SteamVR,
+# Monado, Meta Link) and draws through Vulkan. Elsewhere the composables draw
+# flat.
+openxr = [
+    "cranpose/renderer-wgpu",
+    "dep:openxr",
+    "dep:wgpu",
+    "dep:pollster",
+    "dep:khronos-egl",
+    "dep:glow",
+    "dep:android-activity",
+    "dep:ash",
+    "dep:thiserror",
+    "dep:libc",
+    "dep:windows-sys",
+]
+
+# Times the streamed scenes' passes on the CPU and the GPU, and logs the cost once a second. Off, the
+# passes run with no timing.
+stream-costs = ["openxr"]
+
+[dependencies]
+cranpose = { workspace = true }
+cranpose-core = { workspace = true }
+log = "0.4"
+
+# The OpenXR backend needs the platform side of Cranpose: the activity on
+# Android, and on a desktop the flat window that `run` opens when the machine
+# has no headset. A feature cannot depend on the target, so the target names it.
+# macOS has no headset runtime, so `run` there opens the flat window.
+[target.'cfg(target_os = "android")'.dependencies]
+cranpose = { workspace = true, features = ["android"] }
+openxr = { version = "0.22", optional = true }
+khronos-egl = { version = "6", features = ["dynamic"], optional = true }
+wgpu = { workspace = true, optional = true, features = ["gles", "std"] }
+pollster = { version = "1.0.1", optional = true }
+android-activity = { workspace = true, optional = true }
+libc = { version = "0.2", optional = true }
+glow = { version = "0.18", optional = true }
+
+[target.'cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))'.dependencies]
+cranpose = { workspace = true, features = ["desktop"] }
+thiserror = { version = "2.0.21", optional = true }
+
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+openxr = { version = "0.22", optional = true }
+wgpu = { workspace = true, optional = true, features = ["vulkan", "std"] }
+pollster = { version = "1.0.1", optional = true }
+ash = { version = "0.38", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { version = "0.2", optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", optional = true, features = ["Win32_System_Performance"] }
+
+[dev-dependencies]
+cranpose-testing = { path = "../cranpose-testing" }

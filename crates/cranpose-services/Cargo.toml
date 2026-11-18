@@ -132,8 +132,17 @@ reqwest = { version = "0.13.5", default-features = false, features = ["blocking"
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "native-tls"], optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
+libc = "0.2"
+ndk = { version = "0.9.0", default-features = false, features = ["media"] }
+ndk-sys = { version = "0.6.0", features = ["media"] }
 webbrowser = { version = "1.2.7", optional = true }
 webpki-root-certs = { version = "1.0.12", optional = true }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "objc2", "CFArray", "CFDictionary", "CFNumber", "CFString", "CFBase", "CFCGTypes"] }
+objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "objc2", "objc2-core-video", "CMFormatDescription", "CMSampleBuffer", "CMBlockBuffer", "CMTime"] }
+objc2-core-video = { version = "0.3.2", default-features = false, features = ["std", "objc2", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn"] }
+objc2-video-toolbox = { version = "0.3.2", default-features = false, features = ["std", "objc2", "objc2-core-media", "objc2-core-video", "VTDecompressionSession", "VTDecompressionProperties", "VTSession", "VTErrors"] }
 
 [dev-dependencies]
 # Path-only dev-dep: stripped from the published manifest. Turns on the

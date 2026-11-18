@@ -78,14 +78,15 @@ fn prepare_after_update(data_dir: &Path) {
     };
     let info = adapter.get_info();
     super::name_pipeline_cache_file(&info);
-    let (device, queue) =
-        match pollster::block_on(adapter.request_device(&super::android_device(&adapter))) {
-            Ok(device) => device,
-            Err(error) => {
-                log::warn!("[pipeline-cache] no device to prepare pipelines on: {error}");
-                return;
-            }
-        };
+    let (device, queue) = match pollster::block_on(
+        adapter.request_device(&super::hardware_buffer_device::android_device(&adapter)),
+    ) {
+        Ok(device) => device,
+        Err(error) => {
+            log::warn!("[pipeline-cache] no device to prepare pipelines on: {error}");
+            return;
+        }
+    };
     let mut renderer = WgpuRenderer::default();
     renderer.init_gpu(cranpose_render_wgpu::GpuTarget {
         device: Arc::new(device),

@@ -1043,6 +1043,29 @@ android-coroflow: _disk-guard
       -PcranposeLabel="Coroflow Notes" -PcranposeApplicationId=io.cranpose.coroflow \
       -PcranposeServices=
 
+# Build the player demo for Android: apps/player-demo through the same Android project. It plays
+# the H.264 and HEVC test clips through the hardware decoder and PlayerSurface.
+android-player: _disk-guard
+    cd apps/android-demo/android && ../../../scripts/ci/with_host_lock.sh --shared \
+      ./gradlew --no-daemon :app:assembleRelease \
+      -PcranposeCargoPackage=player-demo-android -PcranposeLibraryName=player_demo_app \
+      -PcranposeLabel="Player demo" -PcranposeApplicationId=dev.cranpose.playerdemo \
+      -PcranposeServices=
+
+# Build the XR demo for headsets such as a Meta Quest: apps/xr-demo through the
+# same Android project, as an immersive app.
+android-xr: _disk-guard
+    cd apps/android-demo/android && ../../../scripts/ci/with_host_lock.sh --shared \
+      ./gradlew --no-daemon :app:assembleRelease \
+      -PcranposeCargoPackage=xr-demo -PcranposeLibraryName=xr_demo \
+      -PcranposeLabel="Cranpose XR" -PcranposeApplicationId=dev.cranpose.xrdemo \
+      -PcranposeServices=xr
+
+# Run apps/xr-demo against Monado's simulated headset with its null compositor and print the
+# frames it ran. Needs `monado-service` and the OpenXR loader on the machine.
+xr-smoke seconds="8":
+    scripts/ci/with_host_lock.sh --shared scripts/dev/xr_monado_smoke.sh {{seconds}}
+
 # Build the shippable Android release artifact: every architecture it carries.
 # `android` above builds the one a development device runs, because each extra
 # architecture is another full native build of the workspace, run in turn.

@@ -5,6 +5,7 @@ extern crate self as cranpose;
 
 #[cfg(feature = "image-loading")]
 mod async_image;
+mod player_surface;
 #[cfg(feature = "localization")]
 mod system_languages;
 #[cfg(feature = "localization")]
@@ -19,6 +20,8 @@ pub mod android;
 pub mod embedded_view;
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
 pub use cranpose_app_shell::{TouchRouter, TouchSample};
+#[cfg(feature = "renderer-wgpu")]
+mod cover_pipeline;
 #[cfg(feature = "renderer-wgpu")]
 mod external_frames;
 #[cfg(feature = "renderer-wgpu")]
@@ -50,6 +53,8 @@ mod offscreen_instance;
 mod scoped_weak_stack;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 pub use android::file_picker::open_content_uri;
+#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+pub use android::finish::finish_activity;
 #[cfg(any(
     test,
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
@@ -239,6 +244,7 @@ pub use cranpose_media::{SoftwareMediaPlayer, path_from_uri, uri_for_path};
 pub use cranpose_services::isSystemInDarkTheme;
 pub use cranpose_services::*;
 pub use cranpose_ui::*;
+pub use player_surface::PlayerSurface;
 
 static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
@@ -387,7 +393,7 @@ pub mod prelude {
     pub use crate::{
         AndroidOverlayWindowOptions, AppFonts, AppLauncher, AppSettings, WebView, WebViewEvent,
         WindowConfig, WindowModifierExt, WindowResizeDirection, WindowState, composition_api::*,
-        rememberWindowState, rememberWindowStateAt,
+        player_surface::PlayerSurface, rememberWindowState, rememberWindowStateAt,
     };
     #[cfg(all(
         feature = "desktop-menus",

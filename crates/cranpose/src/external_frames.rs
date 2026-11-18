@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use cranpose_ui::{ExternalTexture, ImageBitmap};
 
-use crate::GpuContext;
+use crate::{GpuContext, cover_pipeline::cover_pipeline};
 
 /// The most textures one [`ExternalFrames`] holds: the frame a writer
 /// prepares, the one it renders, the one it published and the one shown. An
@@ -41,10 +41,20 @@ pub struct FrameTexture {
     view: wgpu::TextureView,
 }
 
+// Where the textures of a ring come from.
+enum Textures {
+    // The ring makes them on the device, which can also use them as the given usages.
+    Made(wgpu::TextureUsages),
+    // The writer's own code makes them, for a size, in the ring's format. Its textures are
+    // initialized and ready to be sampled.
+    #[cfg(all(feature = "android", target_os = "android"))]
+    Provided(Box<dyn Fn(u32, u32) -> Option<wgpu::Texture> + Send>),
+}
+
 struct Ring {
     gpu: GpuContext,
     format: wgpu::TextureFormat,
-    usage: wgpu::TextureUsages,
+    textures: Textures,
     opaque: bool,
     size: (u32, u32),
     next: u64,
@@ -105,11 +115,33 @@ impl ExternalFrames {
             .contains(wgpu::DownlevelFlags::VIEW_FORMATS);
         let encoder = (format.is_srgb() && !views_in_two_formats)
             .then(|| SrgbEncoder::new(gpu, format.remove_srgb_suffix()));
+        Self::with(gpu, format, Textures::Made(usage), opaque, encoder)
+    }
+
+    // Opaque frames in the textures that `make` creates for a size, in a format that is not sRGB.
+    // A writer that renders with the platform's own API needs this: it also tells wgpu the state
+    // that a texture is in, which the textures that the ring makes cannot hold.
+    #[cfg(all(feature = "android", target_os = "android"))]
+    pub(crate) fn with_textures(
+        gpu: &GpuContext,
+        format: wgpu::TextureFormat,
+        make: impl Fn(u32, u32) -> Option<wgpu::Texture> + Send + 'static,
+    ) -> Self {
+        Self::with(gpu, format, Textures::Provided(Box::new(make)), true, None)
+    }
+
+    fn with(
+        gpu: &GpuContext,
+        format: wgpu::TextureFormat,
+        textures: Textures,
+        opaque: bool,
+        encoder: Option<SrgbEncoder>,
+    ) -> Self {
         Self {
             ring: Arc::new(Mutex::new(Ring {
                 gpu: gpu.clone(),
                 format,
-                usage,
+                textures,
                 opaque,
                 size: (0, 0),
                 next: 1,
@@ -153,7 +185,9 @@ impl ExternalFrames {
         }
         let slot = &mut ring.slots[index];
         slot.state = State::Shown;
-        Some(slot.shown.frame(number))
+        let bitmap = slot.shown.frame(number);
+        drop(ring);
+        Some(bitmap)
     }
 }
 
@@ -186,11 +220,13 @@ impl FrameWriter {
         ring.next += 1;
         let slot = &mut ring.slots[index];
         slot.state = State::Writing(number);
-        Some(FrameTexture {
+        let target = FrameTexture {
             number,
             texture: slot.texture.clone(),
             view: slot.view.clone(),
-        })
+        };
+        drop(ring);
+        Some(target)
     }
 
     /// Hands frame `number` to the composition. Call it once the work that
@@ -252,17 +288,21 @@ impl Ring {
     fn new_slot(&self, width: u32, height: u32) -> Option<Slot> {
         let sampled = self.format.remove_srgb_suffix();
         let view_formats = [sampled];
-        let texture = self.new_texture(
-            width,
-            height,
-            self.format,
-            self.usage,
-            if sampled == self.format || self.encoder.is_some() {
-                &[]
-            } else {
-                &view_formats
-            },
-        );
+        let texture = match &self.textures {
+            Textures::Made(usage) => self.new_texture(
+                width,
+                height,
+                self.format,
+                *usage,
+                if sampled == self.format || self.encoder.is_some() {
+                    &[]
+                } else {
+                    &view_formats
+                },
+            ),
+            #[cfg(all(feature = "android", target_os = "android"))]
+            Textures::Provided(make) => make(width, height)?,
+        };
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let (shown, encode) = match &self.encoder {
             Some(encoder) => {
@@ -343,32 +383,14 @@ impl SrgbEncoder {
                 count: None,
             }],
         });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("external frame encode"),
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("external frame encode"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("cover"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("encode"),
-                compilation_options: Default::default(),
-                targets: &[Some(target.into())],
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline = cover_pipeline(
+            device,
+            "external frame encode",
+            &layout,
+            &module,
+            "encode",
+            target,
+        );
         Self {
             device: (*gpu.device).clone(),
             queue: (*gpu.queue).clone(),

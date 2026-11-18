@@ -35,6 +35,15 @@ pub(super) type ErrorCallback =
 
 pub(super) type StreamFunction = unsafe extern "C" fn(stream: *mut RawStream) -> i32;
 
+pub(super) type FramesFunction = unsafe extern "C" fn(stream: *mut RawStream) -> i64;
+
+pub(super) type TimestampFunction = unsafe extern "C" fn(
+    stream: *mut RawStream,
+    clock: i32,
+    frame_position: *mut i64,
+    time_nanoseconds: *mut i64,
+) -> i32;
+
 type BuilderSetter = unsafe extern "C" fn(builder: *mut RawBuilder, value: i32);
 
 pub(super) struct Library {
@@ -79,6 +88,9 @@ pub(super) struct StreamFunctions {
     pub(super) channel_count: StreamFunction,
     pub(super) format: StreamFunction,
     pub(super) frames_per_burst: StreamFunction,
+    pub(super) xrun_count: StreamFunction,
+    pub(super) frames_written: FramesFunction,
+    pub(super) timestamp: TimestampFunction,
 }
 
 impl Library {
@@ -164,6 +176,9 @@ impl StreamFunctions {
                 channel_count: function(handle, c"AAudioStream_getChannelCount")?,
                 format: function(handle, c"AAudioStream_getFormat")?,
                 frames_per_burst: function(handle, c"AAudioStream_getFramesPerBurst")?,
+                xrun_count: function(handle, c"AAudioStream_getXRunCount")?,
+                frames_written: function(handle, c"AAudioStream_getFramesWritten")?,
+                timestamp: function(handle, c"AAudioStream_getTimestamp")?,
             })
         }
     }

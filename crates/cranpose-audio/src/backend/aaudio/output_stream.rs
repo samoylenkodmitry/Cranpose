@@ -7,13 +7,14 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 
 use cranpose_services::AudioError;
 
 use super::library::{Failure, Library, RawStream, StreamFunction};
 use crate::{
-    backend::{NOMINAL_CHANNELS, Renderer},
+    backend::{NOMINAL_CHANNELS, Renderer, hardware_position::HardwarePosition},
     mixer::RenderStatus,
 };
 
@@ -29,6 +30,7 @@ pub(super) struct StreamState(i32);
 
 impl StreamState {
     pub(super) const UNINITIALIZED: Self = Self(0);
+    pub(super) const STARTING: Self = Self(3);
     pub(super) const STARTED: Self = Self(4);
     pub(super) const CLOSING: Self = Self(11);
     pub(super) const CLOSED: Self = Self(12);
@@ -132,6 +134,38 @@ impl OutputStream {
         self.query(self.library.stream.frames_per_burst)
     }
 
+    pub(super) fn underrun_count(&self) -> i32 {
+        self.query(self.library.stream.xrun_count)
+    }
+
+    // How long from now until the hardware presents the frame that the next render call writes,
+    // or `None` while the stream has no timestamp: AAudio gives none until a short time after
+    // `requestStart`, and while the stream does not run.
+    //
+    // The thread that owns the stream calls this, so the real-time callback does no extra work.
+    pub(super) fn output_latency(&self) -> Option<Duration> {
+        let (mut frame_position, mut nano_time) = (0, 0);
+        // SAFETY: the two outputs are places for one `i64` each. `raw` is this open stream.
+        let result = unsafe {
+            (self.library.stream.timestamp)(
+                self.raw.as_ptr(),
+                libc::CLOCK_MONOTONIC,
+                &mut frame_position,
+                &mut nano_time,
+            )
+        };
+        if result < 0 {
+            return None;
+        }
+        // SAFETY: `raw` is this open stream.
+        let written_frames = unsafe { (self.library.stream.frames_written)(self.raw.as_ptr()) };
+        HardwarePosition {
+            frame_position,
+            nano_time,
+        }
+        .latency(written_frames, monotonic_nanos(), self.sample_rate())
+    }
+
     fn query(&self, function: StreamFunction) -> i32 {
         // SAFETY: every caller passes a stream function of `library`, and
         // `raw` is this open stream.
@@ -145,6 +179,21 @@ impl Drop for OutputStream {
             log::warn!("failed to close the AAudio stream: {failure}");
         }
     }
+}
+
+// The time on the clock that AAudio's timestamps use, in nanoseconds.
+#[allow(
+    clippy::unnecessary_cast,
+    reason = "`time_t` is 64 bits wide on some Android ABIs and 32 bits on the others"
+)]
+fn monotonic_nanos() -> i64 {
+    let mut now = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `now` is a place for the time. Every Android has `CLOCK_MONOTONIC`.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) };
+    now.tv_sec as i64 * 1_000_000_000 + now.tv_nsec as i64
 }
 
 struct DataContext {

@@ -192,7 +192,13 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LIBRARY_SEARCH_PATHS = "$(SRCROOT)";
 				MARKETING_VERSION = 1.0;
-				OTHER_LDFLAGS = "-lc++";
+				OTHER_LDFLAGS = (
+					"-lc++",
+					"-framework",
+					CoreMedia,
+					"-framework",
+					VideoToolbox,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.cranpose.isolated-demo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -218,7 +224,13 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LIBRARY_SEARCH_PATHS = "$(SRCROOT)";
 				MARKETING_VERSION = 1.0;
-				OTHER_LDFLAGS = "-lc++";
+				OTHER_LDFLAGS = (
+					"-lc++",
+					"-framework",
+					CoreMedia,
+					"-framework",
+					VideoToolbox,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.cranpose.isolated-demo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;

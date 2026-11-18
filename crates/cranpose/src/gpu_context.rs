@@ -84,12 +84,18 @@ pub(crate) fn provide_gpu_context(
 /// it, so a host that replaces its device hands content the new one.
 pub(crate) fn provide_current_gpu_context(
     context: impl Fn() -> GpuContext + 'static,
+    content: impl FnMut() + 'static,
+) -> impl FnMut() + 'static {
+    provide_optional_gpu_context(move || Some(context()), content)
+}
+
+// Gives `content` what `context` returns at each composition of it, for a
+// host whose device does not exist yet when its first composition starts.
+pub(crate) fn provide_optional_gpu_context(
+    context: impl Fn() -> Option<GpuContext> + 'static,
     mut content: impl FnMut() + 'static,
 ) -> impl FnMut() + 'static {
     move || {
-        CompositionLocalProvider(
-            [local_gpu_context().provides(Some(context()))],
-            &mut content,
-        );
+        CompositionLocalProvider([local_gpu_context().provides(context())], &mut content);
     }
 }

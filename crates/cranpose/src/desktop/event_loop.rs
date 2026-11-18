@@ -5747,7 +5747,7 @@ pub fn try_run(
 /// Use [`try_run`] when the caller needs to handle launch failures explicitly.
 pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
     try_run(settings, content).unwrap_or_else(|error| {
-        crate::app_launcher::exit_after_launch_error("desktop launch failed", error)
+        crate::app_launcher::exit_after_launch_error("desktop launch failed", &error)
     });
     std::process::exit(0)
 }

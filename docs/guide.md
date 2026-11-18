@@ -2808,6 +2808,7 @@ An app that plays only WAV files of PCM samples, such as its own recordings, ena
 For game sounds, enable `audio`. On desktop, enable `audio-desktop`.
 In a browser `audio` plays through Web Audio, and the sound starts at the user's first press or key.
 An app that makes its own samples hands a `Renderer` to `cranpose_audio::backend::open`. The desktop demo's Music tab plays a piece this way: each note of the score is a composable in a lazy column that holds its note in the synth while it is composed. A runtime shader draws the note as a drop of rain on a window, as a backdrop effect with a batched source. The piece scrolls the column. A hand that scrolls it plays the notes that cross its lower edge.
+The `AudioSink` that `open` returns reports the device's timing. `output_latency` is the time from a render call to the sound. `frames_per_burst` is the frames of one render call. `underrun_count` is the times that the device had no frame to play. An app that sizes a jitter buffer or lines the sound up with a picture reads them. Each is `None` where the platform has no value. None of them waits for the audio thread.
 See [Cranamp](https://github.com/samoylenkodmitry/cranamp) for a player app.
 
 ### Show an image from the network
@@ -2849,6 +2850,54 @@ fn Avatar(url: String) {
 draws the image another way. `ImageRequest::max_size` sets the decode size.
 
 The image decodes on a worker thread. All images share one memory cache. The bytes of decoded pixels bound it. They also share a disk cache with a size limit in the application's cache folder. `ImageLoader::new` makes a loader with other limits. The requests of one image share one download. A request stops its download when all its composables have left. `ImageRequest::new` also takes `file://` URLs and file paths. `ImageRequest::bytes` decodes bytes that the app holds, such as a picked file.
+
+### Show a video stream
+
+`VideoDecoder` decodes H.264 and HEVC on the platform's hardware: through VideoToolbox on macOS and iOS,
+and through `MediaCodec` on Android. The app feeds it access units from one thread. `PlayerSurface` draws
+the pictures in the layout, scaled by a `ContentScale`.
+
+```rust
+use cranpose::prelude::*;
+
+#[composable]
+fn Stream(frames: DecodedFrames) {
+    PlayerSurface(
+        frames,
+        Modifier::empty().size_points(480.0, 270.0),
+        ContentScale::Fit,
+    );
+}
+
+fn start_decoder(width: u32, height: u32) -> Result<(VideoDecoder, DecodedFrames), DecoderError> {
+    let decoder = VideoDecoder::new(DecoderConfig::new(
+        VideoCodec::Hevc,
+        width,
+        height,
+        DecoderOutput::Frames { depth: 6 },
+    ))?;
+    let frames = decoder.frames();
+    Ok((decoder, frames))
+}
+```
+
+Feed the decoder with `submit(AccessUnit { data, timestamp, metadata })`. `data` is one picture in Annex-B
+form, which may start with the parameter sets. `split_access_units` cuts a stream that the app reads from a
+file. The decoder holds no picture back for reordering, so the stream needs no B-frames. A decoder on Apple
+answers `DecoderError::NeedsKeyframe` until a keyframe arrives, after a start in the middle of a stream and
+after the system ends its session. Ask the sender for a keyframe then. `depth` is the number of pictures
+that the decoder, the surface and the GPU hold. Use 6 or more for a stream of 60 pictures a second.
+
+`submit` waits up to `DecoderConfig::input_wait`, 30 milliseconds by default, for the decoder to take a unit,
+and answers `DecoderError::Full` after that. The wait blocks the calling thread, so feed the decoder from a
+thread of its own and never from the frame loop. `DecoderStats::refused` counts the refusals. A unit that the
+decoder never saw breaks the pictures after it until the next keyframe, so send the unit again or ask the
+sender for a keyframe.
+
+`PlayerSurface` draws on macOS and iOS through Metal and on Android through Vulkan. Android needs a
+Vulkan device with the hardware buffer import extensions, which the app's own device has on Android 8
+and later where the driver offers them. It draws nothing where Android renders with OpenGL ES. No other
+platform has a decoder.
 
 ### Use the camera
 

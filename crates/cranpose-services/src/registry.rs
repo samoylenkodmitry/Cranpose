@@ -73,6 +73,7 @@ impl Drop for TestServiceGuard {
         crate::network_status::clear_platform_network_monitor();
         crate::notifier::clear_platform_notifier();
         crate::purchases::clear_platform_purchases();
+        crate::video_decoder::set_platform_decoder_capabilities(None);
     }
 }
 

@@ -92,6 +92,20 @@ The Gradle `services` set also supports manually maintained app manifests:
 | `overlay` | Surface above other apps | `SYSTEM_ALERT_WINDOW` |
 | `television` | A Leanback launcher entry on `CranposeActivity`; `android.software.leanback` and `android.hardware.touchscreen` optional. The app supplies its 320 by 180 banner as `@drawable/tv_banner` | none |
 | `wearable` | Messages and streams to the app on the paired phone or watch (Wear OS Data Layer, `cranpose_services::wearable`) | none |
+| `xr` | An immersive app for headsets (`cranpose_xr::android_main!`): Meta Quest, Pico 4, HTC Vive Focus 3 and XR Elite, Android XR and Steam Frame. The manifest carries the launcher categories and entries of each runtime on `CranposeActivity`, the Android XR start mode and runtime library, `android.hardware.vr.headtracking` and `android.software.xr.api.openxr`, and the Khronos OpenXR loader, which brings its own permissions. `cranposeXrStore` (`meta`, `android-xr` or `open`) sets the features the stores read, as the table below shows | `org.khronos.openxr.permission.OPENXR` |
+
+The `xr` manifest has two features and one activity attribute that the stores
+read differently. The Gradle property `cranposeXrStore` (or `cranpose { xrStore }`)
+picks the values:
+
+| Store | `android.hardware.vr.headtracking` | `android.software.xr.api.openxr` | `excludeFromRecents` |
+| --- | --- | --- | --- |
+| `meta` (default): Meta Horizon Store | required | optional | `true` |
+| `android-xr`: Google Play for Android XR | optional | required | `false` |
+| `open`: Pico, HTC, Steam Frame, sideloading | optional | optional | `false` |
+
+`adb install` reads no feature. The comments of `manifests/xr.xml` cite the
+source of each entry.
 
 `Use::device_motion()` selects `CranposeDeviceMotion`, which reads the rotation
 sensors on a thread of its own, and the normal `HIGH_SAMPLING_RATE_SENSORS`
