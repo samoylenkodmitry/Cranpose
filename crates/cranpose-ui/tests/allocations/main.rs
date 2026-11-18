@@ -828,6 +828,7 @@ fn keyed_items_allocations(
         applier.set_runtime_handle(handle.clone());
         measure_layout(&mut applier, root, Size::new(100.0, 4000.0)).expect("the column measures");
         applier.clear_runtime_handle();
+        applier.end_recycle_frame();
     };
     warm.for_each(&mut frame);
     let frames = counted.len();
@@ -883,6 +884,25 @@ fn nodes_made_fresh_serve_the_nodes_of_a_later_frame() {
     assert!(
         twenty_four <= twelve,
         "{twenty_four} allocations for twenty-four boxes, {twelve} for twelve"
+    );
+}
+
+// A frame that brings back nodes a frame removed nine frames before, as the
+// patchwork's cards come and go, takes the shells the recycle pool kept for
+// them: 1,200 boxes allocate less than one block for eight boxes, where a
+// box made fresh takes two.
+fn a_burst_of_nodes_that_comes_back_frames_later_takes_their_shells() {
+    const BOXES: usize = 1200;
+    let back = keyed_items_allocations(
+        (BOXES, an_empty_box),
+        |frame| frame == 0 || frame >= 10,
+        1..10,
+        10..11,
+    );
+    println!("allocations of a frame that brings {BOXES} boxes back nine frames later: {back}");
+    assert!(
+        back * 8 <= BOXES,
+        "{back} allocations for {BOXES} boxes back"
     );
 }
 
@@ -1090,6 +1110,7 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     composing_a_wide_column_again_allocates_what_a_narrow_one_does();
     a_frame_that_swaps_nodes_for_new_ones_allocates_nothing_for_them();
     nodes_made_fresh_serve_the_nodes_of_a_later_frame();
+    a_burst_of_nodes_that_comes_back_frames_later_takes_their_shells();
     if !cfg!(feature = "inspection") {
         a_modifier_chain_of_plain_elements_allocates_one_shared_box();
     }

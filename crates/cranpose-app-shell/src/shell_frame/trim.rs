@@ -1,6 +1,7 @@
 // What the shell gives back at rest: the room a burst took in the lists its
 // frames fill, such as a first frame's, which names every node, and in its
-// context's, its scenes' and its renderers' storage. An update that changes
+// context's, its scenes' and its renderers' storage; and the shells of
+// removed nodes its recycle pools keep. An update that changes
 // what the shell shows starts a rest of `REST_BEFORE_TRIM`; the first update
 // past its end that changes nothing trims, and draws nothing. The schedule
 // asks for a wake at the end of the rest, and the update checks report the
@@ -77,6 +78,7 @@ where
     #[inline(never)]
     fn trim(&mut self) {
         self.app.app_context.trim();
+        self.app.composition.applier_mut().trim_recycled_nodes();
         self.routing_scratch.trim();
         self.pending_dirty_nodes.trim_growth_slack();
         self.pending_lane_nodes.trim_growth_slack();

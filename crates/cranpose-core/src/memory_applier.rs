@@ -385,6 +385,26 @@ impl MemoryApplier {
         self.state.free_ids.len()
     }
 
+    /// Ends a frame for the recycle pools: each keeps as many removed nodes as its recent frames
+    /// asked for, the most of one frame over the last two spans of
+    /// [`IDLE_PASSES`](crate::collections::pass_aged::IDLE_PASSES) frames, and lets the oldest of
+    /// the rest go. A pool whose frames ask for no node of its type keeps none. A shell calls it
+    /// at the end of each frame.
+    pub fn end_recycle_frame(&mut self) {
+        for pool in self.state.recycle_pools.values_mut() {
+            pool.end_frame();
+        }
+    }
+
+    /// Lets every pooled recycled node go, and the room the pools took: the tree rests, and its
+    /// next nodes come fresh. A shell calls it when it trims at rest.
+    pub fn trim_recycled_nodes(&mut self) {
+        for pool in self.state.recycle_pools.values_mut() {
+            pool.rest();
+        }
+        self.prune_stable_generations();
+    }
+
     /// Returns the number of pooled recycled nodes of all types.
     pub fn debug_recycled_node_count(&self) -> usize {
         self.total_recycled_node_count()
@@ -584,8 +604,7 @@ impl MemoryApplier {
     // as with little memory left, costs a fresh node nothing.
     fn seed_recycled_node_shell_impl(&mut self, key: TypeId, node: &dyn Node) {
         let recycle_pool_limit = node.recycle_pool_limit();
-        let limit = recycle_pool_limit.unwrap_or(usize::MAX);
-        if self.warm_recycled_pool_len(key) >= limit {
+        if self.warm_recycled_pool_len(key) >= RecyclePool::made_ahead_limit(recycle_pool_limit) {
             return;
         }
         let Some(shell) = node.rehouse_for_recycle() else {

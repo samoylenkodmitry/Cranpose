@@ -153,7 +153,7 @@ impl Node for LayoutNode {
     }
 
     fn recycle_pool_limit(&self) -> Option<usize> {
-        Some(node_pool_limit())
+        node_pool_limit()
     }
 
     // The node leaves the tree whole: it lets go of what a drop would let go

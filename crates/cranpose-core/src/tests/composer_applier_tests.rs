@@ -1,4 +1,5 @@
 use super::*;
+use crate::collections::pass_aged::IDLE_PASSES;
 
 #[test]
 fn node_parent_distinguishes_roots_descendants_and_missing_nodes() {
@@ -1407,6 +1408,94 @@ fn a_full_recycle_pool_keeps_its_newest_shells_over_many_removals() {
     );
 }
 
+// A node type with no pool limit, as layout nodes have with ample memory.
+#[derive(Default)]
+struct UnlimitedRecycleNode;
+
+impl Node for UnlimitedRecycleNode {
+    fn recycle_key(&self) -> Option<TypeId> {
+        Some(TypeId::of::<Self>())
+    }
+}
+
+// A frame that makes `count` nodes fresh, as a composition that finds no
+// shell for them does.
+fn make_fresh(applier: &mut MemoryApplier, count: usize) -> Vec<NodeId> {
+    let nodes = (0..count)
+        .map(|_| {
+            applier.record_fresh_recyclable_creation(TypeId::of::<UnlimitedRecycleNode>());
+            applier.create(Box::new(UnlimitedRecycleNode))
+        })
+        .collect();
+    applier.end_recycle_frame();
+    nodes
+}
+
+// A frame that removes `nodes`, then `frames` frames that ask for none.
+fn remove_and_wait(applier: &mut MemoryApplier, nodes: Vec<NodeId>, frames: u64) {
+    for id in nodes {
+        applier.remove(id).expect("remove recyclable node");
+    }
+    applier.clear_recycled_nodes();
+    for _ in 0..=frames {
+        applier.end_recycle_frame();
+    }
+}
+
+// A frame that asks for `count` nodes: the number of them the pool served.
+fn served(applier: &mut MemoryApplier, count: usize) -> usize {
+    let key = TypeId::of::<UnlimitedRecycleNode>();
+    let shells = (0..count)
+        .filter_map(|_| applier.take_recycled_node(key))
+        .count();
+    applier.end_recycle_frame();
+    shells
+}
+
+#[test]
+fn a_burst_that_comes_back_within_two_spans_of_frames_finds_its_shells() {
+    let mut applier = test_applier();
+    let _keep = applier.create(Box::new(UnlimitedRecycleNode));
+    let burst = make_fresh(&mut applier, 300);
+    remove_and_wait(&mut applier, burst, 31);
+    assert_eq!(served(&mut applier, 300), 300, "the second burst");
+
+    let burst = make_fresh(&mut applier, 300);
+    remove_and_wait(&mut applier, burst, IDLE_PASSES + 31);
+    assert_eq!(served(&mut applier, 300), 300, "the third burst");
+}
+
+#[test]
+fn a_pool_whose_frames_ask_for_no_node_lets_its_shells_go() {
+    let mut applier = test_applier();
+    let _keep = applier.create(Box::new(UnlimitedRecycleNode));
+    let burst = make_fresh(&mut applier, 300);
+    remove_and_wait(&mut applier, burst, 2 * IDLE_PASSES);
+    assert_eq!(
+        applier.debug_recycled_node_count_for::<UnlimitedRecycleNode>(),
+        0
+    );
+    assert_eq!(applier.debug_stats().recycled_node_capacity, 0);
+}
+
+#[test]
+fn a_trim_lets_every_recycled_node_go() {
+    let mut applier = test_applier();
+    let _keep = applier.create(Box::new(UnlimitedRecycleNode));
+    let burst = make_fresh(&mut applier, 300);
+    remove_and_wait(&mut applier, burst, 0);
+    assert_eq!(
+        applier.debug_recycled_node_count_for::<UnlimitedRecycleNode>(),
+        300
+    );
+    applier.trim_recycled_nodes();
+    assert_eq!(
+        applier.debug_recycled_node_count_for::<UnlimitedRecycleNode>(),
+        0
+    );
+    assert_eq!(applier.debug_stats().recycled_node_capacity, 0);
+}
+
 #[test]
 fn clear_recycled_nodes_trims_warm_pool_without_fresh_demand() {
     #[derive(Default)]
@@ -1663,6 +1752,12 @@ fn clear_recycled_nodes_releases_excess_warm_id_capacity() {
         applier.remove(id).expect("remove recyclable node");
     }
 
+    applier.clear_recycled_nodes();
+    // The burst's frame asked for its 4,096 nodes: the pool keeps shells
+    // for them until two spans of frames that ask for none went by.
+    for _ in 0..2 * IDLE_PASSES {
+        applier.end_recycle_frame();
+    }
     applier.clear_recycled_nodes();
 
     let stats = applier.debug_stats();

@@ -982,12 +982,14 @@ where
     }
 
     // Ends the update at `frame_time` that made `result`: the surfaces are
-    // clean, after a layout the primary window keeps a focused target when
-    // it is set to, and the rest before a trim starts or ends.
+    // clean, the recycle pools keep what recent frames asked for, after a
+    // layout the primary window keeps a focused target when it is set to,
+    // and the rest before a trim starts or ends.
     pub(crate) fn end_update(&mut self, result: FrameUpdateResult, frame_time: Option<u64>) {
         for surface in &mut self.surfaces {
             surface.is_dirty = false;
         }
+        self.app.composition.applier_mut().end_recycle_frame();
         let primary = &mut self.surfaces[0];
         if primary.dpad_navigation && (result.structure_changed || primary.focus_check_due) {
             primary.focus_check_due = false;
