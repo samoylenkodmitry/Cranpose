@@ -123,8 +123,9 @@ private struct ReferenceControl: View {
             Text("Reference control").font(.caption).padding(.vertical, 24)
         }
         .overlay(alignment: .bottom) {
+            // The toolbar's capsules sit where the count would.
             VStack {
-                Text("Activations: \(activations)")
+                Text("Activations: \(activations)").opacity(component == "toolbar" ? 0 : 1)
                 if let error = trace.error {
                     Text(error).accessibilityIdentifier("trace-error")
                 }
@@ -278,6 +279,8 @@ private struct ReferenceControl: View {
         case "page-control":
             ReferencePageControl(page: selection).frame(width: 300, height: 28)
                 .accessibilityIdentifier("reference-page-control")
+        case "toolbar":
+            ReferenceToolbar(variant: selection).ignoresSafeArea()
         default:
             Text("Unknown reference control: \(component)")
         }
@@ -375,6 +378,38 @@ private struct ReferenceNavigationBar: UIViewControllerRepresentable {
         content.view = scroll
         let navigation = UINavigationController(rootViewController: content)
         navigation.navigationBar.prefersLargeTitles = true
+        return navigation
+    }
+    func updateUIViewController(_ uiViewController: UINavigationController, context: Context) {}
+}
+
+// A bottom toolbar. Variant 0 shows a lone item and a pair at the far end;
+// variant 1 shows a lone item and a prominent one; variant 2 shows a pair of
+// image items and a lone one; variant 3 shows three image items, then a text
+// item beside an image item.
+private struct ReferenceToolbar: UIViewControllerRepresentable {
+    let variant: Int
+    func makeUIViewController(context: Context) -> UINavigationController {
+        let content = UIViewController()
+        content.view.backgroundColor = .clear
+        let item = { (title: String) in UIBarButtonItem(title: title, style: .plain, target: nil, action: nil) }
+        let image = { (name: String) in
+            UIBarButtonItem(image: UIImage(systemName: name), style: .plain, target: nil, action: nil)
+        }
+        let done = UIBarButtonItem(title: "Done", style: .prominent, target: nil, action: nil)
+        switch variant {
+        case 1: content.toolbarItems = [item("Edit"), .flexibleSpace(), done]
+        case 2: content.toolbarItems = [image("square.and.arrow.up"), image("trash"), .flexibleSpace(), image("plus")]
+        case 3:
+            content.toolbarItems = [
+                image("square.and.arrow.up"), image("trash"), image("folder"), .flexibleSpace(), item("Edit"), image("plus"),
+            ]
+        default: content.toolbarItems = [item("Edit"), .flexibleSpace(), item("Share"), item("Delete")]
+        }
+        let navigation = UINavigationController(rootViewController: content)
+        navigation.setNavigationBarHidden(true, animated: false)
+        navigation.setToolbarHidden(false, animated: false)
+        navigation.view.backgroundColor = .clear
         return navigation
     }
     func updateUIViewController(_ uiViewController: UINavigationController, context: Context) {}

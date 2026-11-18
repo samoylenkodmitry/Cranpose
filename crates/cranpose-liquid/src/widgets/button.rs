@@ -62,21 +62,21 @@ pub enum GlassButtonSize {
     Large,
 }
 
-impl GlassButtonSize {
-    fn minimum_height(self) -> f32 {
-        match self {
-            Self::Small => 28.0,
-            Self::Regular => 34.0,
-            Self::Large => 50.0,
-        }
-    }
+// The least height of a text button and its horizontal and vertical padding.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct ButtonMetrics {
+    pub(super) height: f32,
+    pub(super) padding: (f32, f32),
+}
 
-    fn padding(self) -> (f32, f32) {
-        match self {
-            Self::Small => (10.0, 5.0),
-            Self::Regular => (12.0, 7.0),
-            Self::Large => (20.0, 15.0),
-        }
+impl GlassButtonSize {
+    pub(super) fn metrics(self) -> ButtonMetrics {
+        let (height, padding) = match self {
+            Self::Small => (28.0, (10.0, 5.0)),
+            Self::Regular => (34.0, (12.0, 7.0)),
+            Self::Large => (50.0, (20.0, 15.0)),
+        };
+        ButtonMetrics { height, padding }
     }
 
     fn label_style(self, typography: crate::theme::LiquidTypography) -> TextStyle {
@@ -188,9 +188,10 @@ impl GlassButtonSpec {
                 colors.label,
                 height,
             )),
+            // In dark mode iOS keeps the accent at full strength.
             GlassButtonStyle::Prominent => Some(
                 super::glass_surface::floating_material(colors.label, height)
-                    .transmission_tint(colors.accent, 0.6),
+                    .transmission_tint(colors.accent, if colors.is_dark { 1.0 } else { 0.6 }),
             ),
             GlassButtonStyle::Plain | GlassButtonStyle::Destructive => None,
         }
@@ -206,9 +207,11 @@ pub fn GlassButton(
     on_click: impl Fn() + 'static,
     content: impl FnMut() + 'static,
 ) {
+    let metrics = spec.size.metrics();
     GlassButtonWithFeedback(
         modifier,
         spec,
+        metrics,
         HapticFeedback::ImpactLight,
         None,
         on_click,
@@ -220,17 +223,14 @@ pub fn GlassButton(
 pub(crate) fn GlassButtonWithFeedback(
     modifier: Modifier,
     spec: GlassButtonSpec,
+    metrics: ButtonMetrics,
     feedback: HapticFeedback,
     tint_progress: Option<State<f32>>,
     on_click: impl Fn() + 'static,
     content: impl FnMut() + 'static,
 ) {
     let colors = liquid_colors();
-    let material = spec.resolve_material(
-        &colors,
-        spec.content_color(&colors),
-        spec.size.minimum_height(),
-    );
+    let material = spec.resolve_material(&colors, spec.content_color(&colors), metrics.height);
     let (pressed_modifier, base, gesture, illumination, content_activity) = FloatingButtonSurface(
         material,
         spec.glass.is_none(),
@@ -239,7 +239,7 @@ pub(crate) fn GlassButtonWithFeedback(
         tint_progress.map(|state| {
             (
                 state,
-                super::glass_surface::floating_material(colors.label, spec.size.minimum_height())
+                super::glass_surface::floating_material(colors.label, metrics.height)
                     .tint
                     .unwrap_or(Color::TRANSPARENT),
             )
@@ -247,9 +247,9 @@ pub(crate) fn GlassButtonWithFeedback(
         on_click,
     );
 
-    let (horizontal_padding, vertical_padding) = spec.size.padding();
+    let (horizontal_padding, vertical_padding) = metrics.padding;
     let base = base
-        .height_in(spec.size.minimum_height(), f32::INFINITY)
+        .height_in(metrics.height, f32::INFINITY)
         .padding_symmetric(horizontal_padding, vertical_padding);
 
     let content_fade = if matches!(
