@@ -38,35 +38,12 @@ impl ShapeRecorder {
         self.tables.trim_growth();
     }
 
-    /// Keeps the segments of `kept`, ascending ranges of segment indexes
-    /// that do not overlap, with their shapes, moved to the front in order,
-    /// and drops every other segment and shape. The gradient tables stay
-    /// whole while a kept shape paints with a brush.
-    pub fn keep_segment_ranges(&mut self, kept: impl Iterator<Item = Range<u32>> + Clone) {
-        self.tables.keep_segment_ranges(kept);
+    /// Keeps the segments `keep` takes, by index, with their shapes, moved
+    /// to the front in order, and drops every other segment and shape. The
+    /// gradient tables stay whole while a kept shape paints with a brush.
+    pub fn keep_segments(&mut self, keep: impl Fn(u32) -> bool) {
+        self.tables.keep_segments(keep);
         self.forget_unused_gradient_lists();
-    }
-
-    /// Empties the recorder, then takes in the segments of `from` in
-    /// `kept`, ascending ranges of segment indexes that do not overlap, with
-    /// their shapes: what [`Self::keep_segment_ranges`] leaves of `from`,
-    /// for a `from` that a reader still holds as it is. The bounds are those
-    /// of `from`.
-    pub fn keep_segment_ranges_from(
-        &mut self,
-        from: &Self,
-        kept: impl Iterator<Item = Range<u32>>,
-    ) {
-        self.tables.keep_segment_ranges_from(&from.tables, kept);
-        self.gradient_lists.clear();
-        if !self.tables.brushes().is_empty() {
-            for lists in from.gradient_lists.iter() {
-                self.gradient_lists.push(lists.clone());
-            }
-        }
-        self.min = from.min;
-        self.max = from.max;
-        self.end_segment();
     }
 
     // Lets go of the gradient lists once the tables dropped their brushes,

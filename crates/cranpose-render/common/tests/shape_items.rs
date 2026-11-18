@@ -119,7 +119,7 @@ fn drawn(store: &SceneStore, item: Item) -> Vec<Drawn> {
 }
 
 #[test]
-fn staying_shapes_draw_as_recorded_once_a_held_chunk_gives_up_the_others() {
+fn staying_shapes_draw_as_recorded_while_packets_hold_their_chunks() {
     let mut store = SceneStore::new();
     let (mut staying, mut going) = (Vec::new(), Vec::new());
     for index in 0..ITEMS {
@@ -137,9 +137,7 @@ fn staying_shapes_draw_as_recorded_once_a_held_chunk_gives_up_the_others() {
         store.remove_item(item);
     }
     // Chunks of items that all go but one, which packets in flight hold:
-    // none takes shapes again, and once the chunks hold more dead shapes
-    // than live ones and four chunks, the next item finds them all swept,
-    // the held chunk of the staying items among them.
+    // none takes shapes again while a packet holds it.
     let mut packets = Vec::new();
     for group in 0..=KEPT_EMPTY_CHUNKS {
         let first = ITEMS + group * CHUNK_SHAPES;
