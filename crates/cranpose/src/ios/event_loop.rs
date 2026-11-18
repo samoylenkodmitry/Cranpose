@@ -8,6 +8,7 @@ use std::{
 use cranpose_app_shell::{AppShell, default_root_key};
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
+use cranpose_services::{LifecycleState, advance_lifecycle, current_lifecycle_state};
 use cranpose_ui::EdgeInsets;
 use winit::{
     application::ApplicationHandler,
@@ -451,11 +452,16 @@ impl<F: FnMut() + 'static> IosApp<F> {
 
 impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
     fn resumed(&mut self, _event_loop: &dyn ActiveEventLoop) {
-        cranpose_services::advance_lifecycle(cranpose_services::LifecycleState::Resumed);
+        advance_lifecycle(LifecycleState::Resumed);
     }
 
     fn suspended(&mut self, _event_loop: &dyn ActiveEventLoop) {
-        cranpose_services::advance_lifecycle(cranpose_services::LifecycleState::Stopped);
+        // UIKit makes the app inactive under a system sheet such as Face ID,
+        // under Control Center and in the app switcher. The app stays on the
+        // screen there; `Occluded` reports when it leaves.
+        if current_lifecycle_state() == LifecycleState::Resumed {
+            advance_lifecycle(LifecycleState::Paused);
+        }
     }
 
     fn proxy_wake_up(&mut self, _event_loop: &dyn ActiveEventLoop) {
@@ -670,6 +676,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
+            WindowEvent::Occluded(occluded) => follow_occlusion(occluded),
             _ => {}
         }
     }
@@ -677,7 +684,17 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
 
 impl<F: FnMut() + 'static> Drop for IosApp<F> {
     fn drop(&mut self) {
-        cranpose_services::advance_lifecycle(cranpose_services::LifecycleState::Destroyed);
+        advance_lifecycle(LifecycleState::Destroyed);
+    }
+}
+
+// UIKit puts the app in the background (`occluded`) or brings it back to
+// the foreground, where it waits inactive until UIKit makes it active.
+fn follow_occlusion(occluded: bool) {
+    if occluded {
+        advance_lifecycle(LifecycleState::Stopped);
+    } else if !current_lifecycle_state().is_at_least(LifecycleState::Started) {
+        advance_lifecycle(LifecycleState::Started);
     }
 }
 
