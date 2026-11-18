@@ -1515,7 +1515,7 @@ Outside this provider, `UserLabel` reads the default: `Guest`.
 has focus. A stopped host pauses lifecycle-aware collectors.
 
 - **Android:** Activity start, resume, pause, stop and destroy callbacks drive the states.
-- **iOS:** scene activation resumes the host. Scene suspension stops the host. Shutdown destroys the host.
+- **iOS:** an active app is resumed. An inactive app is paused: a system sheet such as Face ID, Control Center or the app switcher covers it. An app in the background is stopped. Shutdown destroys the host.
 - **Desktop:** a visible app with a focused window is resumed. A visible app with focus elsewhere is paused. An occluded or minimized main window stops the host.
 - **Web:** a visible, focused page is resumed. A visible page with focus elsewhere is paused. A hidden tab or minimized browser stops the host.
 
