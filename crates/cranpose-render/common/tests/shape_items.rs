@@ -6,10 +6,28 @@ use cranpose_ui_graphics::{
     RecordLane, RecordSegment, Rect, ShapeRecordBody, ShapeRecordCurve, ShapeRecorder, Stroke,
 };
 
-// A chunk's worth of shape items. Every sixteenth stays, a gradient rect
-// beside a stroked arc; the others are solid rects.
-const ITEMS: u32 = 256;
+// Shape items that fill one chunk but its last shape. Every sixteenth
+// stays, a gradient rect beside a stroked arc; the others are solid rects.
+const ITEMS: u32 = 240;
+// The shapes a chunk takes, and the empty chunks the store keeps for reuse.
+const CHUNK_SHAPES: u32 = 256;
+const KEPT_EMPTY_CHUNKS: u32 = 4;
 const STAYS_EVERY: u32 = 16;
+
+fn solid(index: u32, recorder: &mut ShapeRecorder) {
+    let at = index as f32;
+    recorder.push_rect(
+        Rect {
+            x: at,
+            y: at,
+            width: 10.0,
+            height: 8.0,
+        },
+        &Brush::solid(Color(at / 4096.0, 0.5, 0.0, 1.0)),
+        None,
+        BlendMode::SrcOver,
+    );
+}
 
 fn record(index: u32, recorder: &mut ShapeRecorder) {
     let at = index as f32;
@@ -20,12 +38,7 @@ fn record(index: u32, recorder: &mut ShapeRecorder) {
         height: 8.0,
     };
     if !index.is_multiple_of(STAYS_EVERY) {
-        recorder.push_rect(
-            rect,
-            &Brush::solid(Color(at / 256.0, 0.5, 0.0, 1.0)),
-            None,
-            BlendMode::SrcOver,
-        );
+        solid(index, recorder);
         return;
     }
     let gradient = Brush::linear_gradient_range(
@@ -123,9 +136,24 @@ fn staying_shapes_draw_as_recorded_once_a_held_chunk_gives_up_the_others() {
     for item in going {
         store.remove_item(item);
     }
-    for index in ITEMS..3 * ITEMS {
-        store.add_shapes(u64::from(index), |recorder| record(index, recorder));
+    // Chunks of items that go at once, which packets in flight hold: none
+    // takes shapes again, so the store gains room for more than twice the
+    // live shapes and four chunks, and the next item takes the held chunk,
+    // the one chunk an item still names.
+    let mut packets = Vec::new();
+    for group in 0..=KEPT_EMPTY_CHUNKS {
+        let first = ITEMS + group * CHUNK_SHAPES;
+        let items: Vec<_> = (first..first + CHUNK_SHAPES)
+            .map(|index| store.add_shapes(u64::from(index), |recorder| solid(index, recorder)))
+            .collect();
+        let packet = Arc::clone(store.shapes(items[0]).recorder());
+        packets.push((packet.fingerprint(), packet));
+        for item in items {
+            store.remove_item(item);
+        }
     }
+    let index = ITEMS + (KEPT_EMPTY_CHUNKS + 1) * CHUNK_SHAPES;
+    store.add_shapes(u64::from(index), |recorder| solid(index, recorder));
     for (item, recorded) in &staying {
         assert_eq!(
             &drawn(&store, *item),
@@ -138,4 +166,11 @@ fn staying_shapes_draw_as_recorded_once_a_held_chunk_gives_up_the_others() {
         leased,
         "the packet reads the chunk as it held it"
     );
+    for (print, packet) in &packets {
+        assert_eq!(
+            packet.fingerprint(),
+            *print,
+            "a packet reads the chunk of the items that went as it held it"
+        );
+    }
 }

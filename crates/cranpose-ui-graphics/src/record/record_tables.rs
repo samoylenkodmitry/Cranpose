@@ -1,5 +1,6 @@
 use std::{
     hash::{Hash, Hasher},
+    ops::Range,
     sync::OnceLock,
 };
 
@@ -112,11 +113,11 @@ impl RecordTables {
         drop_unused_gradients(shapes, gradients);
     }
 
-    // Keeps the segments `keep` takes, by index, with their shapes, moved
-    // to the front in order, and drops the others. The gradient tables go
-    // once no kept shape paints with a brush, since a kept shape names its
-    // brush by table index.
-    pub(super) fn keep_segments(&mut self, keep: impl Fn(u32) -> bool) {
+    // Keeps the segments of `kept`, ascending ranges of segment indexes that
+    // do not overlap, with their shapes, moved to the front in order, and
+    // drops the others. The gradient tables go once no kept shape paints
+    // with a brush, since a kept shape names its brush by table index.
+    pub(super) fn keep_segment_ranges(&mut self, kept: impl Iterator<Item = Range<u32>> + Clone) {
         let Self {
             shapes,
             segments,
@@ -125,36 +126,39 @@ impl RecordTables {
         } = self;
         fingerprint.take();
         shapes.keep(
-            (0..)
-                .zip(segments.iter())
-                .filter(|&(index, segment)| keep(index) && segment.lane == RecordLane::Shapes)
-                .map(|(_, segment)| segment.range()),
+            kept.clone()
+                .flat_map(|range| &segments[range.start as usize..range.end as usize])
+                .filter(|segment| segment.lane == RecordLane::Shapes)
+                .map(RecordSegment::range),
         );
-        let (mut index, mut shape_to) = (0, 0);
-        segments.retain_mut(|segment| {
-            let kept = keep(index);
-            index += 1;
-            if kept && segment.lane == RecordLane::Shapes {
+        let (mut to, mut shape_to) = (0, 0);
+        for index in kept.flatten() {
+            // `to` trails `index`: a write lands on a segment read before.
+            let mut segment = segments[index as usize];
+            if segment.lane == RecordLane::Shapes {
                 segment.start = shape_to;
                 shape_to += segment.count;
             }
-            kept
-        });
+            segments[to] = segment;
+            to += 1;
+        }
+        segments.truncate(to);
         drop_unused_gradients(shapes, gradients);
     }
 
-    // Empties the tables, then takes in the segments of `from` that `keep`
-    // takes, by index, with their shapes: what `keep_segments` leaves of
-    // `from`. The gradient tables come whole while a kept shape paints with
-    // a brush.
-    pub(super) fn keep_segments_from(&mut self, from: &Self, keep: impl Fn(u32) -> bool) {
+    // Empties the tables, then takes in the segments of `from` in `kept`,
+    // ascending ranges of segment indexes that do not overlap, with their
+    // shapes: what `keep_segment_ranges` leaves of `from`. The gradient
+    // tables come whole while a kept shape paints with a brush.
+    pub(super) fn keep_segment_ranges_from(
+        &mut self,
+        from: &Self,
+        kept: impl Iterator<Item = Range<u32>>,
+    ) {
         self.clear();
         let mut shape_to = 0;
-        for (index, segment) in (0..).zip(&from.segments) {
-            if !keep(index) {
-                continue;
-            }
-            let mut segment = *segment;
+        for index in kept.flatten() {
+            let mut segment = from.segments[index as usize];
             if segment.lane == RecordLane::Shapes {
                 self.shapes.extend_from(&from.shapes, segment.range());
                 segment.start = shape_to;
