@@ -82,9 +82,8 @@ impl GestureVelocity {
         };
         let release_sample_ms = event.time_ms.zip(self.start_event_ms).map_or_else(
             || {
-                received_at(event)
-                    .saturating_duration_since(start)
-                    .as_millis() as i64
+                let elapsed = received_at(event).saturating_duration_since(start);
+                i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
             },
             |(release_ms, start_ms)| release_ms - start_ms,
         );

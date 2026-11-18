@@ -84,6 +84,10 @@ impl LazyMeasuredItemCache {
         }
     }
 
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "each item's rooms go back to the pool, in any order"
+    )]
     pub(super) fn clear(&mut self) {
         for (_, cached) in self.entries.drain() {
             keep_room(&mut self.rooms, cached.item.roots);

@@ -710,7 +710,7 @@ fn column_recomposition_allocations(count: usize) -> usize {
         output.set(Some(tick));
         let value = tick.value();
         Column(Modifier::empty(), ColumnSpec::default(), move || {
-            let _ = value;
+            let _: u32 = value;
             for _ in 0..count {
                 Box(Modifier::empty(), BoxSpec::default(), || {});
             }
@@ -728,7 +728,8 @@ fn column_recomposition_allocations(count: usize) -> usize {
         pass(index);
     }
     let region = Region::new(GLOBAL);
-    for index in 3..3 + PASSES as u32 {
+    let passes = u32::try_from(PASSES).expect("ten passes");
+    for index in 3..3 + passes {
         pass(index);
     }
     let change = region.change();
@@ -817,7 +818,8 @@ fn a_row_of_two_boxes() {
 // frame that swaps rows of one box does. The pool fills over the first
 // frames.
 fn a_frame_that_swaps_nodes_for_new_ones_allocates_nothing_for_them() {
-    let swapped = |rows| keyed_items_allocations(rows, |_| true, 1..16, 16..16 + PASSES as u32);
+    let passes = u32::try_from(PASSES).expect("ten passes");
+    let swapped = |rows| keyed_items_allocations(rows, |_| true, 1..16, 16..16 + passes);
     let one = swapped((8, a_row_of_one_box));
     let two = swapped((8, a_row_of_two_boxes));
     println!("allocations of a frame that swaps eight rows: of one box {one}, of two boxes {two}");
