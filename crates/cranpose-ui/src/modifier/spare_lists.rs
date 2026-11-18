@@ -11,7 +11,7 @@ pub(crate) struct SpareLists(RefCell<Vec<Rc<ManyElements>>>);
 
 impl SpareLists {
     // At most this many blocks.
-    const BLOCKS: usize = 64;
+    const BLOCKS: usize = 128;
 
     pub(crate) const fn new() -> Self {
         Self(RefCell::new(Vec::new()))
