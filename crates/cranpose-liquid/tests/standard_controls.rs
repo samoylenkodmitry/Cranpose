@@ -156,6 +156,38 @@ fn a_page_control_turns_one_page_per_tap_toward_the_tapped_side() {
 }
 
 #[test]
+fn a_reader_sets_the_page_control_to_the_nearest_page() {
+    let slot: Slot<usize> = Rc::default();
+    let captured = Rc::clone(&slot);
+    let mut robot = robot(move || {
+        let page = rememberMutableStateOf(|| 0_usize);
+        captured.set(Some(page));
+        LiquidPageControl(Modifier::empty(), 5, page.get(), move |next| page.set(next));
+    });
+    let page = slot.take().expect("the composition remembered the page");
+    for (requested, expected) in [(2.6, 3), (9.0, 4), (0.4, 0), (-3.0, 0), (1.5, 2)] {
+        let node = nodes(&mut robot)
+            .into_iter()
+            .find(|node| {
+                node.state_description
+                    .as_deref()
+                    .is_some_and(|state| state.ends_with("/ 5"))
+            })
+            .expect("the page control reads its page")
+            .node_id;
+        let tree = robot.shell_mut().semantics_tree().expect("semantics");
+        let set = cranpose_testing::robot_assertions::find_semantics_node(tree.root(), &|found| {
+            found.node_id == node
+        })
+        .and_then(|found| found.details().set_progress.clone())
+        .expect("the page control takes a page");
+        assert!(set.invoke(requested));
+        robot.wait_for_idle();
+        assert_eq!(page.get(), expected, "a request for page {requested}");
+    }
+}
+
+#[test]
 fn a_disclosure_group_shows_its_content_only_while_open() {
     let mut robot = robot(|| {
         let expanded = rememberMutableStateOf(|| false);
