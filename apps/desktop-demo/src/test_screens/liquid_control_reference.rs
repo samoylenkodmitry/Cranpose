@@ -28,10 +28,15 @@ pub(crate) enum Control {
     Disclosure,
     TextField,
     PageIndicator,
+    Wheel,
+    WheelSame,
+    Time,
+    PopUp,
+    ColorWell,
 }
 
 // The names shared with the native app's `REFERENCE_COMPONENT`.
-const NAMES: [(&str, Control); 20] = [
+const NAMES: [(&str, Control); 25] = [
     ("slider", Control::Slider),
     ("toggle", Control::Toggle),
     ("segmented", Control::Segmented),
@@ -52,6 +57,11 @@ const NAMES: [(&str, Control); 20] = [
     ("disclosure", Control::Disclosure),
     ("text-field", Control::TextField),
     ("page-control", Control::PageIndicator),
+    ("wheel", Control::Wheel),
+    ("wheel-same", Control::WheelSame),
+    ("time", Control::Time),
+    ("pop-up", Control::PopUp),
+    ("color-well", Control::ColorWell),
 ];
 
 impl Control {
@@ -138,6 +148,11 @@ fn ControlContent(control: Control, initial: f32, activations: cranpose::Mutable
         | Control::Disclosure
         | Control::TextField
         | Control::PageIndicator => ReferenceStandard(control, initial),
+        Control::Wheel
+        | Control::WheelSame
+        | Control::Time
+        | Control::PopUp
+        | Control::ColorWell => ReferencePicker(control, initial),
         _ => ReferenceSurface(control, initial, activations),
     }
 }
@@ -190,6 +205,60 @@ fn ReferenceStandard(control: Control, initial: f32) {
             );
         }
         _ => {}
+    }
+}
+
+// The fruits the native wheel offers, and the time its time picker shows.
+const FRUITS: [&str; 7] = [
+    "Apple", "Banana", "Cherry", "Grape", "Lemon", "Mango", "Orange",
+];
+const SAME: [&str; 7] = ["Grape"; 7];
+// The native time picker's frame on this simulator, 24 hours.
+const TIME_WIDTH: f32 = 938.0 / 3.0;
+
+// The pickers, at the native app's `REFERENCE_VALUE`.
+#[composable]
+fn ReferencePicker(control: Control, initial: f32) {
+    let selected = rememberMutableStateOf(move || initial as usize);
+    match control {
+        Control::Time => {
+            let state = rememberLiquidTimePickerState(10, 42, Some(true));
+            LiquidTimePicker(state, Modifier::empty().width(TIME_WIDTH));
+        }
+        Control::PopUp => LiquidPopUpButton(
+            Modifier::empty(),
+            "Fruit",
+            &FRUITS,
+            selected.get(),
+            move |next| selected.set(next),
+        ),
+        Control::ColorWell => LiquidColorWell(
+            Modifier::empty(),
+            "Color",
+            well_color(initial, liquid_colors().is_dark),
+            || {},
+        ),
+        Control::WheelSame => {
+            LiquidWheelPicker(Modifier::empty().width(300.0), "Fruit", &SAME, 3, |_| {});
+        }
+        _ => LiquidWheelPicker(
+            Modifier::empty().width(300.0),
+            "Fruit",
+            &FRUITS,
+            selected.get(),
+            move |next| selected.set(next),
+        ),
+    }
+}
+
+// SwiftUI's `.blue` for a value of 0 and `.red` for 1, as the native color
+// well shows them.
+fn well_color(initial: f32, dark: bool) -> Color {
+    match (initial > 0.5, dark) {
+        (false, false) => Color::from_rgb_u8(0, 136, 255),
+        (false, true) => Color::from_rgb_u8(0, 145, 255),
+        (true, false) => Color::from_rgb_u8(255, 56, 60),
+        (true, true) => Color::from_rgb_u8(255, 66, 69),
     }
 }
 

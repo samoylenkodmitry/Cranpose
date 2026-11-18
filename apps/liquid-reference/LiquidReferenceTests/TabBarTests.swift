@@ -240,6 +240,9 @@ class NativeControlTests: ReferenceUITests {
     func testTextField() { captureStates("text-field", values: ["0", "1"]) }
     func testPageControl() { captureStates("page-control", values: ["0", "2"]) }
     func testWheel() { captureStates("wheel", values: ["0", "3"]) }
+    func testWheelSame() { captureStates("wheel-same", values: ["0"]) }
+    func testWheelHeld() { captureStates("wheel-held", values: ["0"]) }
+    func testTimeWheel() { captureStates("time", values: ["0"]) }
     func testPopUp() { captureStates("pop-up", values: ["0", "3"]) }
     func testColorWell() { captureStates("color-well", values: ["0", "1"]) }
 

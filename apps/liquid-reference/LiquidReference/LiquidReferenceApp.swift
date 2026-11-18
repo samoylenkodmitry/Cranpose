@@ -216,6 +216,15 @@ private struct ReferenceControl: View {
                 }
             }
             .pickerStyle(.wheel).frame(width: 300).accessibilityIdentifier("reference-wheel")
+        case "wheel-same":
+            ReferenceWheel(labels: Array(repeating: "Grape", count: 7), selected: 3, shift: 0)
+                .frame(width: 300).accessibilityIdentifier("reference-wheel")
+        case "wheel-held":
+            ReferenceWheel(labels: ReferenceChoices.fruits, selected: 3, shift: 0.5)
+                .frame(width: 300).accessibilityIdentifier("reference-wheel")
+        case "time":
+            DatePicker("Time", selection: .constant(ReferenceChoices.time), displayedComponents: .hourAndMinute)
+                .datePickerStyle(.wheel).labelsHidden().accessibilityIdentifier("reference-time")
         case "pop-up":
             Picker("Fruit", selection: $selection) {
                 ForEach(Array(ReferenceChoices.fruits.enumerated()), id: \.offset) { index, fruit in
@@ -239,6 +248,54 @@ private struct ReferenceControl: View {
 private enum ReferenceChoices {
     static let fruits = ["Apple", "Banana", "Cherry", "Grape", "Lemon", "Mango", "Orange"]
     static let colors: [Color] = [.blue, .red, .green]
+    static let time = Calendar.current.date(from: DateComponents(year: 2026, month: 1, day: 1, hour: 10, minute: 42))!
+}
+
+// A UIKit wheel of `labels` resting on `selected`, turned `shift` rows past
+// it without a touch, as a finger holds it between two rows.
+private struct ReferenceWheel: UIViewRepresentable {
+    let labels: [String]
+    let selected: Int
+    let shift: CGFloat
+
+    func makeCoordinator() -> Source { Source(labels: labels) }
+
+    func makeUIView(context: Context) -> UIPickerView {
+        let picker = UIPickerView()
+        picker.dataSource = context.coordinator
+        picker.delegate = context.coordinator
+        picker.selectRow(selected, inComponent: 0, animated: false)
+        if shift != 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                let height = picker.rowSize(forComponent: 0).height
+                for view in scrollViews(in: picker) {
+                    view.setContentOffset(CGPoint(x: view.contentOffset.x, y: view.contentOffset.y + shift * height), animated: false)
+                }
+            }
+        }
+        return picker
+    }
+
+    func updateUIView(_ picker: UIPickerView, context: Context) {}
+
+    final class Source: NSObject, UIPickerViewDataSource, UIPickerViewDelegate {
+        let labels: [String]
+        init(labels: [String]) { self.labels = labels }
+        func numberOfComponents(in pickerView: UIPickerView) -> Int { 1 }
+        func pickerView(_ pickerView: UIPickerView, numberOfRowsInComponent component: Int) -> Int { labels.count }
+        func pickerView(_ pickerView: UIPickerView, titleForRow row: Int, forComponent component: Int) -> String? { labels[row] }
+    }
+}
+
+private func scrollViews(in view: UIView) -> [UIScrollView] {
+    var found: [UIScrollView] = []
+    for subview in view.subviews {
+        if let scroll = subview as? UIScrollView {
+            found.append(scroll)
+        }
+        found += scrollViews(in: subview)
+    }
+    return found
 }
 
 // Five pages with `page` current, as a pager under a carousel shows them.
