@@ -81,6 +81,7 @@ runners! {
     robot_explainer_lamp,
     robot_explainer_melt,
     robot_explainer_how,
+    robot_explainer_how_phone,
     robot_explainer_page,
     robot_explainer_pool,
     robot_explainer_silk,

@@ -197,6 +197,8 @@ pub(crate) fn click_text(robot: &Robot, prefix: &str) {
 // far the page has scrolled, since its stage holds it in view.
 pub(crate) struct Walk {
     tag: &'static str,
+    // The height of the window.
+    window: f32,
     // The height of the article's view, which the stage fills.
     page: f32,
     top: f32,
@@ -207,19 +209,25 @@ impl Walk {
     // Read with the article at its top, as a launch shows it. The section is
     // `pages` view heights tall.
     pub(crate) fn new(robot: &Robot, tag: &'static str, pages: f32) -> Self {
+        Self::in_window(robot, tag, pages, HEIGHT)
+    }
+
+    // The same in a window `window` pixels tall.
+    pub(crate) fn in_window(robot: &Robot, tag: &'static str, pages: f32, window: f32) -> Self {
         let (y, height) = section_bounds(robot, tag);
         let page = height / pages;
         Self {
             tag,
+            window,
             page,
-            top: y - (HEIGHT - page),
+            top: y - (window - page),
             travel: page * (pages - 1.0),
         }
     }
 
     fn scrolled(&self, robot: &Robot) -> f32 {
         let (y, _) = section_bounds(robot, self.tag);
-        self.top - (y - (HEIGHT - self.page))
+        self.top - (y - (self.window - self.page))
     }
 
     // Scrolls the article to `progress` along the walk: 0 where the stage

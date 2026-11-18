@@ -473,8 +473,12 @@ impl Composer {
         let in_subcompose = !self.core.subcompose_stack.borrow().is_empty();
 
         let children = self.get_node_children(id);
+        // A list that left its inline room keeps its block: the frame takes
+        // it whole.
         let previous = if children.is_empty() {
             ChildList::new()
+        } else if children.spilled() {
+            ChildList::from_vec(children.into_vec())
         } else {
             ChildList::from_slice(&children)
         };
@@ -483,11 +487,19 @@ impl Composer {
         } else {
             ParentAttachMode::ImmediateAppend
         };
+        // A pass mostly composes as many children as the node held: a list
+        // past its inline room takes their room at once and does not grow
+        // child by child.
+        let new_children = if previous.spilled() {
+            ChildList::with_capacity(previous.len())
+        } else {
+            ChildList::new()
+        };
 
         self.parent_stack().push(ParentFrame {
             id,
             previous,
-            new_children: ChildList::new(),
+            new_children,
             attach_mode,
             synthetic_root: false,
             last_made: None,
