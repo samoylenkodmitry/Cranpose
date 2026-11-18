@@ -51,16 +51,14 @@ pub(crate) fn modifiers_match(a: &Modifier, b: &Modifier, rule: ElementMatch) ->
 }
 
 fn element_matches(a: HeldElement<'_>, b: &DynModifierElement, rule: ElementMatch) -> bool {
-    // One element in both, as a kept chain shares them.
-    if a.is(b) {
-        return true;
-    }
     match rule {
-        ElementMatch::Equal => !a.requires_update() && !b.requires_update() && a.equals(&**b),
+        ElementMatch::Equal => a.matches(b),
+        // One element in both, as a kept chain shares them, matches too.
         ElementMatch::Structural => {
-            (a.element_type() == b.element_type()
-                && a.capabilities() == NodeCapabilities::DRAW
-                && b.capabilities() == NodeCapabilities::DRAW)
+            a.is(b)
+                || (a.element_type() == b.element_type()
+                    && a.capabilities() == NodeCapabilities::DRAW
+                    && b.capabilities() == NodeCapabilities::DRAW)
                 || a.equals(&**b)
         }
     }

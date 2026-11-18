@@ -147,6 +147,24 @@ impl HeldElement<'_> {
         }
     }
 
+    /// Whether `element` is this element itself, or one equal to it that
+    /// asks for no update.
+    pub fn matches(&self, element: &DynModifierElement) -> bool {
+        // The two kinds that most pairs are compare directly: decoding the
+        // element once each way and calling through `dyn` cost a text's set
+        // a third more on the gauntlet.
+        match (self.0, element.repr()) {
+            (Held::Plain { fns, words }, Repr::Plain(value)) => value.equals_plain(fns, words),
+            (Held::Element(held), Repr::Shared(shared)) => {
+                Rc::ptr_eq(held, shared)
+                    || (!held.requires_update()
+                        && !shared.requires_update()
+                        && held.equals_element(&**shared))
+            }
+            _ => !self.requires_update() && !element.requires_update() && self.equals(&**element),
+        }
+    }
+
     /// Whether `element` is of this element's type with equal data.
     pub fn equals(&self, element: &dyn AnyModifierElement) -> bool {
         match self.0 {
