@@ -3,6 +3,7 @@ use std::any::TypeId;
 use cranpose_core::{Node, NodeId};
 
 use super::{LayoutEnvironment, LayoutNode, ModifierChainHandle, unregister_layout_node};
+use crate::widgets::nodes::node_pool_limit::{KEPT_CHILD_ROOM, node_pool_limit};
 
 impl Node for LayoutNode {
     fn mount(&mut self) {
@@ -150,7 +151,7 @@ impl Node for LayoutNode {
     }
 
     fn recycle_pool_limit(&self) -> Option<usize> {
-        Some(super::super::node_pool_limit::node_pool_limit())
+        Some(node_pool_limit())
     }
 
     // The node leaves the tree whole: it lets go of what a drop would let go
@@ -183,7 +184,11 @@ impl Node for LayoutNode {
             unregister_layout_node(owner_context_id, id);
         }
         parts.release_for_recycle();
-        children.clear();
+        if children.capacity() > KEPT_CHILD_ROOM {
+            *children = Vec::new();
+        } else {
+            children.clear();
+        }
         *modifier_chain = ModifierChainHandle::detached(LayoutEnvironment::default().direction);
         *modifier_slices_snapshot = crate::modifier::SlicesSnapshot::default();
         parent.set(None);

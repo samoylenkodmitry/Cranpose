@@ -20,7 +20,10 @@ use crate::{
     modifier::{Point, SharedParentData},
     render_state::AppContext,
     subcompose_layout::SubcomposeLayoutNode,
-    widgets::nodes::{IntrinsicKind, LayoutCells, LayoutNode, LayoutParts, NodeCache},
+    widgets::nodes::{
+        IntrinsicKind, LayoutCells, LayoutNode, LayoutParts, NodeCache,
+        node_pool_limit::KEPT_CHILD_ROOM,
+    },
 };
 
 #[expect(
@@ -591,10 +594,13 @@ impl LayoutRuntimeState {
     }
 
     // Lets go of every child, as the node leaves the tree: the list keeps
-    // its room.
+    // its room for up to `KEPT_CHILD_ROOM` children.
     pub(super) fn release_children(&mut self) {
         if let Some(children) = self.children.as_deref_mut() {
             children.truncate(0);
+            if children.list.capacity() > KEPT_CHILD_ROOM {
+                children.list = Vec::new();
+            }
         }
     }
 
