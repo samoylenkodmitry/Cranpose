@@ -6,9 +6,7 @@ use std::{
 };
 
 use cranpose_animation::Animatable;
-use cranpose_core::{
-    RuntimeHandle, State, remember, rememberMovableContentOf, with_current_composer,
-};
+use cranpose_core::{RuntimeHandle, State, remember, with_current_composer};
 use cranpose_foundation::SemanticsCustomAction;
 use cranpose_macros::composable;
 use cranpose_ui::{
@@ -172,14 +170,14 @@ pub fn LiquidPullToRefreshBox(
         .clip_to_bounds()
         .semantics(move |config| config.custom_actions.push(action.clone()))
         .draw_behind(spinner(Rc::clone(&pull), color, head));
-    let content = rememberMovableContentOf(content);
+    let content: Rc<dyn Fn()> = Rc::new(content);
     Box(container, BoxSpec::default(), move || {
         let moved = Rc::clone(&pull);
-        let (connection, content) = (Rc::clone(&connection), content.clone());
+        let (connection, content) = (Rc::clone(&connection), Rc::clone(&content));
         Box(
             Modifier::empty().offset_with(move || Point::new(0.0, moved.travel())),
             BoxSpec::default(),
-            move || NestedScroll(Rc::clone(&connection), || content.show()),
+            move || NestedScroll(Rc::clone(&connection), || content()),
         );
     });
 }
