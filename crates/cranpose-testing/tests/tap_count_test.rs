@@ -25,15 +25,15 @@ enum Clock {
 
 impl Clock {
     fn at(self, shell: &AppShell<TestRenderer>, millis: u64) -> PointerEventTime {
-        let frame = shell.exact_pointer_event_time(None).animation_time_nanos;
+        let frame = shell.exact_pointer_event_time(None);
         match self {
             Self::Platform => PointerEventTime {
                 platform_time_ms: Some(millis as i64),
-                animation_time_nanos: frame,
+                ..frame
             },
             Self::FrameClock => PointerEventTime {
-                platform_time_ms: None,
-                animation_time_nanos: frame + millis * 1_000_000,
+                animation_time_nanos: frame.animation_time_nanos + millis * 1_000_000,
+                ..frame
             },
         }
     }
@@ -97,6 +97,7 @@ fn platform_time_counts_taps_whatever_frame_time_the_shell_took_them_at() {
     let second = PointerEventTime {
         platform_time_ms: Some(5_100),
         animation_time_nanos: first.animation_time_nanos + 2_000_000_000,
+        ..first
     };
     tap(&mut field.shell, first, x, 10.0);
     tap(&mut field.shell, second, x, 10.0);

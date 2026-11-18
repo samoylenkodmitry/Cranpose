@@ -189,7 +189,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     }
 
     fn on_down(&self, event: &PointerEvent) -> bool {
-        let (position, time_ms) = (event.position, event.time_ms);
+        let position = event.position;
         let interrupted = self.scroll_target.stop_animation();
         let mut gs = self.gesture_state.borrow_mut();
         gs.interrupted_animation = interrupted;
@@ -211,18 +211,12 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         gs.axis_locked_out = false;
         gs.is_overscrolling = self.overscroll.offset().abs() > 0.001;
         gs.velocity
-            .begin(time_ms, self.along_axis(event.global_position));
+            .begin(event, self.along_axis(event.global_position));
 
         false
     }
 
-    fn on_move(
-        &self,
-        position: Point,
-        buttons: PointerButtons,
-        time_ms: Option<i64>,
-        event: &PointerEvent,
-    ) -> bool {
+    fn on_move(&self, position: Point, buttons: PointerButtons, event: &PointerEvent) -> bool {
         let mut gs = self.gesture_state.borrow_mut();
 
         if !buttons.contains(PointerButton::Primary) && gs.drag_down_position.is_some() {
@@ -274,7 +268,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
 
         // In the window: an element that follows the finger barely moves under it.
         gs.velocity
-            .add(time_ms, self.along_axis(event.global_position));
+            .add(event, self.along_axis(event.global_position));
 
         if gs.is_dragging {
             drop(gs);

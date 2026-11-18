@@ -91,7 +91,7 @@ impl Swipe {
         self.down = event.position;
         self.last = event.position;
         self.dragging = false;
-        self.velocity.begin(event.time_ms, event.position.y);
+        self.velocity.begin(event, event.position.y);
     }
 
     fn on_move(&mut self, event: &PointerEvent) {
@@ -112,7 +112,7 @@ impl Swipe {
                 .state
                 .dispatch_raw_delta(self.last.y - event.position.y);
             self.last = event.position;
-            self.velocity.add(event.time_ms, event.position.y);
+            self.velocity.add(event, event.position.y);
             if consumed != 0.0 {
                 event.consume();
             }
@@ -121,7 +121,7 @@ impl Swipe {
 
     fn on_up(&mut self, event: &PointerEvent) {
         if self.dragging {
-            let speed = -self.velocity.release(event.time_ms, MAX_FLING_VELOCITY);
+            let speed = -self.velocity.release(event, MAX_FLING_VELOCITY);
             let state = self.state;
             let stop = Rc::clone(&self.fling);
             let id = state.hold_fling(move || stop.cancel());

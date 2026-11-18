@@ -1228,17 +1228,17 @@ fn pointer_event_clock_supports_realtime_and_exact_sampling() {
     );
 
     shell.update_at_frame_time_nanos(120_000_000);
-    assert_eq!(
-        shell.exact_pointer_event_time(Some(17)),
-        PointerEventTime {
-            platform_time_ms: Some(17),
-            animation_time_nanos: 120_000_000,
-        }
-    );
+    let before_exact = Instant::now();
+    let exact = shell.exact_pointer_event_time(Some(17));
+    assert_eq!(exact.platform_time_ms, Some(17));
+    assert_eq!(exact.animation_time_nanos, 120_000_000);
+    assert!(exact.received_at >= before_exact && exact.received_at <= Instant::now());
 
+    let before_realtime = Instant::now();
     let realtime = shell.realtime_pointer_event_time(Some(18));
     assert_eq!(realtime.platform_time_ms, Some(18));
     assert!(realtime.animation_time_nanos >= 120_000_000);
+    assert!(realtime.received_at >= before_realtime && realtime.received_at <= Instant::now());
 
     shell.update_after_exact_interval(Duration::from_millis(8));
     assert_eq!(
@@ -3561,8 +3561,7 @@ fn a_small_move_back_before_the_lift_keeps_the_fling_s_direction() {
     );
 }
 
-// Lets `duration` of real time pass: the scroller times a move that carries
-// no event time by the clock.
+// Lets `duration` of real time pass.
 fn wait(duration: Duration) {
     let until = Instant::now() + duration;
     while Instant::now() < until {
@@ -3570,12 +3569,42 @@ fn wait(duration: Duration) {
     }
 }
 
-// A shell that passes no event time, as the web's did, handles the moves a
+// A sample that the shell received `offset` after the one that began the
+// gesture.
+fn received_after(
+    shell: &AppShell<HitGraphRenderer>,
+    origin: Instant,
+    offset: Duration,
+) -> PointerEventTime {
+    PointerEventTime {
+        received_at: origin + offset,
+        ..shell.exact_pointer_event_time(None)
+    }
+}
+
+// What the machine does in real time while the shell receives the events.
+#[derive(Clone, Copy)]
+enum Machine {
+    // The events take no real time.
+    Idle,
+    // The real time of the events follows the finger's. A loaded machine
+    // pauses in the shell's thread after each move of a burst.
+    Loaded,
+}
+
+impl Machine {
+    fn pass(self, duration: Duration) {
+        if matches!(self, Self::Loaded) {
+            wait(duration);
+        }
+    }
+}
+
+// A shell that passes no event time, as the web's did, receives the moves a
 // stalled frame held back one after another: the fling must follow the speed
-// the finger moved at, not the speed the moves were handled at.
-#[test]
-fn moves_handled_in_a_burst_fling_at_the_fingers_speed() {
-    let _guard = test_guard();
+// the finger moved at, not the speed the moves came in at. The stamps put the
+// moves of the burst 50 microseconds apart, whatever the machine does.
+fn assert_a_burst_flings_at_the_fingers_speed(machine: Machine) {
     APP_SHELL_WHEEL_SCROLL_STATE.with(|slot| slot.borrow_mut().take());
 
     let root_key = location_key(file!(), line!(), column!());
@@ -3588,29 +3617,47 @@ fn moves_handled_in_a_burst_fling_at_the_fingers_speed() {
     shell.set_viewport(320.0, 640.0);
     shell.update_at_frame_time_nanos(16_000_000);
 
-    shell.set_cursor(160.0, 600.0);
-    shell.pointer_pressed();
+    let origin = Instant::now();
+    let mut offset = Duration::ZERO;
+    shell.set_cursor_at_event_time(160.0, 600.0, received_after(&shell, origin, offset));
+    shell.pointer_pressed_at_event_time(received_after(&shell, origin, offset));
     // The finger moves 8 points every 8 ms: 1,000 points a second.
     let mut y = 600.0f32;
     for _ in 0..6 {
-        wait(Duration::from_millis(8));
+        machine.pass(Duration::from_millis(8));
+        offset += Duration::from_millis(8);
         y -= 8.0;
-        shell.set_cursor(160.0, y);
+        shell.set_cursor_at_event_time(160.0, y, received_after(&shell, origin, offset));
     }
     // A frame stalls for 40 ms, then its five moves and the release arrive
     // at once.
-    wait(Duration::from_millis(40));
+    machine.pass(Duration::from_millis(40));
+    offset += Duration::from_millis(40);
     for _ in 0..5 {
         y -= 8.0;
-        shell.set_cursor(160.0, y);
+        shell.set_cursor_at_event_time(160.0, y, received_after(&shell, origin, offset));
+        offset += Duration::from_micros(50);
+        machine.pass(Duration::from_millis(1));
     }
-    shell.pointer_released();
+    shell.pointer_released_at_event_time(received_after(&shell, origin, offset));
 
     let velocity = shell.debug_enter_app_context(cranpose_ui::debug_last_fling_velocity);
     assert!(
         velocity < -300.0 && velocity > -2_500.0,
         "a finger at 1,000 points a second flung at {velocity} points a second"
     );
+}
+
+#[test]
+fn moves_handled_in_a_burst_fling_at_the_fingers_speed() {
+    let _guard = test_guard();
+    assert_a_burst_flings_at_the_fingers_speed(Machine::Idle);
+}
+
+#[test]
+fn a_loaded_machine_does_not_time_the_moves_of_a_burst() {
+    let _guard = test_guard();
+    assert_a_burst_flings_at_the_fingers_speed(Machine::Loaded);
 }
 
 #[test]
@@ -9358,7 +9405,7 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
-type PointerTimeSample = (PointerEventKind, Option<i64>, Option<u64>);
+type PointerTimeSample = (PointerEventKind, Option<i64>, Option<u64>, Option<Instant>);
 
 thread_local! {
     static POINTER_TIME_PROBE: RefCell<Option<Rc<RefCell<Vec<PointerTimeSample>>>>> =
@@ -9445,6 +9492,7 @@ fn app_shell_pointer_time_probe() {
                                     event.kind,
                                     event.time_ms,
                                     event.animation_time_nanos,
+                                    event.received_at,
                                 ));
                                 event.consume();
                             }
@@ -9474,17 +9522,21 @@ fn shell_preserves_resolved_pointer_timestamps_during_dispatch() {
     let captured = POINTER_TIME_PROBE
         .with(|slot| slot.borrow().as_ref().map(Rc::clone))
         .expect("probe should expose captured samples");
+    let origin = Instant::now();
+    let received = |millis| origin + Duration::from_millis(millis);
     assert!(shell.set_cursor_at_event_time(
         50.0,
         50.0,
         PointerEventTime {
             platform_time_ms: Some(10),
             animation_time_nanos: 100,
+            received_at: received(0),
         },
     ));
     assert!(shell.pointer_pressed_at_event_time(PointerEventTime {
         platform_time_ms: Some(11),
         animation_time_nanos: 110,
+        received_at: received(1),
     }));
     assert!(shell.pointer_released_at_position_event_time(
         51.0,
@@ -9492,12 +9544,63 @@ fn shell_preserves_resolved_pointer_timestamps_during_dispatch() {
         PointerEventTime {
             platform_time_ms: Some(12),
             animation_time_nanos: 120,
+            received_at: received(2),
         },
     ));
 
     let samples = captured.borrow();
-    assert!(samples.contains(&(PointerEventKind::Down, Some(11), Some(110))));
-    assert!(samples.contains(&(PointerEventKind::Up, Some(12), Some(120))));
+    assert!(samples.contains(&(
+        PointerEventKind::Down,
+        Some(11),
+        Some(110),
+        Some(received(1))
+    )));
+    assert!(samples.contains(&(PointerEventKind::Up, Some(12), Some(120), Some(received(2)))));
+}
+
+// A live event takes the instant at which the shell received it, whichever
+// entry point of the platform brought it.
+#[test]
+fn shell_stamps_live_pointer_events_with_the_instant_it_received_them() {
+    let _guard = test_guard();
+    POINTER_TIME_PROBE.with(|slot| slot.borrow_mut().take());
+
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        app_shell_pointer_time_probe,
+    );
+    shell.set_buffer_size(200, 200);
+    shell.set_viewport(200.0, 200.0);
+    shell.update();
+
+    let captured = POINTER_TIME_PROBE
+        .with(|slot| slot.borrow().as_ref().map(Rc::clone))
+        .expect("probe should expose captured samples");
+    let before = Instant::now();
+    assert!(shell.set_cursor(50.0, 50.0));
+    assert!(shell.pointer_pressed());
+    assert!(shell.set_cursor(50.0, 60.0));
+    assert!(shell.pointer_released());
+    let after = Instant::now();
+
+    let samples = captured.borrow();
+    let kinds: Vec<_> = samples.iter().map(|sample| sample.0).collect();
+    assert!(
+        kinds.contains(&PointerEventKind::Down)
+            && kinds.contains(&PointerEventKind::Move)
+            && kinds.contains(&PointerEventKind::Up),
+        "the probe saw {kinds:?}"
+    );
+    let mut previous = before;
+    for (kind, _, _, received_at) in samples.iter() {
+        let received_at = received_at.unwrap_or_else(|| panic!("{kind:?} carries no stamp"));
+        assert!(
+            previous <= received_at && received_at <= after,
+            "{kind:?} was stamped outside the calls that handed it over"
+        );
+        previous = received_at;
+    }
 }
 
 #[test]
