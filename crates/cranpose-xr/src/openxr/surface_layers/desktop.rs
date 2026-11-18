@@ -18,7 +18,7 @@ impl SurfaceLayers {
 
     pub(crate) fn layers<'a>(
         &'a self,
-        _panels: &'a [PanelSlot],
+        _slot: &'a PanelSlot,
     ) -> impl Iterator<Item = QuadLayer<'a>> + use<'a> {
         std::iter::empty()
     }

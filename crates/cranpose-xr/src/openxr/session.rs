@@ -1,18 +1,18 @@
 //! The OpenXR session, its events and the ends of the frames.
 #![expect(
     unsafe_code,
-    reason = "layers made from raw structs with extension structs in their chain"
+    reason = "the list of raw layers that the runtime reads through pointers"
 )]
 
 use std::{
-    ptr,
+    ptr, slice,
     time::{Duration, Instant},
 };
 
 use openxr as xr;
 
 use super::{
-    cylinder_layers::{CylinderLayer, raw_layers},
+    frame_layers::{FrameLayers, Layer},
     graphics::{Api, Graphics},
     passthrough::Passthrough,
     recenter_events::RecenterEvents,
@@ -86,10 +86,54 @@ pub(crate) struct ProjectionEye<'a> {
     pub(crate) fov: FieldOfView,
 }
 
+impl ProjectionEye<'_> {
+    // The view of the eye: all of its image.
+    fn to_raw(&self) -> xr::sys::CompositionLayerProjectionView {
+        xr::CompositionLayerProjectionView::<Api>::new()
+            .pose(posef(&self.pose))
+            .fov(fovf(&self.fov))
+            .sub_image(
+                xr::SwapchainSubImage::new()
+                    .swapchain(self.swapchain)
+                    .image_rect(xr::Rect2Di {
+                        offset: xr::Offset2Di { x: 0, y: 0 },
+                        extent: xr::Extent2Di {
+                            width: self.size.0 as i32,
+                            height: self.size.1 as i32,
+                        },
+                    }),
+            )
+            .into_raw()
+    }
+}
+
 // A layer that shows the pictures that were rendered for both eyes, from the head poses that
 // they were rendered for. The compositor moves them to the head's newer pose.
 pub(crate) struct ProjectionLayer<'a> {
     pub(crate) eyes: [ProjectionEye<'a>; 2],
+}
+
+impl ProjectionLayer<'_> {
+    // The compositor's struct for the layer in `space`, with the structs of its two views, which
+    // the layer's `views` pointer must name. The structs name the swapchains by their handles, so
+    // they are valid for as long as the swapchains live.
+    pub(crate) fn to_raw(
+        &self,
+        space: xr::sys::Space,
+    ) -> (
+        xr::sys::CompositionLayerProjection,
+        [xr::sys::CompositionLayerProjectionView; 2],
+    ) {
+        let layer = xr::sys::CompositionLayerProjection {
+            ty: xr::sys::CompositionLayerProjection::TYPE,
+            next: ptr::null(),
+            layer_flags: xr::CompositionLayerFlags::EMPTY,
+            space,
+            view_count: 2,
+            views: ptr::null(),
+        };
+        (layer, self.eyes.each_ref().map(ProjectionEye::to_raw))
+    }
 }
 
 // A layer that shows a swapchain image on a flat panel.
@@ -99,6 +143,52 @@ pub(crate) struct QuadLayer<'a> {
     pub(crate) pose: Pose,
     // The panel's width and height in meters.
     pub(crate) size: [f32; 2],
+}
+
+impl QuadLayer<'_> {
+    // The compositor's struct for the layer in `space`. It names the swapchain by its handle, so
+    // the struct is valid for as long as the swapchain lives.
+    pub(crate) fn to_raw(&self, space: xr::sys::Space) -> xr::sys::CompositionLayerQuad {
+        let (eye_visibility, offset, extent, blends) = match self.source {
+            LayerSource::Drawn((width, height)) => {
+                (xr::EyeVisibility::BOTH, [0_u32, 0], [width, height], true)
+            }
+            #[cfg(target_os = "android")]
+            LayerSource::Surface(view) => {
+                (eye_visibility(view.eye), view.offset, view.extent, false)
+            }
+        };
+        xr::sys::CompositionLayerQuad {
+            ty: xr::sys::CompositionLayerQuad::TYPE,
+            next: ptr::null(),
+            layer_flags: if blends {
+                xr::CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA
+            } else {
+                xr::CompositionLayerFlags::EMPTY
+            },
+            space,
+            eye_visibility,
+            sub_image: xr::sys::SwapchainSubImage {
+                swapchain: self.swapchain.as_raw(),
+                image_rect: xr::Rect2Di {
+                    offset: xr::Offset2Di {
+                        x: offset[0] as i32,
+                        y: offset[1] as i32,
+                    },
+                    extent: xr::Extent2Di {
+                        width: extent[0] as i32,
+                        height: extent[1] as i32,
+                    },
+                },
+                image_array_index: 0,
+            },
+            pose: posef(&self.pose),
+            size: xr::Extent2Df {
+                width: self.size[0],
+                height: self.size[1],
+            },
+        }
+    }
 }
 
 // The fields drop in their order: the spaces and the frame ends, then the session, then the
@@ -124,6 +214,8 @@ pub(crate) struct XrSession {
     // row is the bottom one and the runtime can flip it
     flips_layers: bool,
     status: SessionStatus,
+    // The raw layers of the frame that ends. The lists keep their capacity from frame to frame.
+    layers: FrameLayers,
 }
 
 impl XrSession {
@@ -142,6 +234,7 @@ impl XrSession {
         let local = session
             .create_reference_space(xr::ReferenceSpaceType::LOCAL, xr::Posef::IDENTITY)
             .map_err(|error| format!("OpenXR space: {error}"))?;
+        let local_handle = local.as_raw();
         let view = session
             .create_reference_space(xr::ReferenceSpaceType::VIEW, xr::Posef::IDENTITY)
             .map_err(|error| format!("OpenXR view space: {error}"))?;
@@ -174,6 +267,7 @@ impl XrSession {
             cylinders,
             flips_layers: flips_layers && !Graphics::TOP_ROW_FIRST,
             status: SessionStatus::Idle,
+            layers: FrameLayers::new(local_handle),
         })
     }
 
@@ -286,106 +380,47 @@ impl XrSession {
     }
 
     // Ends the frame begun last. The room is the bottom layer while the runtime shows the app's
-    // layers. Then come the streamed scenes, the curved panels, and `layers`, back to front.
-    pub(crate) fn end_frame(
+    // layers. Then come `streams`, `panels` and `overlay`, in the order that the compositor draws
+    // them: the last layer covers the others.
+    pub(crate) fn end_frame<'a>(
         &mut self,
         display_time: xr::Time,
-        streams: &[ProjectionLayer<'_>],
-        curved: &[CylinderLayer<'_>],
-        layers: &[QuadLayer<'_>],
+        streams: impl Iterator<Item = ProjectionLayer<'a>>,
+        panels: impl Iterator<Item = Layer<'a>>,
+        overlay: impl Iterator<Item = QuadLayer<'a>>,
     ) -> Result<(), String> {
-        let mut layouts: Vec<xr::sys::CompositionLayerImageLayoutFB> = layers
-            .iter()
-            .map(|_| xr::sys::CompositionLayerImageLayoutFB {
-                ty: xr::sys::CompositionLayerImageLayoutFB::TYPE,
-                next: ptr::null_mut(),
-                flags: xr::sys::CompositionLayerImageLayoutFlagsFB::VERTICAL_FLIP,
-            })
-            .collect();
-        let quads: Vec<xr::CompositionLayerQuad<'_, Api>> = layers
-            .iter()
-            .zip(layouts.iter_mut())
-            .map(|(layer, layout)| {
-                let (eye_visibility, offset, extent, blends) = match layer.source {
-                    LayerSource::Drawn((width, height)) => {
-                        (xr::EyeVisibility::BOTH, [0_u32, 0], [width, height], true)
-                    }
-                    #[cfg(target_os = "android")]
-                    LayerSource::Surface(view) => {
-                        (eye_visibility(view.eye), view.offset, view.extent, false)
-                    }
-                };
-                let raw = xr::sys::CompositionLayerQuad {
-                    ty: xr::sys::CompositionLayerQuad::TYPE,
-                    // The runtime reads the first row of any swapchain as the bottom one. The
-                    // images of wgpu and the pictures of a surface's producer start with the top
-                    // row.
-                    next: if self.flips_layers {
-                        ptr::from_mut(layout).cast_const().cast()
-                    } else {
-                        ptr::null()
-                    },
-                    layer_flags: if blends {
-                        xr::CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA
-                    } else {
-                        xr::CompositionLayerFlags::EMPTY
-                    },
-                    space: self.local.as_raw(),
-                    eye_visibility,
-                    sub_image: xr::sys::SwapchainSubImage {
-                        swapchain: layer.swapchain.as_raw(),
-                        image_rect: xr::Rect2Di {
-                            offset: xr::Offset2Di {
-                                x: offset[0] as i32,
-                                y: offset[1] as i32,
-                            },
-                            extent: xr::Extent2Di {
-                                width: extent[0] as i32,
-                                height: extent[1] as i32,
-                            },
-                        },
-                        image_array_index: 0,
-                    },
-                    pose: posef(&layer.pose),
-                    size: xr::Extent2Df {
-                        width: layer.size[0],
-                        height: layer.size[1],
-                    },
-                };
-                // SAFETY: the struct names a live space and swapchain, and its next chain holds
-                // a layout struct that outlives the frame's end below.
-                unsafe { xr::CompositionLayerQuad::from_raw(raw) }
-            })
-            .collect();
+        self.layers.fill(streams, panels, overlay);
+        // The runtime reads the first row of any swapchain as the bottom one. The images of wgpu
+        // and the pictures of a surface's producer start with the top row. One layout serves every
+        // layer.
         let flip = xr::sys::CompositionLayerImageLayoutFB {
             ty: xr::sys::CompositionLayerImageLayoutFB::TYPE,
             next: ptr::null_mut(),
             flags: xr::sys::CompositionLayerImageLayoutFlagsFB::VERTICAL_FLIP,
         };
-        let cylinders = raw_layers(curved, &self.local, self.flips_layers.then_some(&flip));
-        let views: Vec<[xr::CompositionLayerProjectionView<'_, Api>; 2]> =
-            streams.iter().map(projection_views).collect();
-        let projections: Vec<xr::CompositionLayerProjection<'_, Api>> = views
-            .iter()
-            .map(|views| {
-                xr::CompositionLayerProjection::new()
-                    .layer_flags(xr::CompositionLayerFlags::EMPTY)
-                    .space(&self.local)
-                    .views(views)
-            })
-            .collect();
-        let references: Vec<&xr::CompositionLayerBase<'_, Api>> = self
-            .passthrough
-            .layer()
-            .filter(|_| self.status.shows())
-            .into_iter()
-            .chain(projections.iter().map(|projection| &**projection))
-            .chain(cylinders.iter().map(|cylinder| &**cylinder))
-            .chain(quads.iter().map(|quad| &**quad))
-            .collect();
-        self.stream
-            .end(display_time, self.passthrough.blend_mode(), &references)
-            .map_err(|error| format!("OpenXR end frame: {error}"))
+        let headers = self.layers.headers(
+            self.passthrough.layer().filter(|_| self.status.shows()),
+            self.flips_layers.then_some(&flip),
+        );
+        // SAFETY: each pointer names the struct of a layer that `self.layers` or
+        // `self.passthrough` holds. Nothing moves or drops those until the call returns. The base
+        // layer is a transparent wrapper of the header that every layer struct starts with, so a
+        // reference to it and a pointer to the header have one layout. The wrapper's `end` hands
+        // the array of references to the runtime as an array of pointers.
+        let references = unsafe {
+            slice::from_raw_parts(
+                headers
+                    .as_ptr()
+                    .cast::<&xr::CompositionLayerBase<'_, Api>>(),
+                headers.len(),
+            )
+        };
+        let ended = self
+            .stream
+            .end(display_time, self.passthrough.blend_mode(), references)
+            .map_err(|error| format!("OpenXR end frame: {error}"));
+        self.layers.clear();
+        ended
     }
 }
 
@@ -410,28 +445,6 @@ impl Drop for XrSession {
         }
         log::info!("cranpose xr: session ends in {:?}", self.status);
     }
-}
-
-// The views of a projection layer, left then right. Each shows all of its image.
-fn projection_views<'a>(
-    layer: &ProjectionLayer<'a>,
-) -> [xr::CompositionLayerProjectionView<'a, Api>; 2] {
-    layer.eyes.each_ref().map(|eye| {
-        xr::CompositionLayerProjectionView::new()
-            .pose(posef(&eye.pose))
-            .fov(fovf(&eye.fov))
-            .sub_image(
-                xr::SwapchainSubImage::new()
-                    .swapchain(eye.swapchain)
-                    .image_rect(xr::Rect2Di {
-                        offset: xr::Offset2Di { x: 0, y: 0 },
-                        extent: xr::Extent2Di {
-                            width: eye.size.0 as i32,
-                            height: eye.size.1 as i32,
-                        },
-                    }),
-            )
-    })
 }
 
 #[cfg(target_os = "android")]

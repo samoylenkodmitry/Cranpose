@@ -6,6 +6,7 @@ mod cylinder_layers;
 #[cfg(target_os = "android")]
 mod external_texture;
 mod eye_views;
+mod frame_layers;
 mod frame_rate;
 mod graphics;
 mod hand_actions;

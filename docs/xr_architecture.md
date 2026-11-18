@@ -163,8 +163,9 @@ lists the layers of the room, the streamed scenes and the curved panels first. T
 panels and the surfaces, sorted back to front by the distance from the head to each one's plane,
 so a panel in front of a surface shows over it. The plane's distance, not the distance to the
 layer's center, keeps a small panel at the edge of a large surface in front of it. The handles and
-the rays follow, so they show over everything. The sort runs in place on the frame's list and
-allocates nothing. A curved panel still draws under every flat panel and surface.
+the rays follow, so they show over everything. The sort runs in place on the panels' list and
+allocates nothing. The session keeps the raw structs of the frame's layers in lists that it reuses
+from frame to frame. A curved panel still draws under every flat panel and surface.
 
 ## Video decoding
 

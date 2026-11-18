@@ -4,14 +4,16 @@ use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use cranpose::{AppSettings, GpuContext, GuestView, remember};
 use cranpose_core::CompositionLocalProvider;
+use openxr as xr;
 
 use super::{
+    frame_layers::Layer,
     frame_rate::FrameRate,
     graphics::Graphics,
     handle_layers::HandleLayers,
     headset_input::HeadsetInput,
     host::Host,
-    panel_layers::{DENSITY, PanelFrame, PanelLayers},
+    panel_layers::{DENSITY, PanelLayers},
     ray_layers::RayLayers,
     runtime::Runtime,
     session::{SessionStatus, XrSession},
@@ -25,7 +27,7 @@ use crate::{
     frame_effects::local_frame_effects,
     local_haptics, local_headset_properties, local_spatial_capabilities, local_spatial_environment,
     pointer::Pointer,
-    space::{Space, local_space},
+    space::{PanelSlot, Shape, Space, local_space},
     surface_input::Gesture,
 };
 
@@ -184,20 +186,11 @@ impl Immersive {
             self.space.carry(step);
         }
         self.follow_environment();
-        let PanelFrame {
-            mut quads,
-            cylinders,
-        } = if shown {
+        if shown {
             self.layers
-                .draw(&mut self.guest, &self.gpu, &self.xr_session, &self.space)?
-        } else {
-            PanelFrame {
-                quads: Vec::new(),
-                cylinders: Vec::new(),
-            }
-        };
-        // The handles and the rays show over the panels: the rays end on them
-        let panels = self.space.panels();
+                .draw(&mut self.guest, &self.gpu, &self.xr_session, &self.space)?;
+        }
+        let mut panels = self.space.panels();
         if shown {
             self.streams
                 .update(&self.xr_session, &self.space, self.headset.display_time());
@@ -206,30 +199,59 @@ impl Immersive {
         }
         self.surfaces.sync(&self.xr_session, &self.space, &panels);
         if shown {
-            quads.extend(self.surfaces.layers(&panels));
-            let head = self.headset.device_pose();
-            // The compositor draws layers in list order. The panels and the surfaces go back to
-            // front, so a panel in front of a surface shows over it.
-            if let Some(head) = &head {
-                sort_back_to_front(&mut quads, head.position, |quad| &quad.pose);
-            }
-            quads.extend(self.handles.layers(&panels, self.pointer.handle()));
-            if let Some(head) = &head {
-                quads.extend(self.rays.layers(&self.pointer.beams(), head.position));
-            }
-        }
-        let streams = if shown {
-            self.streams.layers()
+            self.end_with_layers(frame.predicted_display_time, &mut panels)?;
         } else {
-            Vec::new()
-        };
-        self.xr_session
-            .end_frame(frame.predicted_display_time, &streams, &cylinders, &quads)?;
-        drop((streams, cylinders, quads));
+            self.xr_session.end_frame(
+                frame.predicted_display_time,
+                std::iter::empty(),
+                std::iter::empty(),
+                std::iter::empty(),
+            )?;
+        }
         if let Err(error) = self.gpu.device.poll(wgpu::PollType::Poll) {
             log::warn!("cranpose xr: device poll: {error}");
         }
         Ok(())
+    }
+
+    // Ends the frame with the layers of the streamed scenes, the panels and the surfaces, and the
+    // handles and the rays over them. The compositor draws layers in list order, so `panels` go
+    // back to front: a panel in front of a surface shows over it.
+    fn end_with_layers(
+        &mut self,
+        display_time: xr::Time,
+        panels: &mut [PanelSlot],
+    ) -> Result<(), String> {
+        let head = self.headset.device_pose();
+        if let Some(head) = &head {
+            sort_back_to_front(panels, head.position, |slot| &slot.pose);
+        }
+        let beams = self.pointer.beams();
+        let (layers, surfaces) = (&self.layers, &self.surfaces);
+        let curved = panels
+            .iter()
+            .filter(|slot| slot.shape != Shape::Flat)
+            .filter_map(|slot| layers.layer(slot));
+        let flat = panels
+            .iter()
+            .filter(|slot| slot.shape == Shape::Flat)
+            .flat_map(|slot| {
+                layers
+                    .layer(slot)
+                    .into_iter()
+                    .chain(surfaces.layers(slot).map(Layer::Quad))
+            });
+        let rays = head
+            .iter()
+            .flat_map(|head| self.rays.layers(&beams, head.position));
+        self.xr_session.end_frame(
+            display_time,
+            self.streams.layers(),
+            curved.chain(flat),
+            self.handles
+                .layers(panels, self.pointer.handle())
+                .chain(rays),
+        )
     }
 
     // The room follows what the app prefers, and the app learns what the room shows.

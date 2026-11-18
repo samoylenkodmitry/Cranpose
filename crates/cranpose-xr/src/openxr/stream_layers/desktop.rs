@@ -31,7 +31,7 @@ impl StreamLayers {
     ) {
     }
 
-    pub(crate) fn layers(&self) -> Vec<ProjectionLayer<'_>> {
-        Vec::new()
+    pub(crate) fn layers(&self) -> impl Iterator<Item = ProjectionLayer<'_>> + use<'_> {
+        std::iter::empty()
     }
 }

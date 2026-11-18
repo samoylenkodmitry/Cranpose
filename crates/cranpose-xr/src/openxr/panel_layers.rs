@@ -10,6 +10,7 @@ use openxr as xr;
 
 use super::{
     cylinder_layers::CylinderLayer,
+    frame_layers::Layer,
     graphics::{Api, Graphics, SwapchainFormat},
     session::{LayerSource, QuadLayer, XrSession},
 };
@@ -32,12 +33,6 @@ struct PanelImage {
     shown: bool,
 }
 
-// The layers of the panels in a frame: the flat panels and the curved ones.
-pub(crate) struct PanelFrame<'a> {
-    pub(crate) quads: Vec<QuadLayer<'a>>,
-    pub(crate) cylinders: Vec<CylinderLayer<'a>>,
-}
-
 pub(crate) struct PanelLayers {
     format: SwapchainFormat,
     atlas: Option<(wgpu::Texture, wgpu::TextureView)>,
@@ -58,15 +53,15 @@ impl PanelLayers {
         self.format
     }
 
-    // Draws the composition if it changed and returns a layer for each panel that has an
-    // image.
-    pub(crate) fn draw<'a>(
-        &'a mut self,
+    // Draws the composition if it changed and copies the panels that changed into their
+    // swapchains.
+    pub(crate) fn draw(
+        &mut self,
         guest: &mut GuestView,
         gpu: &GpuContext,
         xr_session: &XrSession,
         space: &Space,
-    ) -> Result<PanelFrame<'a>, String> {
+    ) -> Result<(), String> {
         fit_atlas(guest, space)?;
         let (texture, view) = self.atlas_texture(gpu, guest.pixel_size());
         let drawn = guest
@@ -81,26 +76,34 @@ impl PanelLayers {
         }
         self.atlas = Some((texture, view));
         // A panel that grew in this draw gets its room by the next frame
-        fit_atlas(guest, space)?;
-        let quads = panels
+        fit_atlas(guest, space)
+    }
+
+    // The layer of a content panel that has an image: a quad for a flat panel and a cylinder for
+    // a curved one. A surface panel has none here.
+    pub(crate) fn layer(&self, slot: &PanelSlot) -> Option<Layer<'_>> {
+        if slot.kind != PanelKind::Content {
+            return None;
+        }
+        let image = self
+            .images
             .iter()
-            .filter(|slot| slot.shape == Shape::Flat)
-            .filter_map(|slot| {
-                let image = self
-                    .images
-                    .iter()
-                    .find(|image| image.id == slot.id && image.shown)?;
-                Some(QuadLayer {
-                    swapchain: &image.swapchain,
-                    source: LayerSource::Drawn(image.size),
-                    pose: slot.pose,
-                    size: slot.size().map(|dp| dp * METERS_PER_DP),
-                })
-            })
-            .collect();
-        Ok(PanelFrame {
-            quads,
-            cylinders: curved_layers(&panels, &self.images),
+            .find(|image| image.id == slot.id && image.shown)?;
+        let size = slot.size().map(|dp| dp * METERS_PER_DP);
+        Some(match slot.shape {
+            Shape::Flat => Layer::Quad(QuadLayer {
+                swapchain: &image.swapchain,
+                source: LayerSource::Drawn(image.size),
+                pose: slot.pose,
+                size,
+            }),
+            Shape::Curved { radius } => Layer::Cylinder(CylinderLayer {
+                swapchain: &image.swapchain,
+                image_size: image.size,
+                pose: slot.pose,
+                radius,
+                size,
+            }),
         })
     }
 
@@ -254,28 +257,6 @@ impl PanelLayers {
             }
         })
     }
-}
-
-// The layers of the curved panels that have an image.
-fn curved_layers<'a>(panels: &[PanelSlot], images: &'a [PanelImage]) -> Vec<CylinderLayer<'a>> {
-    panels
-        .iter()
-        .filter_map(|slot| {
-            let Shape::Curved { radius } = slot.shape else {
-                return None;
-            };
-            let image = images
-                .iter()
-                .find(|image| image.id == slot.id && image.shown)?;
-            Some(CylinderLayer {
-                swapchain: &image.swapchain,
-                image_size: image.size,
-                pose: slot.pose,
-                radius,
-                size: slot.size().map(|dp| dp * METERS_PER_DP),
-            })
-        })
-        .collect()
 }
 
 // Sizes the composition's view to hold every panel's part of the atlas.

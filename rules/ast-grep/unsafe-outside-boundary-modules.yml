@@ -47,7 +47,6 @@ ignores:
   - crates/cranpose-xr/src/android_main.rs
   - crates/cranpose-xr/src/openxr/clock/performance_counter.rs
   - crates/cranpose-xr/src/openxr/clock/timespec.rs
-  - crates/cranpose-xr/src/openxr/cylinder_layers.rs
   - crates/cranpose-xr/src/openxr/eye_views.rs
   - crates/cranpose-xr/src/openxr/external_texture.rs
   - crates/cranpose-xr/src/openxr/graphics/gles.rs

@@ -66,23 +66,23 @@ impl SurfaceLayers {
         }
     }
 
-    // The layers of the surface panels: one for a mono panel, and one for each eye of a stereo
-    // panel.
+    // The layers of a surface panel: one layer for a mono panel and one for each eye of a stereo
+    // panel. Another kind of panel has none.
     pub(crate) fn layers<'a>(
         &'a self,
-        panels: &'a [PanelSlot],
+        slot: &'a PanelSlot,
     ) -> impl Iterator<Item = QuadLayer<'a>> + use<'a> {
-        panels
-            .iter()
-            .filter_map(move |slot| {
-                let PanelKind::Surface(stereo_mode) = slot.kind else {
-                    return None;
-                };
-                let image = self.images.iter().find(|image| image.id == slot.id)?;
-                let swapchain = image.swapchain.as_ref()?;
-                Some((slot, swapchain, image.size, stereo_mode))
-            })
-            .flat_map(|(slot, swapchain, size, stereo_mode)| {
+        let shown = match slot.kind {
+            PanelKind::Surface(stereo_mode) => self
+                .images
+                .iter()
+                .find(|image| image.id == slot.id)
+                .and_then(|image| Some((image.swapchain.as_ref()?, image.size, stereo_mode))),
+            PanelKind::Content => None,
+        };
+        shown
+            .into_iter()
+            .flat_map(move |(swapchain, size, stereo_mode)| {
                 stereo_mode.views(size).map(move |view| QuadLayer {
                     swapchain,
                     source: LayerSource::Surface(view),

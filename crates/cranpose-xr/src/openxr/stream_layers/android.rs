@@ -172,7 +172,7 @@ impl StreamLayers {
     }
 
     // The layers of the scenes that have shown a frame.
-    pub(crate) fn layers(&self) -> Vec<ProjectionLayer<'_>> {
+    pub(crate) fn layers(&self) -> impl Iterator<Item = ProjectionLayer<'_>> + use<'_> {
         self.streams
             .iter()
             .filter(|stream| !stream.failed)
@@ -188,7 +188,6 @@ impl StreamLayers {
                     ],
                 })
             })
-            .collect()
     }
 }
 
