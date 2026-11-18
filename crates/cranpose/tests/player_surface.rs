@@ -358,6 +358,10 @@ fn a_picture_that_the_intake_leaves_reaches_its_next_call() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test draws until the decoder's second picture arrives, and a poll is the way to see it"
+)]
 fn a_picture_that_comes_while_the_intake_runs_reaches_its_next_call() {
     // The intake takes the first picture. While it runs, the decoder outputs the second, as a
     // stream's next picture comes while the surface converts the one before it.
