@@ -229,6 +229,30 @@ class NativeControlTests: ReferenceUITests {
         return app
     }
 
+    // The controls built on the shared glass: each value is a state worth
+    // comparing, on a solid backdrop and on the checkerboard. One test for
+    // each control keeps every test inside XCTest's two minutes.
+    func testStepper() { captureStates("stepper", values: ["0", "0.5", "1"]) }
+    func testProgress() { captureStates("progress", values: ["0", "0.5", "1"]) }
+    func testActivity() { captureStates("activity", values: ["0", "1"]) }
+    func testGauge() { captureStates("gauge", values: ["0", "0.5", "1"]) }
+    func testDisclosure() { captureStates("disclosure", values: ["0", "1"]) }
+    func testTextField() { captureStates("text-field", values: ["0", "1"]) }
+    func testPageControl() { captureStates("page-control", values: ["0", "2"]) }
+
+    private func captureStates(_ component: String, values: [String]) {
+        for scheme in ["light", "dark"] {
+            for backdrop in ["solid", "checkerboard"] {
+                for value in values {
+                    let app = launchControl(component, scheme: scheme, backdrop: backdrop, value: value)
+                    let name = "control-\(component)-\(scheme)-\(backdrop)-\(value.replacingOccurrences(of: ".", with: "p"))"
+                    capture(name, app: app)
+                    app.terminate()
+                }
+            }
+        }
+    }
+
     func testCheckerboardSurfaces() {
         for scheme in ["light", "dark"] {
             for component in ["button", "prominent-button", "card"] {

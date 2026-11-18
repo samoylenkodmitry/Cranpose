@@ -9,3 +9,5 @@ previous-month = Önceki ay
 next-month = Sonraki ay
 hour = Saat
 minute = Dakika
+increment = Artır
+decrement = Azalt

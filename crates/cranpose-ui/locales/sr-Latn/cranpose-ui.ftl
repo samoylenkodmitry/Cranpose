@@ -9,3 +9,5 @@ previous-month = Prethodni mesec
 next-month = Sledeći mesec
 hour = Sat
 minute = Minut
+increment = Povećaj
+decrement = Smanji

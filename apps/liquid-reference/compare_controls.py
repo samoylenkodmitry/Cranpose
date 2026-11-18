@@ -46,9 +46,18 @@ def read_case_sets(directories):
     return cases, devices.pop()
 
 
-def compare(native, cranpose, output, native_extra=(), cranpose_extra=()):
+def only(cases, prefixes):
+    if not prefixes:
+        return cases
+    return {name: path for name, path in cases.items() if name.startswith(tuple(prefixes))}
+
+
+def compare(native, cranpose, output, native_extra=(), cranpose_extra=(), prefixes=()):
     left, left_device = read_case_sets([native, *native_extra])
     right, right_device = read_case_sets([cranpose, *cranpose_extra])
+    left, right = only(left, prefixes), only(right, prefixes)
+    if not left:
+        raise ValueError(f"no control capture starts with {list(prefixes)}")
     if left.keys() != right.keys():
         raise ValueError(f"control cases differ: {sorted(left.keys() ^ right.keys())}")
     if left_device != right_device:
@@ -104,8 +113,9 @@ def main():
     parser.add_argument("output", type=Path)
     parser.add_argument("--native-extra", type=Path, action="append", default=[])
     parser.add_argument("--cranpose-extra", type=Path, action="append", default=[])
+    parser.add_argument("--case", action="append", default=[], help="compare only the states whose name starts with this")
     args = parser.parse_args()
-    rows = compare(args.native, args.cranpose, args.output, args.native_extra, args.cranpose_extra)
+    rows = compare(args.native, args.cranpose, args.output, args.native_extra, args.cranpose_extra, args.case)
     print(f"{len(rows)} control states compared; {sum(row['unequal_pixels'] for row in rows):,} unequal pixels retained")
     for row in sorted(rows, key=lambda row: -row["mean_rgb_difference"]):
         print(f"{row['case']}: mean {row['mean_rgb_difference']:.3f}, {row['visible_pixels']:,} visible, worst {row['worst_channel_difference']}")

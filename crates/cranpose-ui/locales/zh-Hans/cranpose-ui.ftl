@@ -9,3 +9,5 @@ previous-month = 上个月
 next-month = 下个月
 hour = 小时
 minute = 分钟
+increment = 增加
+decrement = 减少

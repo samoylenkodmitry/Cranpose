@@ -43,11 +43,18 @@ pub struct LiquidColors {
     pub fill: Color,
     /// Lighter fill for nested controls.
     pub secondary_fill: Color,
+    /// The iOS system fill: the track of a progress bar.
+    pub system_fill: Color,
+    /// The iOS tertiary fill: the track of a gauge.
+    pub tertiary_fill: Color,
     /// Resting tint of a glass surface pane (cards, planks): the surface
     /// role at pane translucency, so the backdrop transmits through it.
     pub surface_glass: Color,
     /// Window background (grouped style).
     pub background: Color,
+    /// The iOS system background: white in light mode, black in dark, the
+    /// fill of a rounded-border text field.
+    pub system_background: Color,
     /// Elevated surface (cards, list sections).
     pub surface: Color,
     /// Pressed surface wash.
@@ -83,8 +90,11 @@ impl LiquidColors {
             separator: Color::from_rgba_u8(60, 60, 60, 30),
             fill: Color::from_rgba_u8(120, 120, 128, 40),
             secondary_fill: Color::from_rgba_u8(120, 120, 128, 28),
+            system_fill: Color::from_rgba_u8(120, 120, 128, 51),
+            tertiary_fill: Color::from_rgba_u8(118, 118, 128, 31),
             surface_glass: Color::from_rgba_u8(255, 255, 255, 191),
             background: Color::from_rgb_u8(242, 242, 247),
+            system_background: Color::WHITE,
             surface: Color::WHITE,
             surface_pressed: Color::from_rgb_u8(226, 226, 231),
             accent,
@@ -109,8 +119,11 @@ impl LiquidColors {
             separator: Color::from_rgba_u8(84, 84, 88, 128),
             fill: Color::from_rgba_u8(120, 120, 128, 70),
             secondary_fill: Color::from_rgba_u8(120, 120, 128, 50),
+            system_fill: Color::from_rgba_u8(120, 120, 128, 92),
+            tertiary_fill: Color::from_rgba_u8(118, 118, 128, 61),
             surface_glass: Color::from_rgba_u8(28, 28, 30, 184),
             background: Color::from_rgb_u8(10, 10, 12),
+            system_background: Color::BLACK,
             surface: Color::from_rgb_u8(28, 28, 30),
             surface_pressed: Color::from_rgb_u8(44, 44, 46),
             accent,
@@ -140,6 +153,10 @@ impl LiquidColors {
         self.secondary_fill = self
             .secondary_fill
             .with_alpha(self.secondary_fill.a().max(0.24));
+        self.system_fill = self.system_fill.with_alpha(self.system_fill.a().max(0.4));
+        self.tertiary_fill = self
+            .tertiary_fill
+            .with_alpha(self.tertiary_fill.a().max(0.32));
         self.glass_stroke = self.glass_stroke.with_alpha(self.glass_stroke.a().max(0.9));
         self.toggle_off = if self.is_dark {
             Color::from_rgb_u8(142, 142, 147)

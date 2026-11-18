@@ -9,3 +9,5 @@ previous-month = 이전 달
 next-month = 다음 달
 hour = 시
 minute = 분
+increment = 증가
+decrement = 감소

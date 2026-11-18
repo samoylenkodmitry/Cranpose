@@ -21,26 +21,46 @@ pub(crate) enum Control {
     Search,
     NavBar,
     ListRow,
+    Stepper,
+    Progress,
+    Activity,
+    Gauge,
+    Disclosure,
+    TextField,
+    PageIndicator,
 }
+
+// The names shared with the native app's `REFERENCE_COMPONENT`.
+const NAMES: [(&str, Control); 20] = [
+    ("slider", Control::Slider),
+    ("toggle", Control::Toggle),
+    ("segmented", Control::Segmented),
+    ("button", Control::Button),
+    ("prominent-button", Control::ProminentButton),
+    ("chip", Control::Chip),
+    ("filter-chip", Control::FilterChip),
+    ("card", Control::Card),
+    ("menu", Control::Menu),
+    ("icon-button", Control::IconButton),
+    ("search", Control::Search),
+    ("nav-bar", Control::NavBar),
+    ("list-row", Control::ListRow),
+    ("stepper", Control::Stepper),
+    ("progress", Control::Progress),
+    ("activity", Control::Activity),
+    ("gauge", Control::Gauge),
+    ("disclosure", Control::Disclosure),
+    ("text-field", Control::TextField),
+    ("page-control", Control::PageIndicator),
+];
 
 impl Control {
     pub(crate) fn parse(name: &str) -> anyhow::Result<Self> {
-        Ok(match name {
-            "slider" => Self::Slider,
-            "toggle" => Self::Toggle,
-            "segmented" => Self::Segmented,
-            "button" => Self::Button,
-            "prominent-button" => Self::ProminentButton,
-            "chip" => Self::Chip,
-            "filter-chip" => Self::FilterChip,
-            "card" => Self::Card,
-            "menu" => Self::Menu,
-            "icon-button" => Self::IconButton,
-            "search" => Self::Search,
-            "nav-bar" => Self::NavBar,
-            "list-row" => Self::ListRow,
-            _ => anyhow::bail!("unknown reference control: {name}"),
-        })
+        NAMES
+            .iter()
+            .find(|(known, _)| *known == name)
+            .map(|(_, control)| *control)
+            .ok_or_else(|| anyhow::anyhow!("unknown reference control: {name}"))
     }
 }
 
@@ -111,8 +131,91 @@ fn ControlContent(control: Control, initial: f32, activations: cranpose::Mutable
         Control::Slider | Control::Toggle | Control::Segmented | Control::FilterChip => {
             ReferenceSelection(control, initial, activations);
         }
+        Control::Stepper
+        | Control::Progress
+        | Control::Activity
+        | Control::Gauge
+        | Control::Disclosure
+        | Control::TextField
+        | Control::PageIndicator => ReferenceStandard(control, initial),
         _ => ReferenceSurface(control, initial, activations),
     }
+}
+
+// The standard controls, in the states the native reference app sets from
+// the same `REFERENCE_VALUE`.
+#[composable]
+fn ReferenceStandard(control: Control, initial: f32) {
+    let value = rememberMutableStateOf(move || initial);
+    let expanded = rememberMutableStateOf(move || initial == 1.0);
+    let page = rememberMutableStateOf(move || initial as usize);
+    match control {
+        Control::Stepper => LiquidStepper(
+            Modifier::empty(),
+            value.get(),
+            0.0..=1.0,
+            0.1,
+            move |next| value.set(next),
+        ),
+        Control::Progress => {
+            LiquidLinearProgressIndicator(Modifier::empty().width(300.0), value.get());
+        }
+        Control::Activity => LiquidActivityIndicator(
+            Modifier::empty(),
+            spinner_size(initial),
+            Some(liquid_colors().accent),
+        ),
+        Control::Gauge => LiquidGauge(Modifier::empty().width(300.0), value.get(), "Level"),
+        Control::Disclosure => LiquidDisclosureGroup(
+            Modifier::empty().width(300.0),
+            "Details",
+            expanded.get(),
+            move |next| expanded.set(next),
+            || {
+                Text(
+                    "More information",
+                    Modifier::empty().fill_max_width(),
+                    centered_body(),
+                );
+            },
+        ),
+        Control::TextField => ReferenceTextField(initial == 1.0),
+        Control::PageIndicator => {
+            Box(
+                Modifier::empty().width(300.0),
+                BoxSpec::default().content_alignment(Alignment::CENTER),
+                move || {
+                    LiquidPageControl(Modifier::empty(), 5, page.get(), move |next| page.set(next));
+                },
+            );
+        }
+        _ => {}
+    }
+}
+
+// A value above 0.5 selects the large spinner, as the native app does.
+fn spinner_size(initial: f32) -> LiquidActivityIndicatorSize {
+    if initial > 0.5 {
+        LiquidActivityIndicatorSize::Large
+    } else {
+        LiquidActivityIndicatorSize::Medium
+    }
+}
+
+// A value of 1 fills the field, as the native app does.
+#[composable]
+fn ReferenceTextField(filled: bool) {
+    let text = if filled { "Ada" } else { "" };
+    let state = cranpose::remember(|| cranpose_foundation::text::TextFieldState::new(text))
+        .with(|state| *state);
+    LiquidTextField(Modifier::empty().width(300.0), state, "Name");
+}
+
+fn centered_body() -> cranpose::text::TextStyle {
+    let mut style = liquid_typography().body;
+    style.span_style.color = Some(liquid_colors().label);
+    style.paragraph_style.text_align = cranpose::text::TextAlign::Center;
+    style
 }
 
 #[composable]
