@@ -328,12 +328,14 @@ impl Backgrounds {
 
     /// Inserts every background at its place, the last first so the places
     /// of those before it still hold.
-    fn insert_into(self, slices: &mut ModifierNodeSlices) {
+    fn insert_into(&mut self, slices: &mut ModifierNodeSlices) {
         slices.set_corner_shape(self.last_shape);
         // Room for them all at once: an insert into a full list makes room
         // for four, which the shrink after the walk gives back.
         slices.draw_commands.reserve_exact(self.slots.len());
-        for slot in self.slots.into_iter().rev() {
+        // Popped in place: an iterator that owns the slots would take a copy
+        // of the whole inline list.
+        while let Some(slot) = self.slots.pop() {
             let BackgroundSlot {
                 color,
                 coordinator,
