@@ -9,16 +9,16 @@
 // draws once they are a quarter of it and at least `MIN_DEAD_SHAPES`.
 // When it cannot take the next shape, an empty chunk that no packet holds
 // takes the shapes. Without one, once the chunks hold room for more than
-// `SLACK_CHUNKS` full chunks past the live shapes, the chunk with the most
-// shapes no item draws, at least as many as its live ones and
+// twice the live shapes and `SLACK_CHUNKS` full chunks, the chunk with the
+// most shapes no item draws, at least as many as its live ones and
 // `MIN_DEAD_SHAPES`, drops them and takes the shapes, before a new chunk
-// does. So the store makes a chunk only while the chunks hold little room
-// past the live shapes, or while every chunk holds fewer dead shapes than
-// live ones or `MIN_DEAD_SHAPES`, however long a few items of a chunk live.
-// A move frees room for as many new shapes as it moves or more, and a store
-// of few chunks moves nothing: their shapes go as the chunks empty. A
-// packet that holds such a chunk reads it as it was: a new recorder takes
-// in the live shapes and the chunk's place.
+// does. So the chunks hold room for at most about twice the live shapes and
+// a few chunks, however long a few items of a chunk live. A move frees room
+// for as many new shapes as it moves or more. A store within that room
+// moves nothing: its shapes go as its chunks empty, as a scene that redraws
+// the same items each frame keeps it. A packet that holds such a chunk
+// reads it as it was: a new recorder takes in the live shapes and the
+// chunk's place.
 
 use std::{num::NonZeroU32, ops::Range, sync::Arc};
 
@@ -38,8 +38,8 @@ const KEPT_EMPTY_CHUNKS: usize = 4;
 // The fewest shapes no item draws for which a chunk moves the others: a
 // chunk of a few shapes grows to room for this many before it does.
 const MIN_DEAD_SHAPES: usize = 16;
-// The full chunks of room past the live shapes that the chunks hold before
-// a chunk of many dead shapes drops them in place of a new chunk.
+// The full chunks of room past twice the live shapes that the chunks hold
+// before a chunk of many dead shapes drops them in place of a new chunk.
 const SLACK_CHUNKS: usize = 4;
 
 // A chunk's place in the store's list of chunks, past 0, so a slab of
@@ -134,19 +134,27 @@ pub(super) struct ShapeChunks {
     // Whether an item went since a look for a chunk of many dead shapes
     // found none.
     released: bool,
+    // How many chunks the store holds, and how many shapes its items draw.
+    chunk_count: usize,
+    live_shapes: usize,
 }
 
 #[derive(Clone)]
 struct ShapeChunk {
     recorder: Arc<ShapeRecorder>,
+    // By segment, the index among the runs of the run that recorded it, so
+    // a chunk finds its live runs without a look at the other chunks' runs.
+    // A run of that index names the segment while the item lives; another
+    // run, of a later item, names other segments or another chunk.
+    owners: Vec<u32>,
     // How many items name the chunk, and how many shapes they draw.
     items: u32,
     shapes: u32,
 }
 
 // The runs of the chunk that drops its dead shapes, by index among the
-// runs, and one bit a segment of it, set for the segments they name: room
-// the next such chunk takes again.
+// runs in the order of their segments, and one bit a segment of it, set
+// for the segments they name: room the next such chunk takes again.
 #[derive(Clone, Default)]
 struct LiveRuns {
     runs: Vec<usize>,
@@ -154,17 +162,23 @@ struct LiveRuns {
 }
 
 impl LiveRuns {
-    // Notes the runs of `chunk`, a chunk of `segments` segments, and the
-    // segments they name.
-    fn mark(&mut self, chunk: ChunkId, segments: u32, runs: &Slab<ShapeRun>) {
+    // Notes the runs of `chunk`, whose segments `owners` names the runs
+    // of, and the segments they name.
+    fn mark(&mut self, chunk: ChunkId, owners: &[u32], runs: &Slab<ShapeRun>) {
         self.runs.clear();
         self.segments.clear();
-        self.segments.resize(segments.div_ceil(64) as usize, 0);
-        for (index, run) in runs.indexed().filter(|(_, run)| run.chunk == chunk) {
-            self.runs.push(index);
-            for segment in run.segments.clone() {
-                self.segments[segment as usize / 64] |= 1 << (segment % 64);
+        self.segments.resize(owners.len().div_ceil(64), 0);
+        for (segment, &owner) in (0..).zip(owners) {
+            let Some(run) = runs.get(owner as usize) else {
+                continue;
+            };
+            if run.chunk != chunk || !run.segments.contains(&segment) {
+                continue;
             }
+            if segment == run.segments.start {
+                self.runs.push(owner as usize);
+            }
+            self.segments[segment as usize / 64] |= 1 << (segment % 64);
         }
     }
 
@@ -172,21 +186,25 @@ impl LiveRuns {
         self.segments[segment as usize / 64] & (1 << (segment % 64)) != 0
     }
 
-    // Starts each run noted past the segments before it that the chunk
-    // keeps, once it kept those alone.
+    // Keeps the owners of the segments the chunk keeps.
+    fn keep_owners(&self, owners: &mut Vec<u32>) {
+        let mut segment = 0;
+        owners.retain(|_| {
+            let kept = self.keeps(segment);
+            segment += 1;
+            kept
+        });
+    }
+
+    // Starts each run noted past the segments of the runs before it, once
+    // the chunk kept their segments alone.
     fn renumber(&self, runs: &mut Slab<ShapeRun>) {
+        let mut start = 0;
         for &index in &self.runs {
             let run = &mut runs[index];
-            let (word, bit) = (run.segments.start as usize / 64, run.segments.start % 64);
-            let start = self.segments[..word]
-                .iter()
-                .map(|bits| bits.count_ones())
-                .sum::<u32>()
-                + self
-                    .segments
-                    .get(word)
-                    .map_or(0, |bits| (bits & ((1 << bit) - 1)).count_ones());
-            run.segments = start..start + (run.segments.end - run.segments.start);
+            let end = start + (run.segments.end - run.segments.start);
+            run.segments = start..end;
+            start = end;
         }
     }
 
@@ -197,12 +215,16 @@ impl LiveRuns {
 
 impl ShapeChunks {
     // Records the shapes of one item with `record`, which draw what `print`
-    // hashes, into a chunk that takes them, and returns where they went.
+    // hashes, into a chunk that takes them, and returns where they went: the
+    // run that takes the index `owner` among the runs. An item that records
+    // no shapes names no segment of its chunk, and its run the empty range
+    // at the start, which every chunk holds.
     // Out of line: a background drawn again unchanged keeps its shapes.
     #[inline(never)]
     fn record(
         &mut self,
         runs: &mut Slab<ShapeRun>,
+        owner: usize,
         print: u64,
         record: impl FnOnce(&mut ShapeRecorder),
     ) -> ShapeRun {
@@ -214,10 +236,16 @@ impl ShapeChunks {
         let start = recorder.all_segments().end;
         record(recorder);
         recorder.end_segment();
-        let segments = start..recorder.all_segments().end;
+        let end = recorder.all_segments().end;
+        let segments = if end > start { start..end } else { 0..0 };
+        entry.owners.resize(
+            end as usize,
+            u32::try_from(owner).expect("fewer than 2^32 shape items"),
+        );
         let shapes = recorder.shape_count_in(&segments);
         entry.items += 1;
         entry.shapes += shapes;
+        self.live_shapes += shapes as usize;
         ShapeRun {
             chunk,
             shapes,
@@ -242,7 +270,7 @@ impl ShapeChunks {
             if (full || held >= recorder.shape_capacity())
                 && dead >= (held / 4).max(MIN_DEAD_SHAPES)
             {
-                keep_live_runs(open, recorder, runs, &mut self.live);
+                keep_live_runs(open, recorder, &mut chunk.owners, runs, &mut self.live);
                 return open;
             }
             if !full {
@@ -271,11 +299,11 @@ impl ShapeChunks {
                 .is_some_and(|chunk| Arc::get_mut(&mut chunk.recorder).is_some())
         })?;
         let id = self.empty.swap_remove(at);
-        if let Some(recorder) = self.chunks[id.index()]
-            .as_mut()
-            .and_then(|chunk| Arc::get_mut(&mut chunk.recorder))
+        if let Some(chunk) = self.chunks[id.index()].as_mut()
+            && let Some(recorder) = Arc::get_mut(&mut chunk.recorder)
         {
             recorder.clear();
+            chunk.owners.clear();
         }
         Some(id)
     }
@@ -283,36 +311,29 @@ impl ShapeChunks {
     // The chunk of the most shapes no item draws, among those that hold at
     // least as many of them as live ones and `MIN_DEAD_SHAPES`: a move of
     // its live shapes frees room for as many new ones or more. None while
-    // the chunks hold room for `SLACK_CHUNKS` full chunks or fewer past the
-    // live shapes. None is looked for while no item went since a look found
-    // no such chunk.
+    // the chunks hold room for twice the live shapes and `SLACK_CHUNKS` full
+    // chunks or less. None is looked for while no item went since a look
+    // found no such chunk.
     fn sparse_chunk(&mut self) -> Option<ChunkId> {
-        if !self.released {
+        if !self.released
+            || self.chunk_count * CHUNK_SHAPES <= 2 * self.live_shapes + SLACK_CHUNKS * CHUNK_SHAPES
+        {
             return None;
         }
-        let (mut room, mut live_shapes, mut sparse) = (0, 0, None);
-        for (index, chunk) in self
+        let sparse = self
             .chunks
             .iter()
             .enumerate()
-            .filter_map(|(index, slot)| Some((index, slot.as_ref()?)))
-        {
-            let live = chunk.shapes as usize;
-            room += chunk.recorder.shape_capacity();
-            live_shapes += live;
-            let dead = chunk.recorder.tables().shapes.len() - live;
-            if chunk.items > 0
-                && dead >= live.max(MIN_DEAD_SHAPES)
-                && sparse.is_none_or(|(most, _)| dead >= most)
-            {
-                sparse = Some((dead, index));
-            }
-        }
+            .filter_map(|(index, slot)| {
+                let chunk = slot.as_ref().filter(|chunk| chunk.items > 0)?;
+                let live = chunk.shapes as usize;
+                let dead = chunk.recorder.tables().shapes.len() - live;
+                (dead >= live.max(MIN_DEAD_SHAPES)).then_some((dead, index))
+            })
+            .max()
+            .map(|(_, index)| ChunkId::at(index));
         self.released = sparse.is_some();
-        (room > live_shapes + SLACK_CHUNKS * CHUNK_SHAPES)
-            .then_some(sparse)
-            .flatten()
-            .map(|(_, index)| ChunkId::at(index))
+        sparse
     }
 
     // Drops the shapes no item draws from the chunk `id`, its live shapes
@@ -327,20 +348,23 @@ impl ShapeChunks {
             .as_mut()
             .expect("a chunk an item names is there");
         if let Some(recorder) = Arc::get_mut(&mut chunk.recorder) {
-            keep_live_runs(id, recorder, runs, &mut self.live);
+            keep_live_runs(id, recorder, &mut chunk.owners, runs, &mut self.live);
             return;
         }
-        self.live.mark(id, chunk.recorder.all_segments().end, runs);
+        self.live.mark(id, &chunk.owners, runs);
         let mut kept = ShapeRecorder::default();
         kept.keep_segments_from(&chunk.recorder, |segment| self.live.keeps(segment));
         chunk.recorder = Arc::new(kept);
+        self.live.keep_owners(&mut chunk.owners);
         self.live.renumber(runs);
     }
 
     #[cold]
     fn add_chunk(&mut self) -> ChunkId {
+        self.chunk_count += 1;
         let chunk = Some(ShapeChunk {
             recorder: Arc::default(),
+            owners: Vec::new(),
             items: 0,
             shapes: 0,
         });
@@ -369,13 +393,16 @@ impl ShapeChunks {
         self.released = true;
         entry.items -= 1;
         entry.shapes -= run.shapes;
+        self.live_shapes -= run.shapes as usize;
         if let Some(recorder) = Arc::get_mut(&mut entry.recorder) {
             if entry.items == 0 && open {
                 recorder.clear();
+                entry.owners.clear();
                 return;
             }
             if !run.segments.is_empty() && run.segments.end == recorder.all_segments().end {
                 recorder.truncate_segments(run.segments.start);
+                entry.owners.truncate(run.segments.start as usize);
             }
         }
         if entry.items > 0 {
@@ -388,6 +415,7 @@ impl ShapeChunks {
             self.empty.push(chunk);
         } else {
             self.chunks[chunk.index()] = None;
+            self.chunk_count -= 1;
         }
     }
 
@@ -396,9 +424,7 @@ impl ShapeChunks {
     // A packet keeps a chunk it holds until it lets go.
     #[cold]
     fn trim(&mut self, runs: &mut Slab<ShapeRun>) {
-        for id in self.empty.drain(..) {
-            self.chunks[id.index()] = None;
-        }
+        self.empty.clear();
         for (index, slot) in self.chunks.iter_mut().enumerate() {
             let Some(chunk) = slot else {
                 continue;
@@ -406,6 +432,7 @@ impl ShapeChunks {
             let id = ChunkId::at(index);
             if chunk.items == 0 {
                 *slot = None;
+                self.chunk_count -= 1;
                 if self.open == Some(id) {
                     self.open = None;
                 }
@@ -414,13 +441,14 @@ impl ShapeChunks {
             let Some(recorder) = Arc::get_mut(&mut chunk.recorder) else {
                 continue;
             };
-            // Each move scans every run: only a chunk that a quarter of dead
-            // shapes fills moves, as a chunk that takes shapes does.
+            // Only a chunk that a quarter of dead shapes fills moves, as a
+            // chunk that takes shapes does.
             let held = recorder.tables().shapes.len();
             if held - chunk.shapes as usize >= (held / 4).max(MIN_DEAD_SHAPES) {
-                keep_live_runs(id, recorder, runs, &mut self.live);
+                keep_live_runs(id, recorder, &mut chunk.owners, runs, &mut self.live);
             }
             recorder.trim_growth();
+            chunk.owners.trim_growth_slack();
         }
         while self.chunks.last().is_some_and(Option::is_none) {
             self.chunks.pop();
@@ -438,7 +466,11 @@ impl ShapeChunks {
                 .chunks
                 .iter()
                 .flatten()
-                .map(|chunk| size_of::<ShapeRecorder>() + chunk.recorder.tables().heap_bytes())
+                .map(|chunk| {
+                    size_of::<ShapeRecorder>()
+                        + chunk.recorder.tables().heap_bytes()
+                        + chunk.owners.capacity() * size_of::<u32>()
+                })
                 .sum::<usize>()
     }
 
@@ -457,11 +489,13 @@ impl ShapeChunks {
 fn keep_live_runs(
     chunk: ChunkId,
     recorder: &mut ShapeRecorder,
+    owners: &mut Vec<u32>,
     runs: &mut Slab<ShapeRun>,
     live: &mut LiveRuns,
 ) {
-    live.mark(chunk, recorder.all_segments().end, runs);
+    live.mark(chunk, owners, runs);
     recorder.keep_segments(|segment| live.keeps(segment));
+    live.keep_owners(owners);
     live.renumber(runs);
 }
 
@@ -471,9 +505,10 @@ impl SceneStore {
     /// shares among its shape items. `print` is a hash of what they draw,
     /// the same for the same shapes.
     pub fn add_shapes(&mut self, print: u64, record: impl FnOnce(&mut ShapeRecorder)) -> Item {
+        let owner = self.shape_runs.vacant();
         let run = self
             .shape_chunks
-            .record(&mut self.shape_runs, print, record);
+            .record(&mut self.shape_runs, owner, print, record);
         Item::new(ItemKind::Shape, self.shape_runs.insert(run))
     }
 
@@ -493,7 +528,7 @@ impl SceneStore {
         self.shape_chunks.release(&old);
         let run = self
             .shape_chunks
-            .record(&mut self.shape_runs, print, record);
+            .record(&mut self.shape_runs, index, print, record);
         self.shape_runs.put(index, run);
     }
 
