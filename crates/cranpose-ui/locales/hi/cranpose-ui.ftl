@@ -9,3 +9,5 @@ previous-month = पिछला महीना
 next-month = अगला महीना
 hour = घंटा
 minute = मिनट
+increment = बढ़ाएँ
+decrement = घटाएँ

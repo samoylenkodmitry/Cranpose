@@ -7,7 +7,8 @@ pub(crate) use cranpose_render_common::layer_transform::apply_layer_to_rect;
 #[cfg(test)]
 pub(crate) use cranpose_render_common::style_shared::primitives_for_placement;
 pub(crate) use cranpose_render_common::style_shared::{
-    apply_layer_to_brush, apply_layer_to_color, compose_color_filters, scale_corner_radii,
+    apply_layer_geometry_to_brush, apply_layer_to_brush, apply_layer_to_color,
+    compose_color_filters, scale_corner_radii,
 };
 #[cfg(test)]
 use cranpose_ui::DrawCommand;

@@ -475,21 +475,26 @@ impl Space {
         not(any(test, headset)),
         expect(dead_code, reason = "the headset backend calls it")
     )]
-    pub(crate) fn panels(&self) -> Vec<PanelSlot> {
+    // Puts the panels into `panels` in place of what it held. A frame loop passes the same list
+    // at each frame, so the list keeps its storage.
+    pub(crate) fn panels_into(&self, panels: &mut Vec<PanelSlot>) {
         let curves = self.inner.curves.get();
-        self.inner
-            .entries
-            .borrow()
-            .iter()
-            .map(|entry| PanelSlot {
-                shape: if curves {
-                    entry.slot.shape
-                } else {
-                    Shape::Flat
-                },
-                ..entry.slot
-            })
-            .collect()
+        panels.clear();
+        panels.extend(self.inner.entries.borrow().iter().map(|entry| PanelSlot {
+            shape: if curves {
+                entry.slot.shape
+            } else {
+                Shape::Flat
+            },
+            ..entry.slot
+        }));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn panels(&self) -> Vec<PanelSlot> {
+        let mut panels = Vec::new();
+        self.panels_into(&mut panels);
+        panels
     }
 
     #[cfg_attr(

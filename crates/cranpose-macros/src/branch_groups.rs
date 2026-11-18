@@ -258,13 +258,7 @@ fn source_name(tokens: impl quote::ToTokens) -> String {
         .chars()
         .filter(|c| !c.is_whitespace())
         .collect();
-    if name.len() > 64 {
-        let mut end = 64;
-        while !name.is_char_boundary(end) {
-            end -= 1;
-        }
-        name.truncate(end);
-    }
+    name.truncate(name.floor_char_boundary(64));
     name
 }
 

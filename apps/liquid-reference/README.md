@@ -34,7 +34,7 @@ The Rust builder accepts `aarch64-apple-ios` for a device binary. Physical insta
 
 ### Control captures
 
-`REFERENCE_COMPONENT` selects `slider`, `toggle`, `segmented`, `button`, `prominent-button`, `chip`, `card`, `menu`, `icon-button`, `search`, `nav-bar`, or `list-row`. Both apps center controls in the safe area; the navigation header occupies the top of the screen. `REFERENCE_VALUE` sets the initial slider value, toggle state, or segment index; value `1` selects the grouped menu fixture. The reference binary registers the system font's normal, medium and semibold faces at optical size 17, including the normal face before automatic font loading.
+`REFERENCE_COMPONENT` selects `slider`, `toggle`, `segmented`, `button`, `prominent-button`, `chip`, `card`, `menu`, `icon-button`, `search`, `nav-bar`, `list-row`, `stepper`, `progress`, `activity`, `gauge`, `disclosure`, `text-field`, or `page-control`. Both apps center controls in the safe area; the navigation header occupies the top of the screen. `REFERENCE_VALUE` sets the initial slider value, toggle state, or segment index; value `1` selects the grouped menu fixture. It also sets the stepper, progress and gauge value, the current page, the open disclosure group (`1`) and the large spinner (above 0.5); `1` fills the text field. The reference binary registers the system font's normal, medium and semibold faces at optical size 17, including the normal face before automatic font loading.
 
 `NativeControlTests` and `CranposeControlTests` share geometry and interaction assertions. They capture 41 states across light/dark appearance, slider endpoints, selection, plain/grouped menus, navigation headers, search fields, list rows, icon buttons, and checkerboard surfaces. Menu tests wait for settled bounds and verify action order, centered placement and 42-point rows. Search tests verify the 44-point field and keyboard entry. Geometry assertions use a half-point tolerance; the image report applies no pixel tolerance.
 
@@ -50,6 +50,14 @@ just test-liquid-motion
 
 The final `never` argument disables Xcode's slow failure diagnostic collection while preserving test results and attachments. Omit it to collect diagnostics on failure. Keep the same simulator and viewport for both captures. `compare_controls.py` rejects different devices, incomplete case sets and duplicate screenshots or attachments marked as failures. Verify XCTest success separately: a capture can precede a later test failure. It preserves the original full screenshots and compares unmodified RGBA pixels in fixed regions: x 0–402 and y 317–587 points for controls, y 100–700 for menus, and y 60–250 for navigation headers. The report counts every unequal pixel and retains absolute differences; successful capture is not a claim of pixel parity. Its `--native-extra` and `--cranpose-extra` options combine disjoint captures without dropping states.
 
+Each standard control has its own test method, so one run stays inside XCTest's two-minute limit. `capture_reference_tests.sh` runs named tests in one `xcodebuild` and exports their attachments. `control_crops.py` prints each state's control box in points and writes a contact sheet. `pixel_probe.py` reads one state: the pixels along a row or a column, the box and centroid of a glyph in a region, or the color and opacity of a flat fill over the checkerboard.
+
+```sh
+scripts/dev/capture_reference_tests.sh YOUR_SIMULATOR_UDID ../evidence/native NativeControlTests/testStepper NativeControlTests/testGauge
+python3 apps/liquid-reference/control_crops.py ../evidence/native/attachments ../evidence/native-sheet.png control-stepper
+python3 apps/liquid-reference/pixel_probe.py ../evidence/native/attachments control-stepper-light-solid-0p5 box 160 195 445 458
+```
+
 ### Continuous control motion
 
 `NativeSliderMotionTests`, `NativeToggleMotionTests`, and `NativeSegmentedMotionTests` record one uninterrupted press, three drag legs, a stationary hold, and release. Their `Cranpose` counterparts use the same path. Both retain every source image and application-delivered input timestamp. These fixtures require the 402 × 874 point viewport; the control crop spans y 351–551. The native slider trace also records its bound value, allowing presentation motion to be distinguished from value changes.
@@ -59,6 +67,12 @@ python3 scripts/dev/capture_control_motion.py YOUR_SIMULATOR_UDID target/native-
 python3 scripts/dev/capture_control_motion.py YOUR_SIMULATOR_UDID target/cranpose-motion cranpose
 python3 apps/liquid-reference/compare.py target/native-motion/slider target/cranpose-motion/slider target/slider-motion-comparison
 python3 apps/liquid-reference/export-control-motion.py target/native_control_contact.csv target/native-motion/slider target/native-motion/toggle target/native-motion/segmented
+```
+
+`--variant tap` records a 100 ms tap instead: `NativeToggleTapMotionTests` taps the switch on, and `NativeSegmentedTapMotionTests` taps the third segment. `--variant holdout` records the reversed slider path. `crates/cranpose-liquid/tests/fixtures/native_toggle_tap.csv` keeps the native toggle tap's lens size, white fill, thumb center and track-fill strip position for every display-link frame.
+
+```sh
+python3 scripts/dev/capture_control_motion.py YOUR_SIMULATOR_UDID target/native-tap native --variant tap --components toggle segmented
 ```
 
 The capture helper saves the source commit and patch plus the installed binary hash after each test build. Use unique output directories. Repeat first-use captures separately from warm captures; do not discard pipeline stalls or merge their cadence statistics. `NativeSliderHoldoutMotionTests` reverses the direction sequence and returns to the starting coordinate. `NativeControlAnimationTests` additionally archives native layer animations during contact and release.
@@ -98,6 +112,8 @@ Select `NativeReversalTests/testInteractionKeyframes` or `CranposeReversalTests/
 Physical iPhone tests require USB and Settings → Developer → Enable UI Automation. `liquid-reference-device-test DEVICE TEAM RESULTS SUITE` signs, builds and runs the requested suite. `liquid-reference-device-traces DEVICE OUTPUT [BUNDLE]` copies native or Cranpose touch/layer traces from the device using CoreDevice. `SystemGlassTests/testInspectSettings` captures the actual Settings screen and accessibility tree for inspection.
 
 The iOS 27 validation matrix is 0%, 20%, 50%, 75% and 100% in the system **Tint Amount** setting. `NativeMatrix*Tests` set and assert the actual Settings value before capture; `CranposeMatrix*Tests` assert the corresponding framework theme value. Each test repeats the continuous left–right–left gesture with the original content, changed labels and symbol assignments with a magenta accent and a different color palette, and another label/symbol set with a green accent and a grayscale backdrop. The same `REFERENCE_CONTENT` JSON configures both apps and is retained in the capture metadata. Restore the user's 25% preference afterward. These capture and control checks establish coverage; the exact pixel audit determines image equality. Existing iOS 26.5 optical fixtures do not establish iOS 27 behavior.
+
+`scripts/dev/capture_controls_at_tint.sh DEVICE PERCENT OUTPUT` sets the Tint Amount through `SystemGlassTintTests/testSet0`, `testSet25`, `testSet50` or `testSet100`, then captures every `NativeControlTests` state at it. The simulator's own default is 50%; run `testSet50` last to leave it there.
 
 The component uses overlapping native cell geometry, spring-following drag position, contact growth, and independent width/height responses fitted to native presentation traces. The raised material now composes two native displacement profiles, seven chromatic samples, and separate key/fill lighting. The native lens's central background remains unscaled; Cranpose refracts the glyph mask through its separate 14-point content field and enlarges it by the native 1.16× content ratio. Surface refraction remains active after release. The reference fixture uses native template symbols and the system sans-serif font at UIKit’s exported optical-size and weight-axis coordinates, including its size-dependent tracking.
 

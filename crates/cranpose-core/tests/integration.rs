@@ -8,7 +8,6 @@ mod derived_state_return;
 mod effect_cancellation;
 mod effects_and_frames;
 mod global_writes;
-mod kept_constants;
 mod late_node_records;
 mod lifetime_cancellation;
 mod nested_context;

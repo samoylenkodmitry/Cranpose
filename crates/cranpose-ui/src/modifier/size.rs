@@ -17,7 +17,7 @@ impl Modifier {
         let width = size.width;
         let height = size.height;
         let modifier =
-            Self::from_dyn_element(plain_element(SizeElement::new(Some(width), Some(height))))
+            Self::from_dyn_element(plain_element(&SizeElement::new(Some(width), Some(height))))
                 .with_inspector_metadata(inspector_metadata("size", move |info| {
                     info.add_dimension("width", DimensionConstraint::Points(width));
                     info.add_dimension("height", DimensionConstraint::Points(height));
@@ -43,7 +43,7 @@ impl Modifier {
     ///
     /// Example: `Modifier::empty().width(100.0).height(200.0)`
     pub fn width(self, width: f32) -> Self {
-        let modifier = Self::from_dyn_element(plain_element(SizeElement::new(Some(width), None)))
+        let modifier = Self::from_dyn_element(plain_element(&SizeElement::new(Some(width), None)))
             .with_inspector_metadata(inspector_metadata("width", move |info| {
                 info.add_dimension("width", DimensionConstraint::Points(width));
             }));
@@ -59,7 +59,7 @@ impl Modifier {
     ///
     /// Example: `Modifier::empty().width(100.0).height(200.0)`
     pub fn height(self, height: f32) -> Self {
-        let modifier = Self::from_dyn_element(plain_element(SizeElement::new(None, Some(height))))
+        let modifier = Self::from_dyn_element(plain_element(&SizeElement::new(None, Some(height))))
             .with_inspector_metadata(inspector_metadata("height", move |info| {
                 info.add_dimension("height", DimensionConstraint::Points(height));
             }));
@@ -71,7 +71,7 @@ impl Modifier {
     /// Matches Kotlin: `Modifier.width(IntrinsicSize)`
     pub fn width_intrinsic(self, intrinsic: IntrinsicSize) -> Self {
         let modifier =
-            Self::from_dyn_element(plain_element(IntrinsicSizeElement::width(intrinsic)))
+            Self::from_dyn_element(plain_element(&IntrinsicSizeElement::width(intrinsic)))
                 .with_inspector_metadata(inspector_metadata("widthIntrinsic", move |info| {
                     info.add_dimension("width", DimensionConstraint::Intrinsic(intrinsic));
                 }));
@@ -83,7 +83,7 @@ impl Modifier {
     /// Matches Kotlin: `Modifier.height(IntrinsicSize)`
     pub fn height_intrinsic(self, intrinsic: IntrinsicSize) -> Self {
         let modifier =
-            Self::from_dyn_element(plain_element(IntrinsicSizeElement::height(intrinsic)))
+            Self::from_dyn_element(plain_element(&IntrinsicSizeElement::height(intrinsic)))
                 .with_inspector_metadata(inspector_metadata("heightIntrinsic", move |info| {
                     info.add_dimension("height", DimensionConstraint::Intrinsic(intrinsic));
                 }));
@@ -98,7 +98,7 @@ impl Modifier {
     ///
     /// Matches Kotlin: `Modifier.requiredSize(size: Dp)`
     pub fn required_size(self, size: Size) -> Self {
-        let modifier = Self::from_dyn_element(plain_element(SizeElement::with_constraints(
+        let modifier = Self::from_dyn_element(plain_element(&SizeElement::with_constraints(
             Some(size.width),
             Some(size.width),
             Some(size.height),
@@ -113,7 +113,7 @@ impl Modifier {
     ///
     /// Matches Kotlin: `Modifier.requiredWidth(width: Dp)`
     pub fn required_width(self, width: f32) -> Self {
-        let modifier = Self::from_dyn_element(plain_element(SizeElement::with_constraints(
+        let modifier = Self::from_dyn_element(plain_element(&SizeElement::with_constraints(
             Some(width),
             Some(width),
             None,
@@ -128,7 +128,7 @@ impl Modifier {
     ///
     /// Matches Kotlin: `Modifier.requiredHeight(height: Dp)`
     pub fn required_height(self, height: f32) -> Self {
-        let modifier = Self::from_dyn_element(plain_element(SizeElement::with_constraints(
+        let modifier = Self::from_dyn_element(plain_element(&SizeElement::with_constraints(
             None,
             None,
             Some(height),
@@ -145,7 +145,7 @@ impl Modifier {
     ///
     /// Example: `Modifier::empty().width_in(48.0, f32::INFINITY)`
     pub fn width_in(self, min: f32, max: f32) -> Self {
-        let modifier = Self::from_dyn_element(plain_element(SizeElement::with_constraints(
+        let modifier = Self::from_dyn_element(plain_element(&SizeElement::with_constraints(
             bound(min),
             bound(max),
             None,
@@ -168,7 +168,7 @@ impl Modifier {
     ///
     /// Example: `Modifier::empty().height_in(24.0, f32::INFINITY)`
     pub fn height_in(self, min: f32, max: f32) -> Self {
-        let modifier = Self::from_dyn_element(plain_element(SizeElement::with_constraints(
+        let modifier = Self::from_dyn_element(plain_element(&SizeElement::with_constraints(
             None,
             None,
             bound(min),
@@ -189,7 +189,7 @@ impl Modifier {
     ///
     /// Example: `Modifier::empty().size_in(Size::new(24.0, 24.0), Size::new(f32::INFINITY, 40.0))`
     pub fn size_in(self, min: Size, max: Size) -> Self {
-        let modifier = Self::from_dyn_element(plain_element(SizeElement::with_constraints(
+        let modifier = Self::from_dyn_element(plain_element(&SizeElement::with_constraints(
             bound(min.width),
             bound(max.width),
             bound(min.height),

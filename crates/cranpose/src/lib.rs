@@ -21,7 +21,7 @@ pub mod android;
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
 pub mod embedded_view;
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
-pub use cranpose_app_shell::TouchRouter;
+pub use cranpose_app_shell::{TouchRouter, TouchSample};
 #[cfg(feature = "renderer-wgpu")]
 mod cover_pipeline;
 #[cfg(feature = "renderer-wgpu")]
@@ -361,7 +361,7 @@ pub fn FrameEffect<K: PartialEq + 'static>(
 
 #[doc(hidden)]
 pub use cranpose_core::{
-    __branch_group_scope_advance, __branch_group_scope_deferred, __constant, __current_composer,
+    __branch_group_scope_advance, __branch_group_scope_deferred, __current_composer,
     __inline_source_scope, __source_scope, __worker, CallbackHolder, ComposableGroup, Composer,
     Key, ParamReturnState, ParamState, RecomposeScope, ReturnSlot, ValueSlotHandle,
     branch_location_key, cached_composable_definition_key, caller_location_key,

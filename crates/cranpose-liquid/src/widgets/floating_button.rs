@@ -105,16 +105,12 @@ impl Contact {
     }
 
     fn target(&self, channel: usize, value: f32, animation: AnimationType, time: Option<u64>) {
-        let mut channels = self.channels.borrow_mut();
-        let channel = &mut channels[channel];
-        if channel.target() == value {
-            return;
-        }
-        if let Some(time) = time.or_else(|| self.runtime.last_frame_time_nanos()) {
-            channel.animate_to_at(value, animation, time);
-        } else {
-            channel.animateTo(value, animation);
-        }
+        crate::motion::retarget(
+            &mut self.channels.borrow_mut()[channel],
+            value,
+            animation,
+            time.or_else(|| self.runtime.last_frame_time_nanos()),
+        );
     }
 
     fn pressed(&self, press: Press, time: Option<u64>) {

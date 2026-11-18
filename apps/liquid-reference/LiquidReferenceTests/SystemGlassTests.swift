@@ -1,17 +1,18 @@
 import XCTest
 
 @MainActor
-extension TabBarTests {
+extension ReferenceUITests {
     func systemGlassSettings() -> XCUIApplication {
+        // Settings > Appearance > Liquid Glass: a fresh simulator has no
+        // search index, so the search route finds nothing there.
         let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
         settings.launch()
-        let search = settings.searchFields["Search"]
-        XCTAssertTrue(search.waitForExistence(timeout: 5))
-        search.tap()
-        search.typeText("Liquid Glass")
-        let entry = settings.buttons["OpenAppearanceDeepLink.AppearanceDeepLink./LIQUID_GLASS"]
-        XCTAssertTrue(entry.waitForExistence(timeout: 10))
-        entry.tap()
+        let appearance = settings.staticTexts["Appearance"].firstMatch
+        XCTAssertTrue(appearance.waitForExistence(timeout: 5))
+        appearance.tap()
+        let glass = settings.staticTexts["Liquid Glass"].firstMatch
+        XCTAssertTrue(glass.waitForExistence(timeout: 5))
+        glass.tap()
         XCTAssertTrue(settings.sliders["Tint Amount"].waitForExistence(timeout: 5))
         return settings
     }
@@ -83,4 +84,13 @@ final class NativeMaterialProfileTests: TabBarTests {
     func testTint25() { captureProfile(25) }
     func testTint50() { captureProfile(50) }
     func testTint100() { captureProfile(100) }
+}
+
+// Sets the simulator's Settings > Appearance > Liquid Glass > Tint Amount
+// before a control capture; a fresh simulator starts at 50%.
+final class SystemGlassTintTests: ReferenceUITests {
+    func testSet0() { setSystemGlassTint(0) }
+    func testSet25() { setSystemGlassTint(25) }
+    func testSet50() { setSystemGlassTint(50) }
+    func testSet100() { setSystemGlassTint(100) }
 }

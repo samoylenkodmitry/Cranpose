@@ -1,7 +1,7 @@
 //! The motion after the release of a scroller's drag: a fling or a settle.
 
 use cranpose_core::current_runtime_handle;
-use cranpose_foundation::{MAX_FLING_VELOCITY, ScrollId};
+use cranpose_foundation::{MAX_FLING_VELOCITY, PointerEvent, ScrollId};
 
 use super::{
     FlingAnimation, MIN_FLING_VELOCITY, ScrollGestureDetector, ScrollMotionContext, ScrollTarget,
@@ -9,24 +9,26 @@ use super::{
 };
 
 impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
-    pub(super) fn on_up(&self, time_ms: Option<i64>) -> bool {
-        self.finish_gesture(self.scroll_target.allows_fling(), time_ms)
+    pub(super) fn on_up(&self, event: &PointerEvent) -> bool {
+        self.finish_gesture(self.scroll_target.allows_fling().then_some(event))
     }
 
     pub(super) fn on_cancel(&self) -> bool {
-        self.finish_gesture(false, None)
+        self.finish_gesture(None)
     }
 
-    fn finish_gesture(&self, allow_fling: bool, release_time_ms: Option<i64>) -> bool {
+    // `fling_release` is the up event of a release that may fling, and `None`
+    // for a release that may not.
+    fn finish_gesture(&self, fling_release: Option<&PointerEvent>) -> bool {
+        let allow_fling = fling_release.is_some();
         let (was_dragging, interrupted, gesture_owned, velocity, start_fling, replaced_scroll) = {
             let mut gs = self.gesture_state.borrow_mut();
             let was_dragging = gs.is_dragging;
             let interrupted = std::mem::take(&mut gs.interrupted_animation);
             let gesture_owned = was_dragging || gs.is_overscrolling;
-            let velocity = if allow_fling && gesture_owned {
-                gs.velocity.release(release_time_ms, MAX_FLING_VELOCITY)
-            } else {
-                0.0
+            let velocity = match fling_release {
+                Some(event) if gesture_owned => gs.velocity.release(event, MAX_FLING_VELOCITY),
+                _ => 0.0,
             };
 
             let start_fling = allow_fling && was_dragging && velocity.abs() > MIN_FLING_VELOCITY;

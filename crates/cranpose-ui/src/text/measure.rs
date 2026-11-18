@@ -502,6 +502,8 @@ impl TextService {
         };
         self.layouts.borrow_mut().begin_pass(idle_passes, headroom);
         self.intrinsics.borrow_mut().begin_pass(idle_passes, drop);
+        self.retired.borrow_mut().begin_pass(idle_passes);
+        self.retired_strings.borrow_mut().begin_pass(idle_passes);
         self.layouter.borrow_mut().begin_pass(headroom);
     }
 

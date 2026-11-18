@@ -4,6 +4,7 @@ use std::{
 };
 
 use cranpose_ui_graphics::{Point, space::Ray};
+use web_time::Instant;
 
 use super::rotary::RotaryScrollEvent;
 
@@ -71,8 +72,8 @@ impl PointerUptime {
 }
 
 fn delivery_nanos() -> u64 {
-    static EPOCH: std::sync::OnceLock<web_time::Instant> = std::sync::OnceLock::new();
-    let elapsed = EPOCH.get_or_init(web_time::Instant::now).elapsed();
+    static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    let elapsed = EPOCH.get_or_init(Instant::now).elapsed();
     u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
 }
 
@@ -369,6 +370,12 @@ pub struct PointerEvent {
     /// Unlike `time_ms`, this has the same origin as frame callbacks and can
     /// anchor input-driven animations without a wall/platform clock conversion.
     pub animation_time_nanos: Option<u64>,
+    /// The instant at which the shell received this event, taken once when the
+    /// platform handed the event over. A gesture that times its samples by
+    /// their arrival reads it where the platform gives no `time_ms`. Handling
+    /// the event later does not change it. `None` for an event built without
+    /// the shell.
+    pub received_at: Option<Instant>,
     /// Multiplicative zoom factor for [`PointerEventKind::Zoom`] events
     /// (`> 1.0` zooms in, `< 1.0` zooms out). `1.0` for all other events.
     pub zoom_delta: f32,
@@ -425,6 +432,7 @@ impl PointerEvent {
             buttons: PointerButtons::NONE,
             time_ms: None,
             animation_time_nanos: None,
+            received_at: None,
             zoom_delta: 1.0,
             source: PointerSource::Unknown,
             modifiers: None,
@@ -470,6 +478,12 @@ impl PointerEvent {
     /// Set the timestamp in the animation frame-clock domain.
     pub fn with_animation_time_nanos(mut self, time_nanos: u64) -> Self {
         self.animation_time_nanos = Some(time_nanos);
+        self
+    }
+
+    /// Set the instant at which the shell received this event.
+    pub fn with_received_at(mut self, received_at: Instant) -> Self {
+        self.received_at = Some(received_at);
         self
     }
 
@@ -618,6 +632,7 @@ impl PointerEvent {
             buttons: self.buttons,
             time_ms: self.time_ms,
             animation_time_nanos: self.animation_time_nanos,
+            received_at: self.received_at,
             zoom_delta: self.zoom_delta,
             source: self.source,
             modifiers: self.modifiers,

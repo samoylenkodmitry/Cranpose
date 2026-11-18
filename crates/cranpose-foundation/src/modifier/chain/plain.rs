@@ -6,7 +6,6 @@ use std::{
     fmt,
     hash::Hasher,
     marker::PhantomData,
-    rc::Rc,
 };
 
 use cranpose_core::{ProvidedValue, hash::default};
@@ -269,12 +268,14 @@ impl PlainLayoutFns {
 /// What a chain keeps of a plain element's type beside its words: how many
 /// they are, what the element takes part in, and how to read them.
 pub struct PlainFns {
-    element_type: fn() -> TypeId,
+    element_type: TypeId,
     words: u8,
     capabilities: NodeCapabilities,
+    update_invalidation: Option<InvalidationKind>,
     layout: Option<&'static PlainLayoutFns>,
     type_name: fn() -> &'static str,
-    element: fn(&[u32]) -> DynModifierElement,
+    inspector_name: fn(&[u32]) -> &'static str,
+    inspector_properties: fn(&[u32], &mut dyn FnMut(&'static str, String)),
 }
 
 impl fmt::Debug for PlainFns {
@@ -286,7 +287,7 @@ impl fmt::Debug for PlainFns {
 impl PlainFns {
     /// The type of the element the words hold.
     pub fn element_type(&self) -> TypeId {
-        (self.element_type)()
+        self.element_type
     }
 
     /// How many words the element's value takes.
@@ -313,8 +314,8 @@ impl PlainFns {
         hash_words(words)
     }
 
-    pub(in super::super) fn element(&self, words: &[u32]) -> DynModifierElement {
-        (self.element)(words)
+    pub(in super::super) fn element(&'static self, words: &[u32]) -> DynModifierElement {
+        DynModifierElement::plain(PlainWords::new(self, words))
     }
 
     /// The element `words` hold, when it is an `E`.
@@ -333,25 +334,35 @@ impl<E: PlainElement> FnsOf<E> {
     };
 
     const FNS: PlainFns = PlainFns {
-        element_type: TypeId::of::<E>,
+        element_type: TypeId::of::<E>(),
         words: Self::WORDS,
         capabilities: E::CAPABILITIES,
+        update_invalidation: E::UPDATE_INVALIDATION,
         layout: E::LAYOUT,
         type_name: type_name::<E>,
-        element: |words| plain_element(E::from_words(words)),
+        inspector_name: |words| E::from_words(words).inspector_name(),
+        inspector_properties: |words, inspector| {
+            E::from_words(words).inspector_properties(inspector);
+        },
     };
 }
 
 // The hash of a plain element: of its words, in one function for every
-// type. A chain's rebuild alone reads it, to pick an equal entry among
-// those of one type, so two equal values of other bits, as the two zeros,
-// may hash apart.
+// type, as two elements compare.
 fn hash_words(words: &[u32]) -> u64 {
     let mut hasher = default::new();
     for &word in words {
         hasher.write_u32(word);
     }
     hasher.finish()
+}
+
+// Whether two plain elements of one type hold an equal value: equal words,
+// as Compose's data classes compare a float by its bits (the two zeros
+// differ, a NaN equals itself). The words of a value number five at most,
+// so the comparison folds them inline rather than calling `memcmp`.
+fn same_words(a: &[u32], b: &[u32]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0, |differ, (&x, &y)| differ | (x ^ y)) == 0
 }
 
 /// A plain element as a chain reads it: its type's table, and its value as
@@ -368,35 +379,78 @@ pub trait PlainValue {
     fn equals_words(&self, words: &[u32]) -> bool;
 }
 
-struct TypedPlainElement<E: PlainElement>(E);
+// A plain element's value as a modifier holds it in place of an
+// allocation: its type's table and its words, those past the value's own
+// zero.
+#[derive(Clone, Copy)]
+pub(crate) struct PlainWords {
+    fns: &'static PlainFns,
+    words: [u32; PLAIN_WORDS_MAX],
+    // A byte that holds one value, in the room after the words: the enums
+    // around the value, a modifier's element and a modifier of one element
+    // or of several, keep their tags in the values it never holds and stay
+    // as large as the value.
+    #[expect(dead_code, reason = "its use is the values it never holds")]
+    room: Room,
+}
+
+#[derive(Clone, Copy)]
+#[repr(u8)]
+enum Room {
+    Zero = 0,
+}
+
+impl PlainWords {
+    pub(crate) fn new(fns: &'static PlainFns, words: &[u32]) -> Self {
+        let mut held = [0; PLAIN_WORDS_MAX];
+        held[..words.len()].copy_from_slice(words);
+        Self {
+            fns,
+            words: held,
+            room: Room::Zero,
+        }
+    }
+
+    fn of<E: PlainElement>(element: &E) -> Self {
+        let mut words = [0; PLAIN_WORDS_MAX];
+        element.to_words(&mut words[..E::WORDS]);
+        Self {
+            fns: &FnsOf::<E>::FNS,
+            words,
+            room: Room::Zero,
+        }
+    }
+
+    pub(crate) fn words(&self) -> &[u32] {
+        &self.words[..self.fns.words()]
+    }
+}
 
 // The type alone, as the wrapper of a node's element prints: the values
 // would bring each element's formatting into every image.
-impl<E: PlainElement> fmt::Debug for TypedPlainElement<E> {
+impl fmt::Debug for PlainWords {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TypedPlainElement")
-            .field("type", &type_name::<E>())
-            .finish()
+        f.write_str(self.fns.type_name())
     }
 }
 
-impl<E: PlainElement> PlainValue for TypedPlainElement<E> {
+impl PlainValue for PlainWords {
     fn fns(&self) -> &'static PlainFns {
-        &FnsOf::<E>::FNS
+        self.fns
     }
 
     fn write_words(&self, words: &mut [u32]) {
-        self.0.to_words(words);
+        words.copy_from_slice(self.words());
     }
 
     fn equals_words(&self, words: &[u32]) -> bool {
-        E::from_words(words) == self.0
+        same_words(self.words(), words)
     }
 }
 
-impl<E: PlainElement> AnyModifierElement for TypedPlainElement<E> {
+impl AnyModifierElement for PlainWords {
     fn element_type(&self) -> TypeId {
-        TypeId::of::<E>()
+        self.fns.element_type()
     }
 
     fn maker(&self) -> ElementMaker<'_> {
@@ -408,29 +462,23 @@ impl<E: PlainElement> AnyModifierElement for TypedPlainElement<E> {
     }
 
     fn capabilities(&self) -> NodeCapabilities {
-        E::CAPABILITIES
+        self.fns.capabilities
     }
 
     fn hash_code(&self) -> u64 {
-        let mut words = [0; PLAIN_WORDS_MAX];
-        let words = &mut words[..E::WORDS];
-        self.0.to_words(words);
-        hash_words(words)
+        hash_words(self.words())
     }
 
     fn equals_element(&self, other: &dyn AnyModifierElement) -> bool {
-        other
-            .as_any()
-            .downcast_ref::<Self>()
-            .is_some_and(|typed| typed.0 == self.0)
+        other.equals_plain(self.fns, self.words())
     }
 
     fn inspector_name(&self) -> &'static str {
-        self.0.inspector_name()
+        (self.fns.inspector_name)(self.words())
     }
 
     fn record_inspector_properties(&self, visitor: &mut dyn FnMut(&'static str, String)) {
-        self.0.inspector_properties(visitor);
+        (self.fns.inspector_properties)(self.words(), visitor);
     }
 
     fn requires_update(&self) -> bool {
@@ -442,7 +490,7 @@ impl<E: PlainElement> AnyModifierElement for TypedPlainElement<E> {
     }
 
     fn update_invalidation_kind(&self) -> Option<InvalidationKind> {
-        E::UPDATE_INVALIDATION
+        self.fns.update_invalidation
     }
 
     fn provided_composition_locals(&self) -> Vec<ProvidedValue> {
@@ -456,12 +504,15 @@ impl<E: PlainElement> AnyModifierElement for TypedPlainElement<E> {
     fn equals_plain(&self, fns: &PlainFns, words: &[u32]) -> bool {
         // The same table tells the same type without a call; two tables of
         // one type may still differ in address.
-        (std::ptr::eq(fns, self.fns()) || fns.element_type() == TypeId::of::<E>())
-            && E::from_words(words) == self.0
+        (std::ptr::eq(fns, self.fns) || fns.element_type() == self.fns.element_type())
+            && same_words(self.words(), words)
     }
 }
 
-/// The type-erased element of a plain `element`.
-pub fn plain_element<E: PlainElement>(element: E) -> DynModifierElement {
-    Rc::new(TypedPlainElement(element))
+/// The type-erased element of a plain `element`, a copy of its value.
+// One copy for each element type: a modifier builder inlined into an app's
+// body then holds a call, not the writing of the element's words.
+#[inline(never)]
+pub fn plain_element<E: PlainElement>(element: &E) -> DynModifierElement {
+    DynModifierElement::plain(PlainWords::of(element))
 }

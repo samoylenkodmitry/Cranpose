@@ -66,6 +66,7 @@ struct IosApp<F: FnMut() + 'static> {
     event_proxy: EventLoopProxy,
     launch_error: Rc<RefCell<Option<LaunchError>>>,
     touch_router: cranpose_app_shell::TouchRouter<winit::event::FingerId>,
+    touch_clock: Option<objc2::rc::Retained<super::touch_clock::TouchClock>>,
     next_off_screen_render: Option<Instant>,
     device_loss: crate::gpu_loss::LossSignal,
     device_loss_drill: crate::gpu_loss::LossDrill,
@@ -73,7 +74,27 @@ struct IosApp<F: FnMut() + 'static> {
 
 const OFF_SCREEN_RENDER_PERIOD: Duration = Duration::from_millis(16);
 
+// A sample at `(x, y)` with the time UIKit gave a finger's touch; a pen or a
+// mouse has no finger here.
+fn touch_sample(
+    clock: Option<&super::touch_clock::TouchClock>,
+    finger: Option<winit::event::FingerId>,
+    position: cranpose_ui::Point,
+) -> cranpose_app_shell::TouchSample {
+    cranpose_app_shell::TouchSample::new(position.x, position.y).with_time_ms(
+        clock
+            .zip(finger)
+            .and_then(|(clock, finger)| clock.time_ms(finger)),
+    )
+}
+
 impl<F: FnMut() + 'static> IosApp<F> {
+    // The left-edge back swipe, and the clock that times every touch.
+    fn install_gesture_recognizers(&mut self, window: &dyn Window) {
+        super::back_gesture::register(window);
+        self.touch_clock = super::touch_clock::install(window);
+    }
+
     /// Presses or releases a pointer button: the primary one of a finger, a
     /// pen or a mouse through the touch router, and a mouse's other buttons
     /// as the shell's other mouse buttons. Returns whether a node took it.
@@ -100,11 +121,10 @@ impl<F: FnMut() + 'static> IosApp<F> {
             };
         }
         let finger = button_finger(button);
+        let sample = touch_sample(self.touch_clock.as_deref(), finger, logical);
         match state {
-            ElementState::Pressed => self.touch_router.press(shell, finger, logical.x, logical.y),
-            ElementState::Released => self
-                .touch_router
-                .release(shell, finger, logical.x, logical.y),
+            ElementState::Pressed => self.touch_router.press(shell, finger, sample),
+            ElementState::Released => self.touch_router.release(shell, finger, sample),
         }
     }
 
@@ -137,6 +157,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
             event_proxy,
             launch_error,
             touch_router: cranpose_app_shell::TouchRouter::default(),
+            touch_clock: None,
             next_off_screen_render: None,
             device_loss,
             device_loss_drill,
@@ -548,7 +569,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
 
         shell.app_context().enter(super::clipboard::register);
         shell.app_context().enter(super::keyboard::register);
-        super::back_gesture::register(&*window);
+        self.install_gesture_recognizers(&*window);
         shell.set_semantics_enabled(true);
         crate::accessibility::install_inspector(&mut shell, self.settings.developer_inspector);
         shell.set_safe_area(self.platform_env.safe_area());
@@ -612,12 +633,11 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
                 position, source, ..
             } => {
                 let logical = self.platform.pointer_position(position);
+                let finger = source_finger(&source);
+                let sample = touch_sample(self.touch_clock.as_deref(), finger, logical);
                 if let Some(shell) = self.shell.as_mut() {
                     shell.set_pointer_source(pointer_source_from_winit(&source));
-                    if self
-                        .touch_router
-                        .moved(shell, source_finger(&source), logical.x, logical.y)
-                    {
+                    if self.touch_router.moved(shell, finger, sample) {
                         window.request_redraw();
                     }
                 }

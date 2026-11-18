@@ -13,7 +13,7 @@ impl Modifier {
 
     /// Like [`Self::weight`]. With `fill` set to false the child may be smaller than its share.
     pub fn weight_with_fill(self, weight: f32, fill: bool) -> Self {
-        let modifier = Self::from_dyn_element(plain_element(WeightElement::new(weight, fill)))
+        let modifier = Self::from_dyn_element(plain_element(&WeightElement::new(weight, fill)))
             .with_inspector_metadata(inspector_metadata("weight", move |info| {
                 info.add_property("weight", weight.to_string());
                 info.add_property("fill", fill.to_string());

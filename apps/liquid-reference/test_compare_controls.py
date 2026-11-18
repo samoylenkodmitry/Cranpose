@@ -96,6 +96,15 @@ class ControlComparisonTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate"):
             read_case_sets([a, a])
 
+    def test_a_case_prefix_compares_only_its_states(self):
+        a = self.capture(self.root / "native")
+        b = self.capture(self.root / "cranpose", case="control-slider-light-0p5")
+        extra_a = self.capture(self.root / "extra-native", case="control-stepper-light-solid-0")
+        rows = compare(a, b, self.root / "comparison", [extra_a], (), ["control-slider"])
+        self.assertEqual([row["case"] for row in rows], ["control-slider-light-0p5"])
+        with self.assertRaisesRegex(ValueError, "no control capture"):
+            compare(a, b, self.root / "other", (), (), ["control-gauge"])
+
 
 if __name__ == "__main__":
     unittest.main()

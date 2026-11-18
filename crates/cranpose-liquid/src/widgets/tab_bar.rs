@@ -705,6 +705,7 @@ impl TabGesture {
                             );
                         }),
                         on_select: Rc::clone(&on_select),
+                        other_cell_press: crate::motion::OtherCellPress::MovesLens,
                     },
                 )
             })

@@ -38,7 +38,7 @@ fn zoomable_shell() -> (AppShell<TestRenderer>, ZoomState) {
 fn at(shell: &AppShell<TestRenderer>, millis: i64) -> PointerEventTime {
     PointerEventTime {
         platform_time_ms: Some(millis),
-        animation_time_nanos: shell.exact_pointer_event_time(None).animation_time_nanos,
+        ..shell.exact_pointer_event_time(None)
     }
 }
 

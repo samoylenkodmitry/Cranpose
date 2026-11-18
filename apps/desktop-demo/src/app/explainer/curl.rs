@@ -16,7 +16,7 @@ use cranpose_ui::{
     Size,
 };
 
-use super::{grid_mesh, whole};
+use super::whole;
 
 // The direction the stamp peels along, of length one: from its top left
 // corner toward its bottom right one, which rises first.
@@ -138,10 +138,10 @@ fn curled(size: Size, bend: Bend) -> Mesh {
         }
     }
     let mut indices = Vec::with_capacity((COLUMNS - 1) * (ROWS - 1) * 6);
-    let stride = grid_mesh::vertex(COLUMNS);
+    let stride = whole::narrow(COLUMNS);
     for row in 0..ROWS - 1 {
         for column in 0..COLUMNS - 1 {
-            let at = grid_mesh::vertex(row * COLUMNS + column);
+            let at = whole::narrow(row * COLUMNS + column);
             let below = at + stride;
             indices.extend_from_slice(&[at, at + 1, below, below, at + 1, below + 1]);
         }

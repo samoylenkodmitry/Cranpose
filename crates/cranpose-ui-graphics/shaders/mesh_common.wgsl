@@ -94,26 +94,28 @@ fn before_window(position: vec3<f32>) -> bool {
     return dot(mesh.clip.xyz, position) + mesh.clip.w < 0.0;
 }
 
-// Sixteen points spread over the unit disc, which the shadow taps take.
-fn disc_point(index: u32) -> vec2<f32> {
-    var points = array<vec2<f32>, 16>(
-        vec2<f32>(-0.9420, -0.3991), vec2<f32>(0.9456, -0.7689),
-        vec2<f32>(-0.0942, -0.9294), vec2<f32>(0.3450, 0.2939),
-        vec2<f32>(-0.9159, 0.4577), vec2<f32>(-0.8154, -0.8791),
-        vec2<f32>(-0.3828, 0.2768), vec2<f32>(0.9748, 0.7565),
-        vec2<f32>(0.4432, -0.9751), vec2<f32>(0.5374, -0.4737),
-        vec2<f32>(-0.2650, -0.4189), vec2<f32>(0.7920, 0.1909),
-        vec2<f32>(-0.2419, 0.9971), vec2<f32>(-0.8141, 0.9144),
-        vec2<f32>(0.1998, 0.7864), vec2<f32>(0.1438, -0.1410),
-    );
-    return points[index];
+// Point `index` of `count` spread evenly over the unit disc, the whole
+// pattern turned by `turn` radians: the taps of a soft shadow.
+fn disc_point(index: u32, count: u32, turn: f32) -> vec2<f32> {
+    let angle = f32(index) * 2.399963 + turn;
+    return sqrt((f32(index) + 0.5) / f32(count)) * vec2<f32>(cos(angle), sin(angle));
+}
+
+// How far the taps turn at the screen pixel `pixel`: interleaved gradient
+// noise. One pattern for every pixel would draw each tap as a copy of the
+// shadow's edge; turned from pixel to pixel, the taps fill the penumbra
+// evenly.
+fn tap_turn(pixel: vec2<f32>) -> f32 {
+    let noise = fract(52.9829189 * fract(dot(floor(pixel), vec2<f32>(0.06711056, 0.00583715))));
+    return noise * 6.2831853;
 }
 
 // The share of the light that reaches a point at `position` in the shadow
-// map. A light of no size takes four taps around the point; one of some
-// size first finds how far the casters around the point lie in front of
-// it, then filters over the penumbra that distance opens.
-fn shadow_visibility(position: vec3<f32>) -> f32 {
+// map, seen at the screen pixel `pixel`. A light of no size takes four
+// taps around the point; one of some size first finds how far the casters
+// around the point lie in front of it, then filters over the penumbra that
+// distance opens, with more taps for a wider penumbra.
+fn shadow_visibility(position: vec3<f32>, pixel: vec2<f32>) -> f32 {
     let uv = vec2<f32>(position.x * 0.5 + 0.5, 0.5 - position.y * 0.5);
     if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) {
         return 1.0;
@@ -128,11 +130,12 @@ fn shadow_visibility(position: vec3<f32>) -> f32 {
         lit += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(step, step), depth);
         return lit * 0.25;
     }
+    let turn = tap_turn(pixel);
     let search = mesh.shadow_soft.xy * depth;
     var blockers = 0.0;
     var blocker_depth = 0.0;
     for (var index = 0u; index < 16u; index++) {
-        let found = textureSampleLevel(shadow_depth, shadow_depth_sampler, uv + disc_point(index) * search, 0.0).r;
+        let found = textureSampleLevel(shadow_depth, shadow_depth_sampler, uv + disc_point(index, 16u, turn) * search, 0.0).r;
         if (found < depth) {
             blockers += 1.0;
             blocker_depth += found;
@@ -142,9 +145,11 @@ fn shadow_visibility(position: vec3<f32>) -> f32 {
         return 1.0;
     }
     let penumbra = max(mesh.shadow_soft.xy * (depth - blocker_depth / blockers), vec2<f32>(mesh.shadow.x));
+    let texels = max(penumbra.x, penumbra.y) / mesh.shadow.x;
+    let count = u32(clamp(texels, 16.0, 32.0));
     var lit = 0.0;
-    for (var index = 0u; index < 16u; index++) {
-        lit += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + disc_point(index) * penumbra, depth);
+    for (var index = 0u; index < count; index++) {
+        lit += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + disc_point(index, count, turn) * penumbra, depth);
     }
-    return lit / 16.0;
+    return lit / f32(count);
 }

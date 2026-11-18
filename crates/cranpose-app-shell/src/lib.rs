@@ -9,6 +9,8 @@ mod frame_scheduler;
 mod hit_path_tracker;
 pub mod inspector;
 mod modal_focus;
+#[expect(clippy::multiple_inherent_impl, reason = "one file per shell concern")]
+mod pointer_event_time;
 mod requested_mouse_moves;
 #[cfg(debug_assertions)]
 mod semantics_check;
@@ -60,12 +62,13 @@ pub use dev_options::{DevOptions, FramePacingMode};
 pub use fps_monitor::FpsStats;
 pub use frame_rate_boost::FrameRateBoost;
 pub use frame_scheduler::FrameScheduler;
+pub use pointer_event_time::PointerEventTime;
 use shell_frame::Composed;
 #[cfg(test)]
 use shell_frame::build_draw_refresh_scope;
 pub use surface::{RootId, RootSurface, SurfaceMut};
 use surface::{SurfaceDirtyLane, TextInputRouter, TextInputRoutes, route_nodes_by_surface};
-pub use touch_router::TouchRouter;
+pub use touch_router::{TouchRouter, TouchSample};
 use web_time::Instant;
 pub use wheel::WheelScroll;
 // How long a frame composes before content that a change brings, such as a
@@ -195,15 +198,6 @@ where
     pub(crate) pending_lane_nodes: Vec<NodeId>,
     pub(crate) geometry_scene_nodes: cranpose_ui::GeometrySceneNodes,
     pub(crate) rest: shell_frame::RestTrim,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-/// Platform and animation-clock timestamps for one pointer sample.
-pub struct PointerEventTime {
-    /// Timestamp supplied by the platform, in its millisecond clock domain.
-    pub platform_time_ms: Option<i64>,
-    /// Timestamp in the animation frame-clock domain.
-    pub animation_time_nanos: u64,
 }
 
 fn update_stage_telemetry_threshold_ms() -> Option<f64> {
@@ -416,18 +410,6 @@ impl ShellApp {
             .unwrap_or_default()
             .as_nanos()
             .min(u128::from(u64::MAX)) as u64
-    }
-
-    pub(crate) fn realtime_pointer_event_time(
-        &self,
-        platform_time_ms: Option<i64>,
-    ) -> PointerEventTime {
-        PointerEventTime {
-            platform_time_ms,
-            animation_time_nanos: self
-                .frame_time_nanos_at(Instant::now())
-                .max(self.last_frame_time_nanos),
-        }
     }
 
     pub(crate) fn install_text_input_router(&mut self) {
@@ -1110,19 +1092,6 @@ where
     /// computing a new one.
     pub fn frame_scheduler_snapshot(&self) -> FrameSchedule {
         self.surfaces[0].frame_scheduler.snapshot()
-    }
-
-    /// Timestamp a live input sample against the current animation clock.
-    pub fn realtime_pointer_event_time(&self, platform_time_ms: Option<i64>) -> PointerEventTime {
-        self.app.realtime_pointer_event_time(platform_time_ms)
-    }
-
-    /// Timestamp deterministic input at the most recently processed frame.
-    pub fn exact_pointer_event_time(&self, platform_time_ms: Option<i64>) -> PointerEventTime {
-        PointerEventTime {
-            platform_time_ms,
-            animation_time_nanos: self.app.last_frame_time_nanos,
-        }
     }
 
     /// Advances the frame clock by `frame_interval` past the later of the last frame time and the

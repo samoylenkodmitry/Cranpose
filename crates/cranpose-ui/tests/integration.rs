@@ -18,6 +18,7 @@ mod grid;
 mod held_modifier_elements;
 mod inline_widgets;
 mod inspector_and_insets;
+mod kept_modifiers;
 mod lazy_content_padding;
 mod lazy_memory_headroom;
 mod lazy_retained_many_roots;
@@ -25,6 +26,7 @@ mod lazy_reuse_pool;
 #[path = "support/lazy_screen.rs"]
 mod lazy_screen;
 mod lazy_scroll_from_retained;
+mod lazy_width_change;
 #[cfg(feature = "localization")]
 mod localization;
 mod modifier_local_inheritance;

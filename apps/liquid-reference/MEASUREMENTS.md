@@ -367,3 +367,75 @@ Lossless before/after comparisons cover 186 floating-control captures on black/w
 The shader build passes all 36 fresh simulator interaction cases across the three backgrounds. The viewer retains 31,570 native/candidate frame updates at their original timestamps. After rebasing onto main `8ccdd9217`, all 6,767 workspace tests, 962 release-core tests, doctests and workspace clippy pass; 18 existing skipped tests, including the ten strict native parity targets, remain skipped. The iOS simulator release build also passes.
 
 Evidence is retained outside the worktree at `/Users/s/develop/artifacts/cranpose-liquid-motion-parity-2026-10-01/shader-perf35`. The performance build uses the immutable accepted-material source inventory plus this optimization, so concurrent changes cannot inflate its measured gain. The subsequent rebase changes no renderer, graphics or Liquid source files. The captured and rebased iOS apps are retained with their executable hashes.
+
+## Taps, touch time and the toggle track, 2026-11-17
+
+The simulator is a fresh iPhone 17 Pro, iOS 27.0 (24A434), 402 × 874 points at 3×. Every native reference here was captured again on 2026-11-17; the October artifact directory no longer exists. The machine ran other builds during the captures, with a load average near 800, so the recordings say nothing about frame rate.
+
+The 41-state static comparison of main `7171d6b33` gives the per-case mean RGB difference that `compare_controls.py` now reports beside the unequal-pixel count. Toggle and slider rest states measure 0.06–0.23. The worst cases are the dark card on the checkerboard (19.17), the light card on the checkerboard (5.65), the light card on white (3.32), the light grouped menu (2.22) and the dark prominent button (2.06). The earlier 4.94 for the dark checkerboard card used another crop and cannot be compared.
+
+`NativeToggleTapMotionTests` and `NativeSegmentedTapMotionTests` add a 100 ms tap to the drag captures. The native toggle tap shows three behaviors the drag hid:
+
+- The lens stays lifted for 225 ms from touch-down before its release springs start. A drag held longer releases on lift-off. The release springs themselves already matched: the width fits ω 13.4 rad/s at damping ratio 0.70, the white fill ω 15.0 at 0.98.
+- The track recolors on commit by sliding a strip ten tracks wide under the track: one track of the on color, eight of a linear blend, one of the off color. Its travel fits a spring of ω 10.4 rad/s and damping ratio 1.08 over 144 frames of the tap and drag traces, with RMS 0.0069. The previous 260 ms ease-out tween turned the track blue about twice as fast: 47 levels of red ahead at 0.3 s. The strip now leaves 9–14 levels, one frame of recomposition after the release.
+- The thumb travels to the on side on a spring of ω 24 rad/s and damping ratio 1.14, close to the existing glide.
+
+The native segmented tap leaves the lens in place while the finger is down on another segment and dims that segment's label to about 65% over 150 ms. On release, the lens lifts and travels there; a spring of ω 14.4 rad/s and damping ratio 0.86 fits its center with 3.2 pt RMS over a 200 pt travel. Cranpose moved the lens under the finger at touch-down. It now dims the label, keeps the lens, then lifts it for the minimum lift on the way. The tab bar keeps moving its lens on touch-down, as the iOS tab bar does.
+
+The iOS touch router had no sample time, so drag velocity on iOS came from frame times. A gesture recognizer on winit's view now records `UITouch.timestamp` for every touch before the view takes it. The forward slider capture settles with its fill ending at 277.67 pt, against 276.67 natively; before the change it stopped at 273.67. The reversed holdout path settles at 173.67 pt in both apps, where this file earlier recorded 0.49645 against 0.469973.
+
+The renderer dropped a layer's color filter on text with its own span color: the segmented label dim reached the scene, never the pixels. `text_layer_color_filter` reproduces it with black text under a half-alpha modulation and a red tint.
+
+## System Tint Amount, 2026-11-17
+
+iOS 27 sets the Liquid Glass tint in Settings > Appearance > Liquid Glass > Tint Amount. The simulator default is 50%; the setting is stored only once edited. The iPhoneOS 27.2 SDK has no public API that reports it: `UIGlassEffect` offers the regular and clear styles only. `capture_controls_at_tint.sh` captured the 41 native control states at 0%, 25%, 50% and 100%.
+
+Native at each tint against native at 50%, mean RGB difference:
+
+| State | 0% | 25% | 100% |
+| --- | --- | --- | --- |
+| Dark card on the checkerboard | 6.77 | 3.38 | 17.79 |
+| Light card on the checkerboard | 6.08 | 2.98 | 4.85 |
+| Dark button on the checkerboard | 1.01 | 0.48 | 2.42 |
+| Light button on the checkerboard | 0.89 | 0.44 | 0.74 |
+
+Every state over a plain background stays within 2 levels at every tint, with no visible pixel. The menus change by the same amount between any two captures, including 0% against 100% where the grouped menu differs by 0.17 and no visible pixel; that difference is capture timing, not tint.
+
+Cranpose's cards, buttons, search fields and menus ignore `LiquidThemeSpec::glass_tint_amount`; only the tab bar reads it. Cranpose against native at each tint, mean RGB difference:
+
+| State | 0% | 25% | 50% | 100% |
+| --- | --- | --- | --- | --- |
+| Dark card on the checkerboard | 15.97 | 17.29 | 19.17 | 26.83 |
+| Light card on the checkerboard | 4.99 | 4.42 | 5.65 | 8.52 |
+| Dark button on the checkerboard | 1.08 | 0.62 | 0.59 | 2.69 |
+| Light button on the checkerboard | 1.04 | 0.61 | 0.33 | 1.00 |
+
+The dark card is far from iOS at every tint, so its excess color is no setting artifact. The light card matches best at 25%, the buttons at 50%. The light card face on white now draws 254 as iOS does (247 before); the GPU tone test holds every neutral sample within 5 levels.
+
+Two captures of the same Cranpose build give 11.5 and 13.5 for the mean difference after the release, with the frames aligned on the release. In the second, the touch-down reached the app 25 ms late: UIKit stamped the release 167 ms after the touch-down, while the app received it 142 ms after. The motions start from the delivery time, so the 225 ms minimum lift ended 20 ms later. One toggle tap capture cannot resolve a change smaller than 2 levels.
+
+The branch's final build on the same simulator, mean RGB difference against native at 50%: the light card on white 0.85 (3.32 on main), the light card on the checkerboard 6.03 (5.65), the dark card on the checkerboard 19.17 (19.17). The 41 states hold 5,729,403 unequal pixels against 6,063,197 on main. The toggle tap scores 9.20 over the whole capture and 11.47 after the release (11.70 and 16.11 on main); the segmented tap 0.685 and 0.862 (0.867 and 0.997 on main).
+
+## Standard controls, 2026-11-18
+
+The same simulator captured the stepper, page control, progress bar, spinner, gauge, disclosure group and text field in both apps: light and dark, solid and checkerboard, at the values the tests name. `pixel_probe.py` read the geometry and fitted the fills below.
+
+- Stepper: a 93 × 32 capsule. The fill is (58, 58, 71) at 8.6% in light mode and (231, 231, 241) at 7.7% in dark mode, fitted over the checkerboard with an RMS under 0.3 levels. It is not a semantic iOS fill: `tertiarySystemFill` darkened the dark checkerboard where iOS lightens it. A 1 point rule 24 points tall splits the halves. The minus and plus are 40/3 points long and 5/3 thick, centered at x 23 and 209/3, y 16.
+- Progress bar and gauge: the tracks are `systemFill` and `tertiarySystemFill`, fitted within 0.002 of alpha. The bar is 4 points tall; the gauge track is 16, with the label's line ending 32/3 points above it.
+- Spinner: the medium wheel is 20 points with spokes 2.5 wide from radius 10/3 to 10. The large wheel is 35 points with spokes 5 wide from radius 29/6 to 17.5, at the top leading corner of a 37 point frame. The spoke alphas step by 0.146 from 0.854 to the 0.27 floor; no spoke is opaque.
+- Disclosure group: the closed chevron ends 2/3 point from the trailing edge and turns about the center of a 32/3 point frame. The label row is 27 points and the content starts 1 point below it.
+- Text field: the system background fills it, white or black. The placeholder starts 22/3 points from the leading edge. iOS curves the 5 point corners over 23/3 points of each edge; Cranpose draws circular arcs.
+- Page control: dots 23/3 points across at a 53/3 pitch, the others white at 45%. On a light solid backdrop the dots are invisible in both apps.
+
+Mean RGB difference against native, before and after the fixes:
+
+| State | First build | Fixed |
+| --- | --- | --- |
+| Text field, light checkerboard | 7.98 | 0.045 |
+| Text field, dark checkerboard | 15.81 | 0.054 |
+| Disclosure group open, light solid | 1.4 | 0.116 |
+| Stepper, dark checkerboard at 0.5 | 0.35 | 0.038 |
+| Large spinner, light solid | 0.2 | 0.165 |
+| Gauge full, dark solid | 0.371 | 0.077 |
+
+The gauge's label gap was 2/3 point short, which moved its track 1/3 point up across all 300 points; the gap is now 32/3. All 68 states are within 0.18. The worst are the large spinner's four states, whose remainder is the animation phase at the capture. The page control dots sit 1/3 point higher than native, because UIKit snaps each dot to the pixel grid.

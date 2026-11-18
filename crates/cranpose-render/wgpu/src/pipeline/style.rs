@@ -5,7 +5,7 @@ pub(crate) use cranpose_render_common::layer_transform::apply_layer_to_quad;
 #[cfg(test)]
 pub(crate) use cranpose_render_common::layer_transform::apply_layer_to_rect;
 pub(crate) use cranpose_render_common::style_shared::{
-    apply_layer_to_brush, apply_layer_to_color, scale_corner_radii,
+    apply_layer_geometry_to_brush, apply_layer_to_brush, apply_layer_to_color, scale_corner_radii,
 };
 #[cfg(test)]
 pub(crate) use cranpose_render_common::style_shared::{

@@ -1,7 +1,6 @@
 use std::{
-    any::{Any, TypeId},
+    any::TypeId,
     hash::{Hash, Hasher},
-    rc::Rc,
     sync::OnceLock,
 };
 
@@ -346,51 +345,4 @@ pub const fn constant_value_key(file: &str, line: u32, column: u32, index: u32) 
     hash = fnv1a_location_key_bytes(hash, &[0xfc]);
     hash = fnv1a_location_key_bytes(hash, &index.to_le_bytes());
     Key(avalanche_location_key(hash))
-}
-
-/// Slots of the per-thread table of constant values, as a power of two.
-const CONSTANT_SLOTS: usize = 128;
-
-/// The value `make` gives, for an expression `#[composable]` found to give
-/// the same value every time it runs, such as a modifier chain of
-/// constants: `key` names the expression. The thread keeps the value it
-/// made last for `key` in a table of [`CONSTANT_SLOTS`] slots, so the
-/// expression is made again only when another expression took its slot.
-/// It needs no composition: the expression may sit in a closure that runs
-/// in an event handler, an effect or another thread.
-#[doc(hidden)]
-pub fn __constant<T: Clone + 'static>(key: Key, make: impl FnOnce() -> T) -> T {
-    let slot = (key.0 as usize) & (CONSTANT_SLOTS - 1);
-    if let Some(value) = kept_constant(key, slot).and_then(|kept| kept.downcast_ref::<T>().cloned())
-    {
-        return value;
-    }
-    let value = make();
-    keep_constant(key, slot, Rc::new(value.clone()));
-    value
-}
-
-// The value kept for `key` in `slot`, outside `__constant` so its callers'
-// types make no thread state access each.
-fn kept_constant(key: Key, slot: usize) -> Option<Rc<dyn Any>> {
-    thread_state::try_runtimes(|state| {
-        let constants = state.constants.try_borrow().ok()?;
-        let (kept_key, value) = constants.get(slot)?.as_ref()?;
-        (*kept_key == key).then(|| Rc::clone(value))
-    })
-    .flatten()
-}
-
-fn keep_constant(key: Key, slot: usize, stored: Rc<dyn Any>) {
-    thread_state::try_runtimes(|state| {
-        let Ok(mut constants) = state.constants.try_borrow_mut() else {
-            return;
-        };
-        if constants.is_empty() {
-            constants.resize_with(CONSTANT_SLOTS, || None);
-        }
-        if let Some(entry) = constants.get_mut(slot) {
-            *entry = Some((key, stored));
-        }
-    });
 }

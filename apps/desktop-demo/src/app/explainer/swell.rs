@@ -167,6 +167,7 @@ impl Swell {
         let mut crest = String::new();
         for wave in &self.waves {
             let (dx, dy) = wave.direction;
+            // A String takes every write.
             writeln!(
                 travel,
                 "    vec4<f32>({:.7}, {:.7}, {:.7}, {:.7}),",
@@ -175,7 +176,7 @@ impl Swell {
                 wave.speed,
                 wave.phase
             )
-            .expect("a String takes every write");
+            .unwrap_or_default();
             writeln!(
                 crest,
                 "    vec4<f32>({:.7}, {:.7}, {:.1}, 0.0),",
@@ -183,7 +184,7 @@ impl Swell {
                 dy * wave.slope,
                 wave.gusty
             )
-            .expect("a String takes every write");
+            .unwrap_or_default();
         }
         format!(
             "const SWELL_WAVES: u32 = {WAVES}u;\n\

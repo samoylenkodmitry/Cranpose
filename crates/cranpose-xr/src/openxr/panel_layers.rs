@@ -31,6 +31,8 @@ struct PanelImage {
     textures: Vec<wgpu::Texture>,
     // Whether the swapchain has an image to show
     shown: bool,
+    // Whether this frame's copy holds an image of the swapchain until the copy is submitted
+    acquired: bool,
 }
 
 pub(crate) struct PanelLayers {
@@ -54,13 +56,14 @@ impl PanelLayers {
     }
 
     // Draws the composition if it changed and copies the panels that changed into their
-    // swapchains.
+    // swapchains. `panels` takes the panels as the draw left them.
     pub(crate) fn draw(
         &mut self,
         guest: &mut GuestView,
         gpu: &GpuContext,
         xr_session: &XrSession,
         space: &Space,
+        panels: &mut Vec<PanelSlot>,
     ) -> Result<(), String> {
         fit_atlas(guest, space)?;
         let (texture, view) = self.atlas_texture(gpu, guest.pixel_size());
@@ -68,11 +71,11 @@ impl PanelLayers {
             .draw(&texture, &view)
             .map_err(|error| error.to_string())?;
         // The draw composes, so the panels are read after it: their parts are where it drew them
-        let panels = space.panels();
+        space.panels_into(panels);
         self.images
             .retain(|image| panels.iter().any(|slot| slot.id == image.id));
         if drawn {
-            self.copy_panels(&panels, &texture, gpu, xr_session)?;
+            self.copy_panels(panels, &texture, gpu, xr_session)?;
         }
         self.atlas = Some((texture, view));
         // A panel that grew in this draw gets its room by the next frame
@@ -148,7 +151,6 @@ impl PanelLayers {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("cranpose xr panels"),
             });
-        let mut acquired = Vec::new();
         // A surface has no part of the atlas
         for slot in panels.iter().filter(|slot| slot.kind == PanelKind::Content) {
             let [x, y, width, height] = slot.atlas.map(|dp| (dp * DENSITY).round() as u32);
@@ -179,11 +181,11 @@ impl PanelLayers {
                 },
             );
             Graphics::ready_for_release(&mut encoder, &image.textures[next as usize]);
-            acquired.push(index);
+            image.acquired = true;
         }
         gpu.queue.submit([encoder.finish()]);
-        for index in acquired {
-            let image = &mut self.images[index];
+        for image in self.images.iter_mut().filter(|image| image.acquired) {
+            image.acquired = false;
             image
                 .swapchain
                 .release_image()
@@ -243,6 +245,7 @@ impl PanelLayers {
             swapchain,
             textures,
             shown: false,
+            acquired: false,
         };
         // A panel that changed size keeps its index, so the indices of the frame's other images
         // stay valid

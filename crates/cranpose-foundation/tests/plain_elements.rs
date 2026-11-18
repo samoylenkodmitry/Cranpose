@@ -108,11 +108,11 @@ fn read(chain: &ModifierNodeChain) -> Vec<String> {
 }
 
 fn tint(value: u32) -> DynModifierElement {
-    plain_element(Tint(value))
+    plain_element(&Tint(value))
 }
 
 fn span(from: u32, to: u32) -> DynModifierElement {
-    plain_element(Span(from, to))
+    plain_element(&Span(from, to))
 }
 
 fn mark(tag: u32) -> DynModifierElement {
@@ -177,7 +177,7 @@ fn a_plain_element_moved_past_a_node_leaves_the_chain_its_capabilities() {
 fn a_new_chain_asks_for_every_stage_one_of_its_elements_takes_part_in() {
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
-    chain.update_from_slice(&[tint(1), mark(7), plain_element(Inset(2))], &mut context);
+    chain.update_from_slice(&[tint(1), mark(7), plain_element(&Inset(2))], &mut context);
     let asked = |kind: InvalidationKind| {
         context
             .invalidations()

@@ -3,7 +3,7 @@ use quote::{ToTokens, quote};
 use super::*;
 
 fn kept(mut block: syn::Block) -> String {
-    keep_constant_modifiers(&quote!(::cranpose_core), &mut block);
+    keep_constant_modifiers(&quote!(::cranpose_core), &quote!(::cranpose_ui), &mut block);
     block.to_token_stream().to_string()
 }
 
@@ -23,7 +23,7 @@ fn a_chain_of_constants_is_kept_once() {
         );
     }));
     assert_eq!(
-        tokens.matches("__constant").count(),
+        tokens.matches("__kept_modifier").count(),
         1,
         "the whole chain is one kept value: {tokens}"
     );
@@ -72,7 +72,7 @@ fn a_chain_that_reads_anything_else_is_built_each_time() {
     ] {
         let tokens = kept(block);
         assert!(
-            !tokens.contains("__constant"),
+            !tokens.contains("__kept_modifier"),
             "a variable, a call, an impure builder or no builder at all keeps \
              nothing: {tokens}"
         );
@@ -88,7 +88,7 @@ fn chains_inside_closures_are_kept_too() {
         let make = || Modifier::empty().height(4.0);
     }));
     assert_eq!(
-        tokens.matches("__constant").count(),
+        tokens.matches("__kept_modifier").count(),
         2,
         "the table of constants needs no composition, so a closure that runs \
          outside one keeps its chain too: {tokens}"
@@ -109,7 +109,7 @@ fn a_constant_tail_after_a_builder_reading_a_variable_is_kept_and_joined() {
         );
     }));
     assert_eq!(
-        tokens.matches("__constant").count(),
+        tokens.matches("__kept_modifier").count(),
         1,
         "the tail is one kept value: {tokens}"
     );
@@ -155,7 +155,7 @@ fn a_short_tail_or_a_head_of_other_calls_keeps_no_tail() {
     ] {
         let tokens = kept(block);
         assert!(
-            !tokens.contains("__constant"),
+            !tokens.contains("__kept_modifier"),
             "one constant builder costs what joining a kept tail costs, and a \
              head of other calls may not be a modifier: {tokens}"
         );

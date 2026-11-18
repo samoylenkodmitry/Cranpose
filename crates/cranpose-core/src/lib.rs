@@ -219,10 +219,9 @@ pub use launched_effect::{
     __launched_effect_impl, CancelToken, LaunchedEffect, LaunchedEffectScope,
 };
 pub use location_key::{
-    __constant, HotOriginGuard, branch_location_key, cached_composable_definition_key,
-    caller_location_key, composable_definition_key, composable_identity_key, const_location_key,
-    constant_value_key, hot_branch_key, hot_definition_key, hot_origin, location_key,
-    noted_location_key,
+    HotOriginGuard, branch_location_key, cached_composable_definition_key, caller_location_key,
+    composable_definition_key, composable_identity_key, const_location_key, constant_value_key,
+    hot_branch_key, hot_definition_key, hot_origin, location_key, noted_location_key,
 };
 pub use node_marks::NodeMarks;
 pub use owned::Owned;

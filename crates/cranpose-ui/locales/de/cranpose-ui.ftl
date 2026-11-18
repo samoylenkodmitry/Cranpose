@@ -9,3 +9,5 @@ previous-month = Vorheriger Monat
 next-month = Nächster Monat
 hour = Stunde
 minute = Minute
+increment = Erhöhen
+decrement = Verringern

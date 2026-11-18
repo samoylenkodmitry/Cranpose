@@ -111,6 +111,18 @@ pub trait LazyItemSource {
     /// average item size for the ones kept unplaced. A source places either
     /// every beyond item it keeps in a pass or none.
     fn keep_beyond(&mut self, index: usize, distance: f32) -> Result<BeyondItem, Self::Refusal>;
+
+    /// An empty list for the items the pass places: a source that keeps the
+    /// list of its last pass hands it over, which the pass fills again.
+    fn item_list(&mut self) -> Vec<LazyListMeasuredItem> {
+        Vec::new()
+    }
+
+    /// Takes back, emptied, the list that [`Self::item_list`] handed over to
+    /// a pass that the source refused an item.
+    fn keep_item_list(&mut self, items: Vec<LazyListMeasuredItem>) {
+        drop(items);
+    }
 }
 
 /// An item that a pass from the last pass's items cannot take as it is: it

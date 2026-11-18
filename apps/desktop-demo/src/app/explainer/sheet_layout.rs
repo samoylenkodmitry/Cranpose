@@ -125,9 +125,7 @@ impl SheetLayout {
         let line_height = block.line_height(u);
         let height = (line_height * 0.95).min(block.font_size(u) * 1.14);
         for (row, range) in ranges.iter().enumerate() {
-            let line = text
-                .get(range.clone())
-                .expect("a line range lies inside its text");
+            let line = text.get(range.clone()).unwrap_or_default();
             let shaped = AnnotatedString::from(line);
             let y = top + row as f32 * line_height + (line_height - height) * 0.5;
             let first = self.words.len();
