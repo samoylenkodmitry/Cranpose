@@ -10,6 +10,7 @@
 
 node 1.0 new_with_virtual.* @ crates/cranpose-ui/src/widgets/nodes/layout_node
 node 1.0 rehouse_for_recycle.* @ crates/cranpose-ui/src/widgets/nodes/layout_node
+node 1.0 (^|::)fill @ crates/cranpose-ui/src/widgets/nodes/layout_node\.rs:
 node 1.0 @ crates/cranpose-core/src/emit\.rs:
 node 1.0 into_rc.* @ crates/cranpose-ui/src/layout/mod\.rs:
 node 1.0 bind_at.* @ crates/cranpose-ui/src/layout/layout_child_measure_state\.rs:
