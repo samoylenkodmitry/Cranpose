@@ -15,6 +15,7 @@ mod date_picker;
 mod disclosure_group;
 mod floating_button;
 mod gauge;
+mod glass_icon_button_group;
 mod glass_surface;
 #[cfg(feature = "localization")]
 mod language_picker;
@@ -50,8 +51,7 @@ pub use activity_indicator::{LiquidActivityIndicator, LiquidActivityIndicatorSiz
 pub use bottom_sheet::{LiquidModalBottomSheet, LiquidSheetState, rememberLiquidSheetState};
 pub use button::{
     GlassButton, GlassButtonLabel, GlassButtonSize, GlassButtonSpec, GlassButtonStyle,
-    GlassIconButton, GlassIconButtonGroup, GlassIconButtonGroupItem, GlassIconButtonGroupScope,
-    GlassIconButtonGroupSpec,
+    GlassIconButton,
 };
 pub use card::{Card, LiquidCard, LiquidListRow, LiquidListRowSpec, LiquidListSection, Surface};
 pub use checkbox::{LiquidCheckbox, LiquidRadioButton, LiquidTriStateCheckbox};
@@ -63,6 +63,10 @@ pub use date_picker::{
 };
 pub use disclosure_group::LiquidDisclosureGroup;
 pub use gauge::LiquidGauge;
+pub use glass_icon_button_group::{
+    GlassIconButtonGroup, GlassIconButtonGroupItem, GlassIconButtonGroupScope,
+    GlassIconButtonGroupSpec,
+};
 pub use glass_surface::GlassSurface;
 #[cfg(feature = "localization")]
 pub use language_picker::LiquidLanguagePicker;
