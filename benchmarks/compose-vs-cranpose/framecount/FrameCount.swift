@@ -82,12 +82,12 @@ struct Options {
         if pid <= 0 || (seconds <= 0 && until <= 0) || (out.isEmpty && screenshot.isEmpty) { throw Failure.usage }
     }
 
-    /// The JSON file the caller reads the result or the failure from; empty
-    /// for a screenshot.
+    /// The JSON file with the result or the failure for the caller; empty for
+    /// a screenshot.
     var report: String { [display, ambient, out].first { !$0.isEmpty } ?? "" }
 
-    /// The seconds the asked work takes from now: the capture's span, and the
-    /// waits for a window and for its transition that the ambient read adds.
+    /// The seconds of work asked of FrameCount, from now: the capture's span,
+    /// plus the waits of the ambient read for its window and its transition.
     var work: Double {
         if !display.isEmpty { return linkSeconds }
         if !ambient.isEmpty { return ownWindowSeconds + transitionSeconds + seconds }
@@ -143,8 +143,8 @@ let ownWindowSeconds = 5.0
 /// Seconds the ambient read lets its window's own transition pass.
 let transitionSeconds = 1.0
 
-/// Writes `error` to the report the caller reads and to standard error, and
-/// ends FrameCount.
+/// Writes `error` to the caller's report and to standard error, then ends
+/// FrameCount.
 func fail(_ error: Error, report: String) -> Never {
     if !report.isEmpty {
         let failure = try? JSONSerialization.data(withJSONObject: ["error": "\(error)"])

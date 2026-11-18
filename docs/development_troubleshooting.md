@@ -7,7 +7,7 @@
 - Copied Git indexes can retain invalid fsmonitor state; use `git -c core.fsmonitor=false status` to check a copied checkout.
 - Pattern-based process searches can include their caller or zombies; use the repository waiter and verify exact PIDs independently.
 - Stopping a wrapper can leave its descendants alive; a cancelled CI status alone does not prove the host lock was released.
-- A desktop gauntlet that finds something moving on macm3's display usually meets an orphan (parent pid 1) of a headless Chrome or FrameCount; `sample` the orphan before you kill it, then read the ambient rate again.
+- When the desktop gauntlet finds something moving on macm3's display, look for an orphan (parent pid 1) of a headless Chrome or FrameCount; `sample` it before you kill it, then read the ambient rate again.
 - SIGTERM is 15 and SIGKILL is 9; a missing artifact requires separate filesystem evidence.
 - Bash pipeline status requires `pipefail` or immediate `PIPESTATUS`; zsh uses `pipestatus` with one-based indexing.
 - Bash 3.2 needs `${args[@]+"${args[@]}"}` for optional arrays under `set -u`.
