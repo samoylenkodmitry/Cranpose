@@ -36,10 +36,11 @@ pub(crate) enum Control {
     ColorWell,
     Unavailable,
     ControlGroup,
+    Alert,
 }
 
 // The names shared with the native app's `REFERENCE_COMPONENT`.
-const NAMES: [(&str, Control); 28] = [
+const NAMES: [(&str, Control); 29] = [
     ("slider", Control::Slider),
     ("toggle", Control::Toggle),
     ("segmented", Control::Segmented),
@@ -68,6 +69,7 @@ const NAMES: [(&str, Control); 28] = [
     ("color-well", Control::ColorWell),
     ("unavailable", Control::Unavailable),
     ("control-group", Control::ControlGroup),
+    ("alert", Control::Alert),
 ];
 
 impl Control {
@@ -160,7 +162,9 @@ fn ControlContent(control: Control, initial: f32, activations: cranpose::Mutable
         | Control::Time12
         | Control::PopUp
         | Control::ColorWell => ReferencePicker(control, initial),
-        Control::Unavailable | Control::ControlGroup => ReferenceContainer(control),
+        Control::Unavailable | Control::ControlGroup | Control::Alert => {
+            ReferenceContainer(control);
+        }
         _ => ReferenceSurface(control, initial, activations),
     }
 }
@@ -227,6 +231,18 @@ const TIME_WIDTH: f32 = 320.0;
 // The containers of other controls, as the native app shows them.
 #[composable]
 fn ReferenceContainer(control: Control) {
+    if control == Control::Alert {
+        LiquidAlertDialog(
+            || {},
+            "Delete Photo?",
+            "This photo will be deleted from all your devices.",
+            |scope| {
+                scope.action("Delete", LiquidAlertRole::Destructive, || {});
+                scope.action("Cancel", LiquidAlertRole::Cancel, || {});
+            },
+        );
+        return;
+    }
     if control == Control::ControlGroup {
         LiquidControlGroup(Modifier::empty().width(300.0), |scope| {
             scope.button("Previous", || {});

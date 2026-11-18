@@ -1,6 +1,7 @@
 //! The Liquid component set.
 
 mod activity_indicator;
+mod alert_dialog;
 mod bottom_sheet;
 mod button;
 mod card;
@@ -19,6 +20,7 @@ mod floating_button;
 mod gauge;
 mod glass_icon_button_group;
 mod glass_surface;
+mod label_button;
 #[cfg(feature = "localization")]
 mod language_picker;
 mod lens_motion;
@@ -50,6 +52,7 @@ mod wheel;
 mod wheel_picker;
 
 pub use activity_indicator::{LiquidActivityIndicator, LiquidActivityIndicatorSize};
+pub use alert_dialog::{LiquidAlertDialog, LiquidAlertRole, LiquidAlertScope};
 pub use bottom_sheet::{LiquidModalBottomSheet, LiquidSheetState, rememberLiquidSheetState};
 pub use button::{
     GlassButton, GlassButtonLabel, GlassButtonSize, GlassButtonSpec, GlassButtonStyle,
