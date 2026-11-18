@@ -6,7 +6,6 @@ pub(crate) mod layout_cache;
 mod layout_input;
 /// Text measurement, line wrapping and cursor hit testing.
 pub mod measure;
-pub(crate) mod node_layouts;
 mod prepared_text_layout;
 pub(crate) mod recent_values;
 pub(crate) mod shared_plain_text;
