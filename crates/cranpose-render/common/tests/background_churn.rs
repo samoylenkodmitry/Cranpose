@@ -19,15 +19,12 @@ const STAYING: u32 = 192;
 const ADDED_A_PASS: u32 = 128;
 const PASSES_A_BOX_STAYS: u32 = 4;
 const PASSES: u32 = 100;
-// The pass after which the store's heap rises no higher than it rose in the
-// passes since half as many: the chunks may first take room for a few times
-// their live shapes, and a sweep that drops dead shapes gives it back. Then
-// the bytes by which its peak may still shift: two chunks of shapes, while a
-// store that grows past its bound gains a chunk, 30 KB, each pass. With
-// packets in flight a staying background keeps a small chunk of its own
-// until a recolor moves it, about a kilobyte for each.
+// The pass after which the store's heap holds still: the chunks may first
+// take a few chunks of room past their live shapes. Then the bytes by which
+// the room of its hash tables and scratch lists shifts from pass to pass:
+// far fewer than the 30 KB of a full chunk of shapes.
 const SETTLED: usize = 50;
-const SLACK: usize = 65_536;
+const SLACK: usize = 4096;
 
 fn tint(index: u32, of: u32) -> f32 {
     (index % of) as f32 / of as f32
@@ -144,27 +141,22 @@ fn assert_paints_as_fresh(scene: &Scene, composition: &mut TestComposition, pass
     );
 }
 
-fn assert_bounded_after_settling(heap: &[usize]) {
-    let settled = heap[SETTLED / 2..SETTLED]
-        .iter()
-        .copied()
-        .max()
-        .unwrap_or(0);
+fn assert_flat_after_settling(heap: &[usize]) {
+    let settled = heap[SETTLED - 1];
     let peak = heap[SETTLED..].iter().copied().max().unwrap_or(settled);
     assert!(
         peak <= settled + SLACK,
-        "the store holds up to {settled} bytes in passes {} to {SETTLED} and up to {peak} \
-         after; heap after each pass: {heap:?}",
-        SETTLED / 2
+        "the store holds {settled} bytes after {SETTLED} passes and up to {peak} after; \
+         heap after each pass: {heap:?}"
     );
 }
 
 #[test]
-fn backgrounds_drawn_anew_beside_staying_ones_keep_the_store_heap_bounded() {
-    assert_bounded_after_settling(&churn(0));
+fn backgrounds_drawn_anew_beside_staying_ones_keep_the_store_heap_flat() {
+    assert_flat_after_settling(&churn(0));
 }
 
 #[test]
-fn backgrounds_drawn_anew_while_packets_hold_their_shapes_keep_the_store_heap_bounded() {
-    assert_bounded_after_settling(&churn(2));
+fn backgrounds_drawn_anew_while_packets_hold_their_shapes_keep_the_store_heap_flat() {
+    assert_flat_after_settling(&churn(2));
 }
