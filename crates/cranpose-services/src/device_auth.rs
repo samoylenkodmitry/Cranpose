@@ -24,14 +24,17 @@
 use std::{
     future::Future,
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, OnceLock},
     task::{Context, Poll, Waker},
 };
 
 use cranpose_core::ProcessIds;
 use parking_lot::Mutex;
 
-use crate::registry::ServiceRegistry;
+use crate::{
+    LifecycleObserver, LifecycleState, current_lifecycle_state, observe_lifecycle,
+    registry::ServiceRegistry,
+};
 
 /// What the device can ask its owner with.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -92,9 +95,11 @@ pub trait DeviceAuthenticator: Send + Sync {
     /// What the device can ask with now. It never prompts.
     fn availability(&self) -> DeviceAuthAvailability;
 
-    /// Shows the system prompt with `reason`, which is never empty. The
-    /// backend calls [`finish_device_auth`] with `request` exactly once,
-    /// when the prompt closes or cannot open.
+    /// Shows the system prompt with `reason`, which is never empty. It is
+    /// called only while the application is in the foreground
+    /// ([`LifecycleState::Resumed`]). The backend calls
+    /// [`finish_device_auth`] with `request` exactly once, when the prompt
+    /// closes or cannot open.
     fn authenticate(&self, request: DeviceAuthRequest, reason: &str);
 }
 
@@ -119,7 +124,18 @@ impl Answer {
 }
 
 // The prompt that is open now, with its answer.
-static OPEN: Mutex<Option<(DeviceAuthRequest, Arc<Mutex<Answer>>)>> = Mutex::new(None);
+struct Open {
+    request: DeviceAuthRequest,
+    answer: Arc<Mutex<Answer>>,
+    // The reason, until the backend shows the prompt. The prompt waits for
+    // the application to come to the foreground.
+    waiting: Option<String>,
+}
+
+static OPEN: Mutex<Option<Open>> = Mutex::new(None);
+
+// Shows a waiting prompt each time the application comes to the foreground.
+static FOREGROUND: OnceLock<LifecycleObserver> = OnceLock::new();
 
 /// Installs the platform's backend, or removes it with `None`. Platform
 /// backends call it. Removing the backend ends an open prompt with
@@ -129,7 +145,7 @@ pub fn set_platform_device_authenticator(authenticator: Option<Arc<dyn DeviceAut
         Some(authenticator) => PLATFORM.set(authenticator),
         None => {
             PLATFORM.clear();
-            let open = OPEN.lock().as_ref().map(|(request, _)| *request);
+            let open = OPEN.lock().as_ref().map(|open| open.request);
             if let Some(request) = open {
                 finish_device_auth(request, DeviceAuthOutcome::Unavailable);
             }
@@ -150,34 +166,78 @@ pub fn device_auth_availability() -> DeviceAuthAvailability {
 ///
 /// The future ends when the prompt closes. One prompt is open at a time: a
 /// call while one is open shows no second prompt, and its future ends with
-/// the open one's outcome. Dropping the future leaves the prompt open; its
-/// outcome then goes to no one.
+/// the open one's outcome. Dropping the future of a shown prompt leaves the
+/// prompt open; its outcome then goes to no one.
+///
+/// The prompt opens only while the application is in the foreground
+/// ([`LifecycleState::Resumed`]), since iOS shows no prompt to an application
+/// that is not active. A call made before then, such as during launch or as
+/// the application leaves the screen, waits. Its prompt opens when the
+/// application comes back to the foreground, unless every future of the
+/// call was dropped by then.
 ///
 /// Android shows `reason` as the title of the prompt, and iOS below the name
 /// of the application. An empty `reason` shows nothing and ends with
 /// [`DeviceAuthOutcome::Failed`], since both platforms refuse one.
 pub fn authenticate_device_owner(reason: &str) -> DeviceAuthFuture {
-    let Some(platform) = PLATFORM.get() else {
+    if PLATFORM.get().is_none() {
         return DeviceAuthFuture::ready(DeviceAuthOutcome::Unavailable);
-    };
+    }
     if reason.trim().is_empty() {
         log::warn!("cranpose: a device unlock was asked with no reason to show");
         return DeviceAuthFuture::ready(DeviceAuthOutcome::Failed);
     }
     let mut open = OPEN.lock();
-    if let Some((_, answer)) = open.as_ref() {
+    if let Some(open) = open.as_ref() {
         return DeviceAuthFuture {
-            answer: Arc::clone(answer),
+            answer: Arc::clone(&open.answer),
         };
     }
-    let request = DeviceAuthRequest(NEXT_REQUEST.next());
     let answer = Arc::new(Mutex::new(Answer::default()));
-    *open = Some((request, Arc::clone(&answer)));
-    // A backend that cannot open its prompt finishes at once, which takes
-    // this lock.
+    *open = Some(Open {
+        request: DeviceAuthRequest(NEXT_REQUEST.next()),
+        answer: Arc::clone(&answer),
+        waiting: Some(reason.to_owned()),
+    });
     drop(open);
-    platform.authenticate(request, reason);
+    FOREGROUND.get_or_init(|| {
+        observe_lifecycle(|event| {
+            if event.to == LifecycleState::Resumed {
+                show_waiting();
+            }
+        })
+    });
+    // The state is read after the prompt is stored: a transition between
+    // the two shows it through the observer.
+    if current_lifecycle_state() == LifecycleState::Resumed {
+        show_waiting();
+    }
     DeviceAuthFuture { answer }
+}
+
+// Hands the waiting prompt, if there is one, to the backend. A prompt that
+// no future waits for any more is dropped: the screen that asked is gone.
+fn show_waiting() {
+    let waiting = {
+        let mut open = OPEN.lock();
+        match open.as_mut() {
+            Some(prompt) if prompt.waiting.is_some() && Arc::strong_count(&prompt.answer) == 1 => {
+                *open = None;
+                None
+            }
+            Some(prompt) => prompt.waiting.take().map(|reason| (prompt.request, reason)),
+            None => None,
+        }
+    };
+    let Some((request, reason)) = waiting else {
+        return;
+    };
+    // A backend that cannot open its prompt finishes at once, which takes
+    // the lock of the open prompt.
+    match PLATFORM.get() {
+        Some(platform) => platform.authenticate(request, &reason),
+        None => finish_device_auth(request, DeviceAuthOutcome::Unavailable),
+    }
 }
 
 /// Ends the prompt of `request` with `outcome`. Backends call it once per
@@ -186,7 +246,7 @@ pub fn finish_device_auth(request: DeviceAuthRequest, outcome: DeviceAuthOutcome
     let answer = {
         let mut open = OPEN.lock();
         match open.as_ref() {
-            Some((open_request, _)) if *open_request == request => open.take().map(|(_, a)| a),
+            Some(prompt) if prompt.request == request => open.take().map(|prompt| prompt.answer),
             _ => None,
         }
     };
