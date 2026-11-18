@@ -26,6 +26,7 @@ mod label_button;
 mod language_picker;
 mod lens_motion;
 mod menu;
+mod menu_morph;
 mod nav_bar;
 mod page_control;
 mod pop_up_button;
