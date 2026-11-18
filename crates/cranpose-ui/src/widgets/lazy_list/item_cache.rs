@@ -84,14 +84,8 @@ impl LazyMeasuredItemCache {
         }
     }
 
-    #[expect(
-        clippy::iter_over_hash_type,
-        reason = "each item's rooms go back to the pool, in any order"
-    )]
     pub(super) fn clear(&mut self) {
-        for (_, cached) in self.entries.drain() {
-            keep_room(&mut self.rooms, cached.item.roots);
-        }
+        self.retain_retained_slots(&|_| false);
     }
 
     /// Drops what a new measure pass cannot reuse: everything, when the
@@ -101,7 +95,7 @@ impl LazyMeasuredItemCache {
         &mut self,
         axis: Axis,
         cross_axis_size: f32,
-        retained: impl Fn(SlotId) -> bool,
+        retained: &dyn Fn(SlotId) -> bool,
     ) {
         self.retain_constraint_scope(axis, cross_axis_size);
         self.retain_retained_slots(retained);
@@ -111,7 +105,7 @@ impl LazyMeasuredItemCache {
     /// An item whose composition was disposed can never be reused, and its
     /// entry would keep the item's whole measured tree alive: an endless list
     /// scrolled past thousands of items kept them all.
-    pub(super) fn retain_retained_slots(&mut self, is_retained: impl Fn(SlotId) -> bool) {
+    pub(super) fn retain_retained_slots(&mut self, is_retained: &dyn Fn(SlotId) -> bool) {
         let gone = self
             .entries
             .extract_if(|_, cached| !is_retained(SlotId(cached.item.key)));

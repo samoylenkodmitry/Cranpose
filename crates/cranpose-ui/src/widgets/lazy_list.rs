@@ -625,7 +625,7 @@ fn measure_list_viewport(
     let items_count = content.item_count();
     measured_item_cache
         .borrow_mut()
-        .begin_pass(frame.axis, frame.item_cross_axis_size, |slot| {
+        .begin_pass(frame.axis, frame.item_cross_axis_size, &|slot| {
             scope.slot_is_retained(slot)
         });
     let near = state.nearest_range();
