@@ -1,6 +1,6 @@
 use crate::{
-    Capabilities, Use, android_manifest, android_permissions, android_permissions_up_to,
-    apple_usage, json, rust_source,
+    Capabilities, Service, Use, android_features, android_manifest, android_permissions,
+    android_permissions_up_to, apple_usage, json, rust_source,
 };
 
 const NONE: Capabilities<'static> = Capabilities {
@@ -66,4 +66,97 @@ fn device_motion_asks_for_the_fast_sensor_permission_and_no_sentence() {
 #[test]
 fn an_application_that_does_not_declare_device_motion_asks_for_no_sensor_rate() {
     assert!(!android_manifest(&NONE).contains("HIGH_SAMPLING_RATE_SENSORS"));
+}
+
+const FACE: [Use; 1] = [Use::face_tracking()];
+const ALL_TRACKING: [Use; 4] = [
+    Use::hand_tracking(),
+    Use::body_tracking(),
+    Use::face_tracking(),
+    Use::eye_tracking(),
+];
+
+#[test]
+fn face_tracking_names_both_headset_permissions_and_the_microphone_for_audio() {
+    let face = Capabilities {
+        uses: &FACE,
+        demands: &[],
+        opens: &[],
+        links: &[],
+    };
+    assert_eq!(
+        android_permissions(&face),
+        vec![
+            "android.permission.FACE_TRACKING",
+            "android.permission.RECORD_AUDIO",
+            "com.oculus.permission.FACE_TRACKING",
+            "horizonos.permission.FACE_TRACKING",
+        ]
+    );
+    let manifest = android_manifest(&face);
+    assert!(
+        manifest.contains(
+            "<uses-feature android:name=\"oculus.software.face_tracking\" android:required=\"false\" />"
+        ),
+        "{manifest}"
+    );
+    assert!(json(&face).contains("{ \"name\": \"face-tracking\", \"reason\": null }"));
+    assert!(
+        json(&face).contains("\"features\": [\n    \"oculus.software.face_tracking\"\n  ]"),
+        "{}",
+        json(&face)
+    );
+    assert!(rust_source(&face).contains("Use::face_tracking(),"));
+}
+
+#[test]
+fn every_tracking_permission_group_is_a_permission_the_manifest_declares() {
+    let all = Capabilities {
+        uses: &ALL_TRACKING,
+        demands: &[],
+        opens: &[],
+        links: &[],
+    };
+    let declared = android_permissions(&all);
+    for entry in ALL_TRACKING {
+        let groups = entry.service().android_permission_groups();
+        assert!(!groups.is_empty(), "{:?}", entry.service());
+        for permission in groups.iter().flat_map(|group| group.iter()) {
+            assert!(
+                declared.contains(permission),
+                "{permission} of {:?}",
+                entry.service()
+            );
+        }
+    }
+    for permission in &declared {
+        assert!(
+            ALL_TRACKING.iter().any(|entry| entry
+                .service()
+                .android_permission_groups()
+                .iter()
+                .flat_map(|group| group.iter())
+                .any(|named| named == permission)),
+            "{permission} belongs to no group"
+        );
+    }
+}
+
+#[test]
+fn an_application_that_declares_no_tracking_names_no_tracking_permission_or_feature() {
+    let manifest = android_manifest(&NONE);
+    for name in [
+        "TRACKING",
+        "handtracking",
+        "eye_tracking",
+        "face_tracking",
+        "body_tracking",
+    ] {
+        assert!(!manifest.contains(name), "{name}");
+    }
+    assert!(android_features(&NONE).is_empty());
+    assert!(
+        Service::Camera.android_permission_groups().is_empty(),
+        "services that ask nothing at run time have no group"
+    );
 }

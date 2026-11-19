@@ -66,6 +66,11 @@ pub(crate) struct Readout {
     pub(crate) frames_per_second: u32,
 }
 
+// How many of the joints a runtime tracker gave are valid.
+fn valid_joints<T>(joints: &[T], valid: impl Fn(&T) -> bool) -> usize {
+    joints.iter().filter(|joint| valid(joint)).count()
+}
+
 // What the effect keeps between frames.
 struct Tracker {
     window_start: Duration,
@@ -126,6 +131,16 @@ impl Tracker {
         self.frames = 0;
         self.window_start = frame.predicted_display_time;
         self.log_streams();
+        log::info!(
+            "xr-demo: tracking {:?}; valid joints: left hand {}, right hand {}, body {}; face valid {} source {:?}; gaze {}",
+            frame.tracking,
+            valid_joints(&frame.left_hand.joints, |joint| joint.valid),
+            valid_joints(&frame.right_hand.joints, |joint| joint.valid),
+            valid_joints(frame.body.tracked_joints(), |joint| joint.valid),
+            frame.face.is_valid,
+            frame.meta_face.data_source,
+            frame.eyes.gaze.is_some(),
+        );
         log::info!(
             "xr-demo: {} frame effects in {:?}, period {:?}, predicts {:?} ahead of now, head {:?}, head velocity {:?} {:?}, floor {:?}, stage {:?}, interpupillary distance {:?}, left eye at {:?} from the head, field of view {:?}, profiles {:?} {:?}, recenter {:?}",
             self.frames_per_second,
