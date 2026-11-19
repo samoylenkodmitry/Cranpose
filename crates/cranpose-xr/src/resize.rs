@@ -29,11 +29,11 @@ pub(crate) fn corner_center(slot: &PanelSlot) -> [f32; 3] {
         -(height / 2.0 + CORNER_OFFSET),
         0.0,
     ];
-    slot.pose.then(&Pose::at(corner)).position
+    slot.face().then(&Pose::at(corner)).position
 }
 
-// Where `ray` meets the plane of a panel at `pose`, in dp to the right and up from the panel's
-// center.
+// Where `ray` meets the plane of a panel's face at `pose`, in dp to the right and up from the
+// face's center.
 fn plane_dp(ray: &Ray, pose: &Pose) -> Option<[f32; 2]> {
     let (_, place) = ray.plane_point(pose)?;
     Some(place.map(|meters| meters / METERS_PER_DP))
@@ -63,7 +63,7 @@ impl Resize {
         ];
         Some(Self {
             start,
-            grab: plane_dp(ray, &slot.pose).unwrap_or(handle),
+            grab: plane_dp(ray, &slot.face()).unwrap_or(handle),
             limits,
         })
     }

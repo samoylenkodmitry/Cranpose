@@ -9,7 +9,7 @@
 //! step of growth and not in each frame.
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     rc::Rc,
     time::Duration,
 };
@@ -25,6 +25,7 @@ use crate::{
     locals::with_locals,
     stream_source::StreamSource,
     surface_input::{PointerSink, SurfaceGesture, SurfaceInput},
+    volumes::{VolumeContent, Volumes},
 };
 
 // The space between two panels in the atlas, in dp, so the compositor's filter never reaches a
@@ -79,13 +80,17 @@ impl From<Pose> for Origin {
 }
 
 // What a panel shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum PanelKind {
     // Cranpose content, drawn into the atlas.
     Content,
     // A surface that another producer writes into. It has no part of the atlas, and no
     // composition: a ray stops on it and presses nothing.
     Surface(StereoMode),
+    // 3D content that the scene of the volumes draws. The panel's pose is the center of its box,
+    // its size is the box's width and height in dp, and `depth` is the box's depth in dp. It has no
+    // part of the atlas: a ray stops on the box.
+    Volume { depth: f32 },
 }
 
 // A panel as the backend sees it.
@@ -93,8 +98,8 @@ pub(crate) enum PanelKind {
 pub(crate) struct PanelSlot {
     pub(crate) id: u64,
     pub(crate) kind: PanelKind,
-    // The panel's part of the atlas: left, top, width and height in dp. A surface holds its size
-    // here and no room in the atlas.
+    // The panel's part of the atlas: left, top, width and height in dp. A surface or a volume holds
+    // its size here and no room in the atlas.
     pub(crate) atlas: [f32; 4],
     // The panel's center and turn in the room.
     pub(crate) pose: Pose,
@@ -121,6 +126,24 @@ impl PanelSlot {
         not(any(test, headset)),
         expect(dead_code, reason = "the headset backend calls it")
     )]
+    // The pose of the flat face that the panel's handles stand at and that a resize measures on:
+    // the panel's own pose, or for a volume the pose of its front face, which lies half the box's
+    // depth toward the viewer. A handle at the center plane of a deep box would lie behind a ray's
+    // meeting with the box.
+    pub(crate) fn face(&self) -> Pose {
+        match self.kind {
+            PanelKind::Volume { depth } => {
+                self.pose
+                    .then(&Pose::at([0.0, 0.0, depth * METERS_PER_DP / 2.0]))
+            }
+            PanelKind::Content | PanelKind::Surface(_) => self.pose,
+        }
+    }
+
+    #[cfg_attr(
+        not(any(test, headset)),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
     // The sizes that the user may give the panel with its corner handle, or `None` for a panel
     // that has none. A panel on a curve has none: its corner does not lie on its tangent plane.
     pub(crate) fn resize_limits(&self) -> Option<ResizeLimits> {
@@ -134,9 +157,12 @@ impl PanelSlot {
     // Where `ray` meets the panel as it shows: flat or on its curve.
     pub(crate) fn hit(&self, ray: &Ray) -> Option<PanelHit> {
         let size = self.size().map(|dp| dp * METERS_PER_DP);
-        match self.shape {
-            Shape::Flat => ray.hit_panel(&self.pose, size),
-            Shape::Curved { radius } => ray.hit_cylinder(&self.pose, size, radius),
+        match (self.kind, self.shape) {
+            (PanelKind::Volume { depth }, _) => {
+                ray.hit_box(&self.pose, [size[0], size[1], depth * METERS_PER_DP])
+            }
+            (_, Shape::Flat) => ray.hit_panel(&self.pose, size),
+            (_, Shape::Curved { radius }) => ray.hit_cylinder(&self.pose, size, radius),
         }
     }
 }
@@ -216,6 +242,8 @@ pub(crate) struct Panel {
     pub(crate) dot: MutableState<Option<Dot>>,
     // The surface of a surface panel once the backend has made it.
     pub(crate) surface: MutableState<Option<ExternalSurface>>,
+    // The pose of a volume in the room, which the scene of the volumes reads while it draws.
+    pub(crate) volume_pose: MutableState<Pose>,
 }
 
 // The panels of the app in a headset. The headset's backend provides it around the app's
@@ -235,6 +263,15 @@ struct Inner {
     next_id: Cell<u64>,
     // Whether the headset shows curved panels. If not, they show and answer rays as flat ones.
     curves: Cell<bool>,
+    // The content of the volumes and the camera that draws them, made when the first composable
+    // that needs them asks, because their states belong to a composition's runtime
+    volumes: OnceCell<Volumes>,
+    // The size in pixels of one eye's picture of the volumes, in logical pixels
+    #[cfg_attr(
+        not(any(test, headset)),
+        expect(dead_code, reason = "the headset's scene reads it")
+    )]
+    scene_size: [f32; 2],
 }
 
 // A registered panel as the space keeps it.
@@ -273,6 +310,14 @@ struct Following {
 }
 
 impl Entry {
+    // Gives the scene of the volumes the pose of a volume, which draws it there without
+    // composing. Other panels have no use for the state.
+    fn publish_pose(&self) {
+        if matches!(self.slot.kind, PanelKind::Volume { .. }) {
+            self.panel.volume_pose.set(self.slot.pose);
+        }
+    }
+
     // Puts the panel where its following subspace stands, or hides it while the subspace has no
     // place.
     fn stand(&mut self, standing: Standing) {
@@ -284,6 +329,7 @@ impl Entry {
                 self.origin = origin;
                 self.slot.pose = origin.then(&self.carried.unwrap_or(follow.local));
                 self.slot.ride = standing.hand.map_or(Ride::Free, Ride::On);
+                self.publish_pose();
             }
             None => self.slot.ride = Ride::Hidden,
         }
@@ -301,8 +347,9 @@ impl Space {
         not(any(test, headset)),
         expect(dead_code, reason = "the headset backend calls it")
     )]
-    // A space with no panels.
-    pub(crate) fn new() -> Self {
+    // A space with no panels, whose volumes the headset draws in pictures of `scene_size` pixels
+    // for each eye.
+    pub(crate) fn with_scene_size(scene_size: [f32; 2]) -> Self {
         Self {
             inner: Rc::new(Inner {
                 entries: RefCell::new(Vec::new()),
@@ -310,8 +357,47 @@ impl Space {
                 follow_origins: RefCell::new(FollowOrigins::default()),
                 next_id: Cell::new(1),
                 curves: Cell::new(true),
+                volumes: OnceCell::new(),
+                scene_size,
             }),
         }
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the tests make spaces that draw no volumes")
+    )]
+    // A space with no panels and no room for volumes.
+    pub(crate) fn new() -> Self {
+        Self::with_scene_size([0.0, 0.0])
+    }
+
+    // The content of the volumes and the camera that draws them.
+    pub(crate) fn volumes(&self) -> Volumes {
+        *self.inner.volumes.get_or_init(Volumes::new)
+    }
+
+    #[cfg_attr(
+        not(any(test, headset)),
+        expect(dead_code, reason = "the headset's scene calls it")
+    )]
+    // The size in logical pixels of one eye's picture of the volumes.
+    pub(crate) fn scene_size(&self) -> [f32; 2] {
+        self.inner.scene_size
+    }
+
+    #[cfg_attr(
+        not(any(test, headset)),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    // How many volumes the app has now.
+    pub(crate) fn volume_count(&self) -> usize {
+        self.inner
+            .entries
+            .borrow()
+            .iter()
+            .filter(|entry| matches!(entry.slot.kind, PanelKind::Volume { .. }))
+            .count()
     }
 
     // A new id for a streamed scene.
@@ -396,6 +482,7 @@ impl Space {
             origin: mutableStateOf([0.0, 0.0]),
             dot: mutableStateOf(None),
             surface: mutableStateOf(None),
+            volume_pose: mutableStateOf(Pose::IDENTITY),
         }
     }
 
@@ -431,6 +518,24 @@ impl Space {
         );
     }
 
+    // Registers the volume `panel` with a box of `size` dp (width, height and depth) centered at
+    // `pose`, in a subspace whose origin is `origin`. It takes no room in the atlas.
+    pub(crate) fn place_volume(
+        &self,
+        panel: Panel,
+        size: [f32; 3],
+        origin: impl Into<Origin>,
+        pose: Pose,
+    ) {
+        self.place_kind(
+            panel,
+            PanelKind::Volume { depth: size[2] },
+            [size[0], size[1]],
+            origin.into(),
+            pose,
+        );
+    }
+
     fn place_kind(
         &self,
         panel: Panel,
@@ -446,6 +551,7 @@ impl Space {
                 let entry = &mut entries[index];
                 entry.origin = origin;
                 entry.slot.pose = entry.carried.map_or(pose, |carried| origin.then(&carried));
+                entry.slot.kind = kind;
                 let slot = &mut entry.slot;
                 slot.atlas = [slot.atlas[0], slot.atlas[1], size[0], size[1]];
                 let room = if entry.resizing && kind == PanelKind::Content {
@@ -501,6 +607,7 @@ impl Space {
             Some(standing) => entry.stand(standing),
             None => entry.slot.ride = Ride::Free,
         }
+        entry.publish_pose();
         entry.slot.atlas
     }
 
@@ -587,6 +694,7 @@ impl Space {
             {
                 entry.slot.pose = step.pose;
                 entry.carried = Some(pose);
+                entry.publish_pose();
             }
             let event = SpatialMoveEvent {
                 event_type: step.event_type,
@@ -679,6 +787,15 @@ impl Space {
         let mut entries = self.inner.entries.borrow_mut();
         entries.retain(|entry| entry.slot.id != id);
         restack(&mut entries);
+        if let Some(volumes) = self.inner.volumes.get() {
+            volumes.remove(id);
+        }
+    }
+
+    // The scene of the volumes takes the content of the volume `content.id`, or replaces what it
+    // took.
+    pub(crate) fn publish_volume(&self, content: VolumeContent) {
+        self.volumes().set(content);
     }
 
     #[cfg_attr(

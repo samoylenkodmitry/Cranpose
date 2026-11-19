@@ -18,6 +18,7 @@ impl SwapchainFormat {
         let offered = session
             .enumerate_swapchain_formats()
             .map_err(|error| format!("OpenXR swapchain formats: {error}"))?;
+        log::info!("cranpose xr: the runtime offers swapchain formats {offered:x?}");
         let format = Graphics::FORMATS
             .into_iter()
             .find(|format| offered.contains(&format.api))
@@ -27,5 +28,16 @@ impl SwapchainFormat {
             log::warn!("cranpose xr: no sRGB swapchains; colors show too dark");
         }
         Ok(format)
+    }
+
+    // The depth and stencil format that the scenes draw against, if the runtime offers it.
+    pub(crate) fn choose_depth(session: &xr::Session<Api>) -> Option<Self> {
+        let offered = session.enumerate_swapchain_formats().ok()?;
+        let format = Graphics::DEPTH_FORMAT.filter(|format| offered.contains(&format.api));
+        log::info!(
+            "cranpose xr: depth swapchain format {:?}",
+            format.map(|format| format.wgpu)
+        );
+        format
     }
 }

@@ -17,11 +17,11 @@ const MAX_DISTANCE: f32 = 5.0;
 const LEVEL_SNAP: f32 = 4.0;
 
 // The center of the handle under `slot`'s panel: below the panel's bottom edge by the gap and the
-// handle's radius.
+// handle's radius, at the panel's face.
 pub(crate) fn handle_center(slot: &PanelSlot) -> [f32; 3] {
     let height = slot.size()[1] * METERS_PER_DP;
     let below = [0.0, -(height / 2.0 + HANDLE_GAP + HANDLE_RADIUS), 0.0];
-    slot.pose.then(&Pose::at(below)).position
+    slot.face().then(&Pose::at(below)).position
 }
 
 // A panel held by a controller: the panel's pose in the controller's frame at the grab.

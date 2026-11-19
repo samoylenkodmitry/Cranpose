@@ -7,7 +7,7 @@ use cranpose_core::CompositionLocalProvider;
 use openxr as xr;
 
 use super::{
-    frame_layers::Layer,
+    frame_layers::{Layer, Stages},
     frame_rate::FrameRate,
     graphics::Graphics,
     handle_layers::HandleLayers,
@@ -16,9 +16,10 @@ use super::{
     panel_layers::{DENSITY, PanelLayers},
     ray_layers::RayLayers,
     runtime::Runtime,
-    session::{SessionStatus, XrSession},
+    session::{ProjectionLayer, QuadLayer, SessionStatus, XrSession},
     stream_layers::StreamLayers,
     surface_layers::SurfaceLayers,
+    volume_layers::VolumeLayers,
 };
 use crate::{
     SpatialCapabilities, SpatialEnvironment,
@@ -30,6 +31,7 @@ use crate::{
     pointer::Pointer,
     space::{PanelSlot, Ride, Space, local_space},
     surface_input::Gesture,
+    volume_host::VolumeScene,
 };
 
 // Where the pointer goes when it leaves every panel: far outside the atlas, so no content stays
@@ -85,6 +87,7 @@ struct Immersive {
     environment: SpatialEnvironment,
     pointer: Pointer,
     layers: PanelLayers,
+    volumes: VolumeLayers,
     streams: StreamLayers,
     surfaces: SurfaceLayers,
     rays: RayLayers,
@@ -110,6 +113,9 @@ impl Immersive {
         let layers = PanelLayers::new(&xr_session)?;
         let streams = StreamLayers::new(&graphics, &xr_session);
         let format = layers.format();
+        let volumes = VolumeLayers::new(&xr_session, format);
+        let (width, height) = headset.eye_image_size();
+        let scene_size = [width as f32, height as f32];
         let rays = RayLayers::new(&xr_session, &gpu, format)?;
         let handles = HandleLayers::new(&xr_session, &gpu, format)?;
         let capabilities =
@@ -119,9 +125,10 @@ impl Immersive {
         let composed = Rc::new(RefCell::new(None::<(Space, SpatialEnvironment)>));
         let held = Rc::clone(&composed);
         let mut guest = GuestView::new(settings, &gpu, format.wgpu, 16, 16, DENSITY, move || {
-            let space = remember(Space::new).with(Clone::clone);
+            let space = remember(move || Space::with_scene_size(scene_size)).with(Clone::clone);
             let environment = remember(SpatialEnvironment::new).with(|environment| *environment);
             held.replace(Some((space.clone(), environment)));
+            let volume_space = space.clone();
             CompositionLocalProvider(
                 [
                     local_space().provides(Some(space)),
@@ -132,7 +139,10 @@ impl Immersive {
                     local_headset_properties().provides(Some(properties.clone())),
                     local_tracking_capabilities().provides(tracking.capabilities),
                 ],
-                &mut content,
+                || {
+                    content();
+                    VolumeScene(volume_space.clone());
+                },
             );
         })
         .map_err(|error| format!("composition: {error}"))?;
@@ -149,6 +159,7 @@ impl Immersive {
             environment,
             pointer: Pointer::default(),
             layers,
+            volumes,
             streams,
             surfaces: SurfaceLayers::new(),
             rays,
@@ -227,6 +238,14 @@ impl Immersive {
             )?;
             self.streams
                 .update(&self.xr_session, &self.space, self.headset.display_time());
+            self.volumes.draw(
+                &mut self.guest,
+                &self.gpu,
+                &self.xr_session,
+                &self.space,
+                self.headset.eyes(),
+                self.headset.eye_image_size(),
+            );
         } else {
             self.space.panels_into(panels);
             self.streams.skip(&self.space);
@@ -237,9 +256,13 @@ impl Immersive {
         } else {
             self.xr_session.end_frame(
                 display_time,
-                std::iter::empty(),
-                std::iter::empty(),
-                std::iter::empty(),
+                Stages {
+                    streams: std::iter::empty::<ProjectionLayer<'_>>(),
+                    volumes: None,
+                    panels: std::iter::empty::<Layer<'_>>(),
+                    overlay: std::iter::empty::<QuadLayer<'_>>(),
+                },
+                None,
             )
         }
     }
@@ -275,8 +298,16 @@ impl Immersive {
         let rays = head_position
             .into_iter()
             .flat_map(|head| self.rays.layers(&beams, head));
-        self.xr_session
-            .end_frame(display_time, self.streams.layers(), shown, rays)
+        self.xr_session.end_frame(
+            display_time,
+            Stages {
+                streams: self.streams.layers(),
+                volumes: self.volumes.layer(),
+                panels: shown,
+                overlay: rays,
+            },
+            self.volumes.plan(),
+        )
     }
 
     // The room follows what the app prefers, and the app learns what the room shows.

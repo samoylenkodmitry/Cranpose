@@ -30,6 +30,8 @@ pub(super) struct SceneTarget {
     pub(super) page: ScenePage,
     pub(super) samples: Multisample,
     depth: wgpu::TextureView,
+    // Whether the passes leave their depth in `depth`, which a host reads after the frame
+    keeps_depth: bool,
     colour: SceneColour,
 }
 
@@ -56,8 +58,15 @@ impl SceneTarget {
         }
     }
 
-    pub(super) fn depth(&self) -> &wgpu::TextureView {
-        &self.depth
+    // The depth and stencil the passes draw against, and how they store the depth: a host's
+    // view keeps it.
+    pub(super) fn depth(&self) -> (&wgpu::TextureView, wgpu::StoreOp) {
+        let store = if self.keeps_depth {
+            wgpu::StoreOp::Store
+        } else {
+            wgpu::StoreOp::Discard
+        };
+        (&self.depth, store)
     }
 
     // The colour a pass draws into: the page, which keeps what it holds, or
@@ -150,10 +159,12 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         let renderer = &mut *self.renderer;
         let samples = scene.multisample;
         if samples == Multisample::Off {
+            let (depth, keeps_depth) = renderer.depth_targets.scene(&renderer.device, page.size);
             return Some(SceneTarget {
                 page,
                 samples,
-                depth: renderer.depth_targets.scene(&renderer.device, page.size),
+                depth,
+                keeps_depth,
                 colour: SceneColour::Page(Rc::clone(texture)),
             });
         }
@@ -188,6 +199,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             },
             samples,
             depth,
+            keeps_depth: false,
             colour: SceneColour::Sampled {
                 view,
                 z,

@@ -18,11 +18,14 @@ pub(crate) fn texture_descriptors(
         depth_or_array_layers: 1,
     };
     let mut uses = TextureUses::empty();
+    // A depth swapchain's image is a render attachment as a depth buffer is
+    let attachment = if format.is_depth_stencil_format() {
+        TextureUses::DEPTH_STENCIL_WRITE
+    } else {
+        TextureUses::COLOR_TARGET
+    };
     for (usage_bit, use_bit) in [
-        (
-            wgpu::TextureUsages::RENDER_ATTACHMENT,
-            TextureUses::COLOR_TARGET,
-        ),
+        (wgpu::TextureUsages::RENDER_ATTACHMENT, attachment),
         (wgpu::TextureUsages::COPY_DST, TextureUses::COPY_DST),
         (wgpu::TextureUsages::COPY_SRC, TextureUses::COPY_SRC),
     ] {

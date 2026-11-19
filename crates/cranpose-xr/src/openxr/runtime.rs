@@ -18,6 +18,12 @@ pub(crate) struct Runtime {
     pub(crate) flips_layers: bool,
     // Whether the runtime shows cylinder layers, which curved panels are
     pub(crate) cylinders: bool,
+    // Whether a projection layer can carry the depth of its pictures
+    // (`XR_KHR_composition_layer_depth`)
+    pub(crate) layer_depth: bool,
+    // Whether the layers over a projection layer can test against its depth
+    // (`XR_FB_composition_layer_depth_test`)
+    pub(crate) depth_test: bool,
     // The tracking that the app asked for, and what the runtime offers of it
     pub(crate) tracking: TrackingSetup,
 }
@@ -46,9 +52,12 @@ impl Runtime {
             return Err("the activity ended before the runtime started".into());
         }
         log::info!(
-            "cranpose xr: cylinder layers {}, passthrough extension {}",
+            "cranpose xr: cylinder layers {}, passthrough extension {}, layer depth {}, depth test {}, image layout {}",
             extensions.khr_composition_layer_cylinder,
             extensions.fb_passthrough,
+            extensions.khr_composition_layer_depth,
+            extensions.fb_composition_layer_depth_test,
+            extensions.fb_composition_layer_image_layout,
         );
         let instance = entry
             .create_instance(
@@ -78,6 +87,8 @@ impl Runtime {
             system,
             flips_layers: available.fb_composition_layer_image_layout,
             cylinders: extensions.khr_composition_layer_cylinder,
+            layer_depth: extensions.khr_composition_layer_depth,
+            depth_test: extensions.fb_composition_layer_depth_test,
             tracking: TrackingSetup {
                 request,
                 enabled,
@@ -93,6 +104,9 @@ fn wanted_extensions(available: &xr::ExtensionSet) -> xr::ExtensionSet {
     extensions.fb_composition_layer_image_layout = available.fb_composition_layer_image_layout;
     // Curved panels show on cylinder layers
     extensions.khr_composition_layer_cylinder = available.khr_composition_layer_cylinder;
+    // The 3D content's projection layer carries its depth, and the layers over it test against it
+    extensions.khr_composition_layer_depth = available.khr_composition_layer_depth;
+    extensions.fb_composition_layer_depth_test = available.fb_composition_layer_depth_test;
     // The room around the panels shows through a passthrough layer
     extensions.fb_passthrough = available.fb_passthrough;
     // The runtime's times on the platform's monotonic clock

@@ -1,7 +1,7 @@
 // Writes a moving test pattern into an external surface from its own thread, as a video decoder
 // writes its pictures. A bar crosses the picture and a colored square marks each corner, so a
-// screenshot shows whether the picture is whole, flipped or mirrored. A split picture tints its
-// first half red and its second half blue, for a stereo surface.
+// screenshot shows whether the picture is whole, flipped or mirrored. The picture tints its left
+// half red and its right half blue, for a side-by-side stereo surface.
 #![cfg_attr(
     target_os = "android",
     expect(
@@ -20,15 +20,6 @@ use std::{
 
 use cranpose_xr::ExternalSurface;
 
-// How the picture divides into tinted halves.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Split {
-    // The left half is red and the right half blue.
-    LeftRight,
-    // The top half is red and the bottom half blue.
-    TopBottom,
-}
-
 // The writer of one surface. It stops when dropped. The thread ends at its next frame, so the
 // drop never waits for the compositor.
 pub(crate) struct PatternWriter {
@@ -36,12 +27,12 @@ pub(crate) struct PatternWriter {
 }
 
 impl PatternWriter {
-    pub(crate) fn start(surface: ExternalSurface, split: Split) -> Self {
+    pub(crate) fn start(surface: ExternalSurface) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
         let spawned = thread::Builder::new()
             .name("pattern-writer".into())
-            .spawn(move || paint(surface, split, &flag));
+            .spawn(move || paint(surface, &flag));
         if let Err(error) = spawned {
             log::error!("xr demo: no pattern thread: {error}");
         }
@@ -56,12 +47,12 @@ impl Drop for PatternWriter {
 }
 
 #[cfg(not(target_os = "android"))]
-fn paint(_surface: ExternalSurface, _split: Split, _stop: &AtomicBool) {
+fn paint(_surface: ExternalSurface, _stop: &AtomicBool) {
     // Only a headset makes surfaces, so no thread starts here.
 }
 
 #[cfg(target_os = "android")]
-fn paint(surface: ExternalSurface, split: Split, stop: &AtomicBool) {
+fn paint(surface: ExternalSurface, stop: &AtomicBool) {
     use std::{
         mem::MaybeUninit,
         ptr::NonNull,
@@ -82,12 +73,7 @@ fn paint(surface: ExternalSurface, split: Split, stop: &AtomicBool) {
     // The surface starts with the size that the headset gave it. The side-by-side picture has
     // buffers of half that size, so that the run shows how the compositor reads the halves of a
     // picture whose size is not the size of its swapchain.
-    let (width, height) = (window.width().max(2), window.height().max(2));
-    let (width, height) = if split == Split::LeftRight {
-        (width / 2, height / 2)
-    } else {
-        (width, height)
-    };
+    let (width, height) = (window.width().max(2) / 2, window.height().max(2) / 2);
     if let Err(error) =
         window.set_buffers_geometry(width, height, Some(HardwareBufferFormat::R8G8B8A8_UNORM))
     {
@@ -112,7 +98,7 @@ fn paint(surface: ExternalSurface, split: Split, stop: &AtomicBool) {
         };
         for (y, row) in rows.enumerate() {
             for (x, pixel) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                let rgba = pixel_at(x as u32, y as u32, (width, height), frame, split);
+                let rgba = pixel_at(x as u32, y as u32, (width, height), frame);
                 for (byte, value) in pixel.iter_mut().zip(rgba) {
                     *byte = MaybeUninit::new(value);
                 }
@@ -137,7 +123,7 @@ mod colors {
 
 // The pixel at `x`, `y` of a picture of `size` in frame number `frame`.
 #[cfg(target_os = "android")]
-fn pixel_at(x: u32, y: u32, size: (u32, u32), frame: u32, split: Split) -> [u8; 4] {
+fn pixel_at(x: u32, y: u32, size: (u32, u32), frame: u32) -> [u8; 4] {
     use colors::{BLUE, GREEN, RED, WHITE, YELLOW};
 
     // The corner squares' side, the bar's width, the bar's step in each frame and the grid's
@@ -174,11 +160,7 @@ fn pixel_at(x: u32, y: u32, size: (u32, u32), frame: u32, split: Split) -> [u8; 
     } else {
         0
     };
-    let first_half = match split {
-        Split::LeftRight => x < width / 2,
-        Split::TopBottom => y < height / 2,
-    };
-    let base = if first_half {
+    let base = if x < width / 2 {
         [120, 20, 20]
     } else {
         [20, 20, 120]

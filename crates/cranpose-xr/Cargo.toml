@@ -76,4 +76,5 @@ windows-sys = { version = "0.61", optional = true, features = ["Win32_System_Per
 
 [dev-dependencies]
 cranpose = { workspace = true, features = ["renderer-wgpu", "embedded-default-font"] }
+wgpu = { workspace = true }
 cranpose-testing = { path = "../cranpose-testing" }

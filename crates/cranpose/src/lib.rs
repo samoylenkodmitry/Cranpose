@@ -45,6 +45,8 @@ mod gpu_loss;
 #[cfg(feature = "renderer-wgpu")]
 mod guest_view;
 #[cfg(feature = "renderer-wgpu")]
+pub use cranpose_render_wgpu::SCENE_DEPTH_FORMAT;
+#[cfg(feature = "renderer-wgpu")]
 pub use guest_view::{GuestView, GuestViewError};
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
 mod frame_readback;

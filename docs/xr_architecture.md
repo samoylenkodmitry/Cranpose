@@ -26,22 +26,24 @@ sharp. Each composable maps to one compositor primitive:
 | `SpatialPanel`: a flat panel of 2D Cranpose content | quad layer | core |
 | `SpatialCurvedRow`: panels on a curve | cylinder layer for each panel | `XR_KHR_composition_layer_cylinder` |
 | `SpatialExternalSurface`: a surface for a video decoder or another engine | swapchain backed by an Android `Surface` | `XR_KHR_android_surface_swapchain` |
-| 3D content: `scene3d` and `mesh_surface` | projection layer with depth | core, `XR_KHR_composition_layer_depth` |
+| `SpatialVolume`: 3D content of `scene3d` and `mesh_surface` | one projection layer for all volumes, with depth where the runtime takes it | core, `XR_KHR_composition_layer_depth`, `XR_FB_composition_layer_depth_test` |
 
 A panel draws only when its content changes. The compositor shows the last image of a layer
 until a new one comes, so a still panel costs no GPU time at all.
 
-The cranvr Quest client proved each primitive on a Quest 3 by hand. Its desktop is a surface
-swapchain fed straight by the hardware decoder. Its console is a quad layer of Cranpose content.
-Its controllers, rays and handles are a Cranpose 3D scene in a projection layer.
+A Quest client proved the surface swapchain and the quad layer on a Quest 3 by hand. Its desktop is
+a surface swapchain fed straight by the hardware decoder. Its console is a quad layer of Cranpose
+content. The controllers' rays and the handles of the panels are quad layers with one
+static picture each (`ray_layers.rs`, `handle_layers.rs`), so they cost no draw. Only
+`SpatialVolume` draws a 3D scene, into a projection layer.
 
 ## The API
 
 Names follow Jetpack XR Compose (`androidx.xr.compose`), so Google's documentation serves
 Cranpose developers too:
 
-- `Subspace { ... }`: the 3D area of an app. Outside a headset it shows as a 3D view in the
-  window.
+- `Subspace { ... }`: the 3D area of an app. Outside a headset it shows its panels side by side in
+  the window, and a `SpatialVolume` in it shows as a 3D view in its box.
 - `SpatialPanel(modifier, shape) { ... }`: 2D Cranpose content on a flat panel.
 - `FollowingSubspace(follow) { ... }`: a `Subspace` whose origin is in front of the user's head.
   Jetpack XR 1.0.0-beta02 spells it `Subspace(follow = FollowTarget.view(FollowMode.snap()))`. It
@@ -81,9 +83,165 @@ Cranpose developers too:
   `movable`, `movable_with`, `resizable`, `resizable_with`, `fill_max_size`, `padding`.
 - `SpatialRoundedCornerShape`: the shape of a panel.
 
-Jetpack XR Compose shows 3D models through SceneCore entities. Cranpose has its own 3D: a
-`scene3d` box and `mesh_surface` content. In a `Subspace` such content draws into the
-projection layer, with a camera made from each eye's view.
+- `SpatialVolume(modifier, content)`: 3D content in a box, drawn by Cranpose's own scene. See "3D
+  content".
+
+## 3D content
+
+`SpatialVolume(modifier, content)` puts 3D content in a `Subspace`. The content is ordinary
+composables whose nodes carry `mesh_surface` or `mesh_surfaces`. Cranpose's own scene draws them, as
+`scene3d` draws them in a window, so a mesh shows live composable content on its surface. Jetpack
+XR 1.0 has `SpatialGltfModel`, which renders a glTF model, and `SceneCoreEntity`, which attaches any
+SceneCore entity. Cranpose has neither. Its composable keeps its own name, after the box that the
+content stands in.
+
+The modifier gives the box: `width`, `height` and `depth` in dp, which are millimeters, 500 each by
+default. The modifier's `offset`, `rotate`, `movable` and `resizable` work as on a panel. The
+content's space has its origin at the box's center, x to the right, y down and z away from the
+viewer, and a unit is a dp. That is the space of a `scene3d`, so the same content shows in a window.
+The box is where a ray stops. The content may reach outside it.
+
+### One scene, composed once
+
+A headset draws the content of all volumes in one scene, because one scene has one depth buffer: a
+nearer volume hides a farther one. The volumes' content composes where the app wrote it, but the
+composition does not emit it there. Each `SpatialVolume` gives its content to the space of the
+headset. A root composable, `VolumeScene`, composes it again at the root of a window root of the
+app's composition (`Modifier::window_root`, the root that Cranpose's host overlays use). The window
+root has its own renderer and the size of one eye's picture. The atlas of the panels does not draw
+it, so a volume that animates redraws no panel.
+
+The content composes once. Its state and its effects are the composition's own. A composition
+local that the app provides between the subspace and the volume does not reach it, because the
+scene composes at the root. The headset provides its own locals there.
+
+Each frame draws the same composition twice. For each eye the headset writes the eye's camera into
+a state that the scene's `scene3d` reads while it draws. Then it calls `GuestView::draw_window`,
+which updates the composition and renders the window root into the eye's texture. The update
+collects the scene with the new camera, so no composition and no layout run between the eyes. A volume's pose is a state too. `transform3d` of the volume's node reads it while
+the scene draws, so carrying a volume composes nothing.
+
+### The eye's camera
+
+A scene's camera is a pinhole whose image center is the middle of its box. An eye's display is off
+center: a Quest's eyes reach farther outward than toward the nose. `EyeCamera` turns an eye's pose
+and field of view from `xrLocateViews` into a `Camera` of the scene. The camera shears x and y by z,
+which moves the image center by a fixed amount at every depth. It has one focal length for both
+directions, the smaller of the horizontal and the vertical, so the picture has square pixels and
+covers the eye's field of view in both directions. The image therefore covers more than the eye's
+field of view along the other direction. The layer submits the field of view that the image covers
+(`EyeCamera::field_of_view`), which holds the eye's own along the limiting direction. A layer that
+submitted the eye's own field of view would shift the picture.
+
+The scene's axes are the room's turned half a turn about x, in millimeters. `scene_from_volume` maps
+a volume's content to the scene from the volume's pose in the room, and the eye's camera maps the
+scene to the eye, so the two share the scene's units. The camera cuts away what lies nearer to the
+eye than a 64th of its focal length in pixels: 12 mm for a focal length of 800 pixels.
+
+A GL swapchain's first row is its bottom one. The camera draws the picture upside down, so the
+runtime reads it upright. This also holds for the depth, which has the same rows. The layer chains
+no `XR_FB_composition_layer_image_layout` to the projection, because that extension's reach over a
+depth image is not specified. A Vulkan image starts with its top row, so its camera does not flip.
+
+### The projection layer and its depth
+
+All volumes draw into one projection layer with a view for each eye. Each view has its own swapchain
+of the eye's recommended size and its own pose and field of view. The layer's flags say that the
+picture's alpha blends over what lies under it (`BLEND_TEXTURE_SOURCE_ALPHA`), so the room and the
+panels' layers show through where no mesh draws. The picture is premultiplied, as the panels' are.
+The scene draws with one sample for each pixel, because the depth that the layer carries is the
+depth of a single sample. The renderer draws the scene into a target of its own and converts it
+into the swapchain's image, as it does for the panels' atlas. It draws straight into an image only
+when the image also takes copies. An sRGB image would then need a view of another format, and a
+swapchain's image has none.
+
+With `XR_KHR_composition_layer_depth` the layer carries the depth of each picture. The renderer's
+scene pass can leave its depth in a view that the host gives it
+(`WgpuRenderer::render_with_scene_depth`), so no copy of the depth is made. The depth swapchain has
+the format that the scene's pipelines draw against, `Depth24PlusStencil8`, which is
+`GL_DEPTH24_STENCIL8` on GLES. The scene's depth is `1 - near / z` for a point at distance `z`
+along the eye's axis: 0 at the near plane and 1 at infinity. The layer's depth info therefore says
+`nearZ` is the camera's near plane in meters and `farZ` is 10 km. The extension allows an infinite
+`farZ`, and a plane 10 km away gives the same depth to a part in a million, so no runtime has an
+infinity to mishandle.
+Wgpu maps `Depth24PlusStencil8` to one of two Vulkan formats by the driver and offers no query that
+says which, so a Vulkan headset has no depth swapchain and submits none. A runtime that offers no
+depth swapchain format submits none either. The picture still shows.
+
+### Layer order and the depth test
+
+The frame's layers, from the bottom: the room's passthrough layer, the streamed scenes, the one
+projection layer of the volumes, the flat and curved panels, the surfaces and the panels' handles,
+and the rays. The projection layer lies under the panels, because the compositor draws a later
+layer over an earlier one.
+
+Where the runtime has `XR_FB_composition_layer_depth_test` and the projection layer carries depth,
+each panel, surface, handle and ray layer chains an `XrCompositionLayerDepthTestFB` with
+`LESS_OR_EQUAL` and no depth write. The design expects the compositor to test that layer's
+fragments against the projection layer's depth, so that a panel behind a 3D object shows behind it
+and a panel in front of the object shows in front of it. Panels still draw over each other in the
+order of their distance, and a panel's rounded corners still blend. The projection layer carries
+its depth in its views and chains no test struct of its own.
+
+No device has run this path. The man page of `XrCompositionLayerDepthTestFB` describes `depthMask` as the switch for writes to
+the composition depth buffer. A Quest has to show whether the projection layer
+needs the struct with `depthMask` set for its depth to reach the compositor's buffer. If it does,
+the struct goes onto the projection layer. If panels vanish, the compare direction is the first
+suspect.
+
+Without the test, the projection layer lies under all panels, and a panel covers the 3D content
+wherever the panel stands, also where the content is nearer. A rule that sorts the one layer among
+the panels fails for two volumes with a panel between them, because a layer has one place in the
+list. The order is the same on every runtime. The depth test corrects it where it exists.
+`volume_plan` holds the rule as a function of the number of volumes, the
+eyes the runtime located and the extensions, and its tests cover it.
+
+A frame with no volume has no projection layer, no swapchain and no draw. The first frame with a
+volume makes the swapchains. The frame after the last volume leaves frees them.
+
+### Pointer
+
+A controller's ray stops at a volume's box. The slab test of `Ray::hit_box` gives the entry point,
+and the pointer sends the app `Enter`, `Move`, `Down`, `Up` and `Exit` events through
+`SpatialVolumeScope::on_pointer_event`, the path that a surface takes. The position is in dp from the
+top left corner of the box's front face, from the entry point's x and y. The depth is not reported.
+The ray does not pick the meshes, so a button on a mesh does not receive the ray. Sending the ray
+into the scene's own picking needs the pixel of the ray's hit in the scene's camera, which a scene
+has per eye, and is a larger change than the pointer's design takes now. A window shows the volume
+under the mouse, where the meshes take input as `mesh_surface` documents.
+
+The handles of a movable or resizable volume stand at its front face, half the depth toward the
+viewer. A handle at the center plane of a deep box would lie behind the entry of a ray that points
+at it. The resize measures on the front face's plane and changes the width and the height. The
+content does not scale with the box.
+
+### What it costs
+
+A frame with volumes updates the composition and renders the window root twice. The scene's draw
+closure reads the camera, so each eye's collection builds the scene again. The depth view that the
+renderer keeps in its pass is the swapchain's own, so the depth costs no copy. The color takes the
+renderer's conversion pass for each eye. The CPU side allocates what `scene3d` allocates for each
+evaluation of its closure. The layer code allocates nothing.
+
+A call of the runtime or of the renderer that fails ends the 3D content with one line in the log
+(`the 3D content ends`). The session and its panels keep running. A runtime that refuses the depth
+swapchain leaves the picture without depth, and the layers over it test nothing.
+
+A volume takes two of the compositor's layers when it is movable: the projection layer and the
+handle. The projection layer is one layer however many volumes there are.
+
+### Measured
+
+On the Android XR emulator (runtime "Android XR" 1.0.0, system "Moohan", GLES) the demo's torus
+shows lit and upright in the place of its pose, with its handle under it, beside the panels. The
+runtime offers `XR_KHR_composition_layer_depth`, `XR_FB_composition_layer_depth_test` and
+`XR_FB_composition_layer_image_layout`. Its swapchain formats are `GL_SRGB8_ALPHA8`, `GL_RGBA8`,
+`GL_RGB10_A2` and `GL_RGBA16F`, so it offers no depth format and the layer carries no depth there.
+Its eye pictures are 2560 by 2558 pixels. With the torus moved through the counter panel's plane the panel, which a later layer draws, covers
+the torus, as the order without a depth test says. The depth path and the depth test have run on no
+device.
+The crate's tests run the scene on the GPU of the development machine: two eyes from one
+composition, the depth that the scene leaves, a volume that moves, and a frame with no volume.
 
 ## The room around the panels
 
@@ -541,7 +699,7 @@ availability and what the frame gives, and it draws a map of the hands: a dot fo
 that the cameras track, seen from the front. The map is part of the panel. The compositor of a
 Quest 3 takes 16 layers at most (`xrEndFrame` fails above that, although the system properties
 report 32), and the demo already submits that many, so a panel for the section would end the
-session. A panel for each fingertip would add ten layers, and a hand's own pointing ray would stop
+session. The demo's volume takes two of them, one for the 3D content and one for its handle. A panel for each fingertip would add ten layers, and a hand's own pointing ray would stop
 at the dot at its fingertip. The build script asks for hand tracking, which needs no prompt on a
 Quest. `XR_DEMO_TRACKING=none` asks for nothing, and `XR_DEMO_TRACKING=all` adds the body, the face
 and the eyes, which the system asks the user to allow.
@@ -739,15 +897,17 @@ a pass of the headset backend, and the log says so once.
   and `resizable` handle grabs.
 - Its OpenXR backend: the session, the frame loop, the swapchains, the input actions and the
   extensions. The OpenXR calls sit in a reviewed boundary module.
-- A flat backend for every other platform: the `Subspace` draws as a 3D scene in an ordinary
-  window, as the desktop demo's XR tab does. The web adds WebXR through the same API.
+- A flat backend for every other platform: the `Subspace` draws its panels side by side in an
+  ordinary window, and a `SpatialVolume` draws as a 3D view in its box. The web adds WebXR through
+  the same API.
 
-Cranpose owns the GPU context. On the Quest it uses GLES through wgpu, which the cranvr client
-uses today. On Linux and Windows the OpenXR runtime (SteamVR, Monado, Meta Link, Pimax, Varjo)
-creates the Vulkan instance and device through `XR_KHR_vulkan_enable2`, and wgpu wraps them. The
-backend keeps the difference in its `graphics` module: one file for GLES and one for Vulkan make
-the session and the wgpu device and wrap the swapchain images as wgpu textures. The panels, the
-rays, the handles, the passthrough layer and the cylinder layers do not change. Four things stay
+Cranpose owns the GPU context. On the Quest it uses GLES through wgpu. On Linux and Windows the
+OpenXR runtime (SteamVR, Monado, Meta Link, Pimax, Varjo) creates the Vulkan instance and device
+through `XR_KHR_vulkan_enable2`, and wgpu wraps them. The backend keeps the difference in its
+`graphics` module: one file for GLES and one for Vulkan make the session and the wgpu device and
+wrap the swapchain images as wgpu textures. The panels, the rays, the handles, the passthrough
+layer, the cylinder layers and the projection layer of the volumes do not change, except that a
+Vulkan headset carries no depth for the volumes (see "3D content"). Four things stay
 with Android: the surface swapchains of `SpatialExternalSurface` (a surface panel shows nothing
 in a desktop headset), the stream layer of `StreamedScene` (it imports `AHardwareBuffer`s into GL
 through an EGL image, so a desktop headset shows a streamed scene as nothing until the stream
@@ -827,7 +987,7 @@ loader.
 | Meta Quest 2, Quest Pro, Quest 3S | Meta | The same entries | No |
 | Pico 4, Pico 4 Ultra | PICO OS 5.9 and later with the Khronos loader | `pvr.app.type`, `pvr.sdk.version`, `pxr.sdk.version_code`, `com.picovr.intent.category.VR` | No |
 | HTC Vive Focus 3, XR Elite | Wave OpenXR | `com.htc.intent.category.VRAPP`, `com.htc.vr.content.NumDoFHmd`, `NumDoFController` and `NumController` | No |
-| Samsung Galaxy XR | Android XR (`libopenxr.google.so`) | `PROPERTY_XR_ACTIVITY_START_MODE` set to the unmanaged full space, `uses-native-library`, `android.software.xr.api.openxr` | The Android XR emulator only (system image android-34 `google-xr` v7, runtime "Android XR" 1.0.0, system "Moohan"): the session runs through READY, SYNCHRONIZED, VISIBLE and FOCUSED, and the demo's flat, curved and surface panels show. No pointer input was tested, and no real headset |
+| Samsung Galaxy XR | Android XR (`libopenxr.google.so`) | `PROPERTY_XR_ACTIVITY_START_MODE` set to the unmanaged full space, `uses-native-library`, `android.software.xr.api.openxr` | The Android XR emulator only (system image android-34 `google-xr` v7, runtime "Android XR" 1.0.0, system "Moohan"): the session runs through READY, SYNCHRONIZED, VISIBLE and FOCUSED, and the demo's flat, curved and surface panels and its 3D volume show. No pointer input was tested, and no real headset |
 | Steam Frame | Valve's Android container (Lepton), controllers shown as Oculus Touch | The Khronos category only: no entry of its own was found | No |
 | Play For Dream | Not documented | The Khronos category only: no entry of its own was found | No |
 

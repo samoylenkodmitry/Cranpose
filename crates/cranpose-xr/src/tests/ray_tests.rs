@@ -151,3 +151,83 @@ fn a_curve_without_a_radius_is_flat() {
         );
     }
 }
+
+// A box of 0.4 m wide, 0.3 m high and 0.2 m deep, centered a meter ahead.
+const BOX: [f32; 3] = [0.4, 0.3, 0.2];
+
+fn box_hit(ray: Ray) -> Option<PanelHit> {
+    ray.hit_box(&PANEL, BOX)
+}
+
+#[test]
+fn a_ray_ahead_enters_the_front_face_of_a_box_in_its_middle() {
+    let hit = box_hit(Ray::of_aim(&Pose::IDENTITY)).expect("the ray ahead hits");
+    // The front face is a tenth of a meter before the center
+    assert!((hit.distance - 0.9).abs() < 1e-5, "{}", hit.distance);
+    assert!((hit.u - 0.5).abs() < 1e-5 && (hit.v - 0.5).abs() < 1e-5);
+}
+
+#[test]
+fn a_ray_to_the_upper_left_enters_near_the_top_left_corner_of_the_front_face() {
+    let ray = Ray {
+        origin: [-0.15, 0.1, 0.0],
+        direction: [0.0, 0.0, -1.0],
+    };
+    let hit = box_hit(ray).expect("the ray hits");
+    assert!((hit.u - 0.125).abs() < 1e-5, "u {}", hit.u);
+    assert!((hit.v - 1.0 / 6.0).abs() < 1e-5, "v {}", hit.v);
+}
+
+#[test]
+fn a_ray_that_enters_by_a_side_reports_where_it_stands_on_the_plane_of_the_front_face() {
+    // From the right, level with the center and half way through the box's depth
+    let ray = Ray {
+        origin: [0.5, 0.0, -1.0],
+        direction: [-1.0, 0.0, 0.0],
+    };
+    let hit = box_hit(ray).expect("the ray hits");
+    assert!((hit.distance - 0.3).abs() < 1e-5);
+    assert!((hit.u - 1.0).abs() < 1e-5 && (hit.v - 0.5).abs() < 1e-5);
+}
+
+#[test]
+fn a_ray_that_starts_inside_the_box_hits_it_at_distance_zero() {
+    let ray = Ray {
+        origin: [0.0, 0.0, -1.0],
+        direction: [0.0, 0.0, -1.0],
+    };
+    let hit = box_hit(ray).expect("the ray is inside");
+    assert_eq!(hit.distance, 0.0);
+    assert!((hit.u - 0.5).abs() < 1e-5 && (hit.v - 0.5).abs() < 1e-5);
+}
+
+#[test]
+fn a_ray_that_passes_the_box_misses_it() {
+    let miss = |origin: [f32; 3], direction: [f32; 3]| box_hit(Ray { origin, direction });
+    // Beside the box, above it, behind the ray and parallel to a face outside the box
+    assert_eq!(miss([0.3, 0.0, 0.0], [0.0, 0.0, -1.0]), None);
+    assert_eq!(miss([0.0, 0.2, 0.0], [0.0, 0.0, -1.0]), None);
+    assert_eq!(miss([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]), None);
+    assert_eq!(miss([0.0, 0.2, -1.0], [-1.0, 0.0, 0.0]), None);
+    // A ray whose line meets the box beyond the ray's start, which points away
+    assert_eq!(miss([0.0, 0.0, -2.0], [0.0, 0.0, -1.0]), None);
+}
+
+#[test]
+fn a_turned_box_takes_the_hit_in_its_own_axes() {
+    // The box stands to the left, turned to face the viewer at the origin
+    let turned = Pose {
+        position: [-1.0, 0.0, 0.0],
+        orientation: turn_degrees(0.0, 90.0, 0.0),
+    };
+    let ray = Ray {
+        origin: [0.0, 0.0, -0.1],
+        direction: [-1.0, 0.0, 0.0],
+    };
+    let hit = ray.hit_box(&turned, BOX).expect("the ray hits");
+    assert!((hit.distance - 0.9).abs() < 1e-5, "{}", hit.distance);
+    // The box's right is the room's -z, so a tenth of a meter that way is a quarter of the width
+    // to the right of the middle
+    assert!((hit.u - 0.75).abs() < 1e-4, "u {}", hit.u);
+    assert!((hit.v - 0.5).abs() < 1e-4, "v {}", hit.v);
+}
