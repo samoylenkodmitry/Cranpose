@@ -142,6 +142,26 @@ fn a_decoder_skips_units_until_a_keyframe_brings_the_parameter_sets() {
 }
 
 #[test]
+fn a_picture_that_the_count_includes_is_already_in_the_queue() {
+    let units = split_access_units(VideoCodec::H264, H264_CLIP);
+    let mut decoder = decoder(VideoCodec::H264, DEPTH);
+    let frames = decoder.frames();
+    for (index, data) in units.iter().enumerate() {
+        let before = frames.stats().decoded;
+        decoder.submit(unit(data, index as u64)).expect("a unit");
+        assert!(
+            wait_until(|| frames.stats().decoded > before),
+            "picture {index}: {:?}",
+            frames.stats()
+        );
+        assert!(
+            frames.next_frame().is_some(),
+            "picture {index} is counted and not in the queue"
+        );
+    }
+}
+
+#[test]
 fn timestamps_must_rise_and_a_codec_without_a_decoder_is_refused() {
     let units = split_access_units(VideoCodec::H264, H264_CLIP);
     let mut decoder = decoder(VideoCodec::H264, DEPTH);

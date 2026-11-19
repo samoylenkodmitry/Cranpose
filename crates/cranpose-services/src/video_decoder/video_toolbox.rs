@@ -274,11 +274,17 @@ impl Shared {
                 decode_time: unit.submitted.elapsed(),
             },
         );
-        self.queue.stats.decoded(frame_info.decode_time);
+        let decode_time = frame_info.decode_time;
         let frame = VideoFrame::new(frame_info, image.size(), image.crop(), image);
+        self.enqueue(frame);
+        // The count follows the queue: an app that sees a picture counted finds it in `frames`.
+        self.queue.stats.decoded(decode_time);
+    }
+
+    // Queues `frame` and wakes the task that waits for a picture. The oldest queued pictures go
+    // until the new one fits. If the app holds the rest, the new one goes.
+    fn enqueue(&self, frame: VideoFrame) {
         let mut frames = self.queue.frames.lock();
-        // The oldest queued pictures go until the new one fits. If the app holds the rest, the
-        // new one goes.
         while self.live.load(Relaxed) > self.depth {
             self.queue.stats.dropped();
             if frames.pop_front().is_none() {
