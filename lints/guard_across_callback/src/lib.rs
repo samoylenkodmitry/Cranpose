@@ -1,10 +1,16 @@
 #![feature(rustc_private)]
 
+extern crate rustc_data_structures;
 extern crate rustc_errors;
 extern crate rustc_hir;
 extern crate rustc_middle;
 extern crate rustc_span;
+extern crate rustc_type_ir;
 
+mod reentry;
+
+use reentry::{Effects, Walker};
+use rustc_data_structures::fx::FxHashSet;
 use rustc_errors::DiagDecorator;
 use rustc_hir::{
     Block, Expr, ExprKind, HirId, LetStmt, PatKind, QPath, StmtKind,
@@ -12,31 +18,45 @@ use rustc_hir::{
     intravisit::{self, Visitor},
 };
 use rustc_lint::{LateContext, LateLintPass, LintContext};
-use rustc_middle::ty::{self, Ty};
-use rustc_span::{Span, sym};
+use rustc_middle::ty::{self, GenericArgsRef, Ty};
+use rustc_span::{Span, def_id::DefId, sym};
 
-dylint_linting::declare_late_lint! {
+dylint_linting::impl_late_lint! {
     /// ### What it does
     ///
-    /// Finds a call to a closure, a function pointer or a `dyn Fn` while a
-    /// `RefCell` borrow (`Ref`, `RefMut`) or a lock guard (`MutexGuard`,
-    /// `RwLockReadGuard`, `RwLockWriteGuard`, and `lock_api`'s) that a `let`
-    /// holds is alive in the same block.
+    /// Finds code the caller does not see that runs while a `RefCell` borrow
+    /// (`Ref`, `RefMut`) or a lock guard (`MutexGuard`, `RwLockReadGuard`,
+    /// `RwLockWriteGuard`, and `lock_api`'s) that a `let` holds is alive in
+    /// the same block. That code is one of these:
+    ///
+    /// - a call to a closure, a function pointer or a `dyn Fn`
+    /// - a call to a function of the crate whose body reaches a callback, a
+    ///   `dyn` method or the drop of a value that holds a trait object
+    ///   (`Box<dyn Any>`, `Rc<dyn Fn()>`), directly or through other
+    ///   functions, closures and `Drop` impls of the crate
+    /// - a `drop` of a value whose drop reaches such code
     ///
     /// ### Why is this bad?
     ///
     /// The callback is code the caller does not see. When it reaches the
     /// same cell or lock, the borrow panics or the lock deadlocks, at run
-    /// time, on the path that happens to re-enter. AGENTS.md: a `RefCell`
-    /// borrow or a lock lasts a few lines and never spans a callback.
+    /// time, on the path that happens to re-enter. A `Drop` impl added far
+    /// away makes an old call re-enter, so the lint follows each call into
+    /// its body. AGENTS.md: a `RefCell` borrow or a lock lasts a few lines
+    /// and never spans a callback.
     ///
     /// ### Known problems
     ///
-    /// Only `let`-bound guards and direct calls in their block count: a
-    /// temporary guard inside one expression, and a closure handed to a
-    /// named function that calls it, are not seen. A call that lends the
-    /// guard's data to the callback (`f(&*borrow)`, or a value a `let` took
-    /// from the guard) is the `with` accessor's purpose and is left alone.
+    /// Only `let`-bound guards and calls in their block count: a temporary
+    /// guard inside one expression is not seen. The analysis stays inside
+    /// one crate. A function of another crate counts as plain code, and only
+    /// `dyn` methods of traits outside the standard library count as
+    /// callbacks there. A drop inside a standard library function
+    /// (`Vec::clear`) or at the end of a scope is not seen. A call that lends
+    /// the guard's data to a closure (`f(&*borrow)`, or a value a `let` took
+    /// from the guard) is the `with` accessor's purpose and is left alone. A
+    /// named function that takes the guard's data still counts: its body can
+    /// reach the cell another way.
     ///
     /// ### Example
     ///
@@ -61,17 +81,38 @@ dylint_linting::declare_late_lint! {
     /// ```
     pub GUARD_ACROSS_CALLBACK,
     Warn,
-    "a RefCell borrow or a lock guard is alive while a callback runs"
+    "a RefCell borrow or a lock guard is alive while a callback runs",
+    GuardAcrossCallback::default()
+}
+
+#[derive(Default)]
+pub struct GuardAcrossCallback {
+    // The functions of the crate that can run code their caller does not see.
+    reentrant: FxHashSet<DefId>,
 }
 
 impl<'tcx> LateLintPass<'tcx> for GuardAcrossCallback {
+    fn check_crate(&mut self, cx: &LateContext<'tcx>) {
+        if cx.tcx.sess.is_test_crate() {
+            return;
+        }
+        self.reentrant = reentry::reentrant_fns(cx.tcx);
+    }
+
     fn check_block(&mut self, cx: &LateContext<'tcx>, block: &'tcx Block<'tcx>) {
+        // A test runs its re-entry, so the failure shows. Tests also hold
+        // a global test lock for their whole body.
+        if cx.tcx.sess.is_test_crate() {
+            return;
+        }
+        let mut walker = Walker::new(cx.tcx, cx.typing_env());
         let mut guards: Vec<(HirId, Span)> = Vec::new();
         // The guards and the locals a `let` took from them.
         let mut lent: Vec<HirId> = Vec::new();
         for stmt in block.stmts {
             if let Some(&(_, span)) = guards.first() {
-                let mut calls = CallbackCalls::new(cx, &mut guards, &lent);
+                let mut calls =
+                    CallbackCalls::new(cx, &mut guards, &lent, &mut walker, &self.reentrant);
                 match stmt.kind {
                     StmtKind::Let(local) => {
                         if let Some(init) = local.init {
@@ -97,7 +138,8 @@ impl<'tcx> LateLintPass<'tcx> for GuardAcrossCallback {
             }
         }
         if let (Some(tail), Some(&(_, span))) = (block.expr, guards.first()) {
-            let mut calls = CallbackCalls::new(cx, &mut guards, &lent);
+            let mut calls =
+                CallbackCalls::new(cx, &mut guards, &lent, &mut walker, &self.reentrant);
             calls.visit_expr(tail);
             let found = calls.found;
             report(cx, found, span);
@@ -154,6 +196,8 @@ struct CallbackCalls<'a, 'tcx> {
     cx: &'a LateContext<'tcx>,
     guards: &'a mut Vec<(HirId, Span)>,
     lent: &'a [HirId],
+    walker: &'a mut Walker<'tcx>,
+    reentrant: &'a FxHashSet<DefId>,
     found: Vec<Span>,
 }
 
@@ -162,13 +206,26 @@ impl<'a, 'tcx> CallbackCalls<'a, 'tcx> {
         cx: &'a LateContext<'tcx>,
         guards: &'a mut Vec<(HirId, Span)>,
         lent: &'a [HirId],
+        walker: &'a mut Walker<'tcx>,
+        reentrant: &'a FxHashSet<DefId>,
     ) -> Self {
         Self {
             cx,
             guards,
             lent,
+            walker,
+            reentrant,
             found: Vec::new(),
         }
+    }
+
+    // Whether a call of `did` can reach code the caller does not see. A named
+    // function counts even when it borrows the guard's data: its body can
+    // reach the cell another way.
+    fn reenters(&mut self, did: DefId, args: GenericArgsRef<'tcx>) -> bool {
+        let mut effects = Effects::default();
+        self.walker.call(did, args, &mut effects);
+        effects.reenters(self.reentrant)
     }
 
     fn dropped_guard(&self, callee: &Expr<'_>, args: &[Expr<'_>]) -> Option<HirId> {
@@ -199,15 +256,27 @@ impl<'tcx> Visitor<'tcx> for CallbackCalls<'_, 'tcx> {
         match expr.kind {
             ExprKind::Closure(_) => return,
             ExprKind::Call(callee, args) => {
-                if let Some(id) = self.dropped_guard(callee, args) {
-                    self.guards.retain(|&(guard, _)| guard != id);
-                } else if !self.guards.is_empty()
-                    && !args.iter().any(|arg| mentions(arg, self.lent))
+                if let Some(id) = self.dropped_guard(callee, args)
+                    && self.guards.iter().any(|&(guard, _)| guard == id)
                 {
+                    self.guards.retain(|&(guard, _)| guard != id);
+                } else if !self.guards.is_empty() {
                     let callee_ty = self.cx.typeck_results().expr_ty(callee).peel_refs();
-                    if !matches!(callee_ty.kind(), ty::FnDef(..)) {
+                    if let ty::FnDef(did, fn_args) = callee_ty.kind() {
+                        if self.reenters(*did, fn_args.skip_binder()) {
+                            self.found.push(expr.span);
+                        }
+                    } else if !args.iter().any(|arg| mentions(arg, self.lent)) {
                         self.found.push(expr.span);
                     }
+                }
+            }
+            ExprKind::MethodCall(..) if !self.guards.is_empty() => {
+                let typeck = self.cx.typeck_results();
+                if let Some(did) = typeck.type_dependent_def_id(expr.hir_id)
+                    && self.reenters(did, typeck.node_args(expr.hir_id))
+                {
+                    self.found.push(expr.span);
                 }
             }
             _ => {}

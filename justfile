@@ -106,9 +106,11 @@ clippy: _disk-guard
 clippy-budget-lower:
     python3 scripts/ci/clippy_budget.py --lower
 
-# The type-aware lints of lints/ (cargo-dylint, on the pinned nightly): each
-# lint's sites against scripts/ci/dylint_budget.toml. Nightly CI runs it.
+# The type-aware lints of lints/ (cargo-dylint, on the pinned nightly): the
+# UI test of each lint, then each lint's sites against
+# scripts/ci/dylint_budget.toml. Nightly CI runs it.
 dylint: _dylint-tools
+    cd lints/guard_across_callback && cargo test
     python3 scripts/ci/dylint_budget.py
 
 # Write the dylint counts that fell below their budget.
