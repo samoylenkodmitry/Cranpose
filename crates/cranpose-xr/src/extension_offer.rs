@@ -38,4 +38,14 @@ impl ExtensionOffer {
             eye_tracking_social: eyes && self.eye_tracking_social,
         }
     }
+
+    // Whether the list holds an extension that supplies the feature.
+    pub(crate) const fn offers(self, feature: TrackingFeature) -> bool {
+        match feature {
+            TrackingFeature::Hands => self.hand_tracking,
+            TrackingFeature::Body => self.body_tracking,
+            TrackingFeature::Face => self.face_tracking2 || self.android_face_tracking,
+            TrackingFeature::Eyes => self.eye_gaze_interaction || self.eye_tracking_social,
+        }
+    }
 }

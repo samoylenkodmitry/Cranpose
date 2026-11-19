@@ -6,7 +6,8 @@ use openxr as xr;
 
 use super::{
     body_tracker::BodyTracker, eye_gaze_action::EyeGazeAction, eye_tracker::EyeTracker,
-    face_tracker::FaceTracker, hand_trackers::HandTrackers, tracking_setup::TrackingSetup,
+    face_tracker::FaceTracker, hand_trackers::HandTrackers, permission_prompt::step_of,
+    tracking_setup::TrackingSetup,
 };
 use crate::{
     TrackingAvailability, TrackingCapabilities, TrackingFeature, XrFrame,
@@ -15,24 +16,18 @@ use crate::{
         host::Host,
         session::{SessionStatus, XrSession},
     },
-    tracking_permission::{PermissionAnswer, PermissionStep, Prompt, may_try, permission_step},
-    tracking_request::service_of,
+    tracking_permission::PermissionStep,
 };
 
 // How long the backend waits between two looks at a pending feature: its permissions, and a new try
 // to make its tracker. A frame that falls between does nothing for it.
 const POLL: Duration = Duration::from_secs(1);
 
-// The most groups of permissions that a feature has
-const MOST_GROUPS: usize = 2;
-
 // The trackers for what the app asked, with their permissions. An app that asked for nothing has
 // none, and `sample` returns at once.
 pub(crate) struct Trackers {
     capabilities: TrackingCapabilities,
     setup: TrackingSetup,
-    // Whether the system's prompt showed for each feature
-    prompts: [Prompt; TrackingFeature::ALL.len()],
     last_poll: Option<Duration>,
     hands: Option<HandTrackers>,
     body: Option<BodyTracker>,
@@ -46,7 +41,6 @@ impl Trackers {
         Self {
             capabilities: setup.capabilities,
             setup,
-            prompts: [Prompt::NotShown; TrackingFeature::ALL.len()],
             last_poll: None,
             hands: None,
             body: None,
@@ -120,46 +114,31 @@ impl Trackers {
         due
     }
 
-    // One look at a waiting feature: shows the prompt once, and tries to make the tracker unless the
-    // user refused. A runtime that needs no permission makes it at the first look, and one that
-    // lacks the permission refuses it until the user grants it.
+    // One look at a waiting feature: makes the tracker when every permission is granted, and stops
+    // waiting when the user refused one. The prompt came before the session. A headset that defines
+    // no permission for the feature counts as granted.
     fn advance(&mut self, feature: TrackingFeature, xr_session: &XrSession, host: &Host) {
-        let groups = service_of(feature).android_permission_groups();
-        let mut answers = [PermissionAnswer::Granted; MOST_GROUPS];
-        for (answer, group) in answers.iter_mut().zip(groups) {
-            *answer = host.permission_answer(group);
+        match step_of(host, feature) {
+            PermissionStep::Refused => {
+                log::info!("cranpose xr: {feature:?} tracking: the user refused the permission");
+                self.set(feature, TrackingAvailability::PermissionRefused);
+                return;
+            }
+            // A tracker that the runtime makes before the user grants a permission stays empty,
+            // as Meta's face does before the microphone is granted, and the backend never makes
+            // it again
+            PermissionStep::Wait => return,
+            PermissionStep::Ready => {}
         }
-        let answers = &answers[..groups.len().min(MOST_GROUPS)];
-        let step = permission_step(answers, self.prompts[feature.index()]);
-        if step == PermissionStep::Refused {
-            log::info!("cranpose xr: {feature:?} tracking: the user refused the permission");
-            self.set(feature, TrackingAvailability::PermissionRefused);
-            return;
-        }
-        if step == PermissionStep::Request {
-            let wanted: Vec<&str> = groups
-                .iter()
-                .zip(answers)
-                .filter(|(_, answer)| **answer != PermissionAnswer::Granted)
-                .flat_map(|(group, _)| group.iter().copied())
-                .collect();
-            log::info!("cranpose xr: {feature:?} tracking: asks for {wanted:?}");
-            host.request_permissions(&wanted);
-            self.prompts[feature.index()] = Prompt::Shown;
-        }
-        if !may_try(answers, step) {
-            return;
-        }
-        let ready = step == PermissionStep::Ready;
-        match self.make(feature, xr_session, ready) {
+        match self.make(feature, xr_session) {
             Ok(true) => {
                 log::info!("cranpose xr: {feature:?} tracking runs");
                 self.set(feature, TrackingAvailability::Active);
             }
             Ok(false) => {}
-            // With the permissions granted the runtime still refuses: it has no such tracker, and
-            // a new try would only repeat the refusal
-            Err(error) if ready && error != xr::sys::Result::ERROR_PERMISSION_INSUFFICIENT => {
+            // The permissions are granted and the runtime still refuses: it has no such tracker,
+            // and a new try would only repeat the refusal
+            Err(error) if error != xr::sys::Result::ERROR_PERMISSION_INSUFFICIENT => {
                 log::warn!("cranpose xr: {feature:?} tracking is not available: {error}");
                 self.set(feature, TrackingAvailability::Unavailable);
             }
@@ -171,13 +150,12 @@ impl Trackers {
         self.capabilities = self.capabilities.with_availability(feature, availability);
     }
 
-    // Makes the tracker of the feature. Returns whether the feature runs, or the result that the
-    // runtime refused the tracker with. A feature that waits for its permission is `Ok(false)`.
+    // Makes the tracker of the feature, once its permissions are granted. Returns whether the
+    // feature runs, or the result that the runtime refused the tracker with.
     fn make(
         &mut self,
         feature: TrackingFeature,
         xr_session: &XrSession,
-        permitted: bool,
     ) -> Result<bool, xr::sys::Result> {
         let (instance, session) = (xr_session.instance(), &xr_session.session);
         match feature {
@@ -198,17 +176,16 @@ impl Trackers {
                     .ok_or(xr::sys::Result::ERROR_EXTENSION_NOT_PRESENT)?;
                 self.face = Some(FaceTracker::create(provider, session, instance)?);
             }
-            TrackingFeature::Eyes => return self.make_eyes(session, instance, permitted),
+            TrackingFeature::Eyes => return self.make_eyes(session, instance),
         }
         Ok(true)
     }
 
-    // The eyes run with the social tracker or, once permitted, with the gaze action.
+    // The eyes run with the social tracker or with the gaze action.
     fn make_eyes(
         &mut self,
         session: &xr::Session<Api>,
         instance: &xr::Instance,
-        permitted: bool,
     ) -> Result<bool, xr::sys::Result> {
         let mut refused = None;
         if self.capabilities.is_eye_tracking_social_available() && self.eyes.is_none() {
@@ -217,7 +194,7 @@ impl Trackers {
                 Err(error) => refused = Some(error),
             }
         }
-        if self.eyes.is_some() || (self.gaze.is_some() && permitted) {
+        if self.eyes.is_some() || self.gaze.is_some() {
             Ok(true)
         } else {
             refused.map_or(Ok(false), Err)

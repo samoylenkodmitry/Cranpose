@@ -38,6 +38,8 @@ impl Runtime {
         let listed = tracking::listed(&available);
         let enabled = listed.enabled_for(request);
         tracking::enable(&mut extensions, enabled);
+        // The prompt comes before the session, and the instance is made after it
+        tracking::ask_before_session(host, enabled);
         Graphics::require(&available, &mut extensions)?;
         host.require(&available, &mut extensions);
         log::info!(
@@ -65,7 +67,9 @@ impl Runtime {
         log_runtime(&instance, system);
         let support = tracking::query(&instance, system, enabled);
         let capabilities = TrackingCapabilities::from_runtime(request, listed, support);
-        log::info!("cranpose xr: asked for {request:?}; tracking {capabilities:?}");
+        log::info!(
+            "cranpose xr: the runtime lists {listed:?}; asked for {request:?}; tracking {capabilities:?}"
+        );
         Ok(Self {
             instance,
             system,

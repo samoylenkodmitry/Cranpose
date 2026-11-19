@@ -16,29 +16,19 @@ pub(crate) enum PermissionAnswer {
     Blocked,
 }
 
-// Whether the backend showed the system's prompt for a feature.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Prompt {
-    NotShown,
-    Shown,
-}
-
-// What the backend does next for a feature, given the answers for each of its permission groups
-// and whether it already showed the prompt.
+// Where a feature stands, given the answers for each of its permission groups.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PermissionStep {
     // Every group is granted, or the feature needs none.
     Ready,
-    // A group has no answer and the prompt has not shown: show it.
-    Request,
-    // The prompt shows, or the runtime has not told its answer yet.
+    // A group has no answer: the prompt has not shown or the user has not answered it.
     Wait,
-    // The user refused a group. The backend does not ask again: Android allows one more prompt at
-    // most, and only the user's settings allow it for good.
+    // The user refused a group. Android shows one more prompt at most, and only the user's
+    // settings allow the permission for good, so the backend does not ask again.
     Refused,
 }
 
-pub(crate) fn permission_step(answers: &[PermissionAnswer], prompt: Prompt) -> PermissionStep {
+pub(crate) fn permission_step(answers: &[PermissionAnswer]) -> PermissionStep {
     if answers.iter().any(|answer| {
         matches!(
             answer,
@@ -51,26 +41,8 @@ pub(crate) fn permission_step(answers: &[PermissionAnswer], prompt: Prompt) -> P
         .all(|answer| matches!(answer, PermissionAnswer::Granted))
     {
         PermissionStep::Ready
-    } else if prompt == Prompt::Shown {
-        PermissionStep::Wait
     } else {
-        PermissionStep::Request
-    }
-}
-
-// Whether the backend may try to make the feature's tracker now. It may when every group is
-// granted. It may also while nothing is granted or refused: a runtime that defines no permission for
-// the feature never answers and needs none, and one that does refuses the tracker until the user
-// grants it. It may not while one group is granted and another waits, because the runtime would
-// make a tracker that the missing permission leaves empty, as a face from audio before the
-// microphone is granted, and the backend never makes it again.
-pub(crate) fn may_try(answers: &[PermissionAnswer], step: PermissionStep) -> bool {
-    match step {
-        PermissionStep::Ready => true,
-        PermissionStep::Refused => false,
-        PermissionStep::Request | PermissionStep::Wait => answers
-            .iter()
-            .all(|answer| *answer == PermissionAnswer::NotAsked),
+        PermissionStep::Wait
     }
 }
 

@@ -468,27 +468,30 @@ The Java class `CranposePermissions` comes with any of the four declarations. Th
 `cranpose::android_permission` and `cranpose::request_android_permissions` through it, which are
 `cranpose`'s public path to a run-time permission that differs between devices. Each feature has
 groups of alternative permissions: any one name of a group grants it, because a Quest defines the
-`com.oculus` names and Android XR the `android` ones. The Java side reports 0 (not asked),
-1 (granted), 2 (refused) or 3 (refused for good, which Android shows no prompt for any more).
+`com.oculus` and `horizonos` names and Android XR the `android` ones. The Java side reports 0 (not
+asked), 1 (granted), 2 (refused) or 3 (refused for good, which Android shows no prompt for any
+more). A group of which the device defines no permission counts as granted, so a headset that gates
+its trackers by no permission gets them at once.
 
-`PermissionStep` is the decision: `Ready` when every group is granted, `Request` while a group has
-no answer and the prompt has not shown, `Wait` after it showed, and `Refused` when the user
-refused a group. The backend asks once, and it does not ask again after a refusal.
+The prompt comes before the session. On a Quest 3 the system takes an immersive app off the headset
+to show a dangerous permission's prompt, and the runtime ends a session that is running: the
+session went from `VISIBLE` through `STOPPING` and `IDLE` to `EXITING` in 30 ms, and the app's loop
+ended. So `ask_before_session` runs before the instance is made, after the loader listed the
+extensions. It requests, in one call, every missing permission of every feature that the app asked
+for and the runtime offers, so a Quest 3 does not ask for the eyes it lacks. It waits until each feature is
+answered, the activity ends or five minutes pass. The wait handles the activity's events, so the
+app stays responsive.
 
-A frame does no work for a feature that waits, except once a second: it reads the answers, shows
-the prompt if it is due and tries to make the tracker. `may_try` decides whether it tries:
-
-- Every group is granted: it tries. A refusal other than `XR_ERROR_PERMISSION_INSUFFICIENT` then
-  means that the runtime has no such tracker, so the feature becomes `Unavailable` and the backend
-  stops trying.
-- Nothing is granted and nothing refused: it tries. A runtime that defines no permission for the
-  feature never answers and needs none, and one that does refuses the tracker until the user grants
-  it.
-- One group is granted and another waits: it does not try. A face from audio needs the microphone,
-  and a tracker made before the grant would stay empty and never be made again.
-- The user refused a group: it does not try.
-
-After the tracker runs or the user refuses, the feature costs no more than the frame's own work.
+`PermissionStep` is the decision for a feature: `Ready` when every group is granted, `Wait` while a
+group has no answer and `Refused` when the user refused a group. The backend does not ask again
+after a refusal. The tracker is made only at `Ready`: Meta's `xrCreateFaceTracker2FB` succeeds
+before the user grants the permissions, and a tracker made then stays empty, so waiting for the
+refusal of the runtime would not work. After the prompt, a frame does no work for a feature that
+still waits, except once a second: it reads the answers and makes the tracker when they are
+granted, which is how a grant in the system's settings takes effect during the session. After the
+tracker runs or the user refuses, the feature costs no more than the frame's own work. At `Ready`
+a refusal other than `XR_ERROR_PERMISSION_INSUFFICIENT` means that the runtime has no such tracker,
+so the feature becomes `Unavailable`.
 
 ### What a frame holds
 

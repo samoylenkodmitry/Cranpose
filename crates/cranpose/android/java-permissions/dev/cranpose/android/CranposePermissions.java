@@ -31,15 +31,24 @@ public final class CranposePermissions {
      * The answer for a group of alternative permissions, newline separated: 0
      * not asked, 1 granted, 2 refused, 3 refused for good, so that Android
      * shows no prompt any more and only the application's settings can allow
-     * it. Any one alternative that is granted grants the group.
+     * it. Any one alternative that is granted grants the group. A group of
+     * which this device defines no permission needs none, which is how a
+     * headset that gates its trackers by no permission gets them at once, and
+     * it counts as granted.
      */
     public static int cranposePermissionState(Activity activity, String alternatives) {
+        PackageManager packages = activity.getPackageManager();
+        boolean defined = false;
         boolean askAgain = false;
         boolean refusedBefore = false;
         for (String permission : alternatives.split("\n")) {
             if (activity.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) {
                 return 1;
             }
+            if (!isDefined(packages, permission)) {
+                continue;
+            }
+            defined = true;
             // After one refusal Android wants the reason shown before it asks
             // again; once a refused permission no longer wants it, its prompt
             // does not show. A prompt that is open or was closed unanswered
@@ -48,6 +57,9 @@ public final class CranposePermissions {
             refusedBefore |= activity.getSharedPreferences(
                             CranposeActivity.REFUSED_PERMISSIONS, Context.MODE_PRIVATE)
                     .getBoolean(permission, false);
+        }
+        if (!defined) {
+            return 1;
         }
         if (askAgain) {
             return 2;
@@ -73,5 +85,15 @@ public final class CranposePermissions {
         }
         String[] names = wanted.toArray(new String[0]);
         activity.runOnUiThread(() -> activity.requestPermissions(names, REQUEST_CODE));
+    }
+
+    // Whether this device defines the permission
+    private static boolean isDefined(PackageManager packages, String permission) {
+        try {
+            packages.getPermissionInfo(permission, 0);
+            return true;
+        } catch (PackageManager.NameNotFoundException notDefined) {
+            return false;
+        }
     }
 }

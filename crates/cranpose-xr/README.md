@@ -245,9 +245,10 @@ sensor. A feature that the app asked for gets the system's answer, so a Quest 3 
 `Unavailable`. `XrFrame::tracking` follows the permissions that the user grants.
 
 On a Meta Quest the face and eyes need the user's permission, and a Quest 3 estimates the face from
-the microphone, so `Use::face_tracking()` adds `RECORD_AUDIO`. The system's prompt shows once, from
-the first frame. The backend looks at the answer once a second while a feature waits, and not
-again after the user grants or refuses.
+the microphone, so `Use::face_tracking()` adds `RECORD_AUDIO`. The system's prompt shows before the
+session starts, because the system takes an immersive app off the headset to show it and the runtime
+ends a session that runs. The app waits for the answer. The backend makes a tracker only when every
+permission is granted, and it does not ask again after a refusal.
 
 ## Streamed scenes
 

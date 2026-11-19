@@ -72,7 +72,8 @@ pub fn run<Fonts: LauncherFonts>(
     content: impl FnMut() + 'static,
 ) -> Result<(), RunError> {
     let host = Host;
-    match Runtime::connect(&host, TrackingRequest::of(launcher.capabilities())) {
+    let request = TrackingRequest::of(launcher.capabilities());
+    match Runtime::connect(&host, request) {
         Ok(runtime) => {
             let settings = launcher.into_settings();
             run_immersive(&host, runtime, &settings, content).map_err(RunError::Headset)
