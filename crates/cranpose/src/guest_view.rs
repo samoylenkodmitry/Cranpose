@@ -1,5 +1,7 @@
-use cranpose_app_shell::{AppShell, FrameSchedule, default_root_key};
-use cranpose_render_wgpu::{WgpuRenderer, WgpuTextSystem};
+use cranpose_app_shell::{AppShell, FrameSchedule, RootId, default_root_key};
+use cranpose_core::NodeId;
+use cranpose_render_common::Renderer;
+use cranpose_render_wgpu::{GpuTarget, WgpuRenderer, WgpuTextSystem};
 
 use crate::{AppSettings, GpuContext};
 
@@ -31,6 +33,9 @@ pub enum GuestViewError {
 /// context's queue, so work the host submits there afterwards sees it.
 pub struct GuestView {
     shell: AppShell<WgpuRenderer>,
+    gpu: GpuContext,
+    format: wgpu::TextureFormat,
+    text_system: WgpuTextSystem,
     max_dimension: u32,
     size: (u32, u32),
     density: f32,
@@ -52,10 +57,9 @@ impl GuestView {
     ) -> Result<Self, GuestViewError> {
         let max_dimension = gpu.device.limits().max_texture_dimension_2d;
         validate_size(width, height, density, max_dimension)?;
-        let mut renderer = WgpuRenderer::with_text_system(WgpuTextSystem::from_text_fonts(
-            settings.resolve_fonts(),
-        ));
-        renderer.init_gpu(cranpose_render_wgpu::GpuTarget::on_adapter(
+        let text_system = WgpuTextSystem::from_text_fonts(settings.resolve_fonts());
+        let mut renderer = WgpuRenderer::with_text_system(text_system.clone());
+        renderer.init_gpu(GpuTarget::on_adapter(
             &gpu.adapter,
             std::sync::Arc::clone(&gpu.device),
             std::sync::Arc::clone(&gpu.queue),
@@ -72,6 +76,9 @@ impl GuestView {
         shell.use_system_clipboard();
         Ok(Self {
             shell,
+            gpu: gpu.clone(),
+            format,
+            text_system,
             max_dimension,
             size: (width, height),
             density,
@@ -147,9 +154,11 @@ impl GuestView {
         if !self.visible {
             return Ok(false);
         }
-        let update = self.shell.update();
+        // The update runs for the whole composition. What it changed in a window root owes that
+        // window a frame, and the primary root owes one only for what it changed itself.
+        self.shell.update();
         let owed = self.shell.take_frame_owed();
-        if !(self.dirty || owed || update.visual_changed || self.shell.needs_redraw()) {
+        if !(self.dirty || owed || self.shell.needs_redraw()) {
             return Ok(false);
         }
         let (width, height) = self.size;
@@ -164,6 +173,74 @@ impl GuestView {
     /// Physical dimensions of the textures [`Self::draw`] draws into.
     pub fn pixel_size(&self) -> (u32, u32) {
         self.size
+    }
+
+    /// Gives the window root `root` a view of its own, drawn by [`Self::draw_window`] into
+    /// textures of `width` by `height` pixels at `density` pixels per logical point, with a
+    /// transparent background. `root` is the node of a [`Modifier::window_root`] in this
+    /// composition, as [`Self::shell`]'s `window_roots` lists it. The root lays out into the
+    /// size that its [`WindowRootDescriptor`] reports, which the caller sets to the view's
+    /// logical size (`width / density` by `height / density`) before the next frame.
+    ///
+    /// A window root with a view of its own is not part of the textures [`Self::draw`] draws, and
+    /// the composition stays one: state, effects and locals are shared with the primary root.
+    pub fn open_window(
+        &mut self,
+        root: NodeId,
+        (width, height): (u32, u32),
+        density: f32,
+    ) -> Result<(), GuestViewError> {
+        validate_size(width, height, density, self.max_dimension)?;
+        let mut renderer = WgpuRenderer::with_text_system(self.text_system.clone());
+        renderer.set_root_scale(density);
+        renderer.set_transparent_background(true);
+        renderer.init_gpu(GpuTarget::on_adapter(
+            &self.gpu.adapter,
+            std::sync::Arc::clone(&self.gpu.device),
+            std::sync::Arc::clone(&self.gpu.queue),
+            self.format,
+        ));
+        self.shell.add_window_surface(
+            root,
+            renderer,
+            (width, height),
+            (width as f32 / density, height as f32 / density),
+        );
+        Ok(())
+    }
+
+    /// Takes the view of the window root `root` away.
+    pub fn close_window(&mut self, root: NodeId) {
+        self.shell.remove_window_surface(root);
+    }
+
+    /// Advances the composition and draws the window root `root` into `texture` through `view`,
+    /// whatever changed. The texture has the size that [`Self::open_window`] was given and the
+    /// format of the view.
+    ///
+    /// With `depth`, the root's 3D scenes draw against it and leave their depth in it: a view of
+    /// a texture of [`SCENE_DEPTH_FORMAT`](cranpose_render_wgpu::SCENE_DEPTH_FORMAT) of the same
+    /// size, with the render attachment usage. A scene's camera and the states its graphics
+    /// layers read apply to the next draw, so one composition drawn twice with a state set
+    /// between the draws shows two views of the same content, such as the two eyes of a headset.
+    pub fn draw_window(
+        &mut self,
+        root: NodeId,
+        texture: &wgpu::Texture,
+        view: &wgpu::TextureView,
+        depth: Option<&wgpu::TextureView>,
+    ) -> Result<(), GuestViewError> {
+        self.shell.update();
+        let mut surface = self.shell.surface(RootId::Window(root)).ok_or_else(|| {
+            GuestViewError::Render(format!("no view for the window root {root:?}"))
+        })?;
+        let size = (texture.width(), texture.height());
+        let renderer = surface.renderer();
+        match depth {
+            Some(depth) => renderer.render_with_scene_depth(texture, view, depth, size),
+            None => renderer.render(texture, view, size.0, size.1),
+        }
+        .map_err(|error| GuestViewError::Render(format!("{error:?}")))
     }
 }
 

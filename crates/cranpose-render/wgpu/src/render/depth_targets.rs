@@ -13,6 +13,9 @@ pub(crate) struct DepthTargets {
     interior: IdlePool<((u32, u32), wgpu::TextureView)>,
     // The depth and stencil targets scenes' passes drew against.
     scene: IdlePool<((u32, u32), wgpu::TextureView)>,
+    // The depth and stencil a host gave for the frame that draws now, whose scenes draw against it
+    // and leave their depth in it.
+    hosted_scene: Option<((u32, u32), wgpu::TextureView)>,
 }
 
 impl DepthTargets {
@@ -32,9 +35,26 @@ impl DepthTargets {
         view
     }
 
-    // The depth and stencil a scene's pass draws against at `size`, kept
-    // for the next frames of the same size.
-    pub(crate) fn scene(&mut self, device: &wgpu::Device, size: (u32, u32)) -> wgpu::TextureView {
+    // Has the scenes of the next frame draw against `depth`, a view of `size` that the host owns,
+    // so that the host reads the depth they leave. `None` goes back to targets of the renderer's
+    // own, which the passes drop.
+    pub(crate) fn host_scene(&mut self, hosted: Option<((u32, u32), wgpu::TextureView)>) {
+        self.hosted_scene = hosted;
+    }
+
+    // The depth and stencil a scene's pass draws against at `size`, and whether the pass keeps its
+    // depth: the host's view when it has the size, else a target of the renderer's own, kept for
+    // the next frames of the same size.
+    pub(crate) fn scene(
+        &mut self,
+        device: &wgpu::Device,
+        size: (u32, u32),
+    ) -> (wgpu::TextureView, bool) {
+        if let Some((hosted, view)) = &self.hosted_scene
+            && *hosted == size
+        {
+            return (view.clone(), true);
+        }
         let view = match self.scene.take(|(kept, _)| *kept == size) {
             Some((_, view)) => view,
             None => transient_attachment(
@@ -45,7 +65,7 @@ impl DepthTargets {
         };
         self.scene
             .put((size, view.clone()), KEPT_SCENE_TARGETS, u64::MAX, |_| 0);
-        view
+        (view, false)
     }
 
     pub(super) fn end_frame(&mut self) {
