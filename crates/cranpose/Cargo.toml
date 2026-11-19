@@ -228,6 +228,8 @@ renderer-wgpu = [
     "dep:objc2",
     "dep:objc2-core-foundation",
     "dep:objc2-core-video",
+    "objc2-core-video/CVPixelBufferIOSurface",
+    "objc2-core-video/objc2-io-surface",
     "dep:objc2-io-surface",
     "dep:objc2-metal",
 ]
@@ -612,11 +614,9 @@ objc2-core-video = { version = "0.3", default-features = false, optional = true,
     "std",
     "CVBase",
     "CVPixelBuffer",
-    "CVPixelBufferIOSurface",
     "CVImageBuffer",
     "CVBuffer",
     "CVReturn",
-    "objc2-io-surface",
 ] }
 wgpu = { workspace = true, optional = true, features = [
     "std",
@@ -750,11 +750,9 @@ objc2-core-video = { version = "0.3", default-features = false, optional = true,
     "std",
     "CVBase",
     "CVPixelBuffer",
-    "CVPixelBufferIOSurface",
     "CVImageBuffer",
     "CVBuffer",
     "CVReturn",
-    "objc2-io-surface",
 ] }
 objc2-user-notifications = { version = "0.3", default-features = false, optional = true, features = [
     "std",
