@@ -161,7 +161,9 @@ scene pass can leave its depth in a view that the host gives it
 the format that the scene's pipelines draw against, `Depth24PlusStencil8`, which is
 `GL_DEPTH24_STENCIL8` on GLES. The scene's depth is `1 - near / z` for a point at distance `z`
 along the eye's axis: 0 at the near plane and 1 at infinity. The layer's depth info therefore says
-`nearZ` is the camera's near plane in meters and `farZ` is infinite, which the extension allows.
+`nearZ` is the camera's near plane in meters and `farZ` is 10 km. The extension allows an infinite
+`farZ`, and a plane 10 km away gives the same depth to a part in a million, so no runtime has an
+infinity to mishandle.
 Wgpu maps `Depth24PlusStencil8` to one of two Vulkan formats by the driver and offers no query that
 says which, so a Vulkan headset has no depth swapchain and submits none. A runtime that offers no
 depth swapchain format submits none either. The picture still shows.

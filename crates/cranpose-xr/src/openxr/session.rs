@@ -77,6 +77,11 @@ pub(crate) enum LayerSource {
     Surface(EyeView),
 }
 
+// The far plane that a layer's depth names, in meters. The scene's depth is that of a far plane at
+// infinity, which the extension allows. A finite plane this far away differs from it by a part in
+// a million, and a runtime has no infinity to mishandle.
+const DEPTH_FAR_Z: f32 = 10_000.0;
+
 // The depth of one eye's picture: a swapchain image that holds `1 - near / z` for a point at
 // distance `z` along the eye's axis, which is the depth of a camera whose far plane is infinite.
 pub(crate) struct EyeDepth<'a> {
@@ -123,7 +128,6 @@ impl ProjectionEye<'_> {
     }
 
     // The struct that ties the eye's depth to its view, which the view's `next` pointer must name.
-    // The far plane is at infinity, which `XR_KHR_composition_layer_depth` allows.
     fn depth_to_raw(&self) -> Option<xr::sys::CompositionLayerDepthInfoKHR> {
         let depth = self.depth.as_ref()?;
         Some(xr::sys::CompositionLayerDepthInfoKHR {
@@ -137,7 +141,7 @@ impl ProjectionEye<'_> {
             min_depth: 0.0,
             max_depth: 1.0,
             near_z: depth.near,
-            far_z: f32::INFINITY,
+            far_z: DEPTH_FAR_Z,
         })
     }
 }
