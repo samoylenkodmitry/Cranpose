@@ -42,6 +42,9 @@ impl Runtime {
         tracking::ask_before_session(host, enabled);
         Graphics::require(&available, &mut extensions)?;
         host.require(&available, &mut extensions);
+        if !host.await_activity(&available) {
+            return Err("the activity ended before the runtime started".into());
+        }
         log::info!(
             "cranpose xr: cylinder layers {}, passthrough extension {}",
             extensions.khr_composition_layer_cylinder,
