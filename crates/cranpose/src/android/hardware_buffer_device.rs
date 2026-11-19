@@ -38,16 +38,8 @@ pub(crate) fn android_device(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<
 pub(crate) fn request_device(
     adapter: &wgpu::Adapter,
 ) -> Result<(wgpu::Device, wgpu::Queue), wgpu::RequestDeviceError> {
-    let descriptor = android_device(adapter);
-    if let Some(opened) = open_importing(adapter, &descriptor) {
-        // SAFETY: the device was opened on this adapter with the features and the limits that the
-        // descriptor names.
-        match unsafe { adapter.create_device_from_hal(opened, &descriptor) } {
-            Ok(device) => return Ok(device),
-            Err(error) => log::warn!("android video import: wgpu took no device: {error}"),
-        }
-    }
-    pollster::block_on(adapter.request_device(&descriptor))
+    // Diagnostic: the plain request of v0.26.0, with no import extensions.
+    pollster::block_on(adapter.request_device(&android_device(adapter)))
 }
 
 fn open_importing(
