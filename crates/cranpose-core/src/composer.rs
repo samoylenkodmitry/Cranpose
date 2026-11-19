@@ -30,7 +30,7 @@ mod subcompose_slot;
 mod subcompose_stack;
 pub use composable_group::{ComposableGroup, ParameterChange};
 pub(crate) use movable::PendingMovable;
-use movable::movable_retain_key;
+use movable::{GroupEntry, movable_retain_key};
 use movable_owners::MovableOwners;
 use parent_frame::{InitialParentFrame, push_root_frame};
 pub(crate) use parent_frame::{ParentAttachMode, ParentFrame};
@@ -1125,7 +1125,14 @@ impl Composer {
             let top = stack.len().checked_sub(1);
             top.map(|top| self.frame_scope(&mut stack, top).id())
         };
-        self.begin_resolved_group(host, seed, parent_scope_id, parent_node)
+        let GroupEntry {
+            key,
+            restored,
+            placeholder_for,
+        } = self.resolve_group_entry(host, seed, parent_scope_id);
+        let started =
+            host.with_write_session(|slots| slots.begin_group(key, restored, parent_node));
+        (started, placeholder_for)
     }
 
     #[doc(hidden)]
@@ -1169,10 +1176,6 @@ impl Composer {
         parent_scope: Option<ScopeId>,
         subtree: crate::slot::DetachedSubtree,
     ) -> Result<(), NodeError> {
-        self.core
-            .shared_state
-            .movable_owners
-            .forget_attached_in_subtree(&subtree, slots_host.storage_key());
         let Some(root_key) = subtree.root_key_checked() else {
             log::error!("retention rejected detached subtree without a root group");
             self.dispose_detached_subtree_in_host(slots_host, subtree)?;
@@ -1216,10 +1219,6 @@ impl Composer {
         slots_host: &Rc<SlotsHost>,
         subtree: crate::slot::DetachedSubtree,
     ) -> Result<(), NodeError> {
-        self.core
-            .shared_state
-            .movable_owners
-            .forget_attached_in_subtree(&subtree, slots_host.storage_key());
         let root_nodes = self
             .detached_root_parent_commands(&subtree, "disposal")?
             .into_iter()

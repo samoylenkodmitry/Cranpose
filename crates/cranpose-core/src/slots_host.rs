@@ -157,9 +157,6 @@ impl SlotsHost {
 
     pub(crate) fn bind_runtime_state(&self, state: &Rc<composer::ComposerRuntimeState>) {
         let mut inner = self.inner.borrow_mut();
-        state
-            .movable_owners
-            .note_attached_in_table(&inner.table, self.storage_key());
         inner.runtime_state = Some(Rc::clone(state));
     }
 
@@ -193,9 +190,6 @@ impl SlotsHost {
                 return false;
             }
             let Some(bound_state) = inner.runtime_state.as_ref() else {
-                state
-                    .movable_owners
-                    .note_attached_in_table(&inner.table, self.storage_key());
                 inner.runtime_state = Some(Rc::clone(state));
                 return true;
             };
@@ -225,7 +219,6 @@ impl SlotsHost {
                 "orphaned runtime state must not have a live applier host"
             );
             previous_state.clear_host(self, table);
-            state.movable_owners.note_attached_in_table(table, host_key);
             *runtime_state = Some(Rc::clone(state));
             std::mem::take(lifecycle)
         };

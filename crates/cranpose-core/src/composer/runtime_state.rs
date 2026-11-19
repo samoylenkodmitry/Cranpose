@@ -50,7 +50,7 @@ impl ComposerRuntimeState {
         self.retention_by_host.borrow_mut().remove(&host_key);
         self.pending_movables_by_host.borrow_mut().remove(&host_key);
         self.live_hosts.borrow_mut().remove(&host_key);
-        self.movable_owners.forget_host(host_key, table);
+        self.movable_owners.forget_host(table);
         table.release_scopes();
     }
 
@@ -225,17 +225,11 @@ impl ComposerRuntimeState {
 
     /// The slot table a movable's content is attached to right now, if any.
     pub(crate) fn host_holding_movable(&self, id: Key) -> Option<Rc<SlotsHost>> {
-        let host_key = self.movable_owners.attached_host_key(id)?;
-        let Some(host) = self.host_for_storage_key(host_key) else {
-            self.movable_owners.forget_stale_attached(id, host_key);
-            return None;
-        };
-        if host.borrow().movable_is_attached(id) {
-            Some(host)
-        } else {
-            self.movable_owners.forget_stale_attached(id, host_key);
-            None
-        }
+        self.live_hosts
+            .borrow()
+            .values()
+            .filter_map(Weak::upgrade)
+            .find(|host| host.borrow().movable_is_attached(id))
     }
 
     pub(crate) fn record_pending_movable(&self, host: &Rc<SlotsHost>, pending: PendingMovable) {
@@ -470,8 +464,6 @@ impl ComposerRuntimeState {
         if let Some(retention) = self.retention_by_host.borrow().get(&host.storage_key()) {
             retention.debug_verify(table);
         }
-        self.movable_owners
-            .debug_verify_host(host.storage_key(), table);
     }
 
     #[cfg(test)]

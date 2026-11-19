@@ -8,11 +8,11 @@ use crate::{
     retention::RetainKey,
 };
 
-struct GroupEntry {
-    key: crate::slot::GroupKey,
+pub(super) struct GroupEntry {
+    pub(super) key: crate::slot::GroupKey,
     // Boxed: a restore is rare, and the entry moves on every call.
-    restored: Option<Box<crate::slot::DetachedSubtree>>,
-    placeholder_for: Option<crate::slot::GroupKey>,
+    pub(super) restored: Option<Box<crate::slot::DetachedSubtree>>,
+    pub(super) placeholder_for: Option<crate::slot::GroupKey>,
 }
 
 pub(super) fn movable_retain_key(id: Key) -> RetainKey {
@@ -147,42 +147,7 @@ impl Composer {
         Ok(())
     }
 
-    pub(super) fn begin_resolved_group(
-        &self,
-        host: &Rc<SlotsHost>,
-        seed: crate::slot::GroupKeySeed,
-        parent_scope_id: Option<ScopeId>,
-        parent_node: Option<crate::NodeId>,
-    ) -> (
-        crate::slot::GroupStart<crate::slot::ActiveGroupId>,
-        Option<crate::slot::GroupKey>,
-    ) {
-        let GroupEntry {
-            key,
-            restored,
-            placeholder_for,
-        } = self.resolve_group_entry(host, seed, parent_scope_id);
-        let host_key = host.storage_key();
-        if let Some(subtree) = restored.as_deref() {
-            self.core
-                .shared_state
-                .movable_owners
-                .note_attached_in_subtree(subtree, host_key);
-        }
-        if placeholder_for.is_none()
-            && let Some(id) = key.movable_id()
-        {
-            self.core
-                .shared_state
-                .movable_owners
-                .note_attached(id, host_key);
-        }
-        let started =
-            host.with_write_session(|slots| slots.begin_group(key, restored, parent_node));
-        (started, placeholder_for)
-    }
-
-    fn resolve_group_entry(
+    pub(super) fn resolve_group_entry(
         &self,
         host: &Rc<SlotsHost>,
         seed: crate::slot::GroupKeySeed,
