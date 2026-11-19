@@ -44,7 +44,7 @@ wall-t20-start   group:other                  0.31       0.00
 patchwork-t17    malloc                    8751.95       3.58
 patchwork-t17    realloc                     32.17       0.20
 patchwork-t17    live                       206.17       6.27
-patchwork-t17    copied                     665879      28084
+patchwork-t17    copied                     676837      28084
 patchwork-t17    realloc_bytes               36077       6256
 gauntlet-t16     malloc                    1436.80       0.55
 gauntlet-t16     realloc                     37.70       0.02
