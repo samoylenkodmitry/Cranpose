@@ -218,3 +218,37 @@ fn availability_follows_the_permission_of_one_feature_and_leaves_the_others() {
         start.availability(TrackingFeature::Face)
     );
 }
+
+#[test]
+fn a_feature_is_offered_by_any_extension_that_supplies_it_and_not_by_an_extension_that_extends_it()
+{
+    let offers = |offer: ExtensionOffer, feature| offer.offers(feature);
+    let android_face = ExtensionOffer {
+        android_face_tracking: true,
+        ..NOTHING
+    };
+    assert!(offers(android_face, TrackingFeature::Face));
+    let social = ExtensionOffer {
+        eye_tracking_social: true,
+        ..NOTHING
+    };
+    assert!(offers(social, TrackingFeature::Eyes));
+    // The aim and the full body extend hand tracking and body tracking and supply nothing alone
+    let extensions_only = ExtensionOffer {
+        hand_tracking_aim: true,
+        full_body_tracking: true,
+        ..NOTHING
+    };
+    assert!(!offers(extensions_only, TrackingFeature::Hands));
+    assert!(!offers(extensions_only, TrackingFeature::Body));
+    assert!(
+        TrackingFeature::ALL
+            .into_iter()
+            .all(|feature| !offers(NOTHING, feature))
+    );
+    assert!(
+        TrackingFeature::ALL
+            .into_iter()
+            .all(|feature| offers(quest_list(), feature))
+    );
+}
