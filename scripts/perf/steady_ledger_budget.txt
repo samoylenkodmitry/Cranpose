@@ -23,6 +23,8 @@
 # The rows of wall-t20, patchwork-t17, gauntlet-t16, gauntlet-t12, feed,
 # ticker, layers and dashboard come from one run at the head of #2406, the
 # text cache that keeps returning texts, on main 268b97781; spreads as before.
+# patchwork-t17 copied is lower by the 10,958 B a frame that the word split's
+# list of spaces cut, measured by A/B on main 831d1b8d2.
 # row             metric                    budget     spread   (3 runs)
 wall-t20         malloc                       2.02       0.00
 wall-t20         realloc                      0.13       0.00
@@ -44,7 +46,7 @@ wall-t20-start   group:other                  0.31       0.00
 patchwork-t17    malloc                    8751.95       3.58
 patchwork-t17    realloc                     32.17       0.20
 patchwork-t17    live                       206.17       6.27
-patchwork-t17    copied                     676837      28084
+patchwork-t17    copied                     665879      28084
 patchwork-t17    realloc_bytes               36077       6256
 gauntlet-t16     malloc                    1436.80       0.55
 gauntlet-t16     realloc                     37.70       0.02

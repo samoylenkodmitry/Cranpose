@@ -56,6 +56,36 @@ impl GlyphSet {
     }
 }
 
+// The glyphs a space is and becomes: a font has a few. A walk reads them for
+// each glyph of a coverage, where `IntSet::iter` builds an iterator of some
+// 270 bytes by value for each read. No walk depends on their order.
+struct Spaces(Vec<GlyphId>);
+
+impl Spaces {
+    fn of(space: GlyphId) -> Self {
+        let mut glyphs = Vec::with_capacity(4);
+        glyphs.push(space);
+        Self(glyphs)
+    }
+
+    // Whether `glyph` was new.
+    fn insert(&mut self, glyph: GlyphId) -> bool {
+        let new = !self.contains(glyph);
+        if new {
+            self.0.push(glyph);
+        }
+        new
+    }
+
+    fn contains(&self, glyph: GlyphId) -> bool {
+        self.0.contains(&glyph)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = GlyphId> + '_ {
+        self.0.iter().copied()
+    }
+}
+
 // The glyphs some lookup reads together with a space on one side of it.
 #[derive(Default)]
 struct Side {
@@ -112,8 +142,7 @@ fn space_sides(
     scripts: &[Tag],
     sides: &mut Sides,
 ) -> Option<()> {
-    let mut spaces = IntSet::empty();
-    spaces.insert(space);
+    let mut spaces = Spaces::of(space);
     let features = everything();
     if let Ok(gsub) = font.gsub()
         && let Some(lookups) = ScriptLookups::substitutions(&gsub, scripts, &features).ok()?
@@ -135,7 +164,7 @@ fn space_sides(
 // `subtable_sides` finds, so what its nested lookups make of a space never
 // decides a split. `None` for a format this does not follow.
 #[inline(never)]
-fn close_spaces(lookups: &ScriptLookups<'_>, spaces: &mut IntSet<GlyphId>) -> Option<()> {
+fn close_spaces(lookups: &ScriptLookups<'_>, spaces: &mut Spaces) -> Option<()> {
     let mut found = Vec::new();
     loop {
         lookups.each(&mut |_, subtable| {
@@ -144,11 +173,11 @@ fn close_spaces(lookups: &ScriptLookups<'_>, spaces: &mut IntSet<GlyphId>) -> Op
             }
             Some(())
         })?;
-        let known = spaces.len();
+        let mut grown = false;
         for glyph in found.drain(..) {
-            spaces.insert(glyph);
+            grown |= spaces.insert(glyph);
         }
-        if spaces.len() == known {
+        if !grown {
             return Some(());
         }
     }
@@ -160,7 +189,7 @@ fn close_spaces(lookups: &ScriptLookups<'_>, spaces: &mut IntSet<GlyphId>) -> Op
 fn substitutes(
     subtable: &LookupSubtable<'_>,
     space: GlyphId,
-    spaces: &IntSet<GlyphId>,
+    spaces: &Spaces,
     found: &mut Vec<GlyphId>,
 ) -> Option<()> {
     match subtable {
@@ -219,7 +248,7 @@ fn single_substitutes(
 fn ligature_substitutes(
     format: &LigatureSubstFormat1<'_>,
     space: GlyphId,
-    spaces: &IntSet<GlyphId>,
+    spaces: &Spaces,
     found: &mut Vec<GlyphId>,
 ) -> Option<()> {
     let Some(at) = format.coverage().ok()?.get(space) else {
@@ -251,11 +280,7 @@ fn push_glyphs(found: &mut Vec<GlyphId>, glyphs: &[BigEndian<GlyphId16>]) {
 // The sides on which `subtable` reads `spaces`; `None` when it reads them
 // on both sides, in a context, or in a format this does not read.
 #[inline(never)]
-fn subtable_sides(
-    subtable: LookupSubtable<'_>,
-    spaces: &IntSet<GlyphId>,
-    sides: &mut Sides,
-) -> Option<()> {
+fn subtable_sides(subtable: LookupSubtable<'_>, spaces: &Spaces, sides: &mut Sides) -> Option<()> {
     match subtable {
         // These change the space alone; the closure follows what it becomes.
         LookupSubtable::Single(_)
@@ -301,11 +326,7 @@ fn subtable_sides(
 // A ligature reads a space it starts with the glyphs after it, and a space
 // among its other components with the glyphs before it. The other format
 // names glyphs past 65,535, which this does not read.
-fn ligature_sides(
-    subtable: &LigatureSubst<'_>,
-    spaces: &IntSet<GlyphId>,
-    sides: &mut Sides,
-) -> Option<()> {
+fn ligature_sides(subtable: &LigatureSubst<'_>, spaces: &Spaces, sides: &mut Sides) -> Option<()> {
     let LigatureSubst::Format1(subtable) = subtable else {
         return None;
     };
@@ -323,10 +344,7 @@ fn ligature_sides(
     Some(())
 }
 
-fn reverse_mentions(
-    subtable: &ReverseChainSingleSubst<'_>,
-    spaces: &IntSet<GlyphId>,
-) -> Option<bool> {
+fn reverse_mentions(subtable: &ReverseChainSingleSubst<'_>, spaces: &Spaces) -> Option<bool> {
     let ReverseChainSingleSubst::Format1(subtable) = subtable else {
         return Some(true);
     };
@@ -344,7 +362,7 @@ fn reverse_mentions(
 fn attachment_sides(
     base: Result<CoverageTable<'_>, ReadError>,
     mark: Result<CoverageTable<'_>, ReadError>,
-    spaces: &IntSet<GlyphId>,
+    spaces: &Spaces,
     sides: &mut Sides,
 ) -> Option<()> {
     sides.after.any |= covers(&base.ok()?, spaces);
@@ -355,7 +373,7 @@ fn attachment_sides(
 // The glyphs a pair adjustment moves with a space: a glyph first in a pair
 // with the space second is read with the space after it; a glyph second in
 // a pair with the space first, with the space before it.
-fn pair_sides(subtable: &PairPos<'_>, spaces: &IntSet<GlyphId>, sides: &mut Sides) -> Option<()> {
+fn pair_sides(subtable: &PairPos<'_>, spaces: &Spaces, sides: &mut Sides) -> Option<()> {
     match subtable {
         PairPos::Format1(format) => glyph_pair_sides(format, spaces, sides),
         PairPos::Format2(format) => class_pair_sides(format, spaces, sides),
@@ -364,11 +382,7 @@ fn pair_sides(subtable: &PairPos<'_>, spaces: &IntSet<GlyphId>, sides: &mut Side
 }
 
 #[inline(never)]
-fn glyph_pair_sides(
-    format: &PairPosFormat1<'_>,
-    spaces: &IntSet<GlyphId>,
-    sides: &mut Sides,
-) -> Option<()> {
+fn glyph_pair_sides(format: &PairPosFormat1<'_>, spaces: &Spaces, sides: &mut Sides) -> Option<()> {
     let sets = format.pair_sets();
     for (at, first) in format.coverage().ok()?.iter().enumerate() {
         let records = sets.get(at).ok()?.pair_value_records();
@@ -420,11 +434,7 @@ fn pair_moves(record: &PairValueRecord<'_>) -> bool {
 }
 
 #[inline(never)]
-fn class_pair_sides(
-    format: &PairPosFormat2<'_>,
-    spaces: &IntSet<GlyphId>,
-    sides: &mut Sides,
-) -> Option<()> {
+fn class_pair_sides(format: &PairPosFormat2<'_>, spaces: &Spaces, sides: &mut Sides) -> Option<()> {
     let coverage = format.coverage().ok()?;
     let (firsts, seconds) = (format.class_def1().ok()?, format.class_def2().ok()?);
     let rows = format.class1_records();
@@ -517,12 +527,12 @@ pub(crate) fn moves(record: &ValueRecord<'_>) -> bool {
         || record.y_advance_device().is_some()
 }
 
-fn covers(coverage: &CoverageTable<'_>, spaces: &IntSet<GlyphId>) -> bool {
+fn covers(coverage: &CoverageTable<'_>, spaces: &Spaces) -> bool {
     spaces.iter().any(|glyph| coverage.get(glyph).is_some())
 }
 
 // The classes `classes` gives the spaces.
-fn classes_of(classes: &ClassDef<'_>, spaces: &IntSet<GlyphId>) -> IntSet<u16> {
+fn classes_of(classes: &ClassDef<'_>, spaces: &Spaces) -> IntSet<u16> {
     let mut set = IntSet::empty();
     for space in spaces.iter() {
         set.insert(u16::try_from(classes.get(space)).unwrap_or(u16::MAX));
@@ -532,7 +542,7 @@ fn classes_of(classes: &ClassDef<'_>, spaces: &IntSet<GlyphId>) -> IntSet<u16> {
 
 fn glyphs_mention<'a>(
     glyphs: impl IntoIterator<Item = &'a BigEndian<GlyphId16>>,
-    spaces: &IntSet<GlyphId>,
+    spaces: &Spaces,
 ) -> bool {
     glyphs
         .into_iter()
@@ -549,7 +559,7 @@ fn classes_mention<'a>(
 }
 
 // Whether a contextual lookup reads a space anywhere in its sequences.
-fn context_mentions(context: &SequenceContext<'_>, spaces: &IntSet<GlyphId>) -> Option<bool> {
+fn context_mentions(context: &SequenceContext<'_>, spaces: &Spaces) -> Option<bool> {
     match context {
         SequenceContext::Format1(format) => {
             if covers(&format.coverage().ok()?, spaces) {
@@ -585,10 +595,7 @@ fn context_mentions(context: &SequenceContext<'_>, spaces: &IntSet<GlyphId>) -> 
 
 // Whether a chained contextual lookup reads a space anywhere in its
 // backtrack, input or lookahead.
-fn chained_context_mentions(
-    context: &ChainedSequenceContext<'_>,
-    spaces: &IntSet<GlyphId>,
-) -> Option<bool> {
+fn chained_context_mentions(context: &ChainedSequenceContext<'_>, spaces: &Spaces) -> Option<bool> {
     match context {
         ChainedSequenceContext::Format1(format) => {
             if covers(&format.coverage().ok()?, spaces) {
@@ -626,7 +633,7 @@ fn chained_context_mentions(
 
 fn chained_classes_mention(
     format: &ChainedSequenceContextFormat2<'_>,
-    spaces: &IntSet<GlyphId>,
+    spaces: &Spaces,
 ) -> Option<bool> {
     if covers(&format.coverage().ok()?, spaces) {
         return Some(true);
@@ -658,7 +665,7 @@ fn chained_classes_mention(
 
 fn coverages_mention<'a>(
     coverages: impl Iterator<Item = Result<CoverageTable<'a>, ReadError>>,
-    spaces: &IntSet<GlyphId>,
+    spaces: &Spaces,
 ) -> Option<bool> {
     for coverage in coverages {
         if covers(&coverage.ok()?, spaces) {
@@ -672,3 +679,7 @@ fn coverages_mention<'a>(
 pub(crate) fn class_index(class: u32) -> usize {
     usize::try_from(class).unwrap_or(usize::MAX)
 }
+
+#[cfg(test)]
+#[path = "tests/word_split_tests.rs"]
+mod tests;
