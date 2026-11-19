@@ -2,6 +2,13 @@
 
 // What the user answered for one group of alternative permissions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(any(test, target_os = "android")),
+    expect(
+        dead_code,
+        reason = "only the Android host gets answers other than a grant"
+    )
+)]
 pub(crate) enum PermissionAnswer {
     NotAsked,
     Granted,

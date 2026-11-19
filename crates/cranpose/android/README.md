@@ -111,6 +111,17 @@ source of each entry.
 sensors on a thread of its own, and the normal `HIGH_SAMPLING_RATE_SENSORS`
 permission that lifts the 200 Hz cap of Android 12 and newer.
 
+`Use::hand_tracking()`, `Use::body_tracking()`, `Use::face_tracking()` and `Use::eye_tracking()`
+select `CranposePermissions`, which `cranpose::android_permission` and
+`cranpose::request_android_permissions` call for the permissions that differ between headsets, and
+write the permissions of each headset into the manifest: `com.oculus.permission.*` and
+`horizonos.permission.*` for a Meta Quest and `android.permission.*` for Android XR, each ignored
+by the other. `Use::face_tracking()` adds
+`RECORD_AUDIO`, which a Quest 3 needs to estimate the face from speech. Each also names an optional
+Oculus feature (`oculus.software.handtracking`, `com.oculus.software.body_tracking`,
+`oculus.software.face_tracking` and `oculus.software.eye_tracking`) as not required. They are the
+declarations `cranpose-xr` reads to enable the OpenXR extension of the same name.
+
 `Use::update()` also selects the package installer, its receiver and
 `REQUEST_INSTALL_PACKAGES`. The launcher registers the updater when the declared
 capabilities include updates.

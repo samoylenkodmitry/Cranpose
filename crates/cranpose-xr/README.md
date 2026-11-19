@@ -196,6 +196,59 @@ SpatialFrameEffect(move |frame| {
 });
 ```
 
+## Hands, body, face and eyes
+
+An app that wants the user's hands, body, face or eyes asks for them in its build script, with the
+services of `cranpose::capabilities`, and hands the declaration to its launcher:
+
+```rust,ignore
+// build.rs
+use cranpose_capabilities::{Use, declare};
+
+fn main() {
+    declare(&[Use::hand_tracking(), Use::face_tracking()]).emit();
+}
+
+// lib.rs
+cranpose::app_capabilities!();
+
+cranpose_xr::android_main! {
+    launcher: cranpose::AppLauncher::new().with_capabilities(&CAPABILITIES),
+    content: App,
+}
+```
+
+`Use::hand_tracking()`, `Use::body_tracking()`, `Use::face_tracking()` and `Use::eye_tracking()`
+each enable the OpenXR extensions of their kind that the runtime offers, create the trackers once
+the user grants the permissions, and add those permissions to the Android manifest. An app that
+asks for none enables no extension, creates no tracker, makes no call in a frame and adds no
+permission. OpenXR fixes the extensions when the instance is made, before the content composes, so
+a modifier or a composable cannot ask. Jetpack XR asks at run time, with `Session.configure`.
+
+Each frame's `XrFrame` then holds fixed-size arrays that the backend fills in place:
+
+| Field | Holds | OpenXR |
+|---|---|---|
+| `left_hand`, `right_hand`, `hand(Hand)` | a `HandState`: a `TrackingState`, 26 `HandJoint`s at the index of each `HandJointType`, and a `HandAim` with the pinch of each finger | `XR_EXT_hand_tracking`, `XR_FB_hand_tracking_aim` |
+| `body` | a `BodyState`: 70 or 84 `BodyJoint`s at the index of each `BodyJointType`, and a confidence | `XR_FB_body_tracking`, `XR_META_body_tracking_full_body` |
+| `face` | a `FaceState` with Jetpack XR's names: a weight for each `FaceBlendShapeType`, and a confidence for each `FaceConfidenceRegion` | `XR_ANDROID_face_tracking`, or the shared shapes of `XR_FB_face_tracking2` |
+| `meta_face` | a `MetaFaceState` with Meta's names: a weight for each of its 70 `FaceExpression`s, its confidences and its `FaceDataSource`, which is `Audio` on a Quest 3 | `XR_FB_face_tracking2` |
+| `eyes` | `Eyes`: an `EyeState` for each eye, and a combined gaze pose | `XR_FB_eye_tracking_social`, `XR_EXT_eye_gaze_interaction` |
+| `tracking` | the live `TrackingCapabilities` | |
+
+`local_tracking_capabilities()` gives the `TrackingCapabilities` of the session's start, in the
+pattern of `local_spatial_capabilities()`: for each `TrackingFeature` an `availability()` of
+`Unavailable`, `Offered`, `AwaitingPermission`, `PermissionRefused` or `Active`, and which extension
+supplies what. A feature that the app did not ask for is `Offered` when the runtime lists an
+extension for it. Nothing is enabled then, so the list cannot tell whether the headset has the
+sensor. A feature that the app asked for gets the system's answer, so a Quest 3 reports its eyes as
+`Unavailable`. `XrFrame::tracking` follows the permissions that the user grants.
+
+On a Meta Quest the face and eyes need the user's permission, and a Quest 3 estimates the face from
+the microphone, so `Use::face_tracking()` adds `RECORD_AUDIO`. The system's prompt shows once, from
+the first frame. The backend looks at the answer once a second while a feature waits, and not
+again after the user grants or refuses.
+
 ## Streamed scenes
 
 `StreamedScene` shows frames that another machine rendered for both eyes. The app decodes the

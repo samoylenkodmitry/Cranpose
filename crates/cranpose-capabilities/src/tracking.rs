@@ -14,18 +14,21 @@ pub(crate) struct Tracking {
     pub(crate) features: &'static [&'static str],
 }
 
-// One APK serves every headset: Horizon OS on a Meta Quest reads the `com.oculus.permission` names,
-// Android XR the `android.permission` ones, and each ignores the other's. The Quest asks nobody for
-// the body permission and the hand permission, and the others show a prompt. A Quest 3 estimates
-// the face from the microphone, so the face adds RECORD_AUDIO.
+// One APK serves every headset: Horizon OS on a Meta Quest defines the `com.oculus.permission` names
+// and, for hands, face and eyes, the same permissions as `horizonos.permission` names. Android XR
+// defines the `android.permission` ones. Each ignores the other's. The Quest asks nobody for the
+// hand and body permissions and shows a prompt for the face and the eyes. A Quest 3 estimates the
+// face from the microphone, so the face adds RECORD_AUDIO.
 const HANDS: Tracking = Tracking {
     name: "hand-tracking",
     permissions: &[
         "android.permission.HAND_TRACKING",
         "com.oculus.permission.HAND_TRACKING",
+        "horizonos.permission.HAND_TRACKING",
     ],
     groups: &[&[
         "com.oculus.permission.HAND_TRACKING",
+        "horizonos.permission.HAND_TRACKING",
         "android.permission.HAND_TRACKING",
     ]],
     features: &["oculus.software.handtracking"],
@@ -50,10 +53,12 @@ const FACE: Tracking = Tracking {
         "android.permission.FACE_TRACKING",
         "android.permission.RECORD_AUDIO",
         "com.oculus.permission.FACE_TRACKING",
+        "horizonos.permission.FACE_TRACKING",
     ],
     groups: &[
         &[
             "com.oculus.permission.FACE_TRACKING",
+            "horizonos.permission.FACE_TRACKING",
             "android.permission.FACE_TRACKING",
         ],
         &["android.permission.RECORD_AUDIO"],
@@ -66,9 +71,11 @@ const EYES: Tracking = Tracking {
     permissions: &[
         "android.permission.EYE_TRACKING_FINE",
         "com.oculus.permission.EYE_TRACKING",
+        "horizonos.permission.EYE_TRACKING",
     ],
     groups: &[&[
         "com.oculus.permission.EYE_TRACKING",
+        "horizonos.permission.EYE_TRACKING",
         "android.permission.EYE_TRACKING_FINE",
     ]],
     features: &["oculus.software.eye_tracking"],

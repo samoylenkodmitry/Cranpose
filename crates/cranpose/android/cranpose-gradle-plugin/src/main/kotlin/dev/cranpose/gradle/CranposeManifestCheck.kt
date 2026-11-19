@@ -74,6 +74,8 @@ internal data class RustDeclaration(
     val services: List<String>,
     val permissions: List<String>,
     val demands: List<String>,
+    /** Features the declared services name, which the manifest carries as not required. */
+    val features: List<String> = emptyList(),
     val opens: List<String>,
     /** The URL schemes of the links that open the application. */
     val links: List<String> = emptyList(),
@@ -101,6 +103,7 @@ internal fun readRustDeclaration(declaration: ConfigurableFileCollection): RustD
         }.distinct(),
         permissions = declarations.flatMap { names(it["permissions"]) }.distinct(),
         demands = declarations.flatMap { names(it["demands"]) }.distinct(),
+        features = declarations.flatMap { names(it["features"]) }.distinct(),
         opens = declarations.flatMap { names(it["opens"]) }.distinct(),
         links = declarations.flatMap { names(it["links"]) }.distinct(),
         permissionsUpTo = declarations.flatMap { parsed ->
@@ -147,6 +150,7 @@ internal fun planFeatures(
     declared: List<FeatureLine>,
     wanted: Set<String>,
     demanded: Set<String> = emptySet(),
+    optional: Set<String> = emptySet(),
 ): FeaturePlan {
     val reasons = mutableMapOf<String, String>()
     for (permission in permissions) {
@@ -156,7 +160,7 @@ internal fun planFeatures(
     }
 
     val names = declared.map(FeatureLine::name).toSet()
-    val missing = (reasons.keys + demanded)
+    val missing = (reasons.keys + demanded + optional)
         .filterNot(names::contains)
         .sorted()
         .map { name -> FeatureLine(name, wanted.contains(name)) }
@@ -470,6 +474,7 @@ abstract class CranposeManifestCheck : DefaultTask() {
             declared,
             requiredFeatures.get() + rust.demands,
             rust.demands.toSet(),
+            rust.features.toSet(),
         )
         if (plan.unwanted.isNotEmpty()) {
             throw GradleException(refusalText(plan.unwanted, plan.reasons))

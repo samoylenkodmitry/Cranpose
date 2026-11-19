@@ -90,6 +90,7 @@ fn face_tracking_names_both_headset_permissions_and_the_microphone_for_audio() {
             "android.permission.FACE_TRACKING",
             "android.permission.RECORD_AUDIO",
             "com.oculus.permission.FACE_TRACKING",
+            "horizonos.permission.FACE_TRACKING",
         ]
     );
     let manifest = android_manifest(&face);
@@ -100,6 +101,11 @@ fn face_tracking_names_both_headset_permissions_and_the_microphone_for_audio() {
         "{manifest}"
     );
     assert!(json(&face).contains("{ \"name\": \"face-tracking\", \"reason\": null }"));
+    assert!(
+        json(&face).contains("\"features\": [\n    \"oculus.software.face_tracking\"\n  ]"),
+        "{}",
+        json(&face)
+    );
     assert!(rust_source(&face).contains("Use::face_tracking(),"));
 }
 

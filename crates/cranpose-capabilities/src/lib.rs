@@ -567,12 +567,14 @@ pub fn json(capabilities: &Capabilities<'_>) -> String {
             "    {{ \"name\": \"{permission}\", \"maxSdk\": {level} }}{comma}"
         );
     }
+    let features = android_features(capabilities);
     let demands: Vec<&str> = capabilities
         .demands
         .iter()
         .map(|demand| demand.android_feature())
         .collect();
     for (field, items) in [
+        ("features", &features[..]),
         ("demands", &demands[..]),
         ("opens", capabilities.opens),
         ("links", capabilities.links),

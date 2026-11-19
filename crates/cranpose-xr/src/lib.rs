@@ -11,8 +11,11 @@
 //! Outside a headset it shows the left eye's picture of the newest frame in the layout.
 //!
 //! A [`SpatialFrameEffect`] gives an app the headset's state in each frame: the head, the eyes,
-//! the controllers and the recenter event, as an [`XrFrame`]. [`Haptics`] plays vibrations on the
-//! controllers. A pure Cranpose app can stream a headset to a host with them.
+//! the controllers and the recenter event, as an [`XrFrame`]. An app that asks for it in its build,
+//! with `Use::hand_tracking()`, `Use::body_tracking()`, `Use::face_tracking()` or
+//! `Use::eye_tracking()` of `cranpose::capabilities`, also gets the user's hands, body, face and
+//! gaze there, and [`local_tracking_capabilities`] tells what the runtime offers. [`Haptics`] plays
+//! vibrations on the controllers. A pure Cranpose app can stream a headset to a host with them.
 //!
 //! The `openxr` feature adds the backend for headsets. On Android, as on a Meta Quest, its
 //! [`android_main!`] starts the app as an immersive app. On Linux and Windows its `run` starts
