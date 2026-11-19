@@ -1,12 +1,13 @@
 use std::rc::Rc;
 
-use cranpose_core::collections::{pass_aged::PassAgedCache, recent_hashes::RecentHashes};
+use cranpose_core::collections::pass_aged::PassAgedCache;
 use cranpose_ui_graphics::MemoryHeadroom;
 use smallvec::SmallVec;
 
 use super::{
     TextAlign,
     measure::{PreparedTextLayout, TextFrame},
+    returning_texts::ReturningTexts,
     style::TextStyle,
     text_key::TextKey,
 };
@@ -19,8 +20,6 @@ const WIDTHS_PER_TEXT: usize = 2;
 // Layouts of draw scopes' text kept until a pass draws none of them, the
 // last drawn taking the place of the one drawn longest ago.
 const DRAWN_LAYOUTS: usize = 8;
-// The tags of 128 hashes, 512 bytes.
-const RETURNING_SLOTS: usize = 128;
 
 // The layouts of one text at different widths, the newest first.
 type Widths = SmallVec<[Rc<PreparedTextLayout>; WIDTHS_PER_TEXT]>;
@@ -62,7 +61,7 @@ pub(super) struct LayoutCache {
     drawn: DrawnLayouts,
     // The texts changed in place or drawn lately: one laid out again while
     // here came back, and goes into `kept`.
-    returning: RecentHashes,
+    returning: ReturningTexts,
     // The host's memory headroom when the pass began. A tight heap keeps
     // no layout of a text that changes in place.
     headroom: MemoryHeadroom,
@@ -73,7 +72,7 @@ impl LayoutCache {
         Self {
             kept: PassAgedCache::with_capacity_at_least_one(TEXT_PREPARED_CACHE_CAPACITY),
             drawn: DrawnLayouts::default(),
-            returning: RecentHashes::new(RETURNING_SLOTS),
+            returning: ReturningTexts::new(TEXT_PREPARED_CACHE_CAPACITY),
             headroom: MemoryHeadroom::default(),
         }
     }
@@ -82,6 +81,12 @@ impl LayoutCache {
     pub(super) fn clear(&mut self) {
         self.kept.clear();
         self.drawn = DrawnLayouts::default();
+        self.returning.clear();
+    }
+
+    // Forgets the texts that changed in place or were drawn, and gives back
+    // the room that took: the texts rest.
+    pub(super) fn rest(&mut self) {
         self.returning.clear();
     }
 
@@ -118,13 +123,15 @@ impl LayoutCache {
     }
 
     // Puts `prepared`, laid out for `key` after `miss`, beside the layouts
-    // the cache holds of `key` at other widths, or keeps it as `admission`
-    // says when it held none.
+    // of `key` at other widths, or keeps it as `admission` says when the
+    // cache held none. It hands `retire` the layouts of the text let go by a
+    // full cache for it.
     pub(super) fn keep(
         &mut self,
         key: TextKey,
         prepared: &Rc<PreparedTextLayout>,
         (miss, admission): (Miss, CacheAdmission),
+        retire: impl FnMut(Rc<PreparedTextLayout>),
     ) {
         if let Miss::OtherWidths = miss {
             if let Some(widths) = self.kept.get_mut(&key) {
@@ -146,24 +153,70 @@ impl LayoutCache {
                 }
             }
         }
-        self.keep_first(key, prepared);
+        self.keep_first(key, prepared, retire);
     }
 
-    // Keeps `prepared` as the one layout of `key`. Out of line: a text drawn
-    // anew each frame stops before it.
+    // Keeps `prepared` as the one layout of `key`. It hands `retire` the
+    // layouts let go by a full cache. Out of line: a text drawn anew each
+    // frame stops before it.
     #[inline(never)]
-    fn keep_first(&mut self, key: TextKey, prepared: &Rc<PreparedTextLayout>) {
-        self.kept
+    fn keep_first(
+        &mut self,
+        key: TextKey,
+        prepared: &Rc<PreparedTextLayout>,
+        retire: impl FnMut(Rc<PreparedTextLayout>),
+    ) {
+        let evicted = self
+            .kept
             .push(key, SmallVec::from_elem(Rc::clone(prepared), 1));
+        if let Some((_, widths)) = evicted
+            && self.headroom == MemoryHeadroom::Ample
+            && held_alone(&widths)
+        {
+            retire_each(widths, retire);
+        }
     }
 
-    // Starts a layout pass on a host with `headroom`: drops the kept
-    // layouts no pass asked for in the last `idle_passes`, and the drawn
-    // ones the last pass did not draw.
-    pub(super) fn begin_pass(&mut self, idle_passes: u64, headroom: MemoryHeadroom) {
-        self.kept.begin_pass(idle_passes, drop);
+    // Starts a layout pass on a host with `headroom`. It hands `retire` the
+    // kept layouts that no pass asked for in the last `idle_passes`; a tight
+    // heap drops them. It drops the drawn layouts that the last pass did not
+    // draw.
+    pub(super) fn begin_pass(
+        &mut self,
+        (idle_passes, headroom): (u64, MemoryHeadroom),
+        mut retire: impl FnMut(Rc<PreparedTextLayout>),
+    ) {
+        self.kept.begin_pass(idle_passes, |widths| {
+            if headroom == MemoryHeadroom::Ample && held_alone(&widths) {
+                retire_each(widths, &mut retire);
+            }
+        });
         self.drawn.begin_pass();
+        self.returning.begin_pass(idle_passes);
         self.headroom = headroom;
+    }
+}
+
+// Whether the cache alone holds one of `widths`. A text still draws most
+// layouts let go by a full cache; those leave with no more work.
+fn held_alone(widths: &Widths) -> bool {
+    widths.iter().any(|layout| Rc::strong_count(layout) == 1)
+}
+
+// Hands `retire` the first of `widths` and each other one that shares its
+// lines with no layout. A copy aligned at other widths shares the lines of
+// the first one: in the retired layouts each of the two would wait for the
+// other. Out of line and cold: inlined, its loop takes registers that every
+// push of a full cache then saves.
+#[cold]
+#[inline(never)]
+fn retire_each(widths: Widths, mut retire: impl FnMut(Rc<PreparedTextLayout>)) {
+    let mut widths = widths.into_iter();
+    if let Some(first) = widths.next() {
+        retire(first);
+    }
+    for layout in widths.filter(|layout| !layout.layout.shares_lines()) {
+        retire(layout);
     }
 }
 

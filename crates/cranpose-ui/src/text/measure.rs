@@ -243,7 +243,9 @@ impl TextService {
         if let Some((key, miss)) = missed {
             self.layouts
                 .borrow_mut()
-                .keep(key, &prepared, (miss, admission));
+                .keep(key, &prepared, (miss, admission), |layout| {
+                    self.retire_evicted(layout);
+                });
         }
         prepared
     }
@@ -255,16 +257,42 @@ impl TextService {
         text: AnnotatedString,
         layouts: impl IntoIterator<Item = Rc<PreparedTextLayout>>,
     ) {
-        self.retired_strings.borrow_mut().retire_text(text);
-        let mut retired = self.retired.borrow_mut();
-        for mut layout in layouts {
-            // A layout the shared cache keeps stays there. A kept layout lets
-            // go of its string, which the next changed text may take.
-            if let Some(free) = Rc::get_mut(&mut layout) {
-                free.text = Arc::clone(AnnotatedString::default().render_string());
-                retired.retire(layout);
+        // A layout something else holds, as the shared cache does, stays
+        // with it and with the string it was laid out from: no changed text
+        // could take that string while it does. A layout the text alone held
+        // lets go of its string, which the text gives up below.
+        let mut kept_string = false;
+        {
+            let mut retired = self.retired.borrow_mut();
+            for mut layout in layouts {
+                match Rc::get_mut(&mut layout) {
+                    Some(free) => {
+                        free.text = Arc::clone(AnnotatedString::default().render_string());
+                        retired.retire(layout);
+                    }
+                    None => kept_string |= Arc::ptr_eq(&layout.text, text.render_string()),
+                }
             }
         }
+        if !kept_string {
+            self.retired_strings.borrow_mut().retire_text(text);
+        }
+    }
+
+    // Keeps `layout`, which the shared cache let go, for the next changed
+    // texts when nothing else holds it, and its string when nothing else
+    // holds that.
+    fn retire_evicted(&self, mut layout: Rc<PreparedTextLayout>) {
+        let Some(free) = Rc::get_mut(&mut layout) else {
+            return;
+        };
+        let mut text = free.take_text();
+        if Arc::get_mut(&mut text).is_some() {
+            self.retired_strings
+                .borrow_mut()
+                .retire_text(AnnotatedString::from(text));
+        }
+        self.retired.borrow_mut().retire(layout);
     }
 
     // A plain string of `text`, in the room of a retired one nothing holds.
@@ -500,18 +528,24 @@ impl TextService {
             MemoryHeadroom::Ample => IDLE_PASSES,
             MemoryHeadroom::Tight => 1,
         };
-        self.layouts.borrow_mut().begin_pass(idle_passes, headroom);
+        self.layouts
+            .borrow_mut()
+            .begin_pass((idle_passes, headroom), |layout| {
+                self.retire_evicted(layout);
+            });
         self.intrinsics.borrow_mut().begin_pass(idle_passes, drop);
         self.retired.borrow_mut().begin_pass(idle_passes);
         self.retired_strings.borrow_mut().begin_pass(idle_passes);
         self.layouter.borrow_mut().begin_pass(headroom);
     }
 
-    // Drops the retired layouts and strings and the layouter's glyph room a
-    // long text took: the texts rest.
+    // Drops the retired layouts and strings, the texts the cache waits to
+    // see return and the layouter's glyph room a long text took: the texts
+    // rest.
     pub(crate) fn trim(&self) {
         self.retired.borrow_mut().clear();
         self.retired_strings.borrow_mut().clear();
+        self.layouts.borrow_mut().rest();
         self.layouter.borrow_mut().rest();
     }
 

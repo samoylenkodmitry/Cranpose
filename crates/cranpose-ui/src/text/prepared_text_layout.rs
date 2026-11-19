@@ -69,6 +69,17 @@ impl PreparedTextLayout {
         self.layout_handle = OnceCell::new();
     }
 
+    // Lets go of what a layout keeps of the text it shows, as it waits for
+    // another: its draw scope handle, which shares its lines, and its string,
+    // which it returns.
+    pub(super) fn take_text(&mut self) -> Arc<RenderString> {
+        self.layout_handle = OnceCell::new();
+        std::mem::replace(
+            &mut self.text,
+            Arc::clone(AnnotatedString::default().render_string()),
+        )
+    }
+
     /// The paragraph's width, within the widths it was laid out between, and
     /// the height of all its lines together.
     pub fn size(&self) -> Size {
