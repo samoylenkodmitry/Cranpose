@@ -36,8 +36,8 @@ impl HeadsetInput {
         log::info!("cranpose xr: headset {properties:?}");
         // The gaze action joins the controllers' attach, because a session attaches once
         let mut gaze = tracking
-            .enabled
-            .eye_gaze_interaction
+            .capabilities
+            .is_eye_gaze_interaction_available()
             .then(|| EyeGazeAction::declare(xr_session.instance()))
             .transpose()?;
         let controllers = Controllers::new(xr_session, gaze.as_ref().map(EyeGazeAction::set))?;

@@ -11,10 +11,10 @@ fn jetpack_name_of(meta: &str) -> String {
         ("R", "Right"),
     ] {
         // Only the end of the name carries the side. `EyesLookLeftL` keeps its `Left`.
-        if let Some(stem) = meta.strip_suffix(short) {
-            if stem.ends_with(|c: char| c.is_ascii_lowercase()) {
-                return format!("{stem}{long}");
-            }
+        if let Some(stem) = meta.strip_suffix(short)
+            && stem.ends_with(|c: char| c.is_ascii_lowercase())
+        {
+            return format!("{stem}{long}");
         }
     }
     meta.to_owned()

@@ -1,7 +1,7 @@
-// A panel that shows which tracking the runtime offers and how far each feature has come, and a dot
-// at each fingertip of the hands that the cameras track. The dots are small panels. Each one stands
-// at its fingertip in the room, facing the direction that the headset looked at when the app
-// started, so a viewer who looks that way sees them on the fingers.
+// A panel that shows which tracking the runtime offers and how far each feature has come, and a map
+// of the hands: a dot at each fingertip that the cameras track, seen from the front as the viewer
+// looks at them. The map is part of the panel. A panel for each dot would add ten layers to the
+// compositor's frame, and a hand's own pointing ray would stop at the dot at its fingertip.
 //
 // The app asks only for hand tracking, which needs no prompt on a Meta Quest. The build asks for the
 // body, the face and the eyes as well when the environment variable `XR_DEMO_TRACKING` is `all`,
@@ -10,14 +10,19 @@
 use cranpose::prelude::*;
 use cranpose_ui::text::FontWeight;
 use cranpose_xr::{
-    FaceBlendShapeType, FaceDataSource, FaceTrackingProvider, Hand, HandJointType, Pose,
+    FaceBlendShapeType, FaceDataSource, FaceTrackingProvider, Hand, HandJointType,
     SpatialFrameEffect, SpatialPanel, SubspaceModifier, TrackingAvailability, TrackingCapabilities,
     TrackingFeature, TrackingState, XrFrame, local_tracking_capabilities,
 };
 use player_demo::sized;
 
-// The diameter of a fingertip's dot in dp, which are millimeters.
+// The diameter of a fingertip's dot, and the side of the map, in dp.
 const DOT: f32 = 14.0;
+const MAP: f32 = 280.0;
+// The map shows this many dp for a meter of the room.
+const DP_PER_METER: f32 = 350.0;
+// The map's center lies this far below the head, where the hands rest, in meters.
+const MAP_DROP: f32 = 0.3;
 // The fingertips, from the thumb to the little finger.
 const TIPS: [HandJointType; 5] = [
     HandJointType::ThumbTip,
@@ -26,11 +31,9 @@ const TIPS: [HandJointType; 5] = [
     HandJointType::RingTip,
     HandJointType::LittleTip,
 ];
-// A subspace starts a meter in front of where the head was when the app started.
-const SUBSPACE_DEPTH: f32 = 1.0;
-
-// Where a fingertip is in the room, rounded to a millimeter so that a hand at rest redraws nothing.
-type Dot = Option<[f32; 3]>;
+// Where a fingertip is to the right of the head and above the map's center, in meters rounded to a
+// millimeter, so that a hand at rest redraws nothing.
+type Dot = Option<[f32; 2]>;
 
 // What the panel shows of the frame, rounded so that a still headset redraws nothing.
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -80,18 +83,19 @@ impl TrackingReadout {
     }
 }
 
-// Rounds a place to a millimeter.
-fn millimeters(position: [f32; 3]) -> [f32; 3] {
-    position.map(|meters| (meters * 1000.0).round() / 1000.0)
+// Where a fingertip is on the map: to the right of the head and above the map's center.
+fn on_map(tip: [f32; 3], head: [f32; 3]) -> [f32; 2] {
+    [tip[0] - head[0], tip[1] - head[1] + MAP_DROP].map(|meters| (meters * 1000.0).round() / 1000.0)
 }
 
 // The panel with the readout, and a dot for each fingertip of each hand.
 #[composable]
 pub(crate) fn TrackingPanel() {
     let readout = rememberMutableStateOf(TrackingReadout::default);
-    let dots = remember(|| std::array::from_fn::<_, 10, _>(|_| mutableStateOf(None::<[f32; 3]>)))
+    let dots = remember(|| std::array::from_fn::<_, 10, _>(|_| mutableStateOf(None::<[f32; 2]>)))
         .with(|dots| *dots);
     SpatialFrameEffect(move |frame| {
+        let head = frame.device_pose.map_or([0.0; 3], |pose| pose.position);
         let next = TrackingReadout::of(frame);
         if readout.get_non_reactive() != next {
             readout.set(next);
@@ -101,7 +105,7 @@ pub(crate) fn TrackingPanel() {
             for (n, tip) in TIPS.into_iter().enumerate() {
                 let joint = state.joint(tip);
                 let place: Dot = (state.tracking_state == TrackingState::Tracking && joint.valid)
-                    .then(|| millimeters(joint.pose.position));
+                    .then(|| on_map(joint.pose.position, head));
                 let dot = dots[side * TIPS.len() + n];
                 if dot.get_non_reactive() != place {
                     dot.set(place);
@@ -111,32 +115,55 @@ pub(crate) fn TrackingPanel() {
     });
     SpatialPanel(
         SubspaceModifier::new()
-            .size(800.0, 330.0)
+            .size(1000.0, 330.0)
             .offset(0.0, -560.0, 0.0),
         move || {
-            Column(
+            Row(
                 Modifier::empty()
                     .fill_max_size()
                     .background(Color(0.1, 0.12, 0.14, 0.94))
                     .rounded_corners(24.0)
-                    .padding(28.0),
-                ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(8.0)),
+                    .padding(24.0),
+                RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(24.0)),
                 move || {
-                    Text(
-                        "Tracking",
+                    Column(
                         Modifier::empty(),
-                        sized(30.0, Some(FontWeight::BOLD)),
+                        ColumnSpec::default()
+                            .vertical_arrangement(LinearArrangement::spaced_by(8.0)),
+                        move || {
+                            Text(
+                                "Tracking",
+                                Modifier::empty(),
+                                sized(30.0, Some(FontWeight::BOLD)),
+                            );
+                            ReadoutLines(readout);
+                        },
                     );
-                    ReadoutLines(readout);
+                    HandMap(dots);
                 },
             );
         },
     );
-    for (side, hand) in [Hand::Left, Hand::Right].into_iter().enumerate() {
-        for n in 0..TIPS.len() {
-            FingertipDot(hand, dots[side * TIPS.len() + n]);
-        }
-    }
+}
+
+// The hands seen from the front: a dot for each fingertip, blue for the left hand and orange for the
+// right.
+#[composable]
+fn HandMap(dots: [MutableState<Dot>; 10]) {
+    Box(
+        Modifier::empty()
+            .size_points(MAP, MAP)
+            .background(Color(0.05, 0.06, 0.08, 1.0))
+            .rounded_corners(16.0),
+        BoxSpec::default(),
+        move || {
+            for (side, hand) in [Hand::Left, Hand::Right].into_iter().enumerate() {
+                for n in 0..TIPS.len() {
+                    FingertipDot(hand, dots[side * TIPS.len() + n]);
+                }
+            }
+        },
+    );
 }
 
 // The line for each feature: how far it has come, and what the runtime gives with it.
@@ -230,30 +257,26 @@ fn label(availability: TrackingAvailability) -> &'static str {
     }
 }
 
-// A dot at a fingertip: blue for the left hand, orange for the right. It shows only while the
-// cameras track the fingertip.
+// A dot at a fingertip. It shows only while the cameras track the fingertip.
 #[composable]
 fn FingertipDot(hand: Hand, place: MutableState<Dot>) {
-    let Some([x, y, z]) = place.get() else {
+    let Some([right, up]) = place.get() else {
         return;
     };
     let color = match hand {
         Hand::Left => Color(0.3, 0.55, 1.0, 1.0),
         Hand::Right => Color(1.0, 0.6, 0.2, 1.0),
     };
-    SpatialPanel(
-        SubspaceModifier::new()
-            .size(DOT, DOT)
-            .with_pose(Pose::at([x, y, z + SUBSPACE_DEPTH])),
-        move || {
-            Box(
-                Modifier::empty()
-                    .fill_max_size()
-                    .background(color)
-                    .rounded_corners(DOT / 2.0),
-                BoxSpec::default(),
-                || {},
-            );
-        },
+    Box(
+        Modifier::empty()
+            .size_points(DOT, DOT)
+            .offset(
+                MAP / 2.0 + right * DP_PER_METER - DOT / 2.0,
+                MAP / 2.0 - up * DP_PER_METER - DOT / 2.0,
+            )
+            .background(color)
+            .rounded_corners(DOT / 2.0),
+        BoxSpec::default(),
+        || {},
     );
 }

@@ -476,9 +476,18 @@ no answer and the prompt has not shown, `Wait` after it showed, and `Refused` wh
 refused a group. The backend asks once, and it does not ask again after a refusal.
 
 A frame does no work for a feature that waits, except once a second: it reads the answers, shows
-the prompt if it is due and tries to make the tracker. The trial runs even where no permission is
-defined, so a runtime that needs none makes the tracker at the first look, and one that lacks a
-permission refuses the tracker with `XR_ERROR_PERMISSION_INSUFFICIENT` until the user grants it.
+the prompt if it is due and tries to make the tracker. `may_try` decides whether it tries:
+
+- Every group is granted: it tries. A refusal other than `XR_ERROR_PERMISSION_INSUFFICIENT` then
+  means that the runtime has no such tracker, so the feature becomes `Unavailable` and the backend
+  stops trying.
+- Nothing is granted and nothing refused: it tries. A runtime that defines no permission for the
+  feature never answers and needs none, and one that does refuses the tracker until the user grants
+  it.
+- One group is granted and another waits: it does not try. A face from audio needs the microphone,
+  and a tracker made before the grant would stay empty and never be made again.
+- The user refused a group: it does not try.
+
 After the tracker runs or the user refuses, the feature costs no more than the frame's own work.
 
 ### What a frame holds
@@ -521,6 +530,16 @@ pays one call for each tracker it runs: two `xrLocateHandJointsEXT` (the aim sta
 same call), one `xrLocateBodyJointsFB`, one `xrGetFaceExpressionWeights2FB` or `xrGetFaceStateANDROID`,
 and one `xrGetEyeGazesFB`, or a located space for the gaze. The arrays live in the frame or on the
 stack.
+
+### The demo
+
+`apps/xr-demo` has a tracking panel. It lists each feature with its availability and what the
+frame gives, and it draws a map of the hands: a dot for each fingertip that the cameras track.
+The map is part of one panel. A panel for each fingertip would add ten layers to the compositor's
+frame, and a hand's own pointing ray would stop at the dot at its fingertip. The build script asks
+for hand tracking, which needs no prompt on a Quest. `XR_DEMO_TRACKING=none` asks for nothing, and
+`XR_DEMO_TRACKING=all` adds the body, the face and the eyes, which the system asks the user to
+allow.
 
 ## Flat video
 

@@ -58,6 +58,22 @@ pub(crate) fn permission_step(answers: &[PermissionAnswer], prompt: Prompt) -> P
     }
 }
 
+// Whether the backend may try to make the feature's tracker now. It may when every group is
+// granted. It may also while nothing is granted or refused: a runtime that defines no permission for
+// the feature never answers and needs none, and one that does refuses the tracker until the user
+// grants it. It may not while one group is granted and another waits, because the runtime would
+// make a tracker that the missing permission leaves empty, as a face from audio before the
+// microphone is granted, and the backend never makes it again.
+pub(crate) fn may_try(answers: &[PermissionAnswer], step: PermissionStep) -> bool {
+    match step {
+        PermissionStep::Ready => true,
+        PermissionStep::Refused => false,
+        PermissionStep::Request | PermissionStep::Wait => answers
+            .iter()
+            .all(|answer| *answer == PermissionAnswer::NotAsked),
+    }
+}
+
 #[cfg(test)]
 #[path = "tests/tracking_permission_tests.rs"]
 mod tests;

@@ -652,10 +652,9 @@ pub fn android_manifest(capabilities: &Capabilities<'_>) -> String {
         );
     }
     for feature in android_features(capabilities) {
-        let _ = writeln!(
-            text,
-            "    <uses-feature android:name=\"{feature}\" android:required=\"false\" />"
-        );
+        text.push_str(&format!(
+            "    <uses-feature android:name=\"{feature}\" android:required=\"false\" />\n"
+        ));
     }
     for demand in capabilities.demands {
         let _ = writeln!(

@@ -11,10 +11,11 @@ use super::{
 use crate::{
     TrackingAvailability, TrackingCapabilities, TrackingFeature, XrFrame,
     openxr::{
+        graphics::Api,
         host::Host,
         session::{SessionStatus, XrSession},
     },
-    tracking_permission::{PermissionAnswer, PermissionStep, Prompt, permission_step},
+    tracking_permission::{PermissionAnswer, PermissionStep, Prompt, may_try, permission_step},
     tracking_request::service_of,
 };
 
@@ -146,9 +147,23 @@ impl Trackers {
             host.request_permissions(&wanted);
             self.prompts[feature.index()] = Prompt::Shown;
         }
-        if self.make(feature, xr_session, step == PermissionStep::Ready) {
-            log::info!("cranpose xr: {feature:?} tracking runs");
-            self.set(feature, TrackingAvailability::Active);
+        if !may_try(answers, step) {
+            return;
+        }
+        let ready = step == PermissionStep::Ready;
+        match self.make(feature, xr_session, ready) {
+            Ok(true) => {
+                log::info!("cranpose xr: {feature:?} tracking runs");
+                self.set(feature, TrackingAvailability::Active);
+            }
+            Ok(false) => {}
+            // With the permissions granted the runtime still refuses: it has no such tracker, and
+            // a new try would only repeat the refusal
+            Err(error) if ready && error != xr::sys::Result::ERROR_PERMISSION_INSUFFICIENT => {
+                log::warn!("cranpose xr: {feature:?} tracking is not available: {error}");
+                self.set(feature, TrackingAvailability::Unavailable);
+            }
+            Err(error) => log::debug!("cranpose xr: {feature:?} tracker: {error}"),
         }
     }
 
@@ -156,55 +171,56 @@ impl Trackers {
         self.capabilities = self.capabilities.with_availability(feature, availability);
     }
 
-    // Makes the tracker of the feature, and returns whether it runs. A failure leaves the feature
-    // waiting, and the next look tries again.
-    fn make(&mut self, feature: TrackingFeature, xr_session: &XrSession, permitted: bool) -> bool {
+    // Makes the tracker of the feature. Returns whether the feature runs, or the result that the
+    // runtime refused the tracker with. A feature that waits for its permission is `Ok(false)`.
+    fn make(
+        &mut self,
+        feature: TrackingFeature,
+        xr_session: &XrSession,
+        permitted: bool,
+    ) -> Result<bool, xr::sys::Result> {
         let (instance, session) = (xr_session.instance(), &xr_session.session);
-        let enabled = self.setup.enabled;
-        let failed = |what: &str, error: xr::sys::Result| {
-            log::debug!("cranpose xr: {what} tracker: {error}");
-            false
-        };
         match feature {
-            TrackingFeature::Hands => match HandTrackers::create(session, instance, &enabled) {
-                Ok(trackers) => {
-                    self.hands = Some(trackers);
-                    true
-                }
-                Err(error) => failed("hand", error),
-            },
+            TrackingFeature::Hands => {
+                self.hands = Some(HandTrackers::create(
+                    session,
+                    instance,
+                    &self.setup.enabled,
+                )?);
+            }
             TrackingFeature::Body => {
-                match BodyTracker::create(session, instance, &self.capabilities) {
-                    Ok(tracker) => {
-                        self.body = Some(tracker);
-                        true
-                    }
-                    Err(error) => failed("body", error),
-                }
+                self.body = Some(BodyTracker::create(session, instance, &self.capabilities)?);
             }
             TrackingFeature::Face => {
-                let Some(provider) = self.capabilities.face_tracking_provider() else {
-                    return false;
-                };
-                match FaceTracker::create(provider, session, instance) {
-                    Ok(tracker) => {
-                        self.face = Some(tracker);
-                        true
-                    }
-                    Err(error) => failed("face", error),
-                }
+                let provider = self
+                    .capabilities
+                    .face_tracking_provider()
+                    .ok_or(xr::sys::Result::ERROR_EXTENSION_NOT_PRESENT)?;
+                self.face = Some(FaceTracker::create(provider, session, instance)?);
             }
-            TrackingFeature::Eyes => {
-                if enabled.eye_tracking_social && self.eyes.is_none() {
-                    match EyeTracker::create(session, instance) {
-                        Ok(tracker) => self.eyes = Some(tracker),
-                        Err(error) => {
-                            failed("eye", error);
-                        }
-                    }
-                }
-                self.eyes.is_some() || (self.gaze.is_some() && permitted)
+            TrackingFeature::Eyes => return self.make_eyes(session, instance, permitted),
+        }
+        Ok(true)
+    }
+
+    // The eyes run with the social tracker or, once permitted, with the gaze action.
+    fn make_eyes(
+        &mut self,
+        session: &xr::Session<Api>,
+        instance: &xr::Instance,
+        permitted: bool,
+    ) -> Result<bool, xr::sys::Result> {
+        let mut refused = None;
+        if self.capabilities.is_eye_tracking_social_available() && self.eyes.is_none() {
+            match EyeTracker::create(session, instance) {
+                Ok(tracker) => self.eyes = Some(tracker),
+                Err(error) => refused = Some(error),
             }
+        }
+        if self.eyes.is_some() || (self.gaze.is_some() && permitted) {
+            Ok(true)
+        } else {
+            refused.map_or(Ok(false), Err)
         }
     }
 
