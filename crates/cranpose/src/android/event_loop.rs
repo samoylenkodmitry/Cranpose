@@ -1226,7 +1226,7 @@ fn create_android_gpu_resources(
 
     name_pipeline_cache_file(&adapter_info);
     seed_pipeline_cache();
-    let (device, queue) = super::hardware_buffer_device::request_device(&adapter)?;
+    let (device, queue) = super::device::request_device(&adapter)?;
 
     let device = Arc::new(device);
     let queue = Arc::new(queue);

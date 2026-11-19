@@ -16,12 +16,13 @@ const EXTENSIONS: [&CStr; 7] = [
 ];
 
 // The extensions to add to the ones a device already enables so that it imports hardware buffers,
-// or `None` when the GPU's driver lacks one of them.
+// or `None` when the GPU's driver lacks one of them. `supported` answers whether the driver lists
+// an extension.
 pub(crate) fn extensions_to_add(
-    available: &[&CStr],
+    supported: impl Fn(&CStr) -> bool,
     enabled: &[&CStr],
 ) -> Option<Vec<&'static CStr>> {
-    if EXTENSIONS.iter().any(|wanted| !available.contains(wanted)) {
+    if !EXTENSIONS.iter().all(|&wanted| supported(wanted)) {
         return None;
     }
     Some(

@@ -2855,7 +2855,8 @@ The image decodes on a worker thread. All images share one memory cache. The byt
 
 `VideoDecoder` decodes H.264 and HEVC on the platform's hardware: through VideoToolbox on macOS and iOS,
 and through `MediaCodec` on Android. The app feeds it access units from one thread. `PlayerSurface` draws
-the pictures in the layout, scaled by a `ContentScale`.
+the pictures in the layout, scaled by a `ContentScale`. It needs the `video` feature of `cranpose`, which
+`cranpose-xr` turns on for its apps.
 
 ```rust
 use cranpose::prelude::*;
@@ -2895,9 +2896,9 @@ decoder never saw breaks the pictures after it until the next keyframe, so send 
 sender for a keyframe.
 
 `PlayerSurface` draws on macOS and iOS through Metal and on Android through Vulkan. Android needs a
-Vulkan device with the hardware buffer import extensions, which the app's own device has on Android 8
-and later where the driver offers them. It draws nothing where Android renders with OpenGL ES. No other
-platform has a decoder.
+Vulkan device with the hardware buffer import extensions. With the `video` feature, the app's own device
+has them on Android 8 and later where the driver offers them. Without it, the device opens with no import
+work. It draws nothing where Android renders with OpenGL ES. No other platform has a decoder.
 
 ### Use the camera
 

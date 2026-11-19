@@ -79,7 +79,7 @@ fn prepare_after_update(data_dir: &Path) {
     let info = adapter.get_info();
     super::name_pipeline_cache_file(&info);
     let (device, queue) = match pollster::block_on(
-        adapter.request_device(&super::hardware_buffer_device::android_device(&adapter)),
+        adapter.request_device(&super::device::android_device(&adapter)),
     ) {
         Ok(device) => device,
         Err(error) => {

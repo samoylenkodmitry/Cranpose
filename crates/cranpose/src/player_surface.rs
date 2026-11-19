@@ -23,9 +23,9 @@ use cranpose_ui::{
 /// give the decoder a `depth` of 6 or more for a stream of 60 pictures a second. The decoder
 /// drops its oldest pictures first when the app falls behind, as it does while a window starts.
 ///
-/// Platforms: macOS and iOS draw through Metal. Android draws through Vulkan: the app's device
-/// is opened with the extensions that import a hardware buffer, which the GPU's driver offers on
-/// Android 8 and later. Where the device lacks them, or where Android renders with OpenGL ES, the
+/// Platforms: macOS and iOS draw through Metal. Android draws through Vulkan: the `video` feature
+/// that brings this composable opens the app's device with the extensions that import a hardware
+/// buffer, which the GPU's driver offers on Android 8 and later. Where the device lacks them, or where Android renders with OpenGL ES, the
 /// surface draws nothing. No other platform has a hardware decoder that Cranpose drives. A box
 /// with no picture draws nothing and keeps its size.
 #[composable]

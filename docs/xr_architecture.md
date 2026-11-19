@@ -757,9 +757,11 @@ draws nothing: `YcbcrConverter::new` answers `None`. The steps:
    `VK_ANDROID_external_memory_android_hardware_buffer`, `VK_EXT_queue_family_foreign`,
    `VK_KHR_sampler_ycbcr_conversion`, `VK_KHR_external_memory`, `VK_KHR_dedicated_allocation`,
    `VK_KHR_bind_memory2` and `VK_KHR_get_memory_requirements2` when the driver lists all of them.
-   It chains the `samplerYcbcrConversion` feature, which wgpu-hal leaves off. Any other adapter
-   opens as before. The Android shell gives the composition its `GpuContext`, and gives it the new one
-   after a device loss.
+   The driver's list is the one that wgpu-hal read when it made the adapter, so no second query
+   runs. The callback chains the `samplerYcbcrConversion` feature, which wgpu-hal leaves off. Any
+   other adapter opens as before. Only an app built with the `video` feature of `cranpose` opens
+   its device this way: without it, the device opens as plain wgpu opens it. The Android shell
+   gives the composition its `GpuContext`, and gives it the new one after a device loss.
 2. `vkGetAndroidHardwareBufferPropertiesANDROID` returns the buffer's memory requirements and its
    `VkAndroidHardwareBufferFormatPropertiesANDROID`. The format of a private buffer is
    `VK_FORMAT_UNDEFINED` with an `externalFormat`, and the properties suggest the model, the range
