@@ -32,6 +32,47 @@ impl Ray {
         })
     }
 
+    /// Where the ray first meets a box of `size` meters (width, height and depth) centered on
+    /// `pose`. The hit's `u` and `v` are the entry point's place across the box's front face,
+    /// seen from the box's +z, from 0 to 1, whichever face the ray enters by. A ray that starts
+    /// inside the box hits it at distance 0.
+    pub fn hit_box(&self, pose: &Pose, size: [f32; 3]) -> Option<PanelHit> {
+        let start = pose.unrotate([
+            self.origin[0] - pose.position[0],
+            self.origin[1] - pose.position[1],
+            self.origin[2] - pose.position[2],
+        ]);
+        let direction = pose.unrotate(self.direction);
+        // The stretch of the ray inside each pair of the box's parallel faces, which the ray
+        // shares with all three pairs where it is inside the box
+        let (mut enters, mut leaves) = (0.0_f32, f32::INFINITY);
+        for axis in 0..3 {
+            let half = size[axis] / 2.0;
+            if direction[axis].abs() < 1e-9 {
+                if start[axis].abs() > half {
+                    return None;
+                }
+                continue;
+            }
+            let (first, second) = (
+                (-half - start[axis]) / direction[axis],
+                (half - start[axis]) / direction[axis],
+            );
+            enters = enters.max(first.min(second));
+            leaves = leaves.min(first.max(second));
+            if enters > leaves {
+                return None;
+            }
+        }
+        let x = start[0] + enters * direction[0];
+        let y = start[1] + enters * direction[1];
+        Some(PanelHit {
+            distance: enters,
+            u: (x / size[0] + 0.5).clamp(0.0, 1.0),
+            v: (0.5 - y / size[1]).clamp(0.0, 1.0),
+        })
+    }
+
     // Where the ray meets the plane of a panel centered on `panel`, which faces its +z: how far
     // along the ray, and the place from the panel's center to the right and up, in meters. The
     // place may lie outside the panel. A ray parallel to the plane, or one that points away from
@@ -110,7 +151,7 @@ pub(crate) struct Beam {
     pub(crate) length: f32,
 }
 
-/// A ray's hit on a panel.
+/// A ray's hit on a panel or a volume.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PanelHit {
     /// How far along the ray the hit is, in meters.

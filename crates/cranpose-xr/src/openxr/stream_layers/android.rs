@@ -19,7 +19,7 @@ use crate::{
     openxr::{
         external_texture::{ExternalTexture, Pass, Target},
         graphics::{Api, Graphics},
-        session::{ProjectionEye, ProjectionLayer, XrSession},
+        session::{Alpha, ProjectionEye, ProjectionLayer, XrSession},
         stream_costs::Costs,
     },
     space::Space,
@@ -182,6 +182,7 @@ impl StreamLayers {
                     return None;
                 };
                 (left.shown && right.shown).then(|| ProjectionLayer {
+                    alpha: Alpha::Ignored,
                     eyes: [
                         projection_eye(left, &views.left),
                         projection_eye(right, &views.right),
@@ -358,5 +359,6 @@ fn projection_eye<'a>(eye: &'a EyeTarget, view: &StreamedView) -> ProjectionEye<
         size: eye.size,
         pose: view.pose,
         fov: view.fov,
+        depth: None,
     }
 }

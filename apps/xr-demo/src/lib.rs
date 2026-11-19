@@ -1,5 +1,6 @@
 // A Cranpose app for headsets. In a Meta Quest its panels stand in the room, and a controller's
 // trigger presses the buttons: one counts, the other shows or hides the room around the panels.
+// A lit torus stands beside them in 3D, and a handle under it lets a controller carry it.
 // A strip above them is bent around the viewer. A ball above the left controller shows or hides
 // the strip when the right controller's ray presses it. The counter panel and the video surface
 // have a handle at their bottom right corner that resizes them, and the counter panel one under it
@@ -29,12 +30,14 @@ mod decoder_limits;
 mod foveated_player;
 mod headset_readout;
 mod pattern_writer;
+mod torus_volume;
 mod tracking_panel;
 
 use clip_player::{ClipPlayer, target_display_time};
 use foveated_player::FoveatedPlayer;
 use headset_readout::{HeadsetClock, HeadsetReadout, Readout, StreamLogs};
-use pattern_writer::{PatternWriter, Split};
+use pattern_writer::PatternWriter;
+use torus_volume::TorusVolume;
 use tracking_panel::{TrackedHands, TrackingSection, TrackingView};
 
 cranpose::app_capabilities!();
@@ -83,15 +86,13 @@ pub fn XrDemo() {
                 .size(320.0, 180.0)
                 .offset(600.0, 260.0, 100.0)
                 .rotate(0.0, -30.0, 0.0),
-            Split::LeftRight,
         );
-        PatternSurface(
-            StereoMode::TopBottom,
+        // A volume takes two of the compositor's layers, one for the 3D content and one for its
+        // handle. A Quest takes 16, which the demo's other panels and surfaces leave free.
+        TorusVolume(
             SubspaceModifier::new()
-                .size(320.0, 180.0)
-                .offset(600.0, -260.0, 100.0)
+                .offset(600.0, -330.0, 100.0)
                 .rotate(0.0, -30.0, 0.0),
-            Split::TopBottom,
         );
         CounterPanel(presses, tracking);
         if strip_shown.get() {
@@ -421,14 +422,12 @@ fn PassthroughButton() {
 
 // A surface that a thread fills with the test pattern from its creation to its end.
 #[composable]
-fn PatternSurface(stereo_mode: StereoMode, modifier: SubspaceModifier, split: Split) {
+fn PatternSurface(stereo_mode: StereoMode, modifier: SubspaceModifier) {
     let writer = remember(|| Rc::new(RefCell::new(None::<PatternWriter>))).with(Clone::clone);
     SpatialExternalSurface(stereo_mode, modifier, move |scope| {
         let started = Rc::clone(&writer);
         scope.on_surface_created(move |surface| {
-            started
-                .borrow_mut()
-                .replace(PatternWriter::start(surface, split));
+            started.borrow_mut().replace(PatternWriter::start(surface));
         });
         let stopped = Rc::clone(&writer);
         scope.on_surface_destroyed(move |_| {

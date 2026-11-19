@@ -14,7 +14,7 @@ use super::{
     tracking::{EyeGazeAction, Trackers, TrackingSetup},
 };
 use crate::{
-    Controller, Haptics, HeadsetProperties, Pose, Ray, Recenter, XrFrame,
+    Controller, Haptics, HeadsetProperties, Pose, Ray, Recenter, RenderViewpoint, XrFrame,
     frame_effects::FrameEffects, pointer::Aim,
 };
 
@@ -86,6 +86,19 @@ impl HeadsetInput {
     // The head's pose in the frame sampled last.
     pub(crate) fn device_pose(&self) -> Option<Pose> {
         self.frame.device_pose
+    }
+
+    // The left and the right eye's view in the frame sampled last, or `None` for an eye that the
+    // runtime does not locate.
+    pub(crate) fn eyes(&self) -> [Option<RenderViewpoint>; 2] {
+        [self.frame.left_eye, self.frame.right_eye]
+    }
+
+    // The size of the pictures that the eyes' displays take, in pixels: the left eye's
+    // recommended size.
+    pub(crate) fn eye_image_size(&self) -> (u32, u32) {
+        let [width, height] = self.properties.eye_image_sizes[0].recommended;
+        (width, height)
     }
 
     // Where each controller is in the frame sampled last, left then right: the place of its grip

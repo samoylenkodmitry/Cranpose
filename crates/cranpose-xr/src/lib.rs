@@ -5,6 +5,10 @@
 //! its text sharp. The names follow Jetpack XR Compose. `docs/xr_architecture.md` in the
 //! repository describes the design.
 //!
+//! A [`SpatialVolume`] puts 3D content in a [`Subspace`]: composables whose nodes carry
+//! `mesh_surface`, which a headset draws once for each eye into one projection layer with depth,
+//! and a window shows in a box.
+//!
 //! A [`SpatialExternalSurface`] gives the app a surface that a hardware video decoder or a camera
 //! writes into. The compositor shows its pictures as a layer with no copy. A [`StreamedScene`]
 //! shows frames that another machine rendered, from the head pose that each was rendered for.
@@ -32,6 +36,7 @@ mod billboard_pose;
 mod body_joint;
 mod body_joint_type;
 mod body_state;
+mod callback_slot;
 #[cfg(any(test, headset))]
 mod carry;
 mod controller;
@@ -43,6 +48,8 @@ mod depth_order;
 mod exit_request;
 #[cfg(any(test, headset))]
 mod extension_offer;
+#[cfg(any(test, headset))]
+mod eye_camera;
 mod eye_state;
 mod eyes;
 mod face_blend_shape_type;
@@ -98,6 +105,7 @@ mod spatial_frame_effect;
 mod spatial_move_event;
 mod spatial_panel;
 mod spatial_resize_event;
+mod spatial_volume;
 mod stereo_mode;
 mod stream_source;
 mod stream_stats;
@@ -118,6 +126,17 @@ mod tracking_request;
 mod tracking_state;
 #[cfg(any(test, headset))]
 mod vector;
+#[cfg(any(test, headset))]
+mod volume_host;
+#[cfg(any(test, headset))]
+mod volume_pass;
+#[cfg(any(test, headset))]
+mod volume_plan;
+#[cfg(any(test, headset))]
+mod volume_transform;
+#[cfg(any(test, headset))]
+mod volume_window;
+mod volumes;
 mod xr_frame;
 
 mod android_main;
@@ -181,12 +200,15 @@ pub use spatial_frame_effect::SpatialFrameEffect;
 pub use spatial_move_event::{SpatialMoveEvent, SpatialMoveEventType};
 pub use spatial_panel::SpatialPanel;
 pub use spatial_resize_event::{SpatialResizeEvent, SpatialResizeEventType};
+pub use spatial_volume::{SpatialVolume, SpatialVolumeScope};
 pub use stereo_mode::StereoMode;
 pub use stream_stats::{StreamCounts, StreamStats};
 pub use streamed_scene::StreamedScene;
 pub use streamed_view::{StreamedView, StreamedViews};
 pub use subspace::Subspace;
-pub use subspace_modifier::{DEFAULT_PANEL_SIZE, METERS_PER_DP, SubspaceModifier};
+pub use subspace_modifier::{
+    DEFAULT_PANEL_SIZE, DEFAULT_VOLUME_SIZE, METERS_PER_DP, SubspaceModifier,
+};
 pub use tracking_availability::TrackingAvailability;
 pub use tracking_capabilities::{TrackingCapabilities, local_tracking_capabilities};
 pub use tracking_feature::TrackingFeature;

@@ -127,6 +127,61 @@ compositor. `local_spatial_environment()` gives the app the room around its pane
 headset has passthrough, `set_preferred_passthrough_opacity(Some(1.0))` shows it. Check
 `local_spatial_capabilities().current().is_passthrough_control_enabled()` first.
 
+## 3D content
+
+`SpatialVolume` puts 3D content in a `Subspace`. Its content is ordinary composables whose nodes
+carry `mesh_surface`. Cranpose's own 3D scene draws them, so a mesh shows live composable content on
+its surface:
+
+```rust,ignore
+use cranpose::space::{Light, Mat4, Material, Mesh, MeshSurface, Vec3};
+use cranpose_xr::{SpatialVolume, SubspaceModifier};
+
+SpatialVolume(
+    SubspaceModifier::new().size(300.0, 300.0).depth(300.0).movable(),
+    move |scope| {
+        scope.light(Light {
+            direction: Vec3::new(0.45, 0.6, 0.65),
+            ambient: 0.3,
+            shadows: false,
+            size: 0.0,
+        });
+        let mesh = Arc::clone(&torus);
+        Box(
+            Modifier::empty()
+                .required_size(Size::new(512.0, 128.0))
+                .mesh_surface(move || MeshSurface {
+                    mesh: Arc::clone(&mesh),
+                    transform: Mat4::scaling(Vec3::new(100.0, 100.0, 100.0)),
+                    material: Material::Lit,
+                    casts_shadow: false,
+                    solid: true,
+                })
+                .background(Color(0.95, 0.55, 0.15, 1.0)),
+            BoxSpec::default(),
+            || {},
+        );
+    },
+);
+```
+
+The modifier's `width`, `height` and `depth` give a box in dp, which are millimeters, 500 each by
+default. The content's space has its origin at the box's center, x to the right, y down and z away
+from the viewer, and a unit is a dp. The modifier's `offset`, `rotate`, `movable` and `resizable`
+work as on a panel. A controller's ray stops at the box. `scope.on_pointer_event` receives its
+events, with the position in dp on the box's front face. The meshes do not receive the ray.
+
+Jetpack XR 1.0 shows 3D content with `SpatialGltfModel` for a glTF model and `SceneCoreEntity` for a
+SceneCore entity. Cranpose has neither, so its composable has its own name.
+
+A headset composes the content once and draws it for each eye, from that eye's pose and field of
+view, into one projection layer for all volumes. Where the runtime takes it, the layer carries the
+scene's depth (`XR_KHR_composition_layer_depth`), and the panels and rays over it test against that
+depth (`XR_FB_composition_layer_depth_test`), so a panel and a 3D object hide each other. Where it
+does not, the panels cover the 3D content. A frame with no volume has no projection layer and costs
+no GPU time. The scene draws with one sample for each pixel, and a movable volume takes two of the
+compositor's layers. A window shows the volume as a 3D view in its box.
+
 ## Video and camera surfaces
 
 `SpatialExternalSurface` gives the app a surface that a hardware video decoder or a camera

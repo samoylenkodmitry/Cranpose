@@ -61,6 +61,15 @@ impl Graphics {
         format(vk::Format::B8G8R8A8_UNORM, wgpu::TextureFormat::Bgra8Unorm),
     ];
 
+    // The depth and stencil format that Cranpose's scenes draw against. wgpu maps its
+    // `Depth24PlusStencil8` to `D24_UNORM_S8_UINT` or to `D32_SFLOAT_S8_UINT`, whichever the
+    // driver supports, and offers no query that tells which. A swapchain of the wrong one would
+    // make a view that does not fit its image, so a Vulkan headset carries no depth.
+    pub(crate) const DEPTH_FORMAT: Option<SwapchainFormat> = None;
+
+    // Whether an image needs a layout change before the compositor reads it. Vulkan has layouts.
+    pub(crate) const LAYOUT_BARRIERS: bool = true;
+
     // Whether an image's first row is its top one, which is how wgpu writes it. Vulkan's is.
     pub(crate) const TOP_ROW_FIRST: bool = true;
 
@@ -160,14 +169,19 @@ impl Graphics {
     }
 
     // Puts the image that `texture` wraps in the layout that the runtime expects when the app
-    // releases it, which is the color attachment's, after the commands in `encoder`.
+    // releases it, which is the attachment's, after the commands in `encoder`.
     pub(crate) fn ready_for_release(encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture) {
+        let state = if texture.format().is_depth_stencil_format() {
+            TextureUses::DEPTH_STENCIL_WRITE
+        } else {
+            TextureUses::COLOR_TARGET
+        };
         encoder.transition_resources(
             iter::empty(),
             iter::once(TextureTransition {
                 texture,
                 selector: None,
-                state: TextureUses::COLOR_TARGET,
+                state,
             }),
         );
     }

@@ -78,7 +78,7 @@ impl SurfaceLayers {
                 .iter()
                 .find(|image| image.id == slot.id)
                 .and_then(|image| Some((image.swapchain.as_ref()?, image.size, stereo_mode))),
-            PanelKind::Content => None,
+            PanelKind::Content | PanelKind::Volume { .. } => None,
         };
         shown
             .into_iter()

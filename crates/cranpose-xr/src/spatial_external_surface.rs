@@ -6,12 +6,11 @@ use cranpose::{ExternalSurface, PointerEvent, prelude::*};
 
 use crate::{
     StereoMode, SubspaceModifier,
+    callback_slot::{Callback, invoke},
     space::{Space, local_space, local_subspace_origin},
     subspace_modifier::DEFAULT_PANEL_SIZE,
     surface_input::PointerSink,
 };
-
-type Callback<Argument> = Box<dyn FnMut(Argument)>;
 
 // The callbacks that the content registered. The scope's methods set them, and the surface's
 // effect calls them.
@@ -28,19 +27,6 @@ struct Callbacks(Rc<CallbackSlots>);
 impl PartialEq for Callbacks {
     fn eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-// Calls the callback in `slot` with `argument`. The callback runs with no borrow held, so it may
-// set a new callback.
-fn invoke<Argument>(slot: &RefCell<Option<Callback<Argument>>>, argument: Argument) {
-    let taken = slot.borrow_mut().take();
-    if let Some(mut callback) = taken {
-        callback(argument);
-        let mut slot = slot.borrow_mut();
-        if slot.is_none() {
-            *slot = Some(callback);
-        }
     }
 }
 
