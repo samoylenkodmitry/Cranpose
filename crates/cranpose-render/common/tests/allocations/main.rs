@@ -259,8 +259,14 @@ enum TickerText {
 // Allocations a frame of `texts` texts that all change each frame, showing
 // `shown`.
 fn ticker_frame_allocations(texts: usize, shown: TickerText) -> usize {
-    const WORDS: [&str; 4] = ["alpha", "bravo", "charlie", "delta"];
-    const DIGITS: [usize; 4] = [100, 1_000, 10_000, 100_000];
+    // The values a text shows in turn.
+    const CYCLE: usize = 4;
+    const WORDS: [&str; CYCLE] = ["alpha", "bravo", "charlie", "delta"];
+    const DIGITS: [usize; CYCLE] = [100, 1_000, 10_000, 100_000];
+    // A value shows first in the first cycle and comes back in the second,
+    // when the shared cache keeps it; the frame after, the text replaces the
+    // string the cache keeps. The counted frames start after those.
+    const WARM_UP: usize = 2 * CYCLE + 1;
     let texts = move |tick: MutableState<usize>| {
         for index in 0..texts {
             let style = TextStyle::default();
@@ -284,15 +290,16 @@ fn ticker_frame_allocations(texts: usize, shown: TickerText) -> usize {
             };
         }
     };
-    changing_frames(texts, PASSES).allocations / PASSES
+    changing_frames(texts, WARM_UP, PASSES).allocations / PASSES
 }
 
-// What `counted` frames of a column of `texts` allocate, after eight, each
-// frame showing the texts of the next tick, which `texts` reads from the
-// state it is given. A frame is composition, the layout an app runs while
-// no screen reader is connected and the scene update together.
+// What `counted` frames of a column of `texts` allocate, after `warm_up`,
+// each frame showing the texts of the next tick, which `texts` reads from
+// the state it is given. A frame is composition, the layout an app runs
+// while no screen reader is connected and the scene update together.
 fn changing_frames(
     texts: impl Fn(MutableState<usize>) + Copy + 'static,
+    warm_up: usize,
     counted: usize,
 ) -> stats_alloc::Stats {
     let tick_holder: Rc<RefCell<Option<MutableState<usize>>>> = Rc::default();
@@ -334,11 +341,11 @@ fn changing_frames(
         );
         applier.clear_runtime_handle();
     };
-    for count in 1..=8 {
+    for count in 1..=warm_up {
         frame(count);
     }
     let region = Region::new(GLOBAL);
-    for count in 9..9 + counted {
+    for count in warm_up + 1..=warm_up + counted {
         frame(count);
     }
     region.change()
@@ -435,7 +442,7 @@ fn texts_around_a_long_paragraph_hold_bounded_room() {
         Text(paragraph, Modifier::empty(), TextStyle::default());
     };
     let held = |frames: usize| {
-        let stats = changing_frames(texts, frames);
+        let stats = changing_frames(texts, 8, frames);
         stats.bytes_allocated.cast_signed() - stats.bytes_deallocated.cast_signed()
     };
     let (settled, late) = (140, 400);

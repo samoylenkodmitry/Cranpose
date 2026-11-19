@@ -1,12 +1,13 @@
 use std::rc::Rc;
 
-use cranpose_core::collections::{pass_aged::PassAgedCache, recent_hashes::RecentHashes};
+use cranpose_core::collections::pass_aged::PassAgedCache;
 use cranpose_ui_graphics::MemoryHeadroom;
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 
 use super::{
     TextAlign,
     measure::{PreparedTextLayout, TextFrame},
+    returning_texts::ReturningTexts,
     style::TextStyle,
     text_key::TextKey,
 };
@@ -19,8 +20,6 @@ const WIDTHS_PER_TEXT: usize = 2;
 // Layouts of draw scopes' text kept until a pass draws none of them, the
 // last drawn taking the place of the one drawn longest ago.
 const DRAWN_LAYOUTS: usize = 8;
-// The tags of 128 hashes, 512 bytes.
-const RETURNING_SLOTS: usize = 128;
 
 // The layouts of one text at different widths, the newest first.
 type Widths = SmallVec<[Rc<PreparedTextLayout>; WIDTHS_PER_TEXT]>;
@@ -62,10 +61,13 @@ pub(super) struct LayoutCache {
     drawn: DrawnLayouts,
     // The texts changed in place or drawn lately: one laid out again while
     // here came back, and goes into `kept`.
-    returning: RecentHashes,
+    returning: ReturningTexts,
     // The host's memory headroom when the pass began. A tight heap keeps
     // no layout of a text that changes in place.
     headroom: MemoryHeadroom,
+    // Room for the layouts a pass's start ages out, which `begin_pass`
+    // lends and `give_back` returns empty.
+    aged: Vec<Rc<PreparedTextLayout>>,
 }
 
 impl LayoutCache {
@@ -73,8 +75,9 @@ impl LayoutCache {
         Self {
             kept: PassAgedCache::with_capacity_at_least_one(TEXT_PREPARED_CACHE_CAPACITY),
             drawn: DrawnLayouts::default(),
-            returning: RecentHashes::new(RETURNING_SLOTS),
+            returning: ReturningTexts::new(TEXT_PREPARED_CACHE_CAPACITY),
             headroom: MemoryHeadroom::default(),
+            aged: Vec::new(),
         }
     }
 
@@ -82,6 +85,12 @@ impl LayoutCache {
     pub(super) fn clear(&mut self) {
         self.kept.clear();
         self.drawn = DrawnLayouts::default();
+        self.returning.clear();
+    }
+
+    // Forgets the texts that changed in place or were drawn, and gives back
+    // the room that took: the texts rest.
+    pub(super) fn rest(&mut self) {
         self.returning.clear();
     }
 
@@ -118,23 +127,24 @@ impl LayoutCache {
     }
 
     // Puts `prepared`, laid out for `key` after `miss`, beside the layouts
-    // the cache holds of `key` at other widths, or keeps it as `admission`
-    // says when it held none.
+    // of `key` at other widths, or keeps it as `admission` says when the
+    // cache held none. Returns the layout of the text that a full cache let
+    // go for it, when the cache alone held that layout.
     pub(super) fn keep(
         &mut self,
         key: TextKey,
         prepared: &Rc<PreparedTextLayout>,
         (miss, admission): (Miss, CacheAdmission),
-    ) {
+    ) -> Option<Rc<PreparedTextLayout>> {
         if let Miss::OtherWidths = miss {
             if let Some(widths) = self.kept.get_mut(&key) {
                 remember(widths, prepared);
             }
-            return;
+            return None;
         }
         match admission {
             CacheAdmission::First => {}
-            _ if self.headroom == MemoryHeadroom::Tight => return,
+            _ if self.headroom == MemoryHeadroom::Tight => return None,
             CacheAdmission::Changed | CacheAdmission::Drawn => {
                 let hash = key.mixed_hash();
                 if !self.returning.contains(hash) {
@@ -142,29 +152,63 @@ impl LayoutCache {
                     if admission == CacheAdmission::Drawn {
                         self.drawn.push(key, Rc::clone(prepared));
                     }
-                    return;
+                    return None;
                 }
             }
         }
-        self.keep_first(key, prepared);
+        self.keep_first(key, prepared)
     }
 
-    // Keeps `prepared` as the one layout of `key`. Out of line: a text drawn
-    // anew each frame stops before it.
+    // Keeps `prepared` as the one layout of `key`; returns the layout a full
+    // cache let go for it, as `keep` does. Out of line: a text drawn anew
+    // each frame stops before it.
     #[inline(never)]
-    fn keep_first(&mut self, key: TextKey, prepared: &Rc<PreparedTextLayout>) {
-        self.kept
-            .push(key, SmallVec::from_elem(Rc::clone(prepared), 1));
+    fn keep_first(
+        &mut self,
+        key: TextKey,
+        prepared: &Rc<PreparedTextLayout>,
+    ) -> Option<Rc<PreparedTextLayout>> {
+        let (_, mut widths) = self.kept.push(key, smallvec![Rc::clone(prepared)])?;
+        held_alone(&mut widths, self.headroom)
     }
 
-    // Starts a layout pass on a host with `headroom`: drops the kept
-    // layouts no pass asked for in the last `idle_passes`, and the drawn
-    // ones the last pass did not draw.
-    pub(super) fn begin_pass(&mut self, idle_passes: u64, headroom: MemoryHeadroom) {
-        self.kept.begin_pass(idle_passes, drop);
+    // Starts a layout pass on a host with `headroom`. It drops the drawn
+    // layouts that the last pass did not draw, and the kept ones that no
+    // pass asked for in the last `idle_passes`. Returns, in room that
+    // `give_back` takes back, the layouts of those texts that the cache
+    // alone held, which a tight heap drops too.
+    pub(super) fn begin_pass(
+        &mut self,
+        idle_passes: u64,
+        headroom: MemoryHeadroom,
+    ) -> Vec<Rc<PreparedTextLayout>> {
+        let aged = &mut self.aged;
+        self.kept.begin_pass(idle_passes, |mut widths| {
+            aged.extend(held_alone(&mut widths, headroom));
+        });
         self.drawn.begin_pass();
+        self.returning.begin_pass(idle_passes);
         self.headroom = headroom;
+        std::mem::take(&mut self.aged)
     }
+
+    // Takes back the room `begin_pass` lent, empty, for the next pass.
+    pub(super) fn give_back(&mut self, aged: Vec<Rc<PreparedTextLayout>>) {
+        self.aged = aged;
+    }
+}
+
+// The first layout of `widths`, the layouts of a text the full cache let
+// go, when the cache alone held it on a heap with `headroom` to spare. The
+// layouts at other widths drop: a copy aligned at another width shares the
+// first one's lines, which would keep both waiting among the retired
+// layouts. A text still draws most layouts let go by a full cache; those
+// drop with no more work, as everything does on a tight heap.
+fn held_alone(widths: &mut Widths, headroom: MemoryHeadroom) -> Option<Rc<PreparedTextLayout>> {
+    let alone = widths
+        .first()
+        .is_some_and(|first| Rc::strong_count(first) == 1);
+    (alone && headroom == MemoryHeadroom::Ample).then(|| widths.swap_remove(0))
 }
 
 // Puts `prepared` first among the layouts of one text, keeping the newest.

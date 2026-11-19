@@ -20,11 +20,14 @@
 #
 # Measured on samarch (x86-64 Linux, glibc 2.44, valgrind 3.25.1), main
 # 2fc547b0d, three runs.
+# The rows of wall-t20, patchwork-t17, gauntlet-t16, gauntlet-t12, feed,
+# ticker, layers and dashboard come from one run at the head of #2406, the
+# text cache that keeps returning texts, on main 268b97781; spreads as before.
 # row             metric                    budget     spread   (3 runs)
-wall-t20         malloc                       2.00       0.00
+wall-t20         malloc                       2.02       0.00
 wall-t20         realloc                      0.13       0.00
 wall-t20         live                         0.00       0.00
-wall-t20         copied                       5660          0
+wall-t20         copied                       5652          0
 wall-t20         realloc_bytes                  68          0
 wall-t20-start   malloc                       9.73       0.01
 wall-t20-start   realloc                      0.03       0.00
@@ -38,31 +41,31 @@ wall-t20-start   group:modifiers              4.40       0.00
 wall-t20-start   group:text                   1.05       0.01
 wall-t20-start   group:app                    0.40       0.00
 wall-t20-start   group:other                  0.31       0.00
-patchwork-t17    malloc                    8761.18       3.58
-patchwork-t17    realloc                     24.70       0.20
-patchwork-t17    live                        36.65       6.27
-patchwork-t17    copied                     733037      28084
-patchwork-t17    realloc_bytes               28382       6256
-gauntlet-t16     malloc                    1453.78       0.55
-gauntlet-t16     realloc                     31.48       0.02
-gauntlet-t16     live                       -41.05       0.67
-gauntlet-t16     copied                     525973        374
-gauntlet-t16     realloc_bytes               52794          3
-gauntlet-t12     malloc                     597.27       1.65
-gauntlet-t12     realloc                     14.40       0.05
-gauntlet-t12     live                        80.05       3.95
-gauntlet-t12     copied                     241003        253
-gauntlet-t12     realloc_bytes               23086          5
-feed             malloc                     361.78       0.00
-feed             realloc                      3.48       0.00
-feed             live                         8.83       0.00
-feed             copied                      40045          0
-feed             realloc_bytes                2225          0
-ticker           malloc                     304.00       0.42
-ticker           realloc                      0.08       0.00
-ticker           live                        21.07       0.53
-ticker           copied                     107575          8
-ticker           realloc_bytes                2192          0
+patchwork-t17    malloc                    8751.95       3.58
+patchwork-t17    realloc                     32.17       0.20
+patchwork-t17    live                       206.17       6.27
+patchwork-t17    copied                     676837      28084
+patchwork-t17    realloc_bytes               36077       6256
+gauntlet-t16     malloc                    1436.80       0.55
+gauntlet-t16     realloc                     37.70       0.02
+gauntlet-t16     live                         2.77       0.67
+gauntlet-t16     copied                     514336        374
+gauntlet-t16     realloc_bytes               61047          3
+gauntlet-t12     malloc                     602.25       1.65
+gauntlet-t12     realloc                     23.48       0.05
+gauntlet-t12     live                        78.05       3.95
+gauntlet-t12     copied                     233521        253
+gauntlet-t12     realloc_bytes               37616          5
+feed             malloc                     351.10       0.00
+feed             realloc                      3.80       0.00
+feed             live                         8.95       0.00
+feed             copied                      34085          0
+feed             realloc_bytes                1490          0
+ticker           malloc                     303.28       0.42
+ticker           realloc                      0.05       0.00
+ticker           live                        16.18       0.53
+ticker           copied                     105306          8
+ticker           realloc_bytes                1783          0
 particles        malloc                       0.05       0.00
 particles        realloc                      0.02       0.00
 particles        live                         0.00       0.00
@@ -71,7 +74,7 @@ particles        realloc_bytes                   2          0
 layers           malloc                       0.05       0.00
 layers           realloc                      0.28       0.00
 layers           live                         0.00       0.00
-layers           copied                     125337        216
+layers           copied                     125057        216
 layers           realloc_bytes                1462          0
 grid             malloc                       5.05       0.00
 grid             realloc                      0.32       0.00
@@ -93,8 +96,8 @@ deep-layer       realloc                      0.22       0.00
 deep-layer       live                         0.00       0.00
 deep-layer       copied                      37519          0
 deep-layer       realloc_bytes                 482          0
-dashboard        malloc                      27.18       0.02
-dashboard        realloc                      0.40       0.02
+dashboard        malloc                      27.63       0.02
+dashboard        realloc                      0.33       0.02
 dashboard        live                         0.00       0.00
-dashboard        copied                      22061          0
-dashboard        realloc_bytes                 379          1
+dashboard        copied                      22493          0
+dashboard        realloc_bytes                 371          1
