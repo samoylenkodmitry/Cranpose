@@ -290,7 +290,7 @@ fn ticker_frame_allocations(texts: usize, shown: TickerText) -> usize {
             };
         }
     };
-    changing_frames(texts, (WARM_UP, PASSES)).allocations / PASSES
+    changing_frames(texts, WARM_UP, PASSES).allocations / PASSES
 }
 
 // What `counted` frames of a column of `texts` allocate, after `warm_up`,
@@ -299,7 +299,8 @@ fn ticker_frame_allocations(texts: usize, shown: TickerText) -> usize {
 // while no screen reader is connected and the scene update together.
 fn changing_frames(
     texts: impl Fn(MutableState<usize>) + Copy + 'static,
-    (warm_up, counted): (usize, usize),
+    warm_up: usize,
+    counted: usize,
 ) -> stats_alloc::Stats {
     let tick_holder: Rc<RefCell<Option<MutableState<usize>>>> = Rc::default();
     let holder = Rc::clone(&tick_holder);
@@ -441,7 +442,7 @@ fn texts_around_a_long_paragraph_hold_bounded_room() {
         Text(paragraph, Modifier::empty(), TextStyle::default());
     };
     let held = |frames: usize| {
-        let stats = changing_frames(texts, (8, frames));
+        let stats = changing_frames(texts, 8, frames);
         stats.bytes_allocated.cast_signed() - stats.bytes_deallocated.cast_signed()
     };
     let (settled, late) = (140, 400);

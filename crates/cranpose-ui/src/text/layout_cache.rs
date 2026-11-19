@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use cranpose_core::collections::pass_aged::PassAgedCache;
 use cranpose_ui_graphics::MemoryHeadroom;
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 
 use super::{
     TextAlign,
@@ -168,13 +168,8 @@ impl LayoutCache {
         key: TextKey,
         prepared: &Rc<PreparedTextLayout>,
     ) -> Option<Rc<PreparedTextLayout>> {
-        let (_, widths) = self
-            .kept
-            .push(key, SmallVec::from_elem(Rc::clone(prepared), 1))?;
-        if self.headroom == MemoryHeadroom::Tight {
-            return None;
-        }
-        held_alone(widths)
+        let (_, mut widths) = self.kept.push(key, smallvec![Rc::clone(prepared)])?;
+        held_alone(&mut widths, self.headroom)
     }
 
     // Starts a layout pass on a host with `headroom`. It drops the drawn
@@ -184,15 +179,12 @@ impl LayoutCache {
     // alone held, which a tight heap drops too.
     pub(super) fn begin_pass(
         &mut self,
-        (idle_passes, headroom): (u64, MemoryHeadroom),
+        idle_passes: u64,
+        headroom: MemoryHeadroom,
     ) -> Vec<Rc<PreparedTextLayout>> {
         let aged = &mut self.aged;
-        self.kept.begin_pass(idle_passes, |widths| {
-            if headroom == MemoryHeadroom::Ample
-                && let Some(layout) = held_alone(widths)
-            {
-                aged.push(layout);
-            }
+        self.kept.begin_pass(idle_passes, |mut widths| {
+            aged.extend(held_alone(&mut widths, headroom));
         });
         self.drawn.begin_pass();
         self.returning.begin_pass(idle_passes);
@@ -206,19 +198,17 @@ impl LayoutCache {
     }
 }
 
-// The first layout of `widths`, the layout of a text the full cache let go,
-// when the cache alone held it. The layouts at other widths drop: a copy
-// aligned at another width shares the first one's lines, which would keep
-// both waiting among the retired layouts. A text still draws most layouts
-// let go by a full cache; those drop with no more work.
-fn held_alone(mut widths: Widths) -> Option<Rc<PreparedTextLayout>> {
-    if widths
+// The first layout of `widths`, the layouts of a text the full cache let
+// go, when the cache alone held it on a heap with `headroom` to spare. The
+// layouts at other widths drop: a copy aligned at another width shares the
+// first one's lines, which would keep both waiting among the retired
+// layouts. A text still draws most layouts let go by a full cache; those
+// drop with no more work, as everything does on a tight heap.
+fn held_alone(widths: &mut Widths, headroom: MemoryHeadroom) -> Option<Rc<PreparedTextLayout>> {
+    let alone = widths
         .first()
-        .is_some_and(|first| Rc::strong_count(first) == 1)
-    {
-        return Some(widths.swap_remove(0));
-    }
-    None
+        .is_some_and(|first| Rc::strong_count(first) == 1);
+    (alone && headroom == MemoryHeadroom::Ample).then(|| widths.swap_remove(0))
 }
 
 // Puts `prepared` first among the layouts of one text, keeping the newest.

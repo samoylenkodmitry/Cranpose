@@ -56,10 +56,6 @@ fn pictures_around(let_go: LetGo, headroom: MemoryHeadroom) -> [(Picture, Pictur
     let others: Vec<AnnotatedString> = (0..PAST_THE_CACHE)
         .map(|index| AnnotatedString::from(format!("other text {index}")))
         .collect();
-    let idle_passes = match headroom {
-        MemoryHeadroom::Ample => IDLE_PASSES,
-        MemoryHeadroom::Tight => 1,
-    };
     let context = AppContext::new();
     context.enter(|| {
         set_memory_headroom(headroom);
@@ -72,9 +68,10 @@ fn pictures_around(let_go: LetGo, headroom: MemoryHeadroom) -> [(Picture, Pictur
                 }
             }
             LetGo::Idle => {
+                // A tight heap ages a text out sooner.
                 for other in others
                     .iter()
-                    .take(1 + usize::try_from(idle_passes).unwrap_or(0))
+                    .take(1 + usize::try_from(IDLE_PASSES).unwrap_or(0))
                 {
                     context.start_text_frame();
                     picture(other, WIDE);

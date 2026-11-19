@@ -269,7 +269,7 @@ impl TextService {
             for mut layout in layouts {
                 match Rc::get_mut(&mut layout) {
                     Some(free) => {
-                        free.text = Arc::clone(AnnotatedString::default().render_string());
+                        free.take_text();
                         retired.retire(layout);
                     }
                     None => kept_string |= Arc::ptr_eq(&layout.text, text.render_string()),
@@ -532,10 +532,7 @@ impl TextService {
             MemoryHeadroom::Ample => IDLE_PASSES,
             MemoryHeadroom::Tight => 1,
         };
-        let mut aged = self
-            .layouts
-            .borrow_mut()
-            .begin_pass((idle_passes, headroom));
+        let mut aged = self.layouts.borrow_mut().begin_pass(idle_passes, headroom);
         for layout in aged.drain(..) {
             self.retire_evicted(layout);
         }
