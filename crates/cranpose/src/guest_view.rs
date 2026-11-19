@@ -177,10 +177,11 @@ impl GuestView {
 
     /// Gives the window root `root` a view of its own, drawn by [`Self::draw_window`] into
     /// textures of `width` by `height` pixels at `density` pixels per logical point, with a
-    /// transparent background. `root` is the node of a [`Modifier::window_root`] in this
-    /// composition, as [`Self::shell`]'s `window_roots` lists it. The root lays out into the
-    /// size that its [`WindowRootDescriptor`] reports, which the caller sets to the view's
-    /// logical size (`width / density` by `height / density`) before the next frame.
+    /// transparent background. `root` is the node of a
+    /// [`Modifier::window_root`](crate::Modifier::window_root) in this composition, as
+    /// [`Self::shell`]'s `window_roots` lists it. The root lays out into the size that its
+    /// [`WindowRootDescriptor`](crate::WindowRootDescriptor) reports, which the caller sets to the
+    /// view's logical size (`width / density` by `height / density`) before the next frame.
     ///
     /// A window root with a view of its own is not part of the textures [`Self::draw`] draws, and
     /// the composition stays one: state, effects and locals are shared with the primary root.
