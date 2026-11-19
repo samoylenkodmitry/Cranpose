@@ -613,6 +613,14 @@ shows none of the app's frames. The `xr` service and the backend take care of th
   process's NDK context can hold the application context instead.
 - Each panel's swapchain image starts with its top row, as wgpu writes it, and the layer says
   so with `XR_FB_composition_layer_image_layout`.
+- On Android XR the host takes the activity's events until the activity is resumed and has a
+  window, before it creates the OpenXR instance. The host does so when the runtime offers an
+  `XR_ANDROID_` extension. Android XR's `xrCreateInstance` waits for that state. It polls the
+  calling thread's looper and reads the commands of `android_native_app_glue` from it. This app's
+  glue is android-activity, which keeps its commands in a pipe on the same looper, and the
+  runtime never reads them. Without the wait the call spins at full CPU use and never returns:
+  the log ends after `xrCreateInstance called`. With the wait the runtime logs "already in resume
+  state with window available, skip" and goes on. Other runtimes start as they always did.
 
 The backend also keeps these rules of every runtime and store:
 
@@ -656,7 +664,7 @@ loader.
 | Meta Quest 2, Quest Pro, Quest 3S | Meta | The same entries | No |
 | Pico 4, Pico 4 Ultra | PICO OS 5.9 and later with the Khronos loader | `pvr.app.type`, `pvr.sdk.version`, `pxr.sdk.version_code`, `com.picovr.intent.category.VR` | No |
 | HTC Vive Focus 3, XR Elite | Wave OpenXR | `com.htc.intent.category.VRAPP`, `com.htc.vr.content.NumDoFHmd`, `NumDoFController` and `NumController` | No |
-| Samsung Galaxy XR | Android XR (`libopenxr.google.so`) | `PROPERTY_XR_ACTIVITY_START_MODE` set to the unmanaged full space, `uses-native-library`, `android.software.xr.api.openxr` | No |
+| Samsung Galaxy XR | Android XR (`libopenxr.google.so`) | `PROPERTY_XR_ACTIVITY_START_MODE` set to the unmanaged full space, `uses-native-library`, `android.software.xr.api.openxr` | The Android XR emulator only (system image android-34 `google-xr` v7, runtime "Android XR" 1.0.0, system "Moohan"): the session runs through READY, SYNCHRONIZED, VISIBLE and FOCUSED, and the demo's flat, curved and surface panels show. No pointer input was tested, and no real headset |
 | Steam Frame | Valve's Android container (Lepton), controllers shown as Oculus Touch | The Khronos category only: no entry of its own was found | No |
 | Play For Dream | Not documented | The Khronos category only: no entry of its own was found | No |
 
