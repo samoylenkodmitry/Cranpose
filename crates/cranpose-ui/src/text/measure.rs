@@ -241,11 +241,13 @@ impl TextService {
                 Rc::new(self.lay_out(source.text(), style, frame, (units, source.shaped())))
             });
         if let Some((key, miss)) = missed {
-            self.layouts
+            let let_go = self
+                .layouts
                 .borrow_mut()
-                .keep(key, &prepared, (miss, admission), |layout| {
-                    self.retire_evicted(layout);
-                });
+                .keep(key, &prepared, (miss, admission));
+            if let Some(layout) = let_go {
+                self.retire_evicted(layout);
+            }
         }
         prepared
     }
@@ -281,7 +283,9 @@ impl TextService {
 
     // Keeps `layout`, which the shared cache let go, for the next changed
     // texts when nothing else holds it, and its string when nothing else
-    // holds that.
+    // holds that. Out of line: few misses make the cache let go a layout
+    // that nothing else holds.
+    #[inline(never)]
     fn retire_evicted(&self, mut layout: Rc<PreparedTextLayout>) {
         let Some(free) = Rc::get_mut(&mut layout) else {
             return;
@@ -528,11 +532,14 @@ impl TextService {
             MemoryHeadroom::Ample => IDLE_PASSES,
             MemoryHeadroom::Tight => 1,
         };
-        self.layouts
+        let mut aged = self
+            .layouts
             .borrow_mut()
-            .begin_pass((idle_passes, headroom), |layout| {
-                self.retire_evicted(layout);
-            });
+            .begin_pass((idle_passes, headroom));
+        for layout in aged.drain(..) {
+            self.retire_evicted(layout);
+        }
+        self.layouts.borrow_mut().give_back(aged);
         self.intrinsics.borrow_mut().begin_pass(idle_passes, drop);
         self.retired.borrow_mut().begin_pass(idle_passes);
         self.retired_strings.borrow_mut().begin_pass(idle_passes);
