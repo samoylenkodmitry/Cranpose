@@ -29,6 +29,12 @@ impl Host {
     ) {
     }
 
+    // Readies the process for the runtime that offers `available`: nothing, and it can create
+    // its instance.
+    pub(crate) fn await_activity(&self, _available: &xr::ExtensionSet) -> bool {
+        true
+    }
+
     // Ends the process, as the app asked. Its run returns when the session ended, so there is
     // nothing more to end.
     pub(crate) fn finish(&self) -> bool {
