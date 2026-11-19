@@ -28,6 +28,7 @@ mod scope_frame;
 mod subcompose_slot;
 mod subcompose_stack;
 pub use composable_group::{ComposableGroup, ParameterChange};
+use movable::GroupEntry;
 pub(crate) use movable::PendingMovable;
 use parent_frame::{InitialParentFrame, push_root_frame};
 pub(crate) use parent_frame::{ParentAttachMode, ParentFrame};
@@ -99,13 +100,6 @@ fn bind_slots_host_to_runtime_state(
     Rc::clone(host)
 }
 
-struct GroupEntry {
-    key: crate::slot::GroupKey,
-    /// Boxed: a restore is rare, and the entry moves on every call.
-    restored: Option<Box<crate::slot::DetachedSubtree>>,
-    placeholder_for: Option<crate::slot::GroupKey>,
-}
-
 struct GroupScopeEntry<'a> {
     options: RecomposeOptions,
     start_kind: GroupStartKind,
@@ -140,6 +134,7 @@ impl SlotHostPassGuard {
             }
         }
         self.core.branch_folds.end_pass(self.fold_base);
+        self.core.shared_state.end_compose_pass();
         self.active = false;
     }
 }
@@ -862,6 +857,7 @@ impl Composer {
         mode: crate::slot::SlotPassMode,
     ) -> SlotHostPassGuard {
         let slots = bind_slots_host_to_runtime_state(&self.core.shared_state, slots);
+        self.core.shared_state.begin_compose_pass();
         let fold_base = self.core.branch_folds.len();
         slots.begin_pass(mode, &self.core.branch_folds);
         {
@@ -887,8 +883,8 @@ impl Composer {
             slots.finish_pass(&mut *applier)
         }?;
         self.handle_detached_children_in_host(slots, None, finished.detached_root_children)?;
-        self.wake_sites_whose_movable_arrived();
         self.evict_retained_subtrees_for_host(slots)?;
+        self.settle_pass_movables(slots)?;
         slots.complete_pass_cleanup(&finished.outcome);
         Ok(finished.outcome)
     }
@@ -1108,48 +1104,6 @@ impl Composer {
         self.apply_pending_commands()
     }
 
-    fn resolve_group_entry(
-        &self,
-        host: &Rc<SlotsHost>,
-        seed: crate::slot::GroupKeySeed,
-        parent_scope_id: Option<ScopeId>,
-    ) -> GroupEntry {
-        let key = host.with_write_session(|slots| slots.reserve_group_key(seed));
-        let retain_key = RetainKey::for_group(parent_scope_id, key);
-        let restored = self
-            .core
-            .shared_state
-            .take_retained(host, retain_key, |subtree| {
-                host.with_write_session(|slots| slots.retained_restore_ready(key, subtree))
-            })
-            .or_else(|| self.take_movable_from_another_table(host, retain_key, key))
-            .map(Box::new);
-        if restored.is_some() || !key.is_movable() {
-            return GroupEntry {
-                key,
-                restored,
-                placeholder_for: None,
-            };
-        }
-        let attached_elsewhere = self.movable_attached_elsewhere(host, key);
-        if !attached_elsewhere {
-            return GroupEntry {
-                key,
-                restored: None,
-                placeholder_for: None,
-            };
-        }
-        let id = key.explicit_key.unwrap_or_default();
-        let placeholder = host.with_write_session(|slots| {
-            slots.reserve_group_key(crate::slot::GroupKeySeed::movable_placeholder(id))
-        });
-        GroupEntry {
-            key: placeholder,
-            restored: None,
-            placeholder_for: Some(key),
-        }
-    }
-
     fn start_group(
         &self,
         host: &Rc<SlotsHost>,
@@ -1289,13 +1243,13 @@ impl Composer {
     ) -> Result<(), NodeError> {
         for mut subtree in detached {
             for movable in subtree.split_off_nested_movables() {
-                self.retain_detached_subtree_in_host(slots_host, None, movable)?;
+                self.handle_detached_movable_in_host(slots_host, movable)?;
             }
             if subtree
                 .root_key_checked()
                 .is_some_and(crate::slot::GroupKey::is_movable)
             {
-                self.retain_detached_subtree_in_host(slots_host, None, subtree)?;
+                self.handle_detached_movable_in_host(slots_host, subtree)?;
                 continue;
             }
             let retention_mode = subtree
@@ -1328,15 +1282,15 @@ impl Composer {
         if was_skipped {
             self.attach_root_nodes(root_nodes);
         }
-        self.dispose_detached_nodes(direct_nodes);
-        if detached_children.is_empty() {
-            return;
-        }
-        if let Err(err) =
-            self.handle_detached_children_in_host(host, parent_scope, detached_children)
+        // Handle detached child groups before disposing direct nodes so
+        // retained or movable children detach from a leaving parent node first.
+        if !detached_children.is_empty()
+            && let Err(err) =
+                self.handle_detached_children_in_host(host, parent_scope, detached_children)
         {
             log::error!("detached subtree handling failed while closing a group: {err}");
         }
+        self.dispose_detached_nodes(direct_nodes);
     }
 
     pub(crate) fn close_current_group_body_for_scope(&self, scope: &RecomposeScope) {

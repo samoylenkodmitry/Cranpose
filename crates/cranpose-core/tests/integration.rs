@@ -10,6 +10,7 @@ mod effects_and_frames;
 mod global_writes;
 mod late_node_records;
 mod lifetime_cancellation;
+mod movable_lifetime;
 mod nested_context;
 mod node_marks;
 #[path = "support/ordered_parent.rs"]

@@ -11,7 +11,7 @@ impl DeferredDrop {
         Self { value }
     }
 
-    fn dispose(self) {
+    pub(crate) fn dispose(self) {
         drop(self.value);
     }
 }
@@ -26,10 +26,25 @@ impl SlotLifecycleCoordinator {
         self.pending_drops.push(drop);
     }
 
+    pub(crate) fn queue_drops(&mut self, drops: impl IntoIterator<Item = DeferredDrop>) {
+        self.pending_drops.extend(drops);
+    }
+
+    pub(crate) fn append(&mut self, other: &mut Self) {
+        self.pending_drops.append(&mut other.pending_drops);
+    }
+
     pub(crate) fn queue_subtree_disposal(&mut self, subtree: DetachedSubtree) {
         for drop in subtree.into_payload_drops_rev() {
             self.queue_drop(drop);
         }
+    }
+
+    pub(crate) fn take_pending_drops(&mut self) -> Vec<DeferredDrop> {
+        if self.pending_drops.is_empty() {
+            return Vec::new();
+        }
+        std::mem::take(&mut self.pending_drops)
     }
 
     pub(crate) fn pop_pending_drop(&mut self) -> Option<DeferredDrop> {

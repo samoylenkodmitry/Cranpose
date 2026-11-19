@@ -49,6 +49,12 @@ impl MovableIndex {
         self.anchors.get(&id).copied()
     }
 
+    pub(in crate::slot) fn for_each_id(&self, mut f: impl FnMut(Key)) {
+        for &id in self.anchors.keys() {
+            f(id);
+        }
+    }
+
     pub(in crate::slot) fn clear(&mut self) {
         self.anchors.clear();
     }
@@ -76,6 +82,10 @@ impl SlotTable {
         self.movables
             .anchor(id)
             .is_some_and(|anchor| self.anchors.active_index(anchor).is_some())
+    }
+
+    pub(crate) fn for_each_movable_id(&self, f: impl FnMut(Key)) {
+        self.movables.for_each_id(f);
     }
 
     /// Whether this table issued the anchors a detached subtree carries.

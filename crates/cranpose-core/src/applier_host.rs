@@ -51,6 +51,20 @@ impl NodeDisposal {
         }
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+            && self.slot_hosts.is_empty()
+            && self.lifecycle.pending_drops_len() == 0
+    }
+
+    pub(crate) fn append_lifecycle(&mut self, mut other: SlotLifecycleCoordinator) {
+        self.lifecycle.append(&mut other);
+    }
+
+    pub(crate) fn append_drops(&mut self, drops: Vec<crate::slot::DeferredDrop>) {
+        self.lifecycle.queue_drops(drops);
+    }
+
     pub(crate) fn retain_subtree(&mut self, subtree: DetachedSubtree) {
         subtree.append_disposal_roots(&mut self.nodes);
         self.lifecycle.queue_subtree_disposal(subtree);
@@ -65,10 +79,7 @@ struct NodeDisposalQueue {
 
 impl NodeDisposalQueue {
     fn enqueue(&self, disposal: NodeDisposal) {
-        if !disposal.nodes.is_empty()
-            || !disposal.slot_hosts.is_empty()
-            || disposal.lifecycle.pending_drops_len() != 0
-        {
+        if !disposal.is_empty() {
             self.batches.borrow_mut().push(disposal);
             self.pending.set(true);
         }
@@ -79,6 +90,9 @@ impl NodeDisposalQueue {
         applier: &mut A,
         dispose: fn(&mut A, NodeId) -> Result<(), NodeError>,
     ) -> Result<(), NodeError> {
+        // Keep dropped runtime cells and states alive until every queued node
+        // in this flush unmounts.
+        let _teardown = crate::runtime::enter_state_teardown_scope();
         while self.pending.get() {
             let next = self.batches.borrow_mut().pop();
             let Some(mut batch) = next else {
