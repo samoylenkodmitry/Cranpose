@@ -4,6 +4,11 @@ fn all() -> Vec<&'static CStr> {
     EXTENSIONS.to_vec()
 }
 
+// What a driver that lists `available` answers.
+fn listing<'a>(available: &'a [&CStr]) -> impl Fn(&CStr) -> bool + 'a {
+    move |name| available.contains(&name)
+}
+
 #[test]
 fn a_driver_with_every_extension_adds_the_ones_the_device_lacks() {
     let enabled = [
@@ -13,7 +18,7 @@ fn a_driver_with_every_extension_adds_the_ones_the_device_lacks() {
     ];
     let mut available = all();
     available.push(c"VK_KHR_swapchain");
-    let added = extensions_to_add(&available, &enabled).expect("every extension is there");
+    let added = extensions_to_add(listing(&available), &enabled).expect("every extension is there");
     assert_eq!(
         added,
         [
@@ -29,7 +34,7 @@ fn a_driver_with_every_extension_adds_the_ones_the_device_lacks() {
 #[test]
 fn a_device_that_has_them_all_adds_nothing() {
     let all = all();
-    assert_eq!(extensions_to_add(&all, &all), Some(Vec::new()));
+    assert_eq!(extensions_to_add(listing(&all), &all), Some(Vec::new()));
 }
 
 #[test]
@@ -37,7 +42,11 @@ fn a_driver_that_lacks_one_extension_imports_nothing() {
     for (lacking, name) in EXTENSIONS.iter().enumerate() {
         let mut available = all();
         available.remove(lacking);
-        assert_eq!(extensions_to_add(&available, &[]), None, "without {name:?}");
+        assert_eq!(
+            extensions_to_add(listing(&available), &[]),
+            None,
+            "without {name:?}"
+        );
     }
 }
 

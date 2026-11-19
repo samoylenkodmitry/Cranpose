@@ -47,7 +47,7 @@ enum Textures {
     Made(wgpu::TextureUsages),
     // The writer's own code makes them, for a size, in the ring's format. Its textures are
     // initialized and ready to be sampled.
-    #[cfg(all(feature = "android", target_os = "android"))]
+    #[cfg(all(feature = "video", feature = "android", target_os = "android"))]
     Provided(Box<dyn Fn(u32, u32) -> Option<wgpu::Texture> + Send>),
 }
 
@@ -121,7 +121,7 @@ impl ExternalFrames {
     // Opaque frames in the textures that `make` creates for a size, in a format that is not sRGB.
     // A writer that renders with the platform's own API needs this: it also tells wgpu the state
     // that a texture is in, which the textures that the ring makes cannot hold.
-    #[cfg(all(feature = "android", target_os = "android"))]
+    #[cfg(all(feature = "video", feature = "android", target_os = "android"))]
     pub(crate) fn with_textures(
         gpu: &GpuContext,
         format: wgpu::TextureFormat,
@@ -300,7 +300,7 @@ impl Ring {
                     &view_formats
                 },
             ),
-            #[cfg(all(feature = "android", target_os = "android"))]
+            #[cfg(all(feature = "video", feature = "android", target_os = "android"))]
             Textures::Provided(make) => make(width, height)?,
         };
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());

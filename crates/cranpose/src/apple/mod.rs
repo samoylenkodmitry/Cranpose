@@ -77,7 +77,11 @@ pub(crate) mod network;
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
 ))]
 pub(crate) mod now_playing;
-#[cfg(all(feature = "renderer-wgpu", any(target_os = "macos", target_os = "ios")))]
+#[cfg(all(
+    feature = "video",
+    feature = "renderer-wgpu",
+    any(target_os = "macos", target_os = "ios")
+))]
 pub(crate) mod nv12_converter;
 #[cfg(any(
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),

@@ -57,7 +57,7 @@ The `cranpose` features an app chooses:
   `localization`, `localization-formatting`, `localized-arabic`,
   `localized-devanagari`, `localized-cjk` and `southeast-asian-line-breaks`.
 - Services: `audio`, `audio-desktop`, `camera-desktop`, `media`, `media-wav`,
-  `image-loading`, `webview`, `storekit`, `playbilling`, `heart-rate`,
+  `video`, `image-loading`, `webview`, `storekit`, `playbilling`, `heart-rate`,
   `device-auth`, `device-motion` and `wearable`.
 - Tools: `robot`, `preview`, `hot-reload` and `release-log-info`.
 

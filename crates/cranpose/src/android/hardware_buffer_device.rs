@@ -11,43 +11,23 @@
 //! pictures need belongs to wgpu-hal's list of features, which leaves it off, so the callback chains
 //! the feature itself.
 
-use std::ffi::CStr;
-
 use ash::vk;
 use wgpu::hal::api::Vulkan;
 
 use super::hardware_buffer_extensions::extensions_to_add;
 
-/// The device Cranpose asks an Android adapter for.
-pub(crate) fn android_device(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'static> {
-    wgpu::DeviceDescriptor {
-        label: Some("Android Device"),
-        // Display timing lets the frame pacer see when frames reach the
-        // screen; see `android_display_timing`.
-        required_features: cranpose_render_wgpu::optional_device_features(adapter)
-            | (adapter.features() & wgpu::Features::VULKAN_GOOGLE_DISPLAY_TIMING),
-        required_limits: crate::gpu_limits::mobile_device_limits(adapter.limits()),
-        experimental_features: wgpu::ExperimentalFeatures::disabled(),
-        memory_hints: crate::gpu_limits::mobile_memory_hints(),
-        trace: wgpu::Trace::Off,
-    }
-}
-
-// Opens the device that Cranpose asks `adapter` for, with the import extensions where the adapter
-// is a Vulkan adapter with them, and as wgpu opens it everywhere else.
-pub(crate) fn request_device(
+// The device that `descriptor` names, opened with the import extensions, or `None` where `adapter`
+// is not a Vulkan adapter whose driver has them.
+pub(super) fn request_device(
     adapter: &wgpu::Adapter,
-) -> Result<(wgpu::Device, wgpu::Queue), wgpu::RequestDeviceError> {
-    let descriptor = android_device(adapter);
-    if let Some(opened) = open_importing(adapter, &descriptor) {
-        // SAFETY: the device was opened on this adapter with the features and the limits that the
-        // descriptor names.
-        match unsafe { adapter.create_device_from_hal(opened, &descriptor) } {
-            Ok(device) => return Ok(device),
-            Err(error) => log::warn!("android video import: wgpu took no device: {error}"),
-        }
-    }
-    pollster::block_on(adapter.request_device(&descriptor))
+    descriptor: &wgpu::DeviceDescriptor<'_>,
+) -> Option<(wgpu::Device, wgpu::Queue)> {
+    let opened = open_importing(adapter, descriptor)?;
+    // SAFETY: the device was opened on this adapter with the features and the limits that the
+    // descriptor names.
+    unsafe { adapter.create_device_from_hal(opened, descriptor) }
+        .map_err(|error| log::warn!("android video import: wgpu took no device: {error}"))
+        .ok()
 }
 
 fn open_importing(
@@ -56,16 +36,13 @@ fn open_importing(
 ) -> Option<wgpu::hal::OpenDevice<Vulkan>> {
     // SAFETY: the guard reads the adapter's handles while this function runs.
     let hal = unsafe { adapter.as_hal::<Vulkan>() }?;
+    // wgpu-hal listed the driver's extensions when it made the adapter.
+    let driver = hal.physical_device_capabilities();
+    let enabled = hal.required_device_extensions(descriptor.required_features);
+    let added = extensions_to_add(|name| driver.supports_extension(name), &enabled)?;
     let instance = hal.shared_instance().raw_instance();
     let physical = hal.raw_physical_device();
-    // SAFETY: the physical device belongs to the instance.
-    let properties = unsafe { instance.enumerate_device_extension_properties(physical) }.ok()?;
-    let available: Vec<&CStr> = properties
-        .iter()
-        .filter_map(|property| property.extension_name_as_c_str().ok())
-        .collect();
-    let enabled = hal.required_device_extensions(descriptor.required_features);
-    let added = extensions_to_add(&available, &enabled)?;
+    // wgpu-hal reads this feature when it makes the adapter, but keeps the answer private.
     let mut supported = vk::PhysicalDeviceSamplerYcbcrConversionFeatures::default();
     let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut supported);
     // SAFETY: the physical device belongs to the instance, and the chain lives through the call.
