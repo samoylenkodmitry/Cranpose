@@ -536,13 +536,35 @@ stack.
 
 ### The demo
 
-`apps/xr-demo` has a tracking panel. It lists each feature with its availability and what the
-frame gives, and it draws a map of the hands: a dot for each fingertip that the cameras track.
-The map is part of one panel. A panel for each fingertip would add ten layers to the compositor's
-frame, and a hand's own pointing ray would stop at the dot at its fingertip. The build script asks
-for hand tracking, which needs no prompt on a Quest. `XR_DEMO_TRACKING=none` asks for nothing, and
-`XR_DEMO_TRACKING=all` adds the body, the face and the eyes, which the system asks the user to
-allow.
+`apps/xr-demo` shows the tracking in its counter panel. The section lists each feature with its
+availability and what the frame gives, and it draws a map of the hands: a dot for each fingertip
+that the cameras track, seen from the front. The map is part of the panel. The compositor of a
+Quest 3 takes 16 layers at most (`xrEndFrame` fails above that, although the system properties
+report 32), and the demo already submits that many, so a panel for the section would end the
+session. A panel for each fingertip would add ten layers, and a hand's own pointing ray would stop
+at the dot at its fingertip. The build script asks for hand tracking, which needs no prompt on a
+Quest. `XR_DEMO_TRACKING=none` asks for nothing, and `XR_DEMO_TRACKING=all` adds the body, the face
+and the eyes, which the system asks the user to allow.
+
+### Measured on a Quest 3
+
+On a Quest 3 (Horizon OS, runtime "Oculus" 210.137.0) at the desk, with no hand in view of the
+cameras:
+
+- An app that declares nothing sees `XR_EXT_hand_tracking` and `XR_FB_hand_tracking_aim` in the
+  runtime's list, and none of the body, face and eye extensions. The runtime lists those only to an
+  app whose manifest names their permissions, so such an app reads them as `Unavailable`.
+- An app that declares all four sees the hand, aim, body, full-body and `XR_FB_face_tracking2`
+  extensions, and no eye extension. The eyes are `Unavailable`, because the Quest 3 has no eye
+  cameras.
+- The prompt for the face and the microphone showed before the session started, and the app waited
+  with the face granted and the microphone not. It started the session when the second permission
+  was granted. A prompt that comes while the session runs ended the session in 30 ms.
+- The hand, body and face trackers run. The body gives 84 valid joints, with the legs estimated.
+  The face gives valid weights with the data source `Audio`. The frame effect runs 120 times a
+  second.
+
+The desk shows no hand joints, no aim and no fingertip dots: no hand was in the cameras' view.
 
 ## Flat video
 

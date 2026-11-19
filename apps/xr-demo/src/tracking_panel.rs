@@ -1,7 +1,8 @@
-// A panel that shows which tracking the runtime offers and how far each feature has come, and a map
-// of the hands: a dot at each fingertip that the cameras track, seen from the front as the viewer
-// looks at them. The map is part of the panel. A panel for each dot would add ten layers to the
-// compositor's frame, and a hand's own pointing ray would stop at the dot at its fingertip.
+// What the demo shows of the tracking: which features the runtime offers and how far each has come,
+// and a map of the hands: a dot at each fingertip that the cameras track, seen from the front as the
+// viewer looks at them. The section is part of the counter panel. The compositor takes 16 layers at
+// most, and the demo already submits that many. A panel for each dot would add ten layers, and a
+// hand's own pointing ray would stop at the dot at its fingertip.
 //
 // The app asks only for hand tracking, which needs no prompt on a Meta Quest. The build asks for the
 // body, the face and the eyes as well when the environment variable `XR_DEMO_TRACKING` is `all`,
@@ -11,8 +12,8 @@ use cranpose::prelude::*;
 use cranpose_ui::text::FontWeight;
 use cranpose_xr::{
     FaceBlendShapeType, FaceDataSource, FaceTrackingProvider, Hand, HandJointType,
-    SpatialFrameEffect, SpatialPanel, SubspaceModifier, TrackingAvailability, TrackingCapabilities,
-    TrackingFeature, TrackingState, XrFrame, local_tracking_capabilities,
+    SpatialFrameEffect, TrackingAvailability, TrackingCapabilities, TrackingFeature, TrackingState,
+    XrFrame, local_tracking_capabilities,
 };
 use player_demo::sized;
 
@@ -88,9 +89,16 @@ fn on_map(tip: [f32; 3], head: [f32; 3]) -> [f32; 2] {
     [tip[0] - head[0], tip[1] - head[1] + MAP_DROP].map(|meters| (meters * 1000.0).round() / 1000.0)
 }
 
-// The panel with the readout, and a dot for each fingertip of each hand.
+// What the effect fills and the section shows.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct TrackingView {
+    readout: MutableState<TrackingReadout>,
+    dots: [MutableState<Dot>; 10],
+}
+
+// Runs the frame effect that fills the view: the readout, and the place of each fingertip.
 #[composable]
-pub(crate) fn TrackingPanel() {
+pub(crate) fn TrackedHands() -> TrackingView {
     let readout = rememberMutableStateOf(TrackingReadout::default);
     let dots = remember(|| std::array::from_fn::<_, 10, _>(|_| mutableStateOf(None::<[f32; 2]>)))
         .with(|dots| *dots);
@@ -113,35 +121,29 @@ pub(crate) fn TrackingPanel() {
             }
         }
     });
-    SpatialPanel(
-        SubspaceModifier::new()
-            .size(1000.0, 330.0)
-            .offset(0.0, -560.0, 0.0),
+    TrackingView { readout, dots }
+}
+
+// The readout beside the map of the hands.
+#[composable]
+pub(crate) fn TrackingSection(view: TrackingView) {
+    Row(
+        Modifier::empty(),
+        RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(24.0)),
         move || {
-            Row(
-                Modifier::empty()
-                    .fill_max_size()
-                    .background(Color(0.1, 0.12, 0.14, 0.94))
-                    .rounded_corners(24.0)
-                    .padding(24.0),
-                RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(24.0)),
+            Column(
+                Modifier::empty(),
+                ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(8.0)),
                 move || {
-                    Column(
+                    Text(
+                        "Tracking",
                         Modifier::empty(),
-                        ColumnSpec::default()
-                            .vertical_arrangement(LinearArrangement::spaced_by(8.0)),
-                        move || {
-                            Text(
-                                "Tracking",
-                                Modifier::empty(),
-                                sized(30.0, Some(FontWeight::BOLD)),
-                            );
-                            ReadoutLines(readout);
-                        },
+                        sized(28.0, Some(FontWeight::BOLD)),
                     );
-                    HandMap(dots);
+                    ReadoutLines(view.readout);
                 },
             );
+            HandMap(view.dots);
         },
     );
 }
