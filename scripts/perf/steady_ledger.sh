@@ -69,6 +69,11 @@ readonly LAYOUTS=(
     "deep --scenario=deep --depth=40 --chips=6"
     "deep-layer --scenario=deep_layer --depth=40 --chips=6"
 )
+readonly MOVABLE_LAYOUTS=(
+    "movable-lazy --case=lazy_movable_scroll"
+    "movable-context-menu --case=lazy_context_menu_scroll"
+    "movable-flip --case=movable_parent_flip"
+)
 # The layout whose start gets a row of its own, a layout node.
 readonly START_ROW=wall-t20
 # The layouts whose counted frames an A/B also runs under callgrind, beside
@@ -79,7 +84,7 @@ readonly INSTRUCTION_ROWS=" gauntlet-t12 patchwork-t17 feed "
 # follow the scene's phase (from -101 to +2 a frame on the gauntlet t16 at
 # one commit), so the comparison prints that count and leaves it out of the
 # verdict. Every other row must leave nothing live.
-readonly PHASED_ROWS=" patchwork-t17 gauntlet-t16 gauntlet-t12 feed ticker "
+readonly PHASED_ROWS=" patchwork-t17 gauntlet-t16 gauntlet-t12 feed ticker movable-lazy movable-context-menu "
 
 # What the A/Bs of all lanes on a host share: the lock that lets one fat LTO
 # build run at a time, and the measured bases. STEADY_LEDGER_SHARED moves
@@ -88,7 +93,7 @@ readonly PHASED_ROWS=" patchwork-t17 gauntlet-t16 gauntlet-t12 feed ticker "
 # of its own. FORMAT names the rows that this script writes; a new one
 # measures a kept base again.
 readonly SHARED="${STEADY_LEDGER_SHARED:-$HOME/hotpath}"
-readonly FORMAT=1
+readonly FORMAT=2
 
 self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
@@ -104,6 +109,7 @@ job() {
     shift 4
     local out="$dir/runs/$run/$row"
     local steady="$dir/bin/$side-steady_frames" fb="$dir/bin/$side-framebuffer_frame"
+    local mc="$dir/bin/$side-movable_content"
     local window=(--warmup="$WARMUP_FRAMES" --frames="$COUNTED_FRAMES")
     # Whole stacks, which place each copy or block in its phase, with full
     # source paths, which place a block in its group.
@@ -123,6 +129,22 @@ job() {
         > "$out.$kind" 2>&1 ;;
     instr-start) "${callgrind[@]}" --zero-before='steady_frames::start*' "$steady" --warmup=0 --frames=0 "$@" \
         > "$out.$kind" 2>&1 ;;
+    mc-count) "$mc" --steady-ledger "${window[@]}" "$@" > "$out.count" 2>&1 ;;
+    mc-copy)
+        valgrind --tool=dhat --num-callers=500 --read-inline-info=yes --fullpath-after= \
+            --dhat-out-file="$out.copy.json" --mode=copy --trace-malloc=yes \
+            "$mc" --steady-ledger "${window[@]}" "$@" 2>&1 | ledger trace > "$out.copy"
+        ;;
+    mc-empty)
+        valgrind --tool=dhat --num-callers=500 --read-inline-info=yes --fullpath-after= \
+            --dhat-out-file="$out.empty.json" --mode=copy \
+            "$mc" --steady-ledger --warmup="$WARMUP_FRAMES" --frames=0 "$@" > "$out.empty" 2>&1
+        ;;
+    mc-instr)
+        valgrind --tool=callgrind --callgrind-out-file="$out.instr.out" \
+            --zero-before='movable_content::steady_frames*' \
+            "$mc" --steady-ledger "${window[@]}" "$@" > "$out.instr" 2>&1
+        ;;
     fb-instr)
         SCREEN=dashboard PIXELS=rgb565 FRAMES="$COUNTED_FRAMES" "${callgrind[@]}" \
             --zero-before='framebuffer_frame::steady_frames*' "$fb" > "$out.$kind" 2>&1
@@ -160,6 +182,16 @@ jobs_of() {
     [ -z "$instructions" ] || echo "$run $side fb-instr dashboard"
     echo "$run $side fb-0 dashboard"
     echo "$run $side fb-$COUNTED_FRAMES dashboard"
+    if [ -x "$dir/bin/$side-movable_content" ]; then
+        for layout in "${MOVABLE_LAYOUTS[@]}"; do
+            row=${layout%% *}
+            echo "$row" >> "$dir/runs/$run/order"
+            [ -z "$instructions" ] || echo "$run $side mc-instr $layout"
+            for kind in mc-copy mc-empty mc-count; do
+                echo "$run $side $kind $layout"
+            done
+        done
+    fi
 }
 
 # Runs the job lines on stdin, as many at once as the host has cores.
@@ -211,9 +243,21 @@ build() {
             --features framebuffer,embedded-default-font \
             --bench framebuffer_frame --no-run --message-format=json-render-diagnostics
     ) > "$dir/build-$side-fb.json"
+    local names=(steady_frames framebuffer_frame)
+    local build_jsons=("$dir/build-$side-app.json" "$dir/build-$side-fb.json")
+    if [ -f "$src/crates/cranpose-app-shell/benches/movable_content.rs" ]; then
+        (
+            cd "$src"
+            [ -z "$ws_target" ] || export CARGO_TARGET_DIR="$ws_target"
+            fatlto "$lock" --shared cargo bench -p cranpose-app-shell \
+                --bench movable_content --no-run --message-format=json-render-diagnostics
+        ) > "$dir/build-$side-mc.json"
+        names+=(movable_content)
+        build_jsons+=("$dir/build-$side-mc.json")
+    fi
     local name exe
-    for name in steady_frames framebuffer_frame; do
-        exe=$(grep -h "\"name\":\"$name\"" "$dir/build-$side-app.json" "$dir/build-$side-fb.json" |
+    for name in "${names[@]}"; do
+        exe=$(grep -h "\"name\":\"$name\"" "${build_jsons[@]}" |
             grep -o '"executable":"[^"]*"' | tail -1 | cut -d'"' -f4)
         [ -n "$exe" ] || die "the build of $name named no executable"
         cp "$exe" "$dir/bin/$side-$name"
