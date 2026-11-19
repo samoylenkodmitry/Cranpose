@@ -138,9 +138,6 @@ pub struct AppSettings {
     /// Whether to register the platform's generic families on Android
     /// (default: false).
     pub android_system_fonts: bool,
-    /// The face text draws in when the app supplied none. Only a launcher
-    /// the app gave no fonts sets it, so an app that did has no reference to
-    /// the embedded face and its binary leaves the bytes out.
     pub(crate) default_face: fn() -> Option<Typeface>,
     /// Graphics API selected for the Android WGPU renderer.
     pub android_gpu_backend: AndroidGpuBackend,
@@ -575,9 +572,8 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
     /// AppLauncher::new().with_capabilities(&CAPABILITIES)
     /// ```
     ///
-    /// The platform builds read the same declaration, so the permissions in
-    /// the manifest and the answers a service gives at run time cannot drift
-    /// apart.
+    /// The platform builds read the same declaration, so the permissions in the manifest and the
+    /// answers a service gives at run time cannot drift apart.
     #[must_use]
     pub fn with_capabilities(
         mut self,
@@ -587,11 +583,15 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
         self
     }
 
+    /// The capabilities that `with_capabilities` stated.
+    pub const fn capabilities(&self) -> &cranpose_capabilities::Capabilities<'static> {
+        &self.settings.capabilities
+    }
+
     /// Set the id every framework-owned storage path is scoped by.
     ///
-    /// Use the same reverse-DNS identifier the app is packaged under, so a
-    /// desktop build writes beside its own data rather than beside every other
-    /// Cranpose application.
+    /// Use the same reverse-DNS identifier the app is packaged under, so a desktop build writes
+    /// beside its own data rather than beside every other Cranpose application.
     ///
     /// # Arguments
     ///

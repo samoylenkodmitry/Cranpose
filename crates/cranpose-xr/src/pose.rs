@@ -10,6 +10,12 @@ pub struct Pose {
     pub orientation: [f32; 4],
 }
 
+impl Default for Pose {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
 impl Pose {
     /// No offset and no turn.
     pub const IDENTITY: Self = Self {

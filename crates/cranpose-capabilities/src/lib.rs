@@ -12,6 +12,7 @@ use std::{
 
 use fluent_syntax::ast::{Entry, Expression, InlineExpression, Message, Pattern, PatternElement};
 
+mod tracking;
 mod uses;
 
 /// Something an application uses that the device has to allow.
@@ -57,6 +58,16 @@ pub enum Service {
     /// The rotation of the device, from its motion sensors, at the rate the
     /// sensors give it.
     DeviceMotion,
+    /// The joints of the user's hands, which a headset's cameras track.
+    HandTracking,
+    /// The joints of the user's body, which a headset estimates from its
+    /// cameras and its controllers.
+    BodyTracking,
+    /// The user's facial expression, which a headset estimates from its
+    /// cameras or from the microphone.
+    FaceTracking,
+    /// Where the user's eyes look, which a headset's inward cameras track.
+    EyeTracking,
 }
 
 impl Service {
@@ -81,6 +92,9 @@ impl Service {
             Self::Wearable => "wearable",
             Self::DeviceAuth => "device-auth",
             Self::DeviceMotion => "device-motion",
+            Self::HandTracking | Self::BodyTracking | Self::FaceTracking | Self::EyeTracking => {
+                tracking::of(self).name
+            }
         }
     }
 
@@ -132,7 +146,26 @@ impl Service {
             // it. The permission is a normal one: the system grants it at
             // install and asks nobody. Reading the rotation needs no other.
             Self::DeviceMotion => &["android.permission.HIGH_SAMPLING_RATE_SENSORS"],
+            Self::HandTracking | Self::BodyTracking | Self::FaceTracking | Self::EyeTracking => {
+                tracking::of(self).permissions
+            }
         }
+    }
+
+    /// The permissions this service asks the person for at run time, as
+    /// groups. A group holds one permission for each platform that has one,
+    /// and any one of them satisfies it. The service works when every group
+    /// is satisfied. A service that asks nothing at run time has no group.
+    pub const fn android_permission_groups(self) -> &'static [&'static [&'static str]] {
+        tracking::of(self).groups
+    }
+
+    /// The Android features this service names, each written as optional: a
+    /// store that filters by them still offers the application to a device
+    /// that lacks the sensor, and the application asks the framework at run
+    /// time.
+    pub const fn android_features(self) -> &'static [&'static str] {
+        tracking::of(self).features
     }
 
     /// The Android permissions this service needs only up to an API level,
@@ -570,6 +603,18 @@ pub fn android_permissions(capabilities: &Capabilities<'_>) -> Vec<&'static str>
     named.into_iter().collect()
 }
 
+/// Every optional Android feature the declared services name, in order and
+/// without repeats.
+pub fn android_features(capabilities: &Capabilities<'_>) -> Vec<&'static str> {
+    let mut named = BTreeSet::new();
+    for entry in capabilities.uses {
+        for feature in entry.service.android_features() {
+            named.insert(*feature);
+        }
+    }
+    named.into_iter().collect()
+}
+
 /// The permissions the declaration needs only up to an API level, each with
 /// that level, without repeats and leaving out any the newer list already
 /// names.
@@ -602,6 +647,12 @@ pub fn android_manifest(capabilities: &Capabilities<'_>) -> String {
         let _ = writeln!(
             text,
             "    <uses-permission android:name=\"{permission}\" android:maxSdkVersion=\"{level}\" />"
+        );
+    }
+    for feature in android_features(capabilities) {
+        let _ = writeln!(
+            text,
+            "    <uses-feature android:name=\"{feature}\" android:required=\"false\" />"
         );
     }
     for demand in capabilities.demands {

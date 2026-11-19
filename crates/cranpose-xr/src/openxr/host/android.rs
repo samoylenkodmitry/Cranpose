@@ -10,7 +10,11 @@ use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
 use cranpose::{AppLauncher, LauncherFonts};
 use openxr as xr;
 
-use crate::openxr::{runner::run_immersive, runtime::Runtime, session::SessionStatus};
+use crate::{
+    openxr::{runner::run_immersive, runtime::Runtime, session::SessionStatus},
+    tracking_permission::PermissionAnswer,
+    tracking_request::TrackingRequest,
+};
 
 // The most events that one pass of the loop takes from the activity's queue
 const MAX_INPUT_EVENTS_PER_LOOP: usize = 16;
@@ -35,6 +39,21 @@ impl Host {
     pub(crate) fn require(&self, available: &xr::ExtensionSet, extensions: &mut xr::ExtensionSet) {
         extensions.khr_android_create_instance = true;
         extensions.khr_android_surface_swapchain = available.khr_android_surface_swapchain;
+    }
+
+    // What the user answered for a group of alternative permissions.
+    pub(crate) fn permission_answer(&self, alternatives: &[&str]) -> PermissionAnswer {
+        match cranpose::android_permission(&self.app, alternatives) {
+            cranpose::AndroidPermission::NotAsked => PermissionAnswer::NotAsked,
+            cranpose::AndroidPermission::Granted => PermissionAnswer::Granted,
+            cranpose::AndroidPermission::Refused => PermissionAnswer::Refused,
+            cranpose::AndroidPermission::Blocked => PermissionAnswer::Blocked,
+        }
+    }
+
+    // Shows the system's prompt for the permissions that the app does not hold.
+    pub(crate) fn request_permissions(&self, permissions: &[&str]) {
+        cranpose::request_android_permissions(&self.app, permissions);
     }
 
     // Handles the activity's events and returns whether the activity ended. While the headset
@@ -85,7 +104,8 @@ pub fn run<Fonts: LauncherFonts>(
 ) {
     let settings = launcher.start_android_host(&app);
     let host = Host { app };
-    let result = Runtime::connect(&host)
+    let request = TrackingRequest::of(&settings.capabilities);
+    let result = Runtime::connect(&host, request)
         .and_then(|runtime| run_immersive(&host, runtime, &settings, content));
     if let Err(error) = result {
         log::error!("cranpose xr: {error}");

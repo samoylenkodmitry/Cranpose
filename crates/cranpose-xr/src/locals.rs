@@ -6,7 +6,7 @@
 use cranpose_core::{CompositionLocal, compositionLocalOf};
 
 use crate::{
-    Haptics, HeadsetProperties, SpatialCapabilities, SpatialEnvironment,
+    Haptics, HeadsetProperties, SpatialCapabilities, SpatialEnvironment, TrackingCapabilities,
     frame_effects::FrameEffects,
     space::{Origin, SUBSPACE_ORIGIN, Space},
     spatial_curved_row::Curve,
@@ -21,6 +21,7 @@ pub(crate) struct Locals {
     pub(crate) frame_effects: CompositionLocal<Option<FrameEffects>>,
     pub(crate) haptics: CompositionLocal<Option<Haptics>>,
     pub(crate) headset_properties: CompositionLocal<Option<HeadsetProperties>>,
+    pub(crate) tracking_capabilities: CompositionLocal<TrackingCapabilities>,
 }
 
 thread_local! {
@@ -33,6 +34,7 @@ thread_local! {
         frame_effects: compositionLocalOf(|| None),
         haptics: compositionLocalOf(|| None),
         headset_properties: compositionLocalOf(|| None),
+        tracking_capabilities: compositionLocalOf(TrackingCapabilities::default),
     };
 }
 

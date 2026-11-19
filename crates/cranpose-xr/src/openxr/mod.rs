@@ -30,5 +30,6 @@ mod surface_layers;
 mod surface_swapchain;
 mod system_properties;
 mod tracked_pose;
+mod tracking;
 
 pub use host::run;

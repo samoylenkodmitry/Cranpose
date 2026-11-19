@@ -156,6 +156,42 @@ impl Use {
         }
     }
 
+    /// The joints of the user's hands, which a headset's cameras track; see
+    /// `cranpose_xr::XrFrame`. Declaring it is the only way an application's
+    /// build asks for the permission and for the runtime's extension.
+    pub const fn hand_tracking() -> Self {
+        Self {
+            service: Service::HandTracking,
+            reason: None,
+        }
+    }
+
+    /// The joints of the user's body, which a headset estimates; see
+    /// `cranpose_xr::XrFrame`.
+    pub const fn body_tracking() -> Self {
+        Self {
+            service: Service::BodyTracking,
+            reason: None,
+        }
+    }
+
+    /// The user's facial expression, which a headset estimates from its
+    /// cameras or from the microphone; see `cranpose_xr::XrFrame`.
+    pub const fn face_tracking() -> Self {
+        Self {
+            service: Service::FaceTracking,
+            reason: None,
+        }
+    }
+
+    /// Where the user's eyes look; see `cranpose_xr::XrFrame`.
+    pub const fn eye_tracking() -> Self {
+        Self {
+            service: Service::EyeTracking,
+            reason: None,
+        }
+    }
+
     /// Which service this is.
     pub const fn service(self) -> Service {
         self.service

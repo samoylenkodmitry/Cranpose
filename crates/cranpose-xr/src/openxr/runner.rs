@@ -26,6 +26,7 @@ use crate::{
     exit_request::{ExitRequest, ExitStep, leave},
     frame_effects::local_frame_effects,
     local_haptics, local_headset_properties, local_spatial_capabilities, local_spatial_environment,
+    local_tracking_capabilities,
     pointer::Pointer,
     space::{PanelSlot, Ride, Space, local_space},
     surface_input::Gesture,
@@ -63,7 +64,7 @@ pub(crate) fn run_immersive(
             SessionStatus::Exit => break,
             SessionStatus::Idle => {}
             running => {
-                immersive.frame(running)?;
+                immersive.frame(running, host)?;
                 rate.tick();
             }
         }
@@ -103,8 +104,9 @@ impl Immersive {
         mut content: impl FnMut() + 'static,
     ) -> Result<Self, String> {
         let (graphics, gpu) = Graphics::open(&runtime.instance, runtime.system)?;
+        let tracking = runtime.tracking;
         let xr_session = XrSession::new(runtime, &graphics)?;
-        let headset = HeadsetInput::new(&xr_session)?;
+        let headset = HeadsetInput::new(&xr_session, tracking)?;
         let layers = PanelLayers::new(&xr_session)?;
         let streams = StreamLayers::new(&graphics, &xr_session);
         let format = layers.format();
@@ -128,6 +130,7 @@ impl Immersive {
                     local_frame_effects().provides(Some(effects.clone())),
                     local_haptics().provides(Some(haptics.clone())),
                     local_headset_properties().provides(Some(properties.clone())),
+                    local_tracking_capabilities().provides(tracking.capabilities),
                 ],
                 &mut content,
             );
@@ -163,9 +166,11 @@ impl Immersive {
     // the controllers give no input: the pointer sees them lost, which ends a press. While the
     // runtime shows none of the app's layers the app draws none and ends the frame empty. The
     // app's state stays as it was.
-    fn frame(&mut self, status: SessionStatus) -> Result<(), String> {
+    fn frame(&mut self, status: SessionStatus, host: &Host) -> Result<(), String> {
         let frame = self.xr_session.begin_frame()?;
-        let aims = self.headset.sample(&mut self.xr_session, &frame, status);
+        let aims = self
+            .headset
+            .sample(&mut self.xr_session, &frame, status, host);
         self.space.track(
             self.headset.device_pose(),
             self.headset.controllers(),

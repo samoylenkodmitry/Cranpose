@@ -29,11 +29,13 @@ mod decoder_limits;
 mod foveated_player;
 mod headset_readout;
 mod pattern_writer;
+mod tracking_panel;
 
 use clip_player::{ClipPlayer, target_display_time};
 use foveated_player::FoveatedPlayer;
 use headset_readout::{HeadsetClock, HeadsetReadout, Readout, StreamLogs};
 use pattern_writer::{PatternWriter, Split};
+use tracking_panel::TrackingPanel;
 
 cranpose::app_capabilities!();
 
@@ -95,6 +97,7 @@ pub fn XrDemo() {
             CurvedStrip();
         }
         PressesPanel(presses, readout);
+        TrackingPanel();
     });
     ControllerBall(strip_shown);
 }
