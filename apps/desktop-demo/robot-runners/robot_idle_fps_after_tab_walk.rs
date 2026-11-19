@@ -20,6 +20,11 @@ pub(crate) fn main() {
         .with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(700));
             let _ = robot.wait_for_idle();
+            // Tasks that live as long as the app, as the collector of the
+            // system languages does, are live before the walk as well.
+            let app_tasks = robot
+                .live_ui_task_labels()
+                .expect("live tasks before the walk");
 
             for tab in [
                 "WSZ",
@@ -53,7 +58,7 @@ pub(crate) fn main() {
                     "idle static tab presented frames after settling: {stats:?}"
                 );
             } else {
-                assert_idle_runtime_queues_empty(&robot);
+                assert_idle_runtime_queues_empty(&robot, &app_tasks);
                 perf_contract::log_software_renderer_budget(
                     "idle static tab presented-frame quiescence",
                 );
@@ -69,7 +74,7 @@ pub(crate) fn main() {
         .run(crate::robot_launch::counter_demo);
 }
 
-fn assert_idle_runtime_queues_empty(robot: &cranpose::Robot) {
+fn assert_idle_runtime_queues_empty(robot: &cranpose::Robot, app_tasks: &[(u64, String)]) {
     let stats = robot
         .get_runtime_leak_debug_stats()
         .expect("idle runtime stats should be available");
@@ -77,11 +82,16 @@ fn assert_idle_runtime_queues_empty(robot: &cranpose::Robot) {
         stats.runtime_stats.frame_callbacks_len, 0,
         "idle static tab left frame callbacks queued: {stats:?}"
     );
-    assert_eq!(
-        stats.runtime_stats.tasks_len,
-        0,
-        "idle static tab left runtime tasks queued: {:?}\nstats: {stats:?}",
-        robot.live_ui_task_labels().unwrap_or_default()
+    let tasks = robot
+        .live_ui_task_labels()
+        .expect("live tasks after the walk");
+    let left = tasks
+        .iter()
+        .filter(|task| !app_tasks.contains(task))
+        .collect::<Vec<_>>();
+    assert!(
+        left.is_empty(),
+        "the tab walk left runtime tasks live: {left:?}\nstats: {stats:?}"
     );
     assert_eq!(
         stats.runtime_stats.invalid_scopes_len, 0,

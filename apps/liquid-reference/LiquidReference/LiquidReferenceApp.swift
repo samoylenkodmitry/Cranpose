@@ -355,6 +355,7 @@ private struct ReferenceWheel: UIViewRepresentable {
     }
 }
 
+@MainActor
 private func scrollViews(in view: UIView) -> [UIScrollView] {
     var found: [UIScrollView] = []
     for subview in view.subviews {

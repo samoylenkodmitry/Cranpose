@@ -35,6 +35,21 @@ fn segment_x(index: usize) -> f32 {
     CONTROL_LEFT + width * (index as f32 + 0.5)
 }
 
+// The last frame of a tap that switched the toggle on. A tap holds the thumb
+// up for 225 ms, as iOS does. The native thumb is 98% white 440 ms after it
+// lands (cranpose-liquid's tests/fixtures/native_toggle_tap.csv).
+fn check_thumb_restored(last: &cranpose::RobotScreenshot) {
+    let scale = last.width as f32 / last.logical_width;
+    let x = (371.0 * scale) as usize;
+    let y = (154.0 * scale) as usize;
+    let red = last.pixels[(y * last.width as usize + x) * 4];
+    assert!(
+        red >= 230,
+        "native switch restores its white thumb {:.0} ms after the tap; red={red}",
+        GLIDE_FRAMES as f32 * 1000.0 / 60.0
+    );
+}
+
 fn check_resting_track(resting: &cranpose::RobotScreenshot) {
     let scale = resting.width as f32 / resting.logical_width;
     let track_red = |x: f32| {
@@ -100,16 +115,10 @@ pub(crate) fn main() -> ExitCode {
                 }));
                 let frames = robot.capture_interaction_keyframes(1.0, &timeline)
                     .expect("capture exact-clock glide");
-                if name == "toggle-on" {
-                    let released = &frames[20];
-                    let scale = released.width as f32 / released.logical_width;
-                    let x = (371.0 * scale) as usize;
-                    let y = (154.0 * scale) as usize;
-                    let red = released.pixels[(y * released.width as usize + x) * 4];
-                    assert!(red >= 230,
-                        "native switch restores its white thumb within 333 ms of release; red={red}");
-                }
                 let shot = frames.last().expect("glide shot");
+                if name == "toggle-on" {
+                    check_thumb_restored(shot);
+                }
                 robot_shot::save(shot, &shot_dir, &format!("{}-{name}.png", index + 1));
                 let stats = robot.fps_stats().expect("glide fps stats");
                 let changing_frames = frames.windows(2).filter(|pair| pair[0].pixels != pair[1].pixels).count() as u64;

@@ -9523,20 +9523,20 @@ fn shell_preserves_resolved_pointer_timestamps_during_dispatch() {
         .with(|slot| slot.borrow().as_ref().map(Rc::clone))
         .expect("probe should expose captured samples");
     let origin = Instant::now();
-    let received = |millis| origin + Duration::from_millis(millis);
+    let [moved, pressed, released] = [0, 1, 2].map(|millis| origin + Duration::from_millis(millis));
     assert!(shell.set_cursor_at_event_time(
         50.0,
         50.0,
         PointerEventTime {
             platform_time_ms: Some(10),
             animation_time_nanos: 100,
-            received_at: received(0),
+            received_at: moved,
         },
     ));
     assert!(shell.pointer_pressed_at_event_time(PointerEventTime {
         platform_time_ms: Some(11),
         animation_time_nanos: 110,
-        received_at: received(1),
+        received_at: pressed,
     }));
     assert!(shell.pointer_released_at_position_event_time(
         51.0,
@@ -9544,18 +9544,13 @@ fn shell_preserves_resolved_pointer_timestamps_during_dispatch() {
         PointerEventTime {
             platform_time_ms: Some(12),
             animation_time_nanos: 120,
-            received_at: received(2),
+            received_at: released,
         },
     ));
 
     let samples = captured.borrow();
-    assert!(samples.contains(&(
-        PointerEventKind::Down,
-        Some(11),
-        Some(110),
-        Some(received(1))
-    )));
-    assert!(samples.contains(&(PointerEventKind::Up, Some(12), Some(120), Some(received(2)))));
+    assert!(samples.contains(&(PointerEventKind::Down, Some(11), Some(110), Some(pressed))));
+    assert!(samples.contains(&(PointerEventKind::Up, Some(12), Some(120), Some(released))));
 }
 
 // A live event takes the instant at which the shell received it, whichever
