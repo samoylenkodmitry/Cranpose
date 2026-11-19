@@ -87,9 +87,7 @@ impl ComposerRuntimeState {
     #[inline(never)]
     fn forget_disposed_attached_movables_in_table(&self, table: &SlotTable) {
         let mut disposed = self.disposed_attached_movables.borrow_mut();
-        table.for_each_movable_id(|id| {
-            disposed.remove(&id);
-        });
+        disposed.retain(|&id| !table.movable_is_attached(id));
         if disposed.is_empty() {
             self.has_disposed_attached_movables.set(false);
         }

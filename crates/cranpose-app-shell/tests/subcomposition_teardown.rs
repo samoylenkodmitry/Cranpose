@@ -216,7 +216,7 @@ fn idle_lazy_shell(content: impl FnMut() + 'static) -> AppShell<EmptyRenderer> {
 
 fn scroll_forward_to_rebind(shell: &mut AppShell<EmptyRenderer>, list: LazyListState) {
     for _ in 0..20 {
-        let _ = list.dispatch_scroll_delta(-35.0);
+        let _consumed: f32 = list.dispatch_scroll_delta(-35.0);
         shell.update();
         shell.run_idle_prefetch(None, |_| false);
     }
