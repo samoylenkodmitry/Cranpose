@@ -3,7 +3,12 @@
 
 use openxr as xr;
 
-use super::{graphics::Graphics, host::Host};
+use super::{
+    graphics::Graphics,
+    host::Host,
+    tracking::{self, TrackingSetup},
+};
+use crate::{TrackingCapabilities, tracking_request::TrackingRequest};
 
 // An OpenXR instance on a system with a headset.
 pub(crate) struct Runtime {
@@ -13,12 +18,15 @@ pub(crate) struct Runtime {
     pub(crate) flips_layers: bool,
     // Whether the runtime shows cylinder layers, which curved panels are
     pub(crate) cylinders: bool,
+    // The tracking that the app asked for, and what the runtime offers of it
+    pub(crate) tracking: TrackingSetup,
 }
 
 impl Runtime {
     // Loads the OpenXR loader, makes an instance and finds the headset. A machine with no
-    // loader, no runtime or no headset gets an error that says which.
-    pub(crate) fn connect(host: &Host) -> Result<Self, String> {
+    // loader, no runtime or no headset gets an error that says which. The instance enables the
+    // extensions of the tracking that `request` asks for, and no others.
+    pub(crate) fn connect(host: &Host, request: TrackingRequest) -> Result<Self, String> {
         // SAFETY: the library is the Khronos OpenXR loader: the `xr` service of the Gradle plugin
         // packs it into an APK, and a desktop has it installed with its runtime.
         let entry = unsafe { xr::Entry::load(&host.platform()) }
@@ -27,8 +35,16 @@ impl Runtime {
             .enumerate_extensions()
             .map_err(|error| format!("OpenXR extensions: {error}"))?;
         let mut extensions = wanted_extensions(&available);
+        let listed = tracking::listed(&available);
+        let enabled = listed.enabled_for(request);
+        tracking::enable(&mut extensions, enabled);
+        // The prompt comes before the session, and the instance is made after it
+        tracking::ask_before_session(host, enabled);
         Graphics::require(&available, &mut extensions)?;
         host.require(&available, &mut extensions);
+        if !host.await_activity(&available) {
+            return Err("the activity ended before the runtime started".into());
+        }
         log::info!(
             "cranpose xr: cylinder layers {}, passthrough extension {}",
             extensions.khr_composition_layer_cylinder,
@@ -52,11 +68,21 @@ impl Runtime {
             .system(xr::FormFactor::HEAD_MOUNTED_DISPLAY)
             .map_err(|error| format!("no headset: {error}"))?;
         log_runtime(&instance, system);
+        let support = tracking::query(&instance, system, enabled);
+        let capabilities = TrackingCapabilities::from_runtime(request, listed, support);
+        log::info!(
+            "cranpose xr: the runtime lists {listed:?}; asked for {request:?}; tracking {capabilities:?}"
+        );
         Ok(Self {
             instance,
             system,
             flips_layers: available.fb_composition_layer_image_layout,
             cylinders: extensions.khr_composition_layer_cylinder,
+            tracking: TrackingSetup {
+                request,
+                enabled,
+                capabilities,
+            },
         })
     }
 }
@@ -110,11 +136,12 @@ fn log_runtime(instance: &xr::Instance, system: xr::SystemId) {
     }
     match instance.system_properties(system) {
         Ok(headset) => log::info!(
-            "cranpose xr: system \"{}\", vendor {:#x}, swapchains up to {} by {} pixels",
+            "cranpose xr: system \"{}\", vendor {:#x}, swapchains up to {} by {} pixels, {} layers",
             headset.system_name,
             headset.vendor_id,
             headset.graphics_properties.max_swapchain_image_width,
-            headset.graphics_properties.max_swapchain_image_height
+            headset.graphics_properties.max_swapchain_image_height,
+            headset.graphics_properties.max_layer_count
         ),
         Err(error) => log::warn!("cranpose xr: system properties: {error}"),
     }

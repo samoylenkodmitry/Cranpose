@@ -226,6 +226,7 @@ impl XrSession {
             system,
             flips_layers,
             cylinders,
+            tracking: _,
         } = runtime;
         if !Graphics::TOP_ROW_FIRST && !flips_layers {
             log::warn!("cranpose xr: the runtime cannot flip layers; panels show upside down");

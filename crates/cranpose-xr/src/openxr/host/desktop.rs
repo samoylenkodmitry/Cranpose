@@ -9,6 +9,8 @@ use openxr as xr;
 use crate::{
     RunError,
     openxr::{runner::run_immersive, runtime::Runtime, session::SessionStatus},
+    tracking_permission::PermissionAnswer,
+    tracking_request::TrackingRequest,
 };
 
 // How long the process waits between looks at the runtime while the headset shows something else.
@@ -27,6 +29,20 @@ impl Host {
         _available: &xr::ExtensionSet,
         _extensions: &mut xr::ExtensionSet,
     ) {
+    }
+
+    // A desktop asks the user for nothing: its runtime decides.
+    pub(crate) fn permission_answer(&self, _alternatives: &[&str]) -> PermissionAnswer {
+        PermissionAnswer::Granted
+    }
+
+    // A desktop shows no prompt.
+    pub(crate) fn request_permissions(&self, _permissions: &[&str]) {}
+
+    // Readies the process for the runtime that offers `available`: nothing, and it can create
+    // its instance.
+    pub(crate) fn await_activity(&self, _available: &xr::ExtensionSet) -> bool {
+        true
     }
 
     // Ends the process, as the app asked. Its run returns when the session ended, so there is
@@ -62,7 +78,8 @@ pub fn run<Fonts: LauncherFonts>(
     content: impl FnMut() + 'static,
 ) -> Result<(), RunError> {
     let host = Host;
-    match Runtime::connect(&host) {
+    let request = TrackingRequest::of(launcher.capabilities());
+    match Runtime::connect(&host, request) {
         Ok(runtime) => {
             let settings = launcher.into_settings();
             run_immersive(&host, runtime, &settings, content).map_err(RunError::Headset)

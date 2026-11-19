@@ -6,6 +6,7 @@ fn main() {
     env_logger::init();
     let launcher = cranpose::AppLauncher::new()
         .with_title("Cranpose XR")
+        .with_capabilities(&xr_demo::CAPABILITIES)
         .with_size(960, 540);
     if let Err(error) = cranpose_xr::run(launcher, xr_demo::XrDemo) {
         eprintln!("the XR demo failed to start: {error}");

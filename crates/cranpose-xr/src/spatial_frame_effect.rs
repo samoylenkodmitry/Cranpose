@@ -5,8 +5,9 @@ use cranpose::prelude::*;
 use crate::{XrFrame, frame_effects::local_frame_effects};
 
 /// Runs `on_frame` once in each frame of the headset, with the state of the head, the eyes and
-/// the controllers. It runs on the thread of the frame loop, before the panels draw, so a state
-/// that it sets shows in the same frame.
+/// the controllers, and of the hands, the body, the face and the gaze that the app asked for. It
+/// runs on the thread of the frame loop, before the panels draw, so a state that it sets shows in
+/// the same frame.
 ///
 /// The frame rate is the display's refresh rate, 120 Hz on a Quest 3 at its highest setting. The
 /// callback receives a borrowed [`XrFrame`] that the backend fills in place, and the frame loop

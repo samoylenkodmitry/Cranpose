@@ -70,7 +70,11 @@ Cranpose developers too:
 - `local_spatial_environment()`: the `SpatialEnvironment` with `preferred_passthrough_opacity`
   and `current_passthrough_opacity`, which control the room around the panels.
 - `SpatialFrameEffect(on_frame)`: runs a callback once in each frame of the headset with an
-  `XrFrame`, which holds the head, the eyes and the controllers. See "The headset's state".
+  `XrFrame`, which holds the head, the eyes and the controllers, and, for what the app asks for,
+  the hands, the body, the face and the eyes' gaze. See "The headset's state" and "Tracking hands,
+  body, face and eyes".
+- `local_tracking_capabilities()`: the `TrackingCapabilities` that tell, for each `TrackingFeature`,
+  whether the runtime offers it.
 - `local_haptics()`: the `Haptics` handle that vibrates a hand's controller.
 - `Orbiter`: content attached to the edge of a panel, such as a handle or a toolbar.
 - `SubspaceModifier`: `width`, `height`, `depth`, `size`, `offset`, `rotate`, `with_pose`,
@@ -403,6 +407,165 @@ duration. It is `Send` and `Sync`, so a network thread plays what the host sends
 The frame loop applies the newest request of each hand after the frame effects, with
 `xrApplyHapticFeedback`.
 
+## Tracking hands, body, face and eyes
+
+An app reads the user's hands, body, face and eyes in each frame, with Jetpack XR's names where
+Jetpack XR has them. Four kinds of tracking are opt-in. An app that asks for none pays nothing:
+the instance enables no tracking extension, no tracker exists, no call happens in a frame and the
+APK holds no tracking permission.
+
+### How an app asks
+
+The extensions of an OpenXR instance are fixed when the instance is made. Cranpose makes it before
+the content composes, so a modifier or a composable cannot ask for one. Jetpack XR's
+`Session.configure(Config(handTracking = ...))` runs after the session exists. Cranpose reads
+the build script's declaration instead, which also writes the Android permissions:
+
+| Declaration | Feature | OpenXR extensions | Meta Quest permission | Android XR permission |
+|---|---|---|---|---|
+| `Use::hand_tracking()` | `TrackingFeature::Hands` | `XR_EXT_hand_tracking`, `XR_FB_hand_tracking_aim` | `com.oculus.permission.HAND_TRACKING`, `horizonos.permission.HAND_TRACKING` | `android.permission.HAND_TRACKING` |
+| `Use::body_tracking()` | `Body` | `XR_FB_body_tracking`, `XR_META_body_tracking_full_body` | `com.oculus.permission.BODY_TRACKING` | `android.permission.BODY_TRACKING` |
+| `Use::face_tracking()` | `Face` | `XR_FB_face_tracking2`, else `XR_ANDROID_face_tracking` | `com.oculus.permission.FACE_TRACKING`, `horizonos.permission.FACE_TRACKING` and `android.permission.RECORD_AUDIO` | `android.permission.FACE_TRACKING` |
+| `Use::eye_tracking()` | `Eyes` | `XR_FB_eye_tracking_social`, `XR_EXT_eye_gaze_interaction` | `com.oculus.permission.EYE_TRACKING`, `horizonos.permission.EYE_TRACKING` | `android.permission.EYE_TRACKING_FINE` |
+
+The permission names come from Meta's Move API page and Android's XR permissions page. A Quest 3
+on Horizon OS (Android 14) lists them with `pm list permissions`: the hand and body permissions are
+`normal`, which the system grants at install, and the face and eye permissions are `dangerous`. The
+Quest defines the hand, face and eye permissions under both the `com.oculus.permission` and the
+`horizonos.permission` names, in one permission group, and the body permission under the first
+only. Meta's body page was not reachable, so only the device vouches for `BODY_TRACKING`. A Quest 3
+estimates the face from the microphone, so face tracking needs `RECORD_AUDIO`. Each declaration also
+names an optional Oculus feature, written as not required.
+
+The app passes the declaration to its launcher with `with_capabilities(&CAPABILITIES)`, and the
+backend reads it before `xrCreateInstance`. `TrackingRequest` holds the four answers.
+`ExtensionOffer::enabled_for` keeps from the runtime's list the extensions that the request needs
+and no others. An extension comes only with the one it extends: the aim extension needs hand
+tracking and the full body needs body tracking. A face comes from one extension, Meta's before
+Android's.
+
+### What the runtime offers
+
+`local_tracking_capabilities()` returns the `TrackingCapabilities` of the session's start, in the
+pattern of `local_spatial_capabilities()`. The runtime answers a system property structure only for
+an extension that is enabled, so what it can say depends on what the app asked:
+
+- A feature that the app did not ask for is `Offered` when the runtime lists an extension for it,
+  and `Unavailable` otherwise. A listed extension does not prove that the headset has the sensor.
+- A feature that the app asked for also gets the system's answer
+  (`supportsHandTracking`, `supportsBodyTracking`, `supportsFullBodyTracking`,
+  `supportsVisualFaceTracking` or `supportsAudioFaceTracking`, `supportsFaceTracking`,
+  `supportsEyeGazeInteraction`, `supportsEyeTracking`). A Quest 3 lists the eye extensions and has
+  no eye cameras, so its eyes become `Unavailable` when the app asks.
+- The log holds the request and the capabilities once, at `cranpose xr: asked for`.
+
+`XrFrame::tracking` holds the live value: `AwaitingPermission` until the user answers,
+`PermissionRefused` after a refusal and `Active` once the tracker runs.
+
+### Permissions
+
+The Java class `CranposePermissions` comes with any of the four declarations. The backend calls
+`cranpose::android_permission` and `cranpose::request_android_permissions` through it, which are
+`cranpose`'s public path to a run-time permission that differs between devices. Each feature has
+groups of alternative permissions: any one name of a group grants it, because a Quest defines the
+`com.oculus` and `horizonos` names and Android XR the `android` ones. The Java side reports 0 (not
+asked), 1 (granted), 2 (refused) or 3 (refused for good, which Android shows no prompt for any
+more). A group of which the device defines no permission counts as granted, so a headset that gates
+its trackers by no permission gets them at once.
+
+The prompt comes before the session. On a Quest 3 the system takes an immersive app off the headset
+to show a dangerous permission's prompt, and the runtime ends a session that is running: the
+session went from `VISIBLE` through `STOPPING` and `IDLE` to `EXITING` in 30 ms, and the app's loop
+ended. So `ask_before_session` runs before the instance is made, after the loader listed the
+extensions. It requests, in one call, every missing permission of every feature that the app asked
+for and the runtime offers, so a Quest 3 does not ask for the eyes it lacks. It waits until each feature is
+answered, the activity ends or five minutes pass. The wait handles the activity's events, so the
+app stays responsive.
+
+`PermissionStep` is the decision for a feature: `Ready` when every group is granted, `Wait` while a
+group has no answer and `Refused` when the user refused a group. The backend does not ask again
+after a refusal. The tracker is made only at `Ready`: Meta's `xrCreateFaceTracker2FB` succeeds
+before the user grants the permissions, and a tracker made then stays empty, so waiting for the
+refusal of the runtime would not work. After the prompt, a frame does no work for a feature that
+still waits, except once a second: it reads the answers and makes the tracker when they are
+granted, which is how a grant in the system's settings takes effect during the session. After the
+tracker runs or the user refuses, the feature costs no more than the frame's own work. At `Ready`
+a refusal other than `XR_ERROR_PERMISSION_INSUFFICIENT` means that the runtime has no such tracker,
+so the feature becomes `Unavailable`.
+
+### What a frame holds
+
+Every field of `XrFrame` is a fixed-size array or a plain value, so the frame loop allocates
+nothing:
+
+- `HandState`: `tracking_state` (Jetpack XR's `TrackingState`), 26 `HandJoint`s (`pose`, `radius`,
+  `valid` and `tracked`) at the index of each `HandJointType`, and `aim`, the `HandAim` of
+  `XR_FB_hand_tracking_aim`: the aim pose, the `Pinch` (strength and a flag) of each finger and the
+  system gesture. `HandAim::ray()` gives the ray along which the hand points, so a hand works as a
+  pointer. Jetpack XR's `Hand` is the tracked hand and its `HandSide` the side. Cranpose's `Hand`
+  has been the side since the controllers came, so the tracked hand is `HandState`, Jetpack XR's
+  `Hand.State`.
+- `BodyState`: `active`, `confidence`, `joint_count` (70 for the upper body and the hands, 84 with
+  the legs and feet) and 84 `BodyJoint`s at the index of each `BodyJointType`, which have Meta's
+  names. Jetpack XR has no body API.
+- `FaceState`: Jetpack XR's `Face.State`, with a weight for each of its 68 `FaceBlendShapeType`s and
+  a confidence for each `FaceConfidenceRegion`. `XR_ANDROID_face_tracking` writes it directly. For
+  `XR_FB_face_tracking2` the backend maps the 63 shapes that both share, and the tongue's `Out`,
+  by index. The tongue shapes `Left`, `Right`, `Up` and `Down` stay at 0 there. Meta's two
+  confidences go to the lower region and to both upper regions.
+- `MetaFaceState`: every weight of `XR_FB_face_tracking2`, by `FaceExpression`, with its two
+  confidences and its `FaceDataSource`: `Visual` from cameras, `Audio` from the microphone, as a
+  Quest 3 gives. `FaceExpression::blend_shape` and `FaceBlendShapeType::expression` map between
+  the two names.
+- `Eyes`: an `EyeState` for each eye (`XR_FB_eye_tracking_social`: pose and confidence), and the
+  combined gaze pose of `XR_EXT_eye_gaze_interaction`. Jetpack XR's `Eye.State.isOpen` has no
+  source in these extensions.
+
+`XR_EXT_eye_gaze_interaction` is an action, so the backend declares its action set before the
+session attaches its sets, with the controllers', and syncs both in each frame. A tracker that
+the runtime does not locate leaves its state at rest and `Paused`. While the app has no input
+focus every tracked state is at rest.
+
+### The cost of a frame
+
+An app that asked for nothing returns from `Trackers::sample` after one check. An app that asked
+pays one call for each tracker it runs: two `xrLocateHandJointsEXT` (the aim state rides in the
+same call), one `xrLocateBodyJointsFB`, one `xrGetFaceExpressionWeights2FB` or `xrGetFaceStateANDROID`,
+and one `xrGetEyeGazesFB`, or a located space for the gaze. The arrays live in the frame or on the
+stack.
+
+### The demo
+
+`apps/xr-demo` shows the tracking in its counter panel. The section lists each feature with its
+availability and what the frame gives, and it draws a map of the hands: a dot for each fingertip
+that the cameras track, seen from the front. The map is part of the panel. The compositor of a
+Quest 3 takes 16 layers at most (`xrEndFrame` fails above that, although the system properties
+report 32), and the demo already submits that many, so a panel for the section would end the
+session. A panel for each fingertip would add ten layers, and a hand's own pointing ray would stop
+at the dot at its fingertip. The build script asks for hand tracking, which needs no prompt on a
+Quest. `XR_DEMO_TRACKING=none` asks for nothing, and `XR_DEMO_TRACKING=all` adds the body, the face
+and the eyes, which the system asks the user to allow.
+
+### Measured on a Quest 3
+
+On a Quest 3 (Horizon OS, runtime "Oculus" 210.137.0) at the desk, with no hand in view of the
+cameras:
+
+- An app that declares nothing sees `XR_EXT_hand_tracking` and `XR_FB_hand_tracking_aim` in the
+  runtime's list, and none of the body, face and eye extensions. The runtime lists those only to an
+  app whose manifest names their permissions, so such an app reads them as `Unavailable`.
+- An app that declares all four sees the hand, aim, body, full-body and `XR_FB_face_tracking2`
+  extensions, and no eye extension. The eyes are `Unavailable`, because the Quest 3 has no eye
+  cameras.
+- The prompt for the face and the microphone showed before the session started, and the app waited
+  with the face granted and the microphone not. It started the session when the second permission
+  was granted. A prompt that comes while the session runs ended the session in 30 ms.
+- The hand, body and face trackers run. The body gives 84 valid joints, with the legs estimated.
+  The face gives valid weights with the data source `Audio`. The frame effect runs 120 times a
+  second.
+
+The desk shows no hand joints, no aim and no fingertip dots: no hand was in the cameras' view.
+
 ## Flat video
 
 `PlayerSurface(frames, modifier, content_scale)` of `cranpose` draws the pictures of a decoder in
@@ -613,6 +776,14 @@ shows none of the app's frames. The `xr` service and the backend take care of th
   process's NDK context can hold the application context instead.
 - Each panel's swapchain image starts with its top row, as wgpu writes it, and the layer says
   so with `XR_FB_composition_layer_image_layout`.
+- On Android XR the host takes the activity's events until the activity is resumed and has a
+  window, before it creates the OpenXR instance. The host does so when the runtime offers an
+  `XR_ANDROID_` extension. Android XR's `xrCreateInstance` waits for that state. It polls the
+  calling thread's looper and reads the commands of `android_native_app_glue` from it. This app's
+  glue is android-activity, which keeps its commands in a pipe on the same looper, and the
+  runtime never reads them. Without the wait the call spins at full CPU use and never returns:
+  the log ends after `xrCreateInstance called`. With the wait the runtime logs "already in resume
+  state with window available, skip" and goes on. Other runtimes start as they always did.
 
 The backend also keeps these rules of every runtime and store:
 
@@ -656,7 +827,7 @@ loader.
 | Meta Quest 2, Quest Pro, Quest 3S | Meta | The same entries | No |
 | Pico 4, Pico 4 Ultra | PICO OS 5.9 and later with the Khronos loader | `pvr.app.type`, `pvr.sdk.version`, `pxr.sdk.version_code`, `com.picovr.intent.category.VR` | No |
 | HTC Vive Focus 3, XR Elite | Wave OpenXR | `com.htc.intent.category.VRAPP`, `com.htc.vr.content.NumDoFHmd`, `NumDoFController` and `NumController` | No |
-| Samsung Galaxy XR | Android XR (`libopenxr.google.so`) | `PROPERTY_XR_ACTIVITY_START_MODE` set to the unmanaged full space, `uses-native-library`, `android.software.xr.api.openxr` | No |
+| Samsung Galaxy XR | Android XR (`libopenxr.google.so`) | `PROPERTY_XR_ACTIVITY_START_MODE` set to the unmanaged full space, `uses-native-library`, `android.software.xr.api.openxr` | The Android XR emulator only (system image android-34 `google-xr` v7, runtime "Android XR" 1.0.0, system "Moohan"): the session runs through READY, SYNCHRONIZED, VISIBLE and FOCUSED, and the demo's flat, curved and surface panels show. No pointer input was tested, and no real headset |
 | Steam Frame | Valve's Android container (Lepton), controllers shown as Oculus Touch | The Khronos category only: no entry of its own was found | No |
 | Play For Dream | Not documented | The Khronos category only: no entry of its own was found | No |
 

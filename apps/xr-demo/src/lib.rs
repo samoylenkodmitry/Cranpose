@@ -29,11 +29,13 @@ mod decoder_limits;
 mod foveated_player;
 mod headset_readout;
 mod pattern_writer;
+mod tracking_panel;
 
 use clip_player::{ClipPlayer, target_display_time};
 use foveated_player::FoveatedPlayer;
 use headset_readout::{HeadsetClock, HeadsetReadout, Readout, StreamLogs};
 use pattern_writer::{PatternWriter, Split};
+use tracking_panel::{TrackedHands, TrackingSection, TrackingView};
 
 cranpose::app_capabilities!();
 
@@ -54,6 +56,7 @@ pub fn XrDemo() {
     let clock = remember(HeadsetClock::default).with(Clone::clone);
     let logs = remember(StreamLogs::default).with(Clone::clone);
     remember(decoder_limits::log_in_background);
+    let tracking = TrackedHands();
     Subspace(move || {
         HeadsetReadout(presses, readout, clock.clone(), logs.clone());
         // A flat window shows the panels side by side, so the clips come first
@@ -90,7 +93,7 @@ pub fn XrDemo() {
                 .rotate(0.0, -30.0, 0.0),
             Split::TopBottom,
         );
-        CounterPanel(presses);
+        CounterPanel(presses, tracking);
         if strip_shown.get() {
             CurvedStrip();
         }
@@ -216,8 +219,8 @@ fn FlatStreamedClip(stats: StreamStats) {
 // The panel with the counter and the button for the room. A handle under it carries it, and a
 // handle at its bottom right corner resizes it. The size is the state that the resize sets.
 #[composable]
-fn CounterPanel(presses: MutableState<u32>) {
-    let size = rememberMutableStateOf(|| [800.0_f32, 500.0]);
+fn CounterPanel(presses: MutableState<u32>, tracking: TrackingView) {
+    let size = rememberMutableStateOf(|| [800.0_f32, 800.0]);
     let [width, height] = size.get();
     SpatialPanel(
         SubspaceModifier::new()
@@ -264,6 +267,7 @@ fn CounterPanel(presses: MutableState<u32>) {
                         },
                     );
                     PassthroughButton();
+                    TrackingSection(tracking);
                 },
             );
         },

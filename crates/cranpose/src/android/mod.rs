@@ -82,6 +82,8 @@ pub(crate) mod panic_hook;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod perf_hint;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+pub(crate) mod permission_prompt;
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod permissions;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod pipeline_cache;

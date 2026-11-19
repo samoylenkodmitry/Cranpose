@@ -56,6 +56,11 @@ ignores:
   - crates/cranpose-xr/src/openxr/runtime.rs
   - crates/cranpose-xr/src/openxr/session.rs
   - crates/cranpose-xr/src/openxr/surface_swapchain.rs
+  - crates/cranpose-xr/src/openxr/tracking/body_tracker.rs
+  - crates/cranpose-xr/src/openxr/tracking/eye_tracker.rs
+  - crates/cranpose-xr/src/openxr/tracking/face_tracker.rs
+  - crates/cranpose-xr/src/openxr/tracking/hand_trackers.rs
+  - crates/cranpose-xr/src/openxr/tracking/system_queries.rs
   - crates/cranpose/src/android/accessibility.rs
   - crates/cranpose/src/android/aeabi_memory.rs
   - crates/cranpose/src/android/app_update.rs

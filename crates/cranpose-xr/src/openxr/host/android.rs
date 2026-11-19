@@ -4,20 +4,38 @@
     reason = "the platform info holds raw pointers to the Java VM and the activity"
 )]
 
-use std::time::Duration;
+use std::{
+    cell::Cell,
+    time::{Duration, Instant},
+};
 
 use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
 use cranpose::{AppLauncher, LauncherFonts};
 use openxr as xr;
 
-use crate::openxr::{runner::run_immersive, runtime::Runtime, session::SessionStatus};
+use crate::{
+    openxr::{runner::run_immersive, runtime::Runtime, session::SessionStatus},
+    tracking_permission::PermissionAnswer,
+    tracking_request::TrackingRequest,
+};
 
 // The most events that one pass of the loop takes from the activity's queue
 const MAX_INPUT_EVENTS_PER_LOOP: usize = 16;
 
+// How long one look at the activity's events lasts while the app waits for the activity, and how
+// long the wait goes on before the log says so.
+const RESUME_POLL: Duration = Duration::from_millis(20);
+const RESUME_NOTICE: Duration = Duration::from_secs(5);
+
+// The start of the extension names that only Android XR's runtime offers.
+const ANDROID_XR_EXTENSION: &[u8] = b"XR_ANDROID_";
+
 // The activity that the session belongs to.
 pub(crate) struct Host {
     app: AndroidApp,
+    // Whether the activity is resumed, from the lifecycle events that any look at the activity took.
+    // The permission prompt pauses the activity and resumes it, and its wait takes those events.
+    resumed: Cell<bool>,
 }
 
 impl Host {
@@ -37,6 +55,72 @@ impl Host {
         extensions.khr_android_surface_swapchain = available.khr_android_surface_swapchain;
     }
 
+    // What the user answered for a group of alternative permissions.
+    pub(crate) fn permission_answer(&self, alternatives: &[&str]) -> PermissionAnswer {
+        match cranpose::android_permission(&self.app, alternatives) {
+            cranpose::AndroidPermission::NotAsked => PermissionAnswer::NotAsked,
+            cranpose::AndroidPermission::Granted => PermissionAnswer::Granted,
+            cranpose::AndroidPermission::Refused => PermissionAnswer::Refused,
+            cranpose::AndroidPermission::Blocked => PermissionAnswer::Blocked,
+        }
+    }
+
+    // Shows the system's prompt for the permissions that the app does not hold.
+    pub(crate) fn request_permissions(&self, permissions: &[&str]) {
+        cranpose::request_android_permissions(&self.app, permissions);
+    }
+
+    // Readies the activity for the runtime that offers `available`, and returns whether the app
+    // can create its instance: `false` when the activity ended first. Android XR's runtime waits
+    // for a resumed activity with a window inside `xrCreateInstance`. It reads the commands of
+    // the C glue (`android_native_app_glue`) on the calling thread's looper, where this app's
+    // glue, android-activity, keeps its own. The runtime never reads them and spins. So the
+    // app takes the activity's events until the activity is resumed and has a window, and the
+    // runtime finds it ready. Other runtimes do not wait for the activity, and the app starts
+    // as it always did.
+    pub(crate) fn await_activity(&self, available: &xr::ExtensionSet) -> bool {
+        let android_xr = available
+            .names()
+            .iter()
+            .any(|name| name.starts_with(ANDROID_XR_EXTENSION));
+        !android_xr || self.wait_until_resumed()
+    }
+
+    // Takes the activity's events until it is resumed and has a window, and returns whether it
+    // got there: `false` when the activity ended first.
+    fn wait_until_resumed(&self) -> bool {
+        let start = Instant::now();
+        let mut noticed = false;
+        loop {
+            let mut destroyed = false;
+            self.app.poll_events(Some(RESUME_POLL), |event| {
+                destroyed |= self.take(&event);
+            });
+            self.leave_input_unhandled();
+            if destroyed {
+                return false;
+            }
+            if self.resumed.get() && self.app.native_window().is_some() {
+                return true;
+            }
+            if !noticed && start.elapsed() > RESUME_NOTICE {
+                noticed = true;
+                log::warn!("cranpose xr: the activity is not resumed with a window yet");
+            }
+        }
+    }
+
+    // Notes what an event says of the activity's lifecycle, and returns whether the activity ended.
+    fn take(&self, event: &PollEvent<'_>) -> bool {
+        match event {
+            PollEvent::Main(MainEvent::Resume { .. }) => self.resumed.set(true),
+            PollEvent::Main(MainEvent::Pause) => self.resumed.set(false),
+            PollEvent::Main(MainEvent::Destroy) => return true,
+            _ => {}
+        }
+        false
+    }
+
     // Handles the activity's events and returns whether the activity ended. While the headset
     // shows something else, it waits for them.
     pub(crate) fn ended(&self, status: SessionStatus) -> bool {
@@ -47,9 +131,7 @@ impl Host {
         };
         let mut destroyed = false;
         self.app.poll_events(Some(timeout), |event| {
-            if let PollEvent::Main(MainEvent::Destroy) = event {
-                destroyed = true;
-            }
+            destroyed |= self.take(&event);
         });
         self.leave_input_unhandled();
         destroyed
@@ -84,8 +166,12 @@ pub fn run<Fonts: LauncherFonts>(
     content: impl FnMut() + 'static,
 ) {
     let settings = launcher.start_android_host(&app);
-    let host = Host { app };
-    let result = Runtime::connect(&host)
+    let host = Host {
+        app,
+        resumed: Cell::new(false),
+    };
+    let request = TrackingRequest::of(&settings.capabilities);
+    let result = Runtime::connect(&host, request)
         .and_then(|runtime| run_immersive(&host, runtime, &settings, content));
     if let Err(error) = result {
         log::error!("cranpose xr: {error}");

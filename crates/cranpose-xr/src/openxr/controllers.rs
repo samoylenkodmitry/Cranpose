@@ -26,7 +26,12 @@ pub(crate) struct Controllers {
 }
 
 impl Controllers {
-    pub(crate) fn new(xr_session: &XrSession) -> Result<Self, String> {
+    // Attaches the controllers' set, and `extra` with it when the app has a set of its own: a
+    // session attaches its action sets once.
+    pub(crate) fn new(
+        xr_session: &XrSession,
+        extra: Option<&xr::ActionSet>,
+    ) -> Result<Self, String> {
         let instance = xr_session.instance();
         let set = instance
             .create_action_set("controllers", "Controllers", 0)
@@ -36,9 +41,10 @@ impl Controllers {
             HandActions::new(&set, "right")?,
         ];
         bind_profiles(instance, &actions);
+        let sets: Vec<&xr::ActionSet> = std::iter::once(&set).chain(extra).collect();
         xr_session
             .session
-            .attach_action_sets(&[&set])
+            .attach_action_sets(&sets)
             .map_err(failed("attach actions"))?;
         let [left, right] = actions;
         let path = |path: &str| instance.string_to_path(path).map_err(failed("path"));
@@ -57,16 +63,17 @@ impl Controllers {
         })
     }
 
-    // Writes the controllers of `frame` at `time`. While the app has no input focus, or the
-    // runtime does not sync the actions, the controllers stay at rest.
+    // Writes the controllers of `frame` at `time`, and syncs `extra` with them. While the app has
+    // no input focus, or the runtime does not sync the actions, the controllers stay at rest.
     pub(crate) fn sample(
         &self,
         xr_session: &XrSession,
         time: xr::Time,
         status: SessionStatus,
+        extra: Option<&xr::ActionSet>,
         frame: &mut XrFrame,
     ) {
-        let synced = status.listens() && self.sync(xr_session);
+        let synced = status.listens() && self.sync(xr_session, extra);
         let controllers = [&mut frame.left_controller, &mut frame.right_controller];
         for ((hand, user), controller) in self.hands.iter().zip(self.users).zip(controllers) {
             *controller = Controller::default();
@@ -94,11 +101,20 @@ impl Controllers {
         }
     }
 
-    fn sync(&self, xr_session: &XrSession) -> bool {
-        match xr_session
-            .session
-            .sync_actions(&[xr::ActiveActionSet::new(&self.set)])
-        {
+    fn sync(&self, xr_session: &XrSession, extra: Option<&xr::ActionSet>) -> bool {
+        let own = xr::ActiveActionSet::new(&self.set);
+        let (both, alone);
+        let active: &[xr::ActiveActionSet<'_>] = match extra {
+            Some(extra) => {
+                both = [own, xr::ActiveActionSet::new(extra)];
+                &both
+            }
+            None => {
+                alone = [own];
+                &alone
+            }
+        };
+        match xr_session.session.sync_actions(active) {
             Ok(()) => true,
             Err(error) => {
                 log::debug!("cranpose xr: actions: {error}");
