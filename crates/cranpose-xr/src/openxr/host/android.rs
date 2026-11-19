@@ -15,10 +15,10 @@ use crate::openxr::{runner::run_immersive, runtime::Runtime, session::SessionSta
 // The most events that one pass of the loop takes from the activity's queue
 const MAX_INPUT_EVENTS_PER_LOOP: usize = 16;
 
-// How long one look at the activity's events lasts while the app waits for the activity, and how
-// long the wait goes on before the log says so.
+// How long one look at the activity's events lasts while the app waits for the activity. A
+// resumed activity gets this long to show a window, and a runtime that shows none still starts.
 const RESUME_POLL: Duration = Duration::from_millis(20);
-const RESUME_NOTICE: Duration = Duration::from_secs(5);
+const WINDOW_WAIT: Duration = Duration::from_secs(3);
 
 // The activity that the session belongs to.
 pub(crate) struct Host {
@@ -47,17 +47,19 @@ impl Host {
     // that state inside `xrCreateInstance`. It reads the commands of the C glue
     // (`android_native_app_glue`) on the calling thread's looper, where this app's glue,
     // android-activity, keeps its own. The runtime never reads them and spins. With the events
-    // taken here, the runtime finds the activity ready and skips its wait.
+    // taken here, the runtime finds the activity ready and skips its wait. An activity that is
+    // resumed and gets no window within `WINDOW_WAIT` starts anyway, as a runtime that needs
+    // no window would.
     pub(crate) fn wait_until_resumed(&self) -> bool {
-        let start = Instant::now();
-        let mut noticed = false;
-        let mut resumed = false;
+        let mut resumed_at = None;
         loop {
             let mut destroyed = false;
             self.app
                 .poll_events(Some(RESUME_POLL), |event| match event {
-                    PollEvent::Main(MainEvent::Resume { .. }) => resumed = true,
-                    PollEvent::Main(MainEvent::Pause) => resumed = false,
+                    PollEvent::Main(MainEvent::Resume { .. }) => {
+                        resumed_at.get_or_insert_with(Instant::now);
+                    }
+                    PollEvent::Main(MainEvent::Pause) => resumed_at = None,
                     PollEvent::Main(MainEvent::Destroy) => destroyed = true,
                     _ => {}
                 });
@@ -65,12 +67,15 @@ impl Host {
             if destroyed {
                 return false;
             }
-            if resumed && self.app.native_window().is_some() {
+            let Some(resumed_at) = resumed_at else {
+                continue;
+            };
+            if self.app.native_window().is_some() {
                 return true;
             }
-            if !noticed && start.elapsed() > RESUME_NOTICE {
-                noticed = true;
-                log::warn!("cranpose xr: the activity is not resumed with a window yet");
+            if resumed_at.elapsed() > WINDOW_WAIT {
+                log::warn!("cranpose xr: the resumed activity has no window; connecting");
+                return true;
             }
         }
     }

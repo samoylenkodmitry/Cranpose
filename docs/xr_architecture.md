@@ -619,7 +619,8 @@ shows none of the app's frames. The `xr` service and the backend take care of th
   app's glue is android-activity, which keeps its commands in a pipe on the same looper, and the
   runtime never reads them. Without the wait the call spins at full CPU use and never returns:
   the log ends after `xrCreateInstance called`. With the wait the runtime logs "already in resume
-  state with window available, skip" and goes on.
+  state with window available, skip" and goes on. A resumed activity that shows no window within
+  three seconds starts anyway, for a runtime that needs none.
 
 The backend also keeps these rules of every runtime and store:
 
