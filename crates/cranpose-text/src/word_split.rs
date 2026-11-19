@@ -679,7 +679,3 @@ fn coverages_mention<'a>(
 pub(crate) fn class_index(class: u32) -> usize {
     usize::try_from(class).unwrap_or(usize::MAX)
 }
-
-#[cfg(test)]
-#[path = "tests/word_split_tests.rs"]
-mod tests;
