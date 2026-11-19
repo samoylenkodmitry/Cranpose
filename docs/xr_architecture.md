@@ -31,9 +31,9 @@ sharp. Each composable maps to one compositor primitive:
 A panel draws only when its content changes. The compositor shows the last image of a layer
 until a new one comes, so a still panel costs no GPU time at all.
 
-A Quest client proved the surface swapchain, the quad layer and the streamed scene by hand. Its
-desktop is a surface swapchain fed straight by the hardware decoder. Its console is a quad layer of
-Cranpose content. The controllers' rays and the handles of the panels are quad layers with one
+A Quest client proved the surface swapchain and the quad layer on a Quest 3 by hand. Its desktop is
+a surface swapchain fed straight by the hardware decoder. Its console is a quad layer of Cranpose
+content. The controllers' rays and the handles of the panels are quad layers with one
 static picture each (`ray_layers.rs`, `handle_layers.rs`), so they cost no draw. Only
 `SpatialVolume` draws a 3D scene, into a projection layer.
 
@@ -136,7 +136,7 @@ submitted the eye's own field of view would shift the picture.
 The scene's axes are the room's turned half a turn about x, in millimeters. `scene_from_volume` maps
 a volume's content to the scene from the volume's pose in the room, and the eye's camera maps the
 scene to the eye, so the two share the scene's units. The camera cuts away what lies nearer to the
-eye than a 64th of its focal length in pixels, which is about 3 cm in a Quest's picture.
+eye than a 64th of its focal length in pixels: 12 mm for a focal length of 800 pixels.
 
 A GL swapchain's first row is its bottom one. The camera draws the picture upside down, so the
 runtime reads it upright. This also holds for the depth, which has the same rows. The layer chains

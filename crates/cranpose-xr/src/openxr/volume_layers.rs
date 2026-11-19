@@ -96,12 +96,16 @@ impl VolumeLayers {
         size: (u32, u32),
     ) -> Result<(), String> {
         self.drawn = None;
+        // The swapchains stay through a frame that cannot draw, such as one in which the runtime
+        // loses the eyes, and go with the last volume
+        if space.volume_count() == 0 {
+            self.eyes = None;
+        }
         let Some(frame_plan) = plan(
             space.volume_count(),
             views.map(|view| view.is_some()),
             self.support(),
         ) else {
-            self.eyes = None;
             return Ok(());
         };
         let first_row = if Graphics::TOP_ROW_FIRST {

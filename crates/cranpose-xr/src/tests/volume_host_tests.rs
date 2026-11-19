@@ -12,7 +12,7 @@ use cranpose::{
     prelude::*,
     space::{Light, Mat4, Material, Mesh, MeshSurface, Vec3},
 };
-use cranpose_core::{CompositionLocalProvider, rememberMutableStateOf};
+use cranpose_core::{CompositionLocalProvider, LaunchedEffect, rememberMutableStateOf};
 
 use super::*;
 use crate::{
@@ -37,6 +37,8 @@ struct Headset {
     space: Space,
     shown: MutableState<bool>,
     compositions: Rc<Cell<u32>>,
+    // The value of an animated state at each evaluation of the scene's mesh
+    seen: Rc<RefCell<Vec<u32>>>,
 }
 
 fn gpu() -> GpuContext {
@@ -57,6 +59,8 @@ fn headset() -> Headset {
     let gpu = gpu();
     let compositions = Rc::new(Cell::new(0));
     let counted = Rc::clone(&compositions);
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let observed = Rc::clone(&seen);
     let held = Rc::new(RefCell::new(None));
     let keep = Rc::clone(&held);
     let plane = Arc::new(Mesh::plane());
@@ -71,12 +75,26 @@ fn headset() -> Headset {
             let space = remember(|| Space::with_scene_size([EYE as f32; 2])).with(Clone::clone);
             let shown = rememberMutableStateOf(|| true);
             keep.replace(Some((space.clone(), shown)));
+            // An animation that advances once for each frame of the host
+            let ticks = rememberMutableStateOf(|| 0_u32);
+            LaunchedEffect((), async move |scope| {
+                loop {
+                    scope.with_frame_nanos(|now| now).await;
+                    ticks.update(|ticks| *ticks += 1);
+                }
+            });
             let (counted, plane, host) = (Rc::clone(&counted), Arc::clone(&plane), space.clone());
+            let observed = Rc::clone(&observed);
             CompositionLocalProvider([local_space().provides(Some(space))], move || {
                 let (counted, plane) = (Rc::clone(&counted), Arc::clone(&plane));
+                let observed = Rc::clone(&observed);
                 Subspace(move || {
                     if shown.get() {
-                        quad_volume(Rc::clone(&counted), Arc::clone(&plane));
+                        quad_volume(
+                            Rc::clone(&counted),
+                            Arc::clone(&plane),
+                            (ticks, Rc::clone(&observed)),
+                        );
                     }
                 });
                 VolumeScene(host);
@@ -91,14 +109,20 @@ fn headset() -> Headset {
         space,
         shown,
         compositions,
+        seen,
     }
 }
 
 #[composable]
-fn quad_volume(compositions: Rc<Cell<u32>>, plane: Arc<Mesh>) {
+fn quad_volume(
+    compositions: Rc<Cell<u32>>,
+    plane: Arc<Mesh>,
+    (ticks, seen): (MutableState<u32>, Rc<RefCell<Vec<u32>>>),
+) {
     SpatialVolume(
         SubspaceModifier::new().size(QUAD, QUAD).depth(10.0),
         move |scope| {
+            let seen = Rc::clone(&seen);
             scope.light(Light {
                 direction: Vec3::new(0.0, 0.0, 1.0),
                 ambient: 1.0,
@@ -110,15 +134,19 @@ fn quad_volume(compositions: Rc<Cell<u32>>, plane: Arc<Mesh>) {
             Box(
                 Modifier::empty()
                     .required_size(Size::new(CONTENT, CONTENT))
-                    .mesh_surface(move || MeshSurface {
-                        mesh: Arc::clone(&plane),
-                        // The mesh's unit square, scaled and moved so that it surrounds the
-                        // volume's center
-                        transform: Mat4::scaling(Vec3::new(QUAD, QUAD, 1.0))
-                            .then(&Mat4::translation(Vec3::new(-QUAD / 2.0, -QUAD / 2.0, 0.0))),
-                        material: Material::Emissive,
-                        casts_shadow: false,
-                        solid: true,
+                    .mesh_surface(move || {
+                        // The scene reads the animation while it draws
+                        seen.borrow_mut().push(ticks.get());
+                        MeshSurface {
+                            mesh: Arc::clone(&plane),
+                            // The mesh's unit square, scaled and moved so that it surrounds the
+                            // volume's center
+                            transform: Mat4::scaling(Vec3::new(QUAD, QUAD, 1.0))
+                                .then(&Mat4::translation(Vec3::new(-QUAD / 2.0, -QUAD / 2.0, 0.0))),
+                            material: Material::Emissive,
+                            casts_shadow: false,
+                            solid: true,
+                        }
                     })
                     .background(Color(1.0, 0.0, 0.0, 1.0)),
                 BoxSpec::default(),
@@ -493,4 +521,48 @@ fn a_volume_that_changes_every_frame_does_not_redraw_the_panels_atlas() {
         );
         assert!(draw(&mut headset, &mut pass, &view, &eye_image));
     }
+}
+
+#[test]
+fn both_eyes_draw_the_same_state_of_an_animation_that_advances_once_a_frame() {
+    let mut headset = headset();
+    let mut pass = VolumePass::default();
+    let (left, right) = (Eye::new(&headset.gpu), Eye::new(&headset.gpu));
+    let atlas = Eye::new(&headset.gpu);
+    assert!(draw(&mut headset, &mut pass, &eye(-0.032), &left));
+    let camera = |x| EyeCamera::of(&eye(x), (EYE, EYE), FirstRow::Top).expect("a camera");
+    let mut frame = |headset: &mut Headset| {
+        headset.seen.borrow_mut().clear();
+        // The frame starts with the atlas's update, which is the frame's tick, and the scene
+        // reads the animation there
+        headset
+            .guest
+            .draw(&atlas.color, &atlas.color_view)
+            .expect("the atlas");
+        for (x, image) in [(-0.032, &left), (0.032, &right)] {
+            pass.draw(
+                &mut headset.guest,
+                &headset.space,
+                &camera(x),
+                &image.image(),
+            )
+            .expect("a frame");
+        }
+        headset.seen.borrow().clone()
+    };
+    let mut states = Vec::new();
+    for _ in 0..8 {
+        let seen = frame(&mut headset);
+        // A draw of an eye that ran the frame's callbacks would advance the animation again, and
+        // the scene would read the new state
+        assert!(
+            seen.iter().all(|ticks| *ticks == seen[0]),
+            "a frame drew different states of the animation: {seen:?}"
+        );
+        states.extend(seen.first().copied());
+    }
+    assert!(
+        states.windows(2).any(|pair| pair[0] != pair[1]),
+        "the animation stood still: {states:?}"
+    );
 }

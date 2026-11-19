@@ -79,8 +79,8 @@ impl SpatialVolumeScope {
 /// [`width`](SubspaceModifier::width), [`height`](SubspaceModifier::height) and
 /// [`depth`](SubspaceModifier::depth), 500 dp each by default. The box is where a controller's ray
 /// stops. The content is not scaled to the box and may reach outside it. The camera cuts away
-/// what lies nearer to the eye than a 64th of its focal length in pixels, which is about 3 cm in a
-/// headset.
+/// what lies nearer to the eye than a 64th of its focal length in pixels: 12 mm for a focal length
+/// of 800 pixels.
 ///
 /// A headset draws the content of all volumes together, into one projection layer with a view for
 /// each eye. The content composes once. Each eye then draws it from that eye's own pose and field

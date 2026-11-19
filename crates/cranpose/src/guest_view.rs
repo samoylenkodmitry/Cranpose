@@ -214,9 +214,11 @@ impl GuestView {
         self.shell.remove_window_surface(root);
     }
 
-    /// Advances the composition and draws the window root `root` into `texture` through `view`,
+    /// Updates the composition and draws the window root `root` into `texture` through `view`,
     /// whatever changed. The texture has the size that [`Self::open_window`] was given and the
-    /// format of the view.
+    /// format of the view. The update runs no frame callbacks: the frame's one tick is that of
+    /// [`Self::draw`], so animations and effects that wait for a frame advance once for each
+    /// frame of the host, whatever the number of draws of window roots.
     ///
     /// With `depth`, the root's 3D scenes draw against it and leave their depth in it: a view of
     /// a texture of [`SCENE_DEPTH_FORMAT`](cranpose_render_wgpu::SCENE_DEPTH_FORMAT) of the same
@@ -230,7 +232,7 @@ impl GuestView {
         view: &wgpu::TextureView,
         depth: Option<&wgpu::TextureView>,
     ) -> Result<(), GuestViewError> {
-        self.shell.update();
+        self.shell.update_without_frame();
         let mut surface = self.shell.surface(RootId::Window(root)).ok_or_else(|| {
             GuestViewError::Render(format!("no view for the window root {root:?}"))
         })?;
