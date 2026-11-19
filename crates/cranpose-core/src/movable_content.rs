@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     Composer, Key, composer::ComposerRuntimeState, composer_context, current_runtime_handle,
-    hash_key, remember, with_current_composer,
+    hash_key, with_current_composer,
 };
 
 struct RememberedMovable {
@@ -81,13 +81,15 @@ pub fn movable<K: Hash>(key: K, content: impl FnOnce()) {
 #[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberMovableContentOf(content: impl Fn() + 'static) -> MovableContent {
-    let (runtime, shared_state) =
-        with_current_composer(|composer| (composer.runtime_handle(), composer.shared_state_weak()));
-    let id = remember(|| RememberedMovable {
-        id: runtime.next_movable_content_id(),
-        shared_state,
-    })
-    .with(|owner| owner.id);
+    let source = crate::caller_location_key();
+    let id = with_current_composer(|composer| {
+        composer
+            .remember_at(source, || RememberedMovable {
+                id: composer.runtime_handle().next_movable_content_id(),
+                shared_state: composer.shared_state_weak(),
+            })
+            .with(|owner| owner.id)
+    });
     MovableContent {
         id,
         content: Rc::new(content),

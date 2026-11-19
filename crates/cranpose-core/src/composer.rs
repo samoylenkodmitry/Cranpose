@@ -22,17 +22,19 @@ use crate::{
 
 mod composable_group;
 mod movable;
+mod movable_owners;
 mod parent_frame;
 mod runtime_state;
 mod scope_frame;
 mod subcompose_slot;
 mod subcompose_stack;
 pub use composable_group::{ComposableGroup, ParameterChange};
-use movable::GroupEntry;
 pub(crate) use movable::PendingMovable;
+use movable::movable_retain_key;
+use movable_owners::MovableOwners;
 use parent_frame::{InitialParentFrame, push_root_frame};
 pub(crate) use parent_frame::{ParentAttachMode, ParentFrame};
-pub(crate) use runtime_state::ComposerRuntimeState;
+pub(crate) use runtime_state::{ComposerRuntimeState, HostTableDisposal};
 pub(crate) use scope_frame::ScopeFrame;
 use subcompose_slot::{measure_slot_state, subcompose_slot_at};
 use subcompose_stack::{SubcomposeFrame, SubcomposeStack};
@@ -108,15 +110,16 @@ struct GroupScopeEntry<'a> {
     parent_hint: Option<NodeId>,
 }
 
-struct SlotHostPassGuard {
+struct SlotHostPassGuard<'a> {
     core: Rc<ComposerCore>,
     host: Rc<SlotsHost>,
     /// The branch fold depth the pass began at.
     fold_base: usize,
+    movable_pass: Option<movable_owners::PassGuard<'a>>,
     active: bool,
 }
 
-impl SlotHostPassGuard {
+impl SlotHostPassGuard<'_> {
     fn close(&mut self) {
         if !self.active {
             return;
@@ -134,12 +137,12 @@ impl SlotHostPassGuard {
             }
         }
         self.core.branch_folds.end_pass(self.fold_base);
-        self.core.shared_state.end_compose_pass();
+        self.movable_pass = None;
         self.active = false;
     }
 }
 
-impl Drop for SlotHostPassGuard {
+impl Drop for SlotHostPassGuard<'_> {
     fn drop(&mut self) {
         self.close();
     }
@@ -159,13 +162,6 @@ fn reparent_restored_scopes(
             scope.reactivate();
         });
     });
-}
-
-fn movable_retain_key(id: Key) -> RetainKey {
-    RetainKey::for_group(
-        None,
-        crate::slot::GroupKey::new(crate::slot::MOVABLE_STATIC_KEY, Some(id), 0),
-    )
 }
 
 /// How many applied command queues a thread keeps for its passes.
@@ -855,9 +851,9 @@ impl Composer {
         &self,
         slots: &Rc<SlotsHost>,
         mode: crate::slot::SlotPassMode,
-    ) -> SlotHostPassGuard {
+    ) -> SlotHostPassGuard<'_> {
         let slots = bind_slots_host_to_runtime_state(&self.core.shared_state, slots);
-        self.core.shared_state.begin_compose_pass();
+        let movable_pass = self.core.shared_state.movable_owners.enter_pass();
         let fold_base = self.core.branch_folds.len();
         slots.begin_pass(mode, &self.core.branch_folds);
         {
@@ -873,6 +869,7 @@ impl Composer {
             core: self.clone_core(),
             host: slots,
             fold_base,
+            movable_pass: Some(movable_pass),
             active: true,
         }
     }
@@ -1128,14 +1125,7 @@ impl Composer {
             let top = stack.len().checked_sub(1);
             top.map(|top| self.frame_scope(&mut stack, top).id())
         };
-        let GroupEntry {
-            key,
-            restored,
-            placeholder_for,
-        } = self.resolve_group_entry(host, seed, parent_scope_id);
-        let started =
-            host.with_write_session(|slots| slots.begin_group(key, restored, parent_node));
-        (started, placeholder_for)
+        self.begin_resolved_group(host, seed, parent_scope_id, parent_node)
     }
 
     #[doc(hidden)]
@@ -1179,6 +1169,10 @@ impl Composer {
         parent_scope: Option<ScopeId>,
         subtree: crate::slot::DetachedSubtree,
     ) -> Result<(), NodeError> {
+        self.core
+            .shared_state
+            .movable_owners
+            .forget_attached_in_subtree(&subtree, slots_host.storage_key());
         let Some(root_key) = subtree.root_key_checked() else {
             log::error!("retention rejected detached subtree without a root group");
             self.dispose_detached_subtree_in_host(slots_host, subtree)?;
@@ -1222,6 +1216,10 @@ impl Composer {
         slots_host: &Rc<SlotsHost>,
         subtree: crate::slot::DetachedSubtree,
     ) -> Result<(), NodeError> {
+        self.core
+            .shared_state
+            .movable_owners
+            .forget_attached_in_subtree(&subtree, slots_host.storage_key());
         let root_nodes = self
             .detached_root_parent_commands(&subtree, "disposal")?
             .into_iter()

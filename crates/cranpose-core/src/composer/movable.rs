@@ -8,11 +8,18 @@ use crate::{
     retention::RetainKey,
 };
 
-pub(super) struct GroupEntry {
-    pub(super) key: crate::slot::GroupKey,
+struct GroupEntry {
+    key: crate::slot::GroupKey,
     // Boxed: a restore is rare, and the entry moves on every call.
-    pub(super) restored: Option<Box<crate::slot::DetachedSubtree>>,
-    pub(super) placeholder_for: Option<crate::slot::GroupKey>,
+    restored: Option<Box<crate::slot::DetachedSubtree>>,
+    placeholder_for: Option<crate::slot::GroupKey>,
+}
+
+pub(super) fn movable_retain_key(id: Key) -> RetainKey {
+    RetainKey::for_group(
+        None,
+        crate::slot::GroupKey::new(crate::slot::MOVABLE_STATIC_KEY, Some(id), 0),
+    )
 }
 
 pub(crate) struct PendingMovable {
@@ -63,7 +70,7 @@ impl Composer {
     }
 
     pub(crate) fn forget_movables(&self, ids: &[Key]) -> Result<(), NodeError> {
-        let _pass = self.core.shared_state.enter_compose_pass();
+        let _pass = self.core.shared_state.movable_owners.enter_pass();
         for id in ids {
             let Some((host, subtree)) = self.core.shared_state.take_retained_movable(*id) else {
                 continue;
@@ -90,7 +97,12 @@ impl Composer {
         subtree
             .root_key_checked()
             .and_then(crate::slot::GroupKey::movable_id)
-            .is_some_and(|id| self.core.shared_state.take_disposed_attached_movable(id))
+            .is_some_and(|id| {
+                self.core
+                    .shared_state
+                    .movable_owners
+                    .take_disposed_attached(id)
+            })
     }
 
     fn dispose_movable_subtree_in_host(
@@ -112,7 +124,7 @@ impl Composer {
     }
 
     pub(super) fn dispose_dropped_movable_owners(&self) -> Result<(), NodeError> {
-        if !self.core.shared_state.has_dropped_movable_owners() {
+        if !self.core.shared_state.movable_owners.has_dropped() {
             return Ok(());
         }
         self.dispose_dropped_movable_owners_slow()
@@ -121,23 +133,56 @@ impl Composer {
     #[cold]
     #[inline(never)]
     fn dispose_dropped_movable_owners_slow(&self) -> Result<(), NodeError> {
-        loop {
-            let ids = self.core.shared_state.take_dropped_movable_owners();
-            if ids.is_empty() {
-                return Ok(());
-            }
-            for id in ids {
-                if let Some((host, subtree)) = self.core.shared_state.take_retained_movable(id) {
-                    self.dispose_movable_subtree_in_host(&host, subtree)?;
-                    host.flush_pending_drops();
-                } else if self.core.shared_state.host_holding_movable(id).is_some() {
-                    self.core.shared_state.note_disposed_attached_movable(id);
-                }
+        while let Some(id) = self.core.shared_state.movable_owners.pop_dropped() {
+            if let Some((host, subtree)) = self.core.shared_state.take_retained_movable(id) {
+                self.dispose_movable_subtree_in_host(&host, subtree)?;
+                host.flush_pending_drops();
+            } else if self.core.shared_state.host_holding_movable(id).is_some() {
+                self.core
+                    .shared_state
+                    .movable_owners
+                    .note_disposed_attached(id);
             }
         }
+        Ok(())
     }
 
-    pub(super) fn resolve_group_entry(
+    pub(super) fn begin_resolved_group(
+        &self,
+        host: &Rc<SlotsHost>,
+        seed: crate::slot::GroupKeySeed,
+        parent_scope_id: Option<ScopeId>,
+        parent_node: Option<crate::NodeId>,
+    ) -> (
+        crate::slot::GroupStart<crate::slot::ActiveGroupId>,
+        Option<crate::slot::GroupKey>,
+    ) {
+        let GroupEntry {
+            key,
+            restored,
+            placeholder_for,
+        } = self.resolve_group_entry(host, seed, parent_scope_id);
+        let host_key = host.storage_key();
+        if let Some(subtree) = restored.as_deref() {
+            self.core
+                .shared_state
+                .movable_owners
+                .note_attached_in_subtree(subtree, host_key);
+        }
+        if placeholder_for.is_none()
+            && let Some(id) = key.movable_id()
+        {
+            self.core
+                .shared_state
+                .movable_owners
+                .note_attached(id, host_key);
+        }
+        let started =
+            host.with_write_session(|slots| slots.begin_group(key, restored, parent_node));
+        (started, placeholder_for)
+    }
+
+    fn resolve_group_entry(
         &self,
         host: &Rc<SlotsHost>,
         seed: crate::slot::GroupKeySeed,

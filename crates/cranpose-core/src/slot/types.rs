@@ -366,6 +366,12 @@ impl DetachedSubtree {
         self.groups.first().map(|group| group.key)
     }
 
+    pub(crate) fn movable_ids(&self) -> impl Iterator<Item = Key> + '_ {
+        self.groups
+            .iter()
+            .filter_map(|group| group.key.movable_id())
+    }
+
     #[cfg(test)]
     pub(crate) fn root_parent_anchor(&self) -> AnchorId {
         self.root().parent_anchor

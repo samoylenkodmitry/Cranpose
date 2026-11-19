@@ -90,6 +90,9 @@ impl NodeDisposalQueue {
         applier: &mut A,
         dispose: fn(&mut A, NodeId) -> Result<(), NodeError>,
     ) -> Result<(), NodeError> {
+        if !self.pending.get() {
+            return Ok(());
+        }
         // Keep dropped runtime cells and states alive until every queued node
         // in this flush unmounts.
         let _teardown = crate::runtime::enter_state_teardown_scope();

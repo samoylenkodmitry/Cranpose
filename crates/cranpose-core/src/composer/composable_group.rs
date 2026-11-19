@@ -15,7 +15,7 @@ pub struct ComposableGroup<'a> {
     // The group's scope when it opened with one; `None` for a group whose
     // body makes its scope when it first needs one.
     scope: Option<RecomposeScope>,
-    pass: Option<SlotHostPassGuard>,
+    pass: Option<SlotHostPassGuard<'a>>,
     runs_body: bool,
     // Whether the group composes reused content, under which every group
     // runs its body.

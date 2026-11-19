@@ -40,13 +40,6 @@ impl SlotLifecycleCoordinator {
         }
     }
 
-    pub(crate) fn take_pending_drops(&mut self) -> Vec<DeferredDrop> {
-        if self.pending_drops.is_empty() {
-            return Vec::new();
-        }
-        std::mem::take(&mut self.pending_drops)
-    }
-
     pub(crate) fn pop_pending_drop(&mut self) -> Option<DeferredDrop> {
         self.pending_drops.pop()
     }

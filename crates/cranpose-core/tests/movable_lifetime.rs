@@ -6,8 +6,8 @@ use std::{
 use cranpose_core::{
     Applier, Composition, DisposableEffect, DisposableEffectResult, LaunchedEffect,
     LaunchedEffectScope, MemoryApplier, MovableContent, MutableState, Node, NodeId, RuntimeCell,
-    SlotTable, SlotsHost, location_key, movable, pop_parent, push_parent, remember,
-    rememberMovableContentOf, with_current_composer,
+    SlotId, SlotTable, SlotsHost, SubcomposeState, location_key, movable, pop_parent, push_parent,
+    remember, rememberMovableContentOf, with_current_composer,
 };
 
 use crate::tracked_parent::TrackedParent;
@@ -439,8 +439,15 @@ fn retained_movable_in_another_host_disposes_when_owner_host_drops_outside_pass(
     probe.assert_disposed(&mut composition, node);
 }
 
-#[test]
-fn dropping_slots_host_while_applier_is_borrowed_unmounts_retained_movable_before_host_drops() {
+struct RetainedHostFixture {
+    composition: Composition<MemoryApplier>,
+    sub_slots: Rc<RefCell<Option<Rc<SlotsHost>>>>,
+    host_resource_drops: Rc<Cell<usize>>,
+    probe: Rc<LifecycleProbe>,
+    node: NodeId,
+}
+
+fn setup_retained_host_with_watched_resource() -> RetainedHostFixture {
     let mut composition = Composition::new(MemoryApplier::new());
     let show_movable = MutableState::with_runtime(true, composition.runtime_handle());
     let sub_slots = Rc::new(RefCell::new(Some(Rc::new(
@@ -482,25 +489,236 @@ fn dropping_slots_host_while_applier_is_borrowed_unmounts_retained_movable_befor
 
     render(&mut composition);
     let node = probe.node.get().expect("keyed movable composed");
-
     show_movable.set_value(false);
     render(&mut composition);
-    assert_eq!(probe.unmounts.get(), 0);
-    assert_eq!(host_resource_drops.get(), 0);
-
-    // Drop the SlotsHost while the applier is mutably borrowed (as happens
-    // during layout's NodeDisposalQueue::flush).
-    {
-        let _applier = composition.applier_mut();
-        sub_slots.borrow_mut().take();
+    assert_eq!(probe.unmounts.get(), 0, "retained movable stays mounted");
+    assert_eq!(
+        host_resource_drops.get(),
+        0,
+        "host resource stays alive before disposal"
+    );
+    RetainedHostFixture {
+        composition,
+        sub_slots,
+        host_resource_drops,
+        probe,
+        node,
     }
+}
 
-    assert_eq!(probe.unmounts.get(), 1);
-    assert_eq!(probe.payload_drops.get(), 1);
-    assert_eq!(host_resource_drops.get(), 1);
+fn assert_host_unmounted_before_payloads(fixture: &mut RetainedHostFixture) {
+    assert_eq!(
+        fixture.probe.unmounts.get(),
+        1,
+        "retained movable unmounts once"
+    );
+    assert_eq!(
+        fixture.probe.payload_drops.get(),
+        1,
+        "retained movable payloads drop once"
+    );
+    assert_eq!(
+        fixture.host_resource_drops.get(),
+        1,
+        "host resource drops once"
+    );
     assert!(
-        !probe.unmount_saw_watched_dropped.get(),
+        !fixture.probe.unmount_saw_watched_dropped.get(),
         "retained movable node must unmount before the host's own remembered payloads drop"
     );
-    assert!(composition.applier_mut().get_mut(node).is_err());
+    assert!(
+        fixture
+            .composition
+            .applier_mut()
+            .get_mut(fixture.node)
+            .is_err(),
+        "disposed movable node leaves the applier"
+    );
+}
+
+#[test]
+fn dropping_slots_host_while_applier_is_borrowed_unmounts_retained_movable_before_host_drops() {
+    let mut fixture = setup_retained_host_with_watched_resource();
+    {
+        let _applier = fixture.composition.applier_mut();
+        fixture.sub_slots.borrow_mut().take();
+    }
+    assert_host_unmounted_before_payloads(&mut fixture);
+}
+
+#[test]
+fn reset_while_applier_is_borrowed_unmounts_retained_movable_before_host_drops() {
+    let mut fixture = setup_retained_host_with_watched_resource();
+    let slots = fixture
+        .sub_slots
+        .borrow_mut()
+        .take()
+        .expect("sub_slots created");
+    {
+        let _applier = fixture.composition.applier_mut();
+        slots.reset().expect("reset while applier is borrowed");
+    }
+    assert_host_unmounted_before_payloads(&mut fixture);
+}
+
+fn setup_retained_nested_owner() -> (
+    Composition<MemoryApplier>,
+    Rc<SlotsHost>,
+    Rc<LifecycleProbe>,
+) {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let show_a = MutableState::with_runtime(true, composition.runtime_handle());
+    let sub_slots = Rc::new(SlotsHost::new(SlotTable::new()));
+    let probe = Rc::new(LifecycleProbe::default());
+    let root_key = location_key(file!(), line!(), column!());
+
+    let render = |composition: &mut Composition<MemoryApplier>| {
+        let sub_slots = Rc::clone(&sub_slots);
+        let probe = Rc::clone(&probe);
+        composition
+            .render(root_key, move || {
+                let host =
+                    with_current_composer(|composer| composer.emit_node(TrackedParent::default));
+                let probe = Rc::clone(&probe);
+                with_current_composer(|composer| {
+                    composer
+                        .subcompose_in(&sub_slots, Some(host), |_| {
+                            let a = rememberMovableContentOf(move || {
+                                let probe = Rc::clone(&probe);
+                                let b = rememberMovableContentOf(move || {
+                                    probe.emit_movable_body(Vec::new(), None);
+                                });
+                                emit_wrapper(|| b.show());
+                            });
+                            if show_a.value() {
+                                emit_wrapper(|| a.show());
+                            }
+                        })
+                        .expect("subcompose_in");
+                });
+            })
+            .expect("render composition");
+    };
+
+    render(&mut composition);
+    show_a.set_value(false);
+    render(&mut composition);
+    assert_eq!(
+        probe.unmounts.get(),
+        0,
+        "A and B stay retained while A's owner lives"
+    );
+    (composition, sub_slots, probe)
+}
+
+#[test]
+fn reset_outside_pass_with_retained_nested_owner() {
+    let (_composition, sub_slots, probe) = setup_retained_nested_owner();
+    sub_slots.reset().expect("reset outside a pass");
+    assert_eq!(probe.unmounts.get(), 1);
+}
+
+#[test]
+fn into_table_outside_pass_with_retained_nested_owner() {
+    let (_composition, sub_slots, probe) = setup_retained_nested_owner();
+    let _table = sub_slots.into_table().expect("into_table outside a pass");
+    assert_eq!(probe.unmounts.get(), 1);
+}
+
+#[test]
+fn node_disposal_flush_keeps_owner_host_runtime_cell_alive_until_target_host_unmounts() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let show_in_target = MutableState::with_runtime(true, runtime.clone());
+    let keep_owner = MutableState::with_runtime(true, runtime);
+    let subcompose_state = Rc::new(RefCell::new({
+        let mut state = SubcomposeState::default();
+        state.set_reusable_pool_limits(0, 0);
+        state
+    }));
+    let shared_movable: Rc<RefCell<Option<MovableContent>>> = Rc::new(RefCell::new(None));
+    let captured_composer = Rc::new(RefCell::new(None));
+    let pending_disposal = Rc::new(RefCell::new(None));
+    let probe = Rc::new(LifecycleProbe::default());
+    let root_key = location_key(file!(), line!(), column!());
+
+    let render = |composition: &mut Composition<MemoryApplier>| {
+        let subcompose_state = Rc::clone(&subcompose_state);
+        let shared_movable = Rc::clone(&shared_movable);
+        let captured_composer = Rc::clone(&captured_composer);
+        let pending_disposal = Rc::clone(&pending_disposal);
+        let probe = Rc::clone(&probe);
+        composition
+            .render(root_key, move || {
+                let root = with_current_composer(|composer| {
+                    *captured_composer.borrow_mut() = Some(composer.clone());
+                    composer.emit_node(TrackedParent::default)
+                });
+                let mut state = subcompose_state.borrow_mut();
+                state.begin_pass();
+                if keep_owner.value() {
+                    let owner_slots = state.get_or_create_slots(SlotId::new(1));
+                    let shared_movable = Rc::clone(&shared_movable);
+                    let probe = Rc::clone(&probe);
+                    let owner_node = with_current_composer(|composer| {
+                        composer
+                            .subcompose_in(&owner_slots, Some(root), |composer| {
+                                let cell = remember(|| RuntimeCell::new(Cell::new(0))).with(|c| *c);
+                                let content = rememberMovableContentOf(move || {
+                                    probe.emit_movable_body(vec![cell], None);
+                                });
+                                *shared_movable.borrow_mut() = Some(content);
+                                composer.emit_node(TrackedParent::default)
+                            })
+                            .expect("subcompose owner slot")
+                    });
+                    state.register_active(SlotId::new(1), &[owner_node], &[]);
+                }
+                let target_slots = state.get_or_create_slots(SlotId::new(2));
+                let content = shared_movable.borrow().clone();
+                with_current_composer(|composer| {
+                    composer
+                        .subcompose_in(&target_slots, Some(root), |_| {
+                            if show_in_target.value()
+                                && let Some(content) = content
+                            {
+                                content.show();
+                            }
+                        })
+                        .expect("subcompose target slot");
+                });
+                state.register_active(SlotId::new(2), &[], &[]);
+                let disposal = state.finish_pass();
+                if !keep_owner.value() {
+                    *pending_disposal.borrow_mut() = Some(disposal);
+                }
+            })
+            .expect("render composition");
+    };
+
+    render(&mut composition);
+    let node = probe.node.get().expect("movable node in target slot");
+
+    // Retain the movable inside the target slot while the owner slot still lives.
+    show_in_target.set_value(false);
+    render(&mut composition);
+    assert_eq!(probe.unmounts.get(), 0);
+
+    // Evict the owner slot into SubcomposeDisposal without running it yet,
+    // then dispose it under a borrowed applier so owner_slots drops inside
+    // NodeDisposalQueue::flush (outside any compose pass).
+    keep_owner.set_value(false);
+    render(&mut composition);
+    let disposal = pending_disposal
+        .borrow_mut()
+        .take()
+        .expect("owner slot disposal queued");
+    let composer = captured_composer
+        .borrow_mut()
+        .take()
+        .expect("composer captured");
+    composer
+        .dispose_subcomposed_nodes(disposal)
+        .expect("dispose owner slot through NodeDisposalQueue::flush");
+    probe.assert_disposed(&mut composition, node);
 }

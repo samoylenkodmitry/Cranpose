@@ -49,6 +49,10 @@ impl MovableIndex {
         self.anchors.get(&id).copied()
     }
 
+    pub(in crate::slot) fn is_empty(&self) -> bool {
+        self.anchors.is_empty()
+    }
+
     pub(in crate::slot) fn clear(&mut self) {
         self.anchors.clear();
     }
@@ -76,6 +80,17 @@ impl SlotTable {
         self.movables
             .anchor(id)
             .is_some_and(|anchor| self.anchors.active_index(anchor).is_some())
+    }
+
+    pub(crate) fn has_attached_movables(&self) -> bool {
+        !self.movables.is_empty()
+    }
+
+    pub(crate) fn attached_movable_ids(&self) -> impl Iterator<Item = Key> + '_ {
+        self.groups
+            .iter()
+            .filter_map(|group| group.key.movable_id())
+            .filter(|&id| self.movable_is_attached(id))
     }
 
     /// Whether this table issued the anchors a detached subtree carries.

@@ -9,8 +9,8 @@ use cranpose_liquid::{LiquidContextMenu, LiquidShape, LiquidTheme, LiquidThemeSp
 use cranpose_macros::composable;
 use cranpose_render_common::{RenderScene, Renderer, graph_scene::Scene};
 use cranpose_ui::{
-    Box, BoxSpec, BoxWithConstraints, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Modifier,
-    ScrollState, SemanticsNode, Text, TextStyle,
+    Box, BoxSpec, BoxWithConstraints, Column, ColumnSpec, LazyColumn, LazyColumnSpec, LazyItems,
+    Modifier, ScrollState, SemanticsNode, Text, TextStyle,
 };
 use cranpose_ui_graphics::Size;
 
@@ -176,8 +176,18 @@ fn ContextMenuScrollableRow(index: usize) {
     );
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RowReuse {
+    Shared,
+    UniqueFirst,
+}
+
 #[composable]
-fn IdleLazyList(list_handle: Rc<Cell<Option<LazyListState>>>, row: impl Fn(usize) + 'static) {
+fn IdleLazyList(
+    list_handle: Rc<Cell<Option<LazyListState>>>,
+    reuse: RowReuse,
+    row: impl Fn(usize) + 'static,
+) {
     let list = rememberLazyListState();
     list_handle.set(Some(list));
     let row: Rc<dyn Fn(usize)> = Rc::new(row);
@@ -187,7 +197,17 @@ fn IdleLazyList(list_handle: Rc<Cell<Option<LazyListState>>>, row: impl Fn(usize
         LazyColumnSpec::new(),
         move |scope| {
             let row = Rc::clone(&row);
-            scope.items(80, move |index| row(index));
+            match reuse {
+                RowReuse::UniqueFirst => {
+                    scope.items(
+                        LazyItems::new(80).content_type(|index| u64::from(index == 0)),
+                        move |index| row(index),
+                    );
+                }
+                RowReuse::Shared => {
+                    scope.items(80, move |index| row(index));
+                }
+            }
         },
     );
 }
@@ -252,7 +272,7 @@ fn movable_content_in_a_lazy_item_survives_disposal_and_return_under_idle_prefet
     let mut shell = idle_lazy_shell({
         let list_handle = Rc::clone(&list_handle);
         move || {
-            IdleLazyList(Rc::clone(&list_handle), |index| {
+            IdleLazyList(Rc::clone(&list_handle), RowReuse::Shared, |index| {
                 if index % 4 == 0 {
                     MovableScrollableRow(index, None);
                 } else {
@@ -280,7 +300,7 @@ fn liquid_context_menu_in_a_lazy_item_survives_disposal_and_return_under_idle_pr
         move || {
             let list_handle = Rc::clone(&list_handle);
             LiquidTheme(LiquidThemeSpec::system(SchemeMode::Light), move || {
-                IdleLazyList(Rc::clone(&list_handle), |index| {
+                IdleLazyList(Rc::clone(&list_handle), RowReuse::Shared, |index| {
                     if index % 4 == 0 {
                         ContextMenuScrollableRow(index);
                     } else {
@@ -306,13 +326,20 @@ fn hidden_movable_content_in_an_evicted_lazy_item_unmounts_before_its_scroll_sta
         move || {
             let show = rememberMutableStateOf(|| true);
             show_handle.set(Some(show));
-            IdleLazyList(Rc::clone(&list_handle), move |index| {
-                if index == 0 {
-                    MovableScrollableRow(index, Some(show));
-                } else {
-                    plain_row(index);
-                }
-            });
+            // Give item 0 a distinct content type so the reuse pool cannot
+            // rebind it to a plain row and instead evicts its SlotsHost
+            // directly after PASSES_KEPT passes.
+            IdleLazyList(
+                Rc::clone(&list_handle),
+                RowReuse::UniqueFirst,
+                move |index| {
+                    if index == 0 {
+                        MovableScrollableRow(index, Some(show));
+                    } else {
+                        plain_row(index);
+                    }
+                },
+            );
         }
     });
     // Detach the movable into the row's own retention map while the row stays
