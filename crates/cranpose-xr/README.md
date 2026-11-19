@@ -175,10 +175,10 @@ Jetpack XR 1.0 shows 3D content with `SpatialGltfModel` for a glTF model and `Sc
 SceneCore entity. Cranpose has neither, so its composable has its own name.
 
 A headset composes the content once and draws it for each eye, from that eye's pose and field of
-view, into one projection layer for all volumes. Where the runtime takes it, the layer carries the
-scene's depth (`XR_KHR_composition_layer_depth`), and the panels and rays over it test against that
-depth (`XR_FB_composition_layer_depth_test`), so a panel and a 3D object hide each other. Where it
-does not, the panels cover the 3D content. A frame with no volume has no projection layer and costs
+view, into one projection layer for all volumes. Where the runtime offers a depth swapchain, the
+layer carries the scene's depth (`XR_KHR_composition_layer_depth`), and where it has
+`XR_FB_composition_layer_depth_test` the panels and rays over it are set to test against that depth.
+No headset has run that test yet. Otherwise the panels cover the 3D content. A frame with no volume has no projection layer and costs
 no GPU time. The scene draws with one sample for each pixel, and a movable volume takes two of the
 compositor's layers. A window shows the volume as a 3D view in its box.
 

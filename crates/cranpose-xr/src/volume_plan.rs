@@ -63,7 +63,7 @@ pub(crate) fn plan(volumes: usize, eyes: [bool; 2], depth: DepthSupport) -> Opti
 
 // Whether the layers of `stage` test against the depth of the projection layer in a frame with
 // `plan`. The room and the streamed scenes lie under the projection layer. The projection layer
-// writes its own depth.
+// carries its own depth.
 pub(crate) fn tests_depth(stage: Stage, plan: Option<VolumePlan>) -> bool {
     matches!(stage, Stage::Panels | Stage::Overlay) && plan.is_some_and(|plan| plan.tests_depth)
 }

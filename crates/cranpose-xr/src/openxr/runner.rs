@@ -245,7 +245,7 @@ impl Immersive {
                 &self.space,
                 self.headset.eyes(),
                 self.headset.eye_image_size(),
-            )?;
+            );
         } else {
             self.space.panels_into(panels);
             self.streams.skip(&self.space);

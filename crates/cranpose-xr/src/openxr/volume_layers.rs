@@ -54,6 +54,9 @@ pub(crate) struct VolumeLayers {
     extensions: (bool, bool),
     eyes: Option<[EyeSwapchains; 2]>,
     drawn: Option<Drawn>,
+    // Whether the 3D content failed. A failure ends the 3D content and leaves the session, with
+    // its panels, running.
+    failed: bool,
 }
 
 impl VolumeLayers {
@@ -66,6 +69,7 @@ impl VolumeLayers {
             extensions: xr_session.depth_extensions(),
             eyes: None,
             drawn: None,
+            failed: false,
         }
     }
 
@@ -85,8 +89,29 @@ impl VolumeLayers {
 
     // Draws the scene of the volumes once for each eye, if the app has a volume and the runtime
     // located both eyes, into pictures of `size` pixels. A frame with no volume makes no layer
-    // and frees the swapchains.
+    // and frees the swapchains. A call of the runtime or of the renderer that fails ends the 3D
+    // content, with one line in the log, and leaves the panels running.
     pub(crate) fn draw(
+        &mut self,
+        guest: &mut GuestView,
+        gpu: &GpuContext,
+        xr_session: &XrSession,
+        space: &Space,
+        views: [Option<RenderViewpoint>; 2],
+        size: (u32, u32),
+    ) {
+        if self.failed {
+            return;
+        }
+        if let Err(error) = self.try_draw(guest, gpu, xr_session, space, views, size) {
+            log::error!("cranpose xr: the 3D content ends: {error}");
+            self.failed = true;
+            self.eyes = None;
+            self.drawn = None;
+        }
+    }
+
+    fn try_draw(
         &mut self,
         guest: &mut GuestView,
         gpu: &GpuContext,
@@ -133,6 +158,13 @@ impl VolumeLayers {
         } = self
         else {
             return Ok(());
+        };
+        // A swapchain that the runtime refused to make for the depth leaves its eye without depth,
+        // and the layers over the projection then have none to test against
+        let has_depth = eyes.iter().all(|eye| eye.depth.is_some());
+        let frame_plan = VolumePlan {
+            submits_depth: frame_plan.submits_depth && has_depth,
+            tests_depth: frame_plan.tests_depth && has_depth,
         };
         let mut drew = true;
         for (eye, camera) in eyes.iter_mut().zip(&cameras) {
@@ -199,9 +231,14 @@ impl VolumeLayers {
                 size,
                 SwapchainUse::Color,
             )?;
-            let depth = depth_format
-                .map(|format| make_swapchain(xr_session, gpu, format, size, SwapchainUse::Depth))
-                .transpose()?;
+            // The depth is an extra: a runtime that refuses its swapchain still shows the picture
+            let depth = depth_format.and_then(|format| {
+                make_swapchain(xr_session, gpu, format, size, SwapchainUse::Depth)
+                    .inspect_err(|error| {
+                        log::warn!("cranpose xr: no depth for the volumes: {error}");
+                    })
+                    .ok()
+            });
             let (depth, depths) = match depth {
                 Some((swapchain, targets)) => (Some(swapchain), targets),
                 None => (None, Vec::new()),

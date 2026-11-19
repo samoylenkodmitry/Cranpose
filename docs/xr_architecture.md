@@ -175,10 +175,17 @@ layer over an earlier one.
 
 Where the runtime has `XR_FB_composition_layer_depth_test` and the projection layer carries depth,
 each panel, surface, handle and ray layer chains an `XrCompositionLayerDepthTestFB` with
-`LESS_OR_EQUAL` and no depth write. The compositor then tests that layer's fragments against the
-projection layer's depth. A panel behind a 3D object shows behind it, and a panel in front of the
-object shows in front of it. Panels still draw over each other in the order of their distance. A panel's rounded corners still
-blend. The projection layer itself writes depth and tests none.
+`LESS_OR_EQUAL` and no depth write. The design expects the compositor to test that layer's
+fragments against the projection layer's depth, so that a panel behind a 3D object shows behind it
+and a panel in front of the object shows in front of it. Panels still draw over each other in the
+order of their distance, and a panel's rounded corners still blend. The projection layer carries
+its depth in its views and chains no test struct of its own.
+
+No device has run this path. The man page of `XrCompositionLayerDepthTestFB` describes `depthMask` as the switch for writes to
+the composition depth buffer. A Quest has to show whether the projection layer
+needs the struct with `depthMask` set for its depth to reach the compositor's buffer. If it does,
+the struct goes onto the projection layer. If panels vanish, the compare direction is the first
+suspect.
 
 Without the test, the projection layer lies under all panels, and a panel covers the 3D content
 wherever the panel stands, also where the content is nearer. A rule that sorts the one layer among
@@ -214,6 +221,10 @@ renderer keeps in its pass is the swapchain's own, so the depth costs no copy. T
 renderer's conversion pass for each eye. The CPU side allocates what `scene3d` allocates for each
 evaluation of its closure. The layer code allocates nothing.
 
+A call of the runtime or of the renderer that fails ends the 3D content with one line in the log
+(`the 3D content ends`). The session and its panels keep running. A runtime that refuses the depth
+swapchain leaves the picture without depth, and the layers over it test nothing.
+
 A volume takes two of the compositor's layers when it is movable: the projection layer and the
 handle. The projection layer is one layer however many volumes there are.
 
@@ -224,7 +235,9 @@ shows lit and upright in the place of its pose, with its handle under it, beside
 runtime offers `XR_KHR_composition_layer_depth`, `XR_FB_composition_layer_depth_test` and
 `XR_FB_composition_layer_image_layout`. Its swapchain formats are `GL_SRGB8_ALPHA8`, `GL_RGBA8`,
 `GL_RGB10_A2` and `GL_RGBA16F`, so it offers no depth format and the layer carries no depth there.
-Its eye pictures are 2560 by 2558 pixels. The depth path and the depth test have run on no device.
+Its eye pictures are 2560 by 2558 pixels. With the torus moved through the counter panel's plane the panel, which a later layer draws, covers
+the torus, as the order without a depth test says. The depth path and the depth test have run on no
+device.
 The crate's tests run the scene on the GPU of the development machine: two eyes from one
 composition, the depth that the scene leaves, a volume that moves, and a frame with no volume.
 
