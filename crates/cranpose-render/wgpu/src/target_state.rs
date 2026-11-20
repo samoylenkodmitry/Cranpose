@@ -4,7 +4,7 @@
 // after the collect, which records how it drew each record, it adds the
 // areas they are drawn in now.
 
-use cranpose_core::{RecordRef, collections::growth_slack::GrowthSlack};
+use cranpose_core::{RecordId, RecordRef, collections::growth_slack::GrowthSlack};
 use cranpose_render_common::{
     scene_store::{
         BLUR_PIXEL_SLACK, JournalEntry, JournalRead, Reach, RecordEvent, RecordEvents, SceneStore,
@@ -326,6 +326,7 @@ pub(crate) struct TargetState {
     // that frame takes it.
     marks: Vec<(u32, Visit)>,
     stamp: u32,
+    path: Vec<RecordId>,
     captures: Vec<Capture>,
     // While frames keep changing most of the window, the frames left to
     // skip: 1, 4, 16, 64 and then [`MAX_SKIPPED`] after each such frame.
@@ -420,17 +421,17 @@ impl TargetState {
     // is not known and no ancestor holds its area: the walk finds that
     // record's area unknown too. `false` when the frame works out no damage
     // or an old area is not known: the walk then works the areas out.
-    pub(crate) fn predict_damage(&self, store: &SceneStore, damage: &mut Damage) -> bool {
+    pub(crate) fn predict_damage(&mut self, store: &SceneStore, damage: &mut Damage) -> bool {
         let (Some(setting), Some(begun)) = (self.setting, self.begun()) else {
             return false;
         };
         damage.assign_part(begun);
-        damage.settle(setting.viewport);
         let mut whole = false;
         if let Damage::Part(rects) = damage {
             // One run: at the bound of rects, a lone add searches every pair.
             let mut run = rects.run();
-            for &change in &self.changed {
+            for at in 0..self.changed.len() {
+                let change = self.changed[at];
                 match self.own_area(store, change, Moment::Predicted, setting) {
                     Area::Drawn(pixels) | Area::Composite(pixels) => run.add(pixels.rect()),
                     Area::Hidden => {}
@@ -569,6 +570,7 @@ impl TargetState {
         if self.skipped >= RELEASE_SKIPS {
             self.shown = Vec::new();
             self.changed = Vec::new();
+            self.path = Vec::new();
             self.captures = Vec::new();
         }
     }
@@ -681,7 +683,7 @@ impl TargetState {
     // or that shows a scene, else its own as the walk kept it. A record gone
     // from the store is found under `parent`.
     fn area_of(
-        &self,
+        &mut self,
         store: &SceneStore,
         (record, scope): (RecordRef, Scope),
         parent: Option<RecordRef>,
@@ -696,7 +698,7 @@ impl TargetState {
     // The area a change of `record` of `scope` takes beside what its
     // ancestors hold, as `moment` reads it in a frame of `setting`.
     fn own_area(
-        &self,
+        &mut self,
         store: &SceneStore,
         (record, scope): (RecordRef, Scope),
         moment: Moment,
@@ -736,7 +738,7 @@ impl TargetState {
     // draws. A record gone from the store is found under `parent`; one whose
     // parent went too lies in the area of that parent.
     fn ancestor_area(
-        &self,
+        &mut self,
         store: &SceneStore,
         record: RecordRef,
         parent: Option<RecordRef>,
@@ -751,33 +753,31 @@ impl TargetState {
                 None => None,
             },
         };
-        // Up from the parent, each ancestor that holds the area replaces the
-        // one below it: the last is the topmost.
-        let mut holder = None;
-        while let Some(ancestor) = current {
+        self.path.clear();
+        while let Some(id) = current {
+            self.path.push(id);
+            current = store.parent(id);
+        }
+        for &ancestor in self.path.iter().rev() {
             let area = self
                 .shown(store.record_ref(ancestor))
                 .map(|shown| shown.area);
-            let holds = if scene_of(store.layer(ancestor)).is_some() {
-                Some(match area {
+            if scene_of(store.layer(ancestor)).is_some() {
+                return Some(match area {
                     Some(Area::Drawn(pixels)) => Area::Composite(pixels),
                     Some(area) => area,
                     None => Area::Hidden,
-                })
-            } else {
-                match area {
-                    Some(Area::Drawn(_) | Area::Unknown) => None,
-                    Some(area) => Some(area),
-                    // An ancestor new since the frame: the record moved
-                    // under it, and its old parent's change holds where it
-                    // was.
-                    None => Some(Area::Hidden),
-                }
-            };
-            holder = holds.or(holder);
-            current = store.parent(ancestor);
+                });
+            }
+            match area {
+                Some(Area::Drawn(_) | Area::Unknown) => {}
+                Some(area) => return Some(area),
+                // An ancestor new since the frame: the record moved under
+                // it, and its old parent's change holds where it was.
+                None => return Some(Area::Hidden),
+            }
         }
-        holder
+        None
     }
 
     // Where the subtree of `record` lands at the origin the frame before
