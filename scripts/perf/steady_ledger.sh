@@ -54,26 +54,25 @@ set -euo pipefail
 readonly WARMUP_FRAMES=60
 readonly COUNTED_FRAMES=60
 
-# The rows: a name, then the bench app's command line for that layout.
+# The rows: a name, its bench binary, its window function, then the command
+# line for that layout.
 readonly LAYOUTS=(
-    "wall-t20 --scenario=wall --tier=20"
-    "patchwork-t17 --scenario=patchwork --tier=17"
-    "gauntlet-t16 --scenario=gauntlet --tier=16"
-    "gauntlet-t12 --scenario=gauntlet --tier=12"
-    "feed --scenario=feed --speed=12000 --fcols=4 --ui=0.3"
-    "ticker --scenario=ticker --quotes=72"
-    "particles --scenario=particles --particles=20000"
-    "layers --scenario=layers --tcols=12 --trows=22"
-    "grid --scenario=grid --rows=30 --cols=12"
-    "grid-layer --scenario=grid_layer --rows=30 --cols=12"
-    "deep --scenario=deep --depth=40 --chips=6"
-    "deep-layer --scenario=deep_layer --depth=40 --chips=6"
-)
-readonly MOVABLE_LAYOUTS=(
-    "movable-lazy --case=lazy_movable_scroll"
-    "movable-heavy --case=lazy_movable_heavy"
-    "movable-context-menu --case=lazy_context_menu_scroll"
-    "movable-flip --case=movable_parent_flip"
+    "wall-t20 steady_frames steady_frames::steady_frames --scenario=wall --tier=20"
+    "patchwork-t17 steady_frames steady_frames::steady_frames --scenario=patchwork --tier=17"
+    "gauntlet-t16 steady_frames steady_frames::steady_frames --scenario=gauntlet --tier=16"
+    "gauntlet-t12 steady_frames steady_frames::steady_frames --scenario=gauntlet --tier=12"
+    "feed steady_frames steady_frames::steady_frames --scenario=feed --speed=12000 --fcols=4 --ui=0.3"
+    "ticker steady_frames steady_frames::steady_frames --scenario=ticker --quotes=72"
+    "particles steady_frames steady_frames::steady_frames --scenario=particles --particles=20000"
+    "layers steady_frames steady_frames::steady_frames --scenario=layers --tcols=12 --trows=22"
+    "grid steady_frames steady_frames::steady_frames --scenario=grid --rows=30 --cols=12"
+    "grid-layer steady_frames steady_frames::steady_frames --scenario=grid_layer --rows=30 --cols=12"
+    "deep steady_frames steady_frames::steady_frames --scenario=deep --depth=40 --chips=6"
+    "deep-layer steady_frames steady_frames::steady_frames --scenario=deep_layer --depth=40 --chips=6"
+    "movable-lazy movable_content movable_content::steady_frames --steady-ledger --case=lazy_movable_scroll"
+    "movable-heavy movable_content movable_content::steady_frames --steady-ledger --case=lazy_movable_heavy"
+    "movable-context-menu movable_content movable_content::steady_frames --steady-ledger --case=lazy_context_menu_scroll"
+    "movable-flip movable_content movable_content::steady_frames --steady-ledger --case=movable_parent_flip"
 )
 # The layout whose start gets a row of its own, a layout node.
 readonly START_ROW=wall-t20
@@ -103,14 +102,13 @@ die() {
     exit 2
 }
 
-# One measurement process: `--job RUN SIDE KIND ROW [ARGS...]`, which
+# One measurement process: `--job RUN SIDE KIND ROW [BIN FN ARGS...]`, which
 # run_jobs hands to xargs. RUN names the run's directory, SIDE the binaries.
 job() {
     local run=$1 side=$2 kind=$3 row=$4
     shift 4
     local out="$dir/runs/$run/$row"
-    local steady="$dir/bin/$side-steady_frames" fb="$dir/bin/$side-framebuffer_frame"
-    local mc="$dir/bin/$side-movable_content"
+    local fb="$dir/bin/$side-framebuffer_frame"
     local window=(--warmup="$WARMUP_FRAMES" --frames="$COUNTED_FRAMES")
     # Whole stacks, which place each copy or block in its phase, with full
     # source paths, which place a block in its group.
@@ -118,42 +116,32 @@ job() {
         --dhat-out-file="$out.$kind.json")
     local callgrind=(valgrind --tool=callgrind --callgrind-out-file="$out.$kind.out")
     case $kind in
-    count) "$steady" "${window[@]}" "$@" > "$out.count" 2>&1 ;;
-    copy) "${dhat[@]}" --mode=copy --trace-malloc=yes "$steady" "${window[@]}" "$@" 2>&1 | ledger trace > "$out.$kind" ;;
-    # The same run with no counted frames, for the copies whose stack
-    # valgrind cut before it reached the counted frames' function.
-    empty) "${dhat[@]}" --mode=copy "$steady" --warmup="$WARMUP_FRAMES" --frames=0 "$@" > "$out.$kind" 2>&1 ;;
-    heap) "${dhat[@]}" "$steady" "${window[@]}" "$@" > "$out.$kind" 2>&1 ;;
-    # Instructions from the window's function on, of which the process's
-    # exit after it adds a few.
-    instr) "${callgrind[@]}" --zero-before='steady_frames::steady_frames*' "$steady" "${window[@]}" "$@" \
-        > "$out.$kind" 2>&1 ;;
-    instr-start) "${callgrind[@]}" --zero-before='steady_frames::start*' "$steady" --warmup=0 --frames=0 "$@" \
-        > "$out.$kind" 2>&1 ;;
-    mc-count) "$mc" --steady-ledger "${window[@]}" "$@" > "$out.count" 2>&1 ;;
-    mc-copy)
-        valgrind --tool=dhat --num-callers=500 --read-inline-info=yes --fullpath-after= \
-            --dhat-out-file="$out.copy.json" --mode=copy --trace-malloc=yes \
-            "$mc" --steady-ledger "${window[@]}" "$@" 2>&1 | ledger trace > "$out.copy"
-        ;;
-    mc-empty)
-        valgrind --tool=dhat --num-callers=500 --read-inline-info=yes --fullpath-after= \
-            --dhat-out-file="$out.empty.json" --mode=copy \
-            "$mc" --steady-ledger --warmup="$WARMUP_FRAMES" --frames=0 "$@" > "$out.empty" 2>&1
-        ;;
-    mc-instr)
-        valgrind --tool=callgrind --callgrind-out-file="$out.instr.out" \
-            --zero-before='movable_content::steady_frames*' \
-            "$mc" --steady-ledger "${window[@]}" "$@" > "$out.instr" 2>&1
-        ;;
     fb-instr)
         SCREEN=dashboard PIXELS=rgb565 FRAMES="$COUNTED_FRAMES" "${callgrind[@]}" \
             --zero-before='framebuffer_frame::steady_frames*' "$fb" > "$out.$kind" 2>&1
+        return
         ;;
     fb-*)
         SCREEN=dashboard PIXELS=rgb565 FRAMES="${kind#fb-}" "${dhat[@]}" --mode=copy --trace-malloc=yes "$fb" 2>&1 |
             ledger trace > "$out.$kind"
+        return
         ;;
+    esac
+    local bin="$dir/bin/$side-$1" fn=$2
+    shift 2
+    case $kind in
+    count) "$bin" "${window[@]}" "$@" > "$out.count" 2>&1 ;;
+    copy) "${dhat[@]}" --mode=copy --trace-malloc=yes "$bin" "${window[@]}" "$@" 2>&1 | ledger trace > "$out.$kind" ;;
+    # The same run with no counted frames, for the copies whose stack
+    # valgrind cut before it reached the counted frames' function.
+    empty) "${dhat[@]}" --mode=copy "$bin" --warmup="$WARMUP_FRAMES" --frames=0 "$@" > "$out.$kind" 2>&1 ;;
+    heap) "${dhat[@]}" "$bin" "${window[@]}" "$@" > "$out.$kind" 2>&1 ;;
+    # Instructions from the window's function on, of which the process's
+    # exit after it adds a few.
+    instr) "${callgrind[@]}" --zero-before="${fn}*" "$bin" "${window[@]}" "$@" \
+        > "$out.$kind" 2>&1 ;;
+    instr-start) "${callgrind[@]}" --zero-before='steady_frames::start*' "$bin" --warmup=0 --frames=0 "$@" \
+        > "$out.$kind" 2>&1 ;;
     *) die "unknown job $kind" ;;
     esac
 }
@@ -161,11 +149,12 @@ job() {
 # The job lines of one run of SIDE's binaries into runs/RUN; with a third
 # argument, `instructions`, the callgrind runs of an A/B too.
 jobs_of() {
-    local run=$1 side=$2 instructions=${3:-} layout row kind
+    local run=$1 side=$2 instructions=${3:-} layout row bin _ kind
     mkdir -p "$dir/runs/$run"
     : > "$dir/runs/$run/order"
     for layout in "${LAYOUTS[@]}"; do
-        row=${layout%% *}
+        read -r row bin _ <<< "$layout"
+        [ -x "$dir/bin/$side-$bin" ] || continue
         echo "$row" >> "$dir/runs/$run/order"
         # The longest jobs first, so that they do not end the run alone.
         if [ "$row" = "$START_ROW" ]; then
@@ -183,18 +172,6 @@ jobs_of() {
     [ -z "$instructions" ] || echo "$run $side fb-instr dashboard"
     echo "$run $side fb-0 dashboard"
     echo "$run $side fb-$COUNTED_FRAMES dashboard"
-    if [ -x "$dir/bin/$side-movable_content" ]; then
-        for layout in "${MOVABLE_LAYOUTS[@]}"; do
-            row=${layout%% *}
-            echo "$row" >> "$dir/runs/$run/order"
-            if [ -n "$instructions" ] && [[ $INSTRUCTION_ROWS == *" $row "* ]]; then
-                echo "$run $side mc-instr $layout"
-            fi
-            for kind in mc-copy mc-empty mc-count; do
-                echo "$run $side $kind $layout"
-            done
-        done
-    fi
 }
 
 # Runs the job lines on stdin, as many at once as the host has cores.
@@ -224,47 +201,39 @@ fatlto() {
     fi
 }
 
-# Builds the bench app's steady_frames example with the app's release profile
-# and the framebuffer_frame bench of the tree at src as bin/SIDE-*, with line
-# tables, so that DHAT names the start's sites.
+build_bin() {
+    local side=$1 name=$2 target=$3
+    shift 3
+    local json="$dir/build-$side-$name.json" exe
+    (
+        cd "$src"
+        [ -z "$target" ] || export CARGO_TARGET_DIR="$target"
+        fatlto "$lock" --shared "$@" --message-format=json-render-diagnostics
+    ) > "$json"
+    exe=$(grep "\"name\":\"$name\"" "$json" |
+        grep -o '"executable":"[^"]*"' | tail -1 | cut -d'"' -f4)
+    [ -n "$exe" ] || die "the build of $name named no executable"
+    cp "$exe" "$dir/bin/$side-$name"
+}
+
+# Builds the bench app's steady_frames example with the app's release profile,
+# the framebuffer_frame bench, and the movable_content bench of the tree at
+# src as bin/SIDE-*, with line tables, so that DHAT names the start's sites.
 build() {
     local side=$1 app_target=${2:-} ws_target=${3:-}
     mkdir -p "$dir/bin"
     export CARGO_PROFILE_RELEASE_DEBUG=line-tables-only CARGO_PROFILE_RELEASE_STRIP=none
     export CARGO_PROFILE_BENCH_DEBUG=line-tables-only CARGO_PROFILE_BENCH_STRIP=none
-    (
-        cd "$src"
-        [ -z "$app_target" ] || export CARGO_TARGET_DIR="$app_target"
-        fatlto "$lock" --shared cargo build --release \
-            --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml \
-            --example steady_frames --message-format=json-render-diagnostics
-    ) > "$dir/build-$side-app.json"
-    (
-        cd "$src"
-        [ -z "$ws_target" ] || export CARGO_TARGET_DIR="$ws_target"
-        fatlto "$lock" --shared cargo bench -p cranpose --no-default-features \
-            --features framebuffer,embedded-default-font \
-            --bench framebuffer_frame --no-run --message-format=json-render-diagnostics
-    ) > "$dir/build-$side-fb.json"
-    local names=(steady_frames framebuffer_frame)
-    local build_jsons=("$dir/build-$side-app.json" "$dir/build-$side-fb.json")
+    build_bin "$side" steady_frames "$app_target" \
+        cargo build --release --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml \
+        --example steady_frames
+    build_bin "$side" framebuffer_frame "$ws_target" \
+        cargo bench -p cranpose --no-default-features --features framebuffer,embedded-default-font \
+        --bench framebuffer_frame --no-run
     if [ -f "$src/crates/cranpose-app-shell/benches/movable_content.rs" ]; then
-        (
-            cd "$src"
-            [ -z "$ws_target" ] || export CARGO_TARGET_DIR="$ws_target"
-            fatlto "$lock" --shared cargo bench -p cranpose-app-shell \
-                --bench movable_content --no-run --message-format=json-render-diagnostics
-        ) > "$dir/build-$side-mc.json"
-        names+=(movable_content)
-        build_jsons+=("$dir/build-$side-mc.json")
+        build_bin "$side" movable_content "$ws_target" \
+            cargo bench -p cranpose-app-shell --bench movable_content --no-run
     fi
-    local name exe
-    for name in "${names[@]}"; do
-        exe=$(grep -h "\"name\":\"$name\"" "${build_jsons[@]}" |
-            grep -o '"executable":"[^"]*"' | tail -1 | cut -d'"' -f4)
-        [ -n "$exe" ] || die "the build of $name named no executable"
-        cp "$exe" "$dir/bin/$side-$name"
-    done
 }
 
 # Puts the tree of TAR at AREA/src, keeping the times of files whose content
