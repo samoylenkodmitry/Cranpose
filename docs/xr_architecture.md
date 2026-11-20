@@ -1226,8 +1226,8 @@ The full demo shows the room around the headset from its start. A screenshot of 
 holds a picture of the room, which a device check must not keep. `XR_DEMO_PASSTHROUGH=off` starts the
 demo with the room hidden, so that its screenshots hold the panels on black. A check can test the
 picture for it: in the screenshots of the builds `XR_DEMO_PASSTHROUGH=off`, `XR_DEMO_VOLUME`,
-`XR_DEMO_CONTROLLERS=only` and `XR_DEMO_ROOM=script`, a share of 46 to 99 percent of the pixels is
-exactly black and under 0.4 percent is a dark grey. A room gives almost no black pixel.
+`XR_DEMO_CONTROLLERS=only` and `XR_DEMO_ROOM=script`, 46 to 99 percent of the pixels are exactly black
+and under 0.4 percent are a dark grey (a brightest channel from 1 to 23).
 `scripts/dev/xr_vrapi_stats.py` reads the frame rate, the app's time for a frame and the GPU's share
 from the line that a Quest's runtime logs each second for the app.
 
