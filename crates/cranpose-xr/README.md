@@ -168,8 +168,30 @@ SpatialVolume(
 The modifier's `width`, `height` and `depth` give a box in dp, which are millimeters, 500 each by
 default. The content's space has its origin at the box's center, x to the right, y down and z away
 from the viewer, and a unit is a dp. The modifier's `offset`, `rotate`, `movable` and `resizable`
-work as on a panel. A controller's ray stops at the box. `scope.on_pointer_event` receives its
-events, with the position in dp on the box's front face. The meshes do not receive the ray.
+work as on a panel.
+
+A controller's or a hand's ray meets the content's meshes on the CPU. It stops at the nearest
+triangle of any mesh in the volume, from either side, and passes through the empty part of the box.
+A volume with no mesh stops the ray at its box. `scope.on_input_event` receives an `InputEvent`, as
+Jetpack XR's `InteractableComponent` gives its listener: the ray in the content's space, an
+`InputAction` (`HoverEnter`, `HoverMove`, `HoverExit`, `Down`, `Move`, `Up`) and a `HitInfo` with
+the node of the content whose mesh the ray meets (`input_entity`), which of its meshes (`mesh_index`),
+the place of the hit in dp (`hit_position`) and the triangle. A press names the mesh that it began on
+until the release. `SpatialGltfModelState::node_of(&hit)` names the glTF node of a hit on a model.
+`scope.on_pointer_event` still receives Compose's pointer events, with the position in dp on the
+box's front face. The meshes are those that the last draw left in the scene, so a mesh that moves in
+a frame is hit where it stood in the frame before.
+
+```rust,ignore
+SpatialVolume(modifier, move |scope| {
+    scope.on_input_event(move |event| {
+        if let (InputAction::Down, Some(hit)) = (event.action, event.hit_info) {
+            log::info!("pressed node {:?} at {:?}", hit.input_entity, hit.hit_position);
+        }
+    });
+    // ...the meshes
+});
+```
 
 Jetpack XR 1.0 shows 3D content with `SpatialGltfModel` for a glTF model and `SceneCoreEntity` for a
 SceneCore entity. Cranpose has no SceneCore entities, so its composable has its own name. It has a
@@ -181,8 +203,15 @@ layer carries the scene's depth (`XR_KHR_composition_layer_depth`), and where it
 `XR_FB_composition_layer_depth_test` the panels and rays over it are set to test against that depth.
 A Quest 3 shows the panels behind the 3D content where they stand behind it. Otherwise the
 panels cover the 3D content. A frame with no volume has no projection layer and costs
-no GPU time. The scene draws with one sample for each pixel, and a movable volume takes two of the
-compositor's layers. A window shows the volume as a 3D view in its box.
+no GPU time. A movable volume takes two of the compositor's layers. A window shows the volume as a
+3D view in its box.
+
+The scene takes four samples in each pixel where the device takes four in its colour and depth
+formats, so the edges of a mesh show smooth. The renderer averages the samples straight into the
+page that the eye's image is converted from, and a second pass with one sample leaves the layer's
+depth. A pixel that an edge covers in part carries the depth of the surface at its centre. A sheet
+made with `Mesh::plane` already smooths its outline, so the gain shows on the edges of solids. The
+`docs/xr_architecture.md` file has the path and the measurements.
 
 ## glTF models
 
@@ -496,6 +525,63 @@ check where no hand can be tracked, such as an emulator. `script_hand(ScriptedHa
 from, at, PinchCycle::default()))` installs a hand whose aim pose points at a place in the room and
 whose index finger pinches in a cycle. The frame holds it as a tracked hand, so the pointer treats
 it as the cameras' hand. The feature is off by default.
+
+## Text entry
+
+A text field asks for the platform's software keyboard when it takes focus, as it does on a phone.
+The options of `BasicTextField` hold the request (`show_keyboard_on_focus`), and a tap on a focused
+field repeats it. A headset answers with one of two keyboards. An app needs no code for it.
+
+The keyboard that Cranpose draws is a `SpatialPanel` of keys. It opens below the panel that holds
+the focused field, in the plane of that panel, and it closes when focus leaves the field. It follows
+the panel: a panel that the user carries, or that follows a controller, takes the keyboard along.
+A controller's ray and a hand's pinch press the keys, because the keys are ordinary buttons.
+A key does not take the focus from the field.
+
+- The keys are the digits, the 26 letters in the QWERTY order, shift, backspace, enter, space, the
+  comma and the period, a key that shows a page of symbols (`?123`) and back (`abc`), and a key that
+  hides the keyboard. The symbols page holds `@ # $ % & * ( ) - + ! " ' : ; / ? = _ [ ] { } < > \ |`.
+- Each key sends the key event that a hardware keyboard sends for it (`KeyEvent`, with the `Key`
+  and the text that the US layout gives), and the backend hands it to the shell after the pointer's
+  events of the frame. The text reaches the field through the path of a hardware keyboard, so the
+  `on_key_event` modifiers of the app see it too. A letter in a capital carries the shift modifier.
+- One press of shift makes the next letter a capital. A second press locks shift, and a third
+  unlocks it.
+- Enter runs the keyboard action of a single-line field (`on_keyboard_action`). Without one the
+  action is Done, which hides the keyboard. In a multi-line field enter starts a new line.
+- The hide key closes the keyboard and leaves the focus in the field. A tap on the field opens the
+  keyboard again.
+- The keyboard has the Latin alphabet only. It has no other layout, no suggestions, no composing
+  text and no repeat of a held key.
+- The open keyboard is one more layer of the frame. A runtime takes 16 layers at least, so an app
+  that stands near the limit loses the panel that stands farthest from the head, as with any other
+  panel.
+
+On Android XR the system shows its own input method over an immersive app. A text field then opens
+that keyboard in place of the drawn one, through the same request. The keyboard is a panel of the
+system. The system gives it the input focus, so the app's lifecycle is `Paused` while it shows, and
+the app's pointer gets no aim. The back action hides the keyboard, and the app resumes. What the
+keyboard types reaches the field as the text of an input connection, so the field takes
+suggestions, other languages and voice input from the keyboard. Android XR shows the keyboard only
+for an app whose activity has an editor view, which the backend adds.
+
+`use_keyboard(Keyboard::Drawn)` draws the keyboard of Cranpose on every runtime, also where the
+system shows its own. `Keyboard::System`, the default, uses the system's keyboard where the runtime
+shows it and draws the keyboard elsewhere. The choice counts if it comes before the app starts,
+in the launcher's setup. Jetpack XR Compose has no such choice. There the system's input method
+types, and Compose opens it as it does on a phone.
+
+```rust,ignore
+cranpose_xr::use_keyboard(cranpose_xr::Keyboard::Drawn);
+```
+
+A build that turns on the `scripted-hand` feature can type on the keyboard of Cranpose with
+`ScriptedHand::typing`. The hand presses a field, and then the keys that type a text, one press in
+each cycle. It shows the keyboard in an emulator, where no hand can be tracked.
+
+Meta's own keyboard for Quest apps, `XR_META_virtual_keyboard`, is not used. It needs the app to
+draw the keyboard's model, which the runtime hands over as glTF through `XR_FB_render_model`.
+`docs/xr_architecture.md` lists what it needs.
 
 ## Streamed scenes
 

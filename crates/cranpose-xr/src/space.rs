@@ -17,14 +17,19 @@ use std::{
 use cranpose::{ExternalSurface, MutableState, mutableStateOf};
 use cranpose_core::CompositionLocal;
 
+#[cfg(any(test, headset))]
+pub(crate) mod field_dock;
+mod surface_delivery;
+
 use crate::{
     FollowTarget, Hand, METERS_PER_DP, MovePolicy, PanelHit, Pose, Ray, Recenter, ResizeLimits,
     ResizePolicy, SpatialMoveEvent, SpatialMoveEventType, SpatialResizeEvent,
     SpatialResizeEventType, StereoMode,
+    dock::Dock,
     follow_origin::{FollowOrigins, Standing},
     locals::with_locals,
     stream_source::StreamSource,
-    surface_input::{InputSink, PointerSink, SurfaceGesture, SurfaceInput, input_event},
+    surface_input::{InputSink, PointerSink, SurfaceInput},
     volumes::{VolumeContent, Volumes},
 };
 
@@ -266,6 +271,13 @@ struct Inner {
     // The content of the volumes and the camera that draws them, made when the first composable
     // that needs them asks, because their states belong to a composition's runtime
     volumes: OnceCell<Volumes>,
+    // The panel that holds the focused text field, which the panels below a field stand under
+    #[cfg(any(test, headset))]
+    field_panel: Cell<Option<u64>>,
+    // The keyboard that the headset draws for a focused text field, made when the headset's
+    // content asks, because its state belongs to a composition's runtime
+    #[cfg(any(test, headset))]
+    keyboard: OnceCell<crate::soft_keyboard::SoftKeyboard>,
     // The size in pixels of one eye's picture of the volumes, in logical pixels
     #[cfg_attr(
         not(any(test, headset)),
@@ -302,6 +314,9 @@ struct Entry {
     // For a volume: where the app takes the ray's input events
     input_sink: Option<InputSink>,
     input: SurfaceInput,
+    // Whether the panel stands below the panel of the focused text field, as the keyboard does,
+    // wherever that panel stands
+    dock: Dock,
 }
 
 // The place of a panel in a following subspace.
@@ -360,6 +375,10 @@ impl Space {
                 next_id: Cell::new(1),
                 curves: Cell::new(true),
                 volumes: OnceCell::new(),
+                #[cfg(any(test, headset))]
+                field_panel: Cell::new(None),
+                #[cfg(any(test, headset))]
+                keyboard: OnceCell::new(),
                 scene_size,
             }),
         }
@@ -592,6 +611,7 @@ impl Space {
                     sink: None,
                     input_sink: None,
                     input: SurfaceInput::default(),
+                    dock: Dock::Free,
                 });
                 (entries.len() - 1, true)
             }
@@ -644,22 +664,45 @@ impl Space {
         }
     }
 
-    // Sets where the surface `id` sends the pointer's events, or `None` for a surface that takes
-    // none.
-    pub(crate) fn set_surface_sink(&self, id: u64, sink: Option<PointerSink>) {
+    // Sets where the panel `id` stands in relation to the panel of the focused text field.
+    pub(crate) fn set_dock(&self, id: u64, dock: Dock) {
         let mut entries = self.inner.entries.borrow_mut();
         if let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == id) {
-            entry.sink = sink;
+            entry.dock = dock;
         }
     }
 
-    // Sets where the volume `id` sends the input events of a ray, or `None` for a volume that takes
-    // none.
-    pub(crate) fn set_input_sink(&self, id: u64, sink: Option<InputSink>) {
-        let mut entries = self.inner.entries.borrow_mut();
-        if let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == id) {
-            entry.input_sink = sink;
-        }
+    // The keyboard that the headset draws for a focused text field.
+    #[cfg(any(test, headset))]
+    pub(crate) fn keyboard(&self) -> crate::soft_keyboard::SoftKeyboard {
+        self.inner
+            .keyboard
+            .get_or_init(crate::soft_keyboard::SoftKeyboard::new)
+            .clone()
+    }
+
+    // The panel that holds the focused text field, or `None` while no panel does. The panels that
+    // stand below the field's panel stand under it.
+    #[cfg(any(test, headset))]
+    pub(crate) fn set_field_panel(&self, panel: Option<u64>) {
+        self.inner.field_panel.set(panel);
+    }
+
+    // The panel of content that covers the point `at` of the atlas, in dp. The panels that stand
+    // below a field's panel are left out: they hold no field.
+    #[cfg(any(test, headset))]
+    pub(crate) fn panel_at(&self, at: [f32; 2]) -> Option<u64> {
+        let [x, y] = at;
+        self.inner
+            .entries
+            .borrow()
+            .iter()
+            .filter(|entry| entry.slot.kind == PanelKind::Content && entry.dock == Dock::Free)
+            .find(|entry| {
+                let [left, top, width, height] = entry.slot.atlas;
+                (left..left + width).contains(&x) && (top..top + height).contains(&y)
+            })
+            .map(|entry| entry.slot.id)
     }
 
     // Sets the shape of the panel `id`.
@@ -760,40 +803,6 @@ impl Space {
     }
 
     #[cfg_attr(
-        not(any(test, headset)),
-        expect(dead_code, reason = "the headset backend calls it")
-    )]
-    // Tells the surface that `gesture` names what the pointer did on it, as Compose's pointer
-    // event, and a volume as the input event of a ray. A surface that takes no pointer events sees
-    // nothing.
-    pub(crate) fn deliver_to_surface(&self, gesture: &SurfaceGesture) {
-        let heard = {
-            let mut entries = self.inner.entries.borrow_mut();
-            entries
-                .iter_mut()
-                .find(|entry| entry.slot.id == gesture.surface)
-                .and_then(|entry| {
-                    let (event, action) = entry.input.event(gesture.gesture)?;
-                    let input = entry
-                        .input_sink
-                        .clone()
-                        .zip(gesture.ray)
-                        .map(|(sink, ray)| (sink, input_event(&ray, action, &entry.slot.pose)));
-                    Some((entry.sink.clone(), event, input))
-                })
-        };
-        // The callbacks run with no borrow held, so that they may call the space
-        if let Some((sink, event, input)) = heard {
-            if let Some(sink) = sink {
-                sink(event);
-            }
-            if let Some((sink, event)) = input {
-                sink(event);
-            }
-        }
-    }
-
-    #[cfg_attr(
         not(all(headset, target_os = "android")),
         expect(dead_code, reason = "the Android headset backend calls it")
     )]
@@ -829,8 +838,9 @@ impl Space {
     // at each frame, so the list keeps its storage.
     pub(crate) fn panels_into(&self, panels: &mut Vec<PanelSlot>) {
         let curves = self.inner.curves.get();
+        let entries = self.inner.entries.borrow();
         panels.clear();
-        panels.extend(self.inner.entries.borrow().iter().map(|entry| PanelSlot {
+        panels.extend(entries.iter().map(|entry| PanelSlot {
             shape: if curves {
                 entry.slot.shape
             } else {
@@ -838,6 +848,8 @@ impl Space {
             },
             ..entry.slot
         }));
+        #[cfg(any(test, headset))]
+        field_dock::dock(&entries, self.inner.field_panel.get(), panels);
     }
 
     #[cfg(test)]

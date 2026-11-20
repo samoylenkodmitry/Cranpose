@@ -76,7 +76,9 @@ fn picture(samples: Multisample) -> (Picture, f32) {
         .camera
         .near();
     let alpha = read(&headset.gpu, &eye_image.color, 4)
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|texel| texel[3])
         .collect();
     let depth = read_depth(&headset.gpu, &eye_image.depth);

@@ -93,11 +93,14 @@ fn a_pose_straight_ahead_has_no_turn() {
 
 #[test]
 fn the_script_fills_its_own_hand_of_the_frame_as_a_tracked_hand() {
+    // The script starts at its first frame
+    let script = script();
+    play(&script, &mut XrFrame::default());
     let mut frame = XrFrame {
         predicted_display_time: millis(2300),
         ..XrFrame::default()
     };
-    play(&script(), &mut frame);
+    play(&script, &mut frame);
     assert_eq!(frame.right_hand.tracking_state, TrackingState::Tracking);
     let aim = frame.right_hand.aim.expect("an aim");
     assert_eq!(aim.index.strength, 1.0);

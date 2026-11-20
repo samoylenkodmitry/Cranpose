@@ -107,17 +107,21 @@ impl SpatialVolumeScope {
 /// The content's space has its origin at the box's center, x to the right, y down and z away from
 /// the viewer, and a unit is a dp, which is a millimeter in a subspace. The box is `modifier`'s
 /// [`width`](SubspaceModifier::width), [`height`](SubspaceModifier::height) and
-/// [`depth`](SubspaceModifier::depth), 500 dp each by default. The box is where a controller's ray
-/// stops. The content is not scaled to the box and may reach outside it. The camera cuts away
+/// [`depth`](SubspaceModifier::depth), 500 dp each by default. A controller's ray meets the box
+/// first, and then the nearest triangle of the content's meshes inside it (see
+/// [`on_input_event`](SpatialVolumeScope::on_input_event)). A volume with no mesh stops the ray at
+/// its box. The content is not scaled to the box and may reach outside it. The camera cuts away
 /// what lies nearer to the eye than a 64th of its focal length in pixels: 12 mm for a focal length
 /// of 800 pixels.
 ///
 /// A headset draws the content of all volumes together, into one projection layer with a view for
 /// each eye. The content composes once. Each eye then draws it from that eye's own pose and field
-/// of view, with no composition in between. The scene draws with one sample for each pixel, so
-/// the edges of a mesh are not smoothed. Its depth buffer hides a farther mesh behind a nearer
-/// one, also between volumes. The layer carries that depth where the runtime takes it. While the
-/// app has no volume, the headset draws no scene and makes no layer.
+/// of view, with no composition in between. The scene takes four samples in each pixel where the
+/// device takes four in its colour and depth formats, and one elsewhere, so the edges of a mesh
+/// show smooth. Its depth buffer hides a farther mesh behind a nearer one, also between volumes.
+/// The layer carries that depth where the runtime takes it. A pixel that an edge covers in part
+/// carries the depth of the surface at its centre. While the app has no volume, the headset draws
+/// no scene and makes no layer.
 ///
 /// The composables of the content compose at the root of the volumes' scene, which is a window of
 /// the app's composition. They share the composition's state. A composition local that the app

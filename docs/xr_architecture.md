@@ -78,6 +78,8 @@ Cranpose developers too:
 - `local_tracking_capabilities()`: the `TrackingCapabilities` that tell, for each `TrackingFeature`,
   whether the runtime offers it.
 - `local_haptics()`: the `Haptics` handle that vibrates a hand's controller.
+- A keyboard for the text fields of the app, with no composable to write: see "Text entry".
+  `use_keyboard(Keyboard)` chooses between the system's keyboard and the one that Cranpose draws.
 - `Orbiter`: content attached to the edge of a panel, such as a handle or a toolbar.
 - `SubspaceModifier`: `width`, `height`, `depth`, `size`, `offset`, `rotate`, `with_pose`,
   `movable`, `movable_with`, `resizable`, `resizable_with`, `fill_max_size`, `padding`.
@@ -151,11 +153,11 @@ All volumes draw into one projection layer with a view for each eye. Each view h
 of the eye's recommended size and its own pose and field of view. The layer's flags say that the
 picture's alpha blends over what lies under it (`BLEND_TEXTURE_SOURCE_ALPHA`), so the room and the
 panels' layers show through where no mesh draws. The picture is premultiplied, as the panels' are.
-The scene draws with one sample for each pixel, because the depth that the layer carries is the
-depth of a single sample. The renderer draws the scene into a target of its own and converts it
-into the swapchain's image, as it does for the panels' atlas. It draws straight into an image only
-when the image also takes copies. An sRGB image would then need a view of another format, and a
-swapchain's image has none.
+The renderer draws the scene into a target of its own, the page, and converts the page into the
+swapchain's image, as it does for the panels' atlas. It draws straight into an image only when the
+image also takes copies. An sRGB image would then need a view of another format, and a swapchain's
+image has none. The scene takes four samples in each pixel where the device takes four in its
+colour and depth formats (see "Anti-aliasing").
 
 With `XR_KHR_composition_layer_depth` the layer carries the depth of each picture. The renderer's
 scene pass can leave its depth in a view that the host gives it
@@ -169,6 +171,52 @@ infinity to mishandle.
 Wgpu maps `Depth24PlusStencil8` to one of two Vulkan formats by the driver and offers no query that
 says which, so a Vulkan headset has no depth swapchain and submits none. A runtime that offers no
 depth swapchain format submits none either. The picture still shows.
+
+### Anti-aliasing
+
+The scene takes four samples in each pixel (`Multisample::X4`) where the device takes four in the
+format that the renderer draws the scene in (`Rgba8Unorm`, the non-sRGB form of the swapchain's
+format) and in `Depth24PlusStencil8` (`volume_samples`). A device that takes fewer draws with one.
+The headset asks the adapter once, at the first frame with a volume, and the log names the answer.
+
+**The path.** The pass draws into colour and depth attachments of four samples that are transient
+(`TextureUsages::TRANSIENT_ATTACHMENT`), cleared at the start and discarded at the end. Its colour
+attachment has the page as its resolve target. A tiled GPU keeps the four samples in tile memory,
+averages them as it writes the page, and never writes them out. On GLES, which is the Quest's
+graphics API in this backend, the wgpu fork's GL backend binds the page with
+`glFramebufferTexture2DMultisampleEXT` when the device has `GL_EXT_multisampled_render_to_texture`,
+the resolve target is a plain texture, the colour is discarded and the attachment is the first. That
+extension is multisampled render-to-texture: no multisampled buffer exists, and the driver averages
+in tile memory. Without it the backend resolves with a blit after the pass. On Vulkan, which Linux
+and Windows headsets use, the same pass is a subpass with a resolve attachment.
+
+Before this change a scene of four samples drew into the samples, averaged them into a texture of its
+own and then laid that texture over a cleared page with a composite pass. A scene that covers a page
+which still holds only its transparent clear now averages straight into the page. The pass replaces
+the page's clear and the composite, so a frame of volumes has one pass for the colour where it had
+three (clear, scene, composite). The path needs the page to be blank under the scene, and the scene
+to cover it. A scene with glass, with other content beneath it or that does not cover the page takes
+the earlier path.
+
+**The depth.** One wgpu pass holds one sample count, and wgpu has no depth resolve. Storing a depth
+of four samples to resolve it in a later pass costs four times the bandwidth of the depth that the
+layer carries. A second pass with one sample draws the opaque surfaces and the volumes again with the
+depth pipelines (`ScenePipeline::Depth`, which discards the texels that the colour pass discards) into
+the view of the depth swapchain. It runs after the colour pass and draws only the steps that the
+colour pass drew, so the depth never shows what the picture does not. Its colour attachment is a
+transient placeholder that it clears and drops. Each pixel then holds the depth of its centre. A
+pixel that an edge covers in part carries the surface's depth where the centre is covered and the
+far plane where it is not, which the panels over the layer see as a fringe of one pixel at most. A
+scene of four samples that cannot average into the page leaves the far plane in the depth. The
+doorways of a scene write no depth in this pass.
+
+**What was measured.** A test on the GPU of the development machine draws a red quad of 38 pixels,
+turned by half a radian so that its edges slant, in a picture of 128 by 128 pixels, with one sample
+and with four. The mesh has seams for edges: a `Mesh::plane` smooths its outline on its own, and a
+solid's edge does not. With one sample no pixel is in between (alpha neither 0 nor 255). With four
+samples 84 pixels are, and at least nine in ten of the rows that an edge crosses hold one. With four samples
+every opaque pixel carries the quad's depth, every empty pixel the far plane, and an edge pixel one of
+the two.
 
 ### Layer order and the depth test
 
@@ -202,13 +250,49 @@ volume makes the swapchains. The frame after the last volume leaves frees them.
 
 ### Pointer
 
-A controller's ray stops at a volume's box. The slab test of `Ray::hit_box` gives the entry point,
-and the pointer sends the app `Enter`, `Move`, `Down`, `Up` and `Exit` events through
-`SpatialVolumeScope::on_pointer_event`, the path that a surface takes. The position is in dp from the
-top left corner of the box's front face, from the entry point's x and y. The depth is not reported.
-The ray does not pick the meshes, so a button on a mesh does not receive the ray. Sending the ray
-into the scene's own picking needs the pixel of the ray's hit in the scene's camera, which a scene
-has per eye, and is a larger change than the pointer's design takes now. A window shows the volume
+A controller's or a hand's ray meets a volume in two steps. The slab test of `Ray::hit_box` finds
+whether the ray crosses the volume's box. For a volume whose content has meshes, the pointer then
+finds the nearest triangle of those meshes, and the ray stops there. A ray that crosses the box and
+meets no triangle passes through, to the panels behind. A volume with no mesh stops the ray at its
+box, as before.
+
+**Where the meshes come from.** The scene's layer tree holds each `mesh_surface` and
+`mesh_surfaces` node with its map into the scene. `GuestView::visit_window_meshes` walks the layers
+under the node of one volume (`VolumeNode` records that node) with no allocation, and reports each
+mesh with the map from its own space to the volume's content space. The walk is `SpaceTree`'s own,
+generic over what it keeps, so picking and drawing agree on where a node stands: the layout offset,
+the `transform3d` nodes above it and the surface's transform. The headset keeps the list in
+`PickMeshes`, in storage that it reuses. It takes the list again for each volume that a ray points
+at or that a press is on, from the scene's last draw. A volume that no ray points at keeps its last
+list. A mesh that moves in a frame is therefore hit where it stood in the frame before.
+
+**The pick.** `ContentRay::of` turns the room's ray into the volume's content space with the
+direction in dp for each meter, so the distance that a mesh gives is in meters and compares with the
+distance to a panel. Each mesh takes the ray into its own space through the inverse of its map. The
+mesh's box (`Mesh::bounds`, worked out once) turns most rays away with a slab test. `Mesh::cast`
+then reads the triangles, from either side, and gives the nearest in front of the ray's origin. A
+triangle's edge counts as a hit. The nearest mesh wins. The pick allocates nothing, and a mesh
+whose map has no inverse takes no ray. A volume with no mesh in the list takes the box.
+
+**What the app gets.** `SpatialVolumeScope::on_input_event` receives an `InputEvent`, after Jetpack
+XR's: the source, the hand, the time, the ray in the content's space, an `InputAction` and a
+`HitInfo`. The actions are `HoverEnter`, `HoverMove` and `HoverExit` with no press, and `Down`,
+`Move` and `Up` for a press. Jetpack XR's `CANCEL` has no counterpart: a controller that is lost
+ends a press with an `Up`. The `HitInfo` names the composable node whose mesh the ray meets
+(Jetpack XR's `inputEntity`), which of the node's meshes it is, the place of the hit in the content
+space in dp (`hitPosition`) and the triangle. As in Jetpack XR, a press keeps the entity that it
+began on: its `Move`s and `Up` name that mesh, and `hit_position` is `None` where the ray has left
+it. Jetpack XR's list of every entity that the ray crosses is one nearest hit here, and its
+`transform` has no counterpart. For a glTF model `SpatialGltfModelState::node_of` maps a hit to the
+`GltfModelNode`: each material's node records the composition node that carries it, and the draw
+that the mesh index names gives the file's node, with its name.
+
+The demo's readout panel shows the result in its `Ray meets` line: `torus`, `crate, glTF node
+crate` (the name of the file's node) or `nothing`. The ray passes through the torus's hole.
+
+`SpatialVolumeScope::on_pointer_event` still gives Compose's pointer events. Its position is the
+hit's place projected onto the box's front face where the volume has meshes. The Compose events go
+to the volume as a whole. A composable on a mesh does not receive the ray. A window shows the volume
 under the mouse, where the meshes take input as `mesh_surface` documents.
 
 The handles of a movable or resizable volume stand at its front face, half the depth toward the
@@ -271,9 +355,11 @@ nothing. A model with no playing animation runs no effect and builds its surface
 stop between two frames leave the state unchanged and change the pose, so each start and stop also
 counts into the effect's key.
 
-A frame that animates a material with more than one primitive allocates the list of the material's
-surfaces, because `MeshSurfaces::new` takes a `Vec`. A material with one primitive allocates
-nothing.
+A layer keeps a few spaces (`LayerSpaces`: the `Arc<LayerSpace>` that a node's graphics layer
+holds) and an evaluation moves the surfaces of one that no node holds any more, in place. A node
+keeps the space of its last evaluation until the next replaces it, so two spaces serve in turn and a
+third covers a frame in flight. An animation of a material with any number of primitives allocates
+no list of surfaces and no `Arc` in a frame. A space that is still held is never changed.
 
 ### glTF models on a Quest 3
 
@@ -310,8 +396,11 @@ shipping `release` profile has other absolute sizes. An app without the feature 
 A frame with volumes updates the composition and renders the window root twice. The scene's draw
 closure reads the camera, so each eye's collection builds the scene again. The depth view that the
 renderer keeps in its pass is the swapchain's own, so the depth costs no copy. The color takes the
-renderer's conversion pass for each eye. The CPU side allocates what `scene3d` allocates for each
-evaluation of its closure. The layer code allocates nothing.
+renderer's conversion pass for each eye. With four samples a frame adds the second pass of one
+sample for the depth: its vertex work and a store of the depth swapchain, which the one-sample pass
+stored too. The CPU side allocates what `scene3d` allocates for each evaluation of its closure. The
+layer code allocates nothing. The pointer's pick allocates nothing either: it takes the list of
+meshes again only for a volume that a ray points at or a press is on, and keeps its storage.
 
 A call of the runtime or of the renderer that fails ends the 3D content with one line in the log
 (`the 3D content ends`). The session and its panels keep running. A runtime that refuses the depth
@@ -912,6 +1001,121 @@ cameras:
   second.
 
 The desk shows no hand joints, no aim and no fingertip dots: no hand was in the cameras' view.
+
+## Text entry
+
+A text field that takes focus asks the platform for its software keyboard, through
+`PlatformTextInputHandler` of `cranpose-ui` (`show_keyboard` on focus and on each tap on the
+field, `hide_keyboard` when focus leaves). Android and iOS install a handler that opens the
+system's keyboard. The headset backend installs one of two handlers on its shell.
+
+### The keyboard that Cranpose draws
+
+Its handler sets the state `open` of the keyboard. A composable that the backend adds after the
+app's content (as `VolumeScene` is) composes a `SpatialPanel` of keys while `open` is true. The
+panel's modifier marks it as standing below the panel of the focused field. The pose is no state of
+the panel's composition: the space derives it each time it reads the panels. It puts the keyboard
+24 dp below the field's panel, in the same plane, and takes the field panel's `Ride`. So a panel that
+the user carries, or that follows a controller, takes its keyboard along with no composition. The
+keyboard shows nowhere while no panel is known to hold the field.
+
+The frame loop runs three steps for the keyboard after it sent the pointer's events to the shell.
+It asks the shell for the focused field's bounds, and the space names the panel of content whose
+part of the atlas holds the bounds' center. Then it hands the keys that were typed to
+`AppShell::on_key_event`. A key's click runs inside the shell's own pointer dispatch, so a key
+cannot call the shell. It pushes the key down and the key up of a hardware keyboard into a queue
+instead. The text reaches the field through the path of a hardware keyboard: the key handlers of
+the app, the focus keys and then the field.
+
+A key is a `Button`. The integration tests press keys with a controller's ray and with a scripted
+hand, and the field keeps its focus through every press. The keys follow the US
+layout, so a symbol that a US keyboard reaches with shift carries shift and the key of its digit or
+punctuation. Backspace, enter and the hide key carry no text, because the field matches a key event
+with text before it matches the key.
+
+The keyboard is one more layer in a frame. `LayerLimit` already drops the panels that stand
+farthest from the head when a frame holds more layers than the runtime takes, and the keyboard
+stands near the head.
+
+### The system's keyboard on Android XR
+
+Android XR shows the Android input method over an immersive OpenXR app. The evidence comes from the
+Android XR emulator (system image android-34 `google-xr` revision 7, Gboard as the input method):
+
+- An activity that has no editor view cannot show it. `InputMethodManager` logs "Ignoring
+  showSoftInput() as view=DecorView ... is not served".
+- With the editor view of `cranpose/android/java` (`CranposeTextInput`), which the Android backend
+  of Cranpose uses on a phone, the input method shows: `dumpsys input_method` reports
+  `mInputShown=true` and `mWindowVisible=true`, and the keyboard is a panel in the compositor's
+  picture below the app's panels.
+- The panel takes the input focus. The session goes from `FOCUSED` to `VISIBLE`, so the app's
+  lifecycle is `Paused` and its pointer gets no aim. The back action hides the keyboard, and the
+  session returns to `FOCUSED`. The next tap on the field shows the keyboard again.
+- What the keyboard types arrives as input connection events. `adb shell input text hello` produced
+  five `commitText` events, and the field of the demo showed the text.
+
+So on a runtime with `XR_ANDROID_` extensions the backend installs `AndroidInputMethod` of `cranpose`
+on the shell: the handler of the Android backend, with the editor view and the event queue,
+without the window insets and without the placement of the editor view. The loop calls its `pump` in
+each frame, which hands the queue's events to the shell and the focused field's text to the editor
+view. The drawn keyboard never opens then. `use_keyboard(Keyboard::Drawn)` keeps the drawn keyboard.
+
+Not run: a real Android XR headset, and tapping the keys of the system keyboard with a hand or a
+controller (the emulator's hand simulation does not reach the guest, and `adb shell input text` types
+through the same input connection without the keys). Whether the Quest's runtime shows the Android
+input method over an immersive app is not run either. The Quest was not on adb for this change.
+
+### Meta's virtual keyboard
+
+`XR_META_virtual_keyboard` gives a Quest app the keyboard that the Meta system draws in its own
+apps, with its suggestions and its animation. The runtime owns the layout and the typing logic, and
+the app draws the keyboard. The app is not built for it yet. A Quest 3 runtime lists
+`XR_META_virtual_keyboard` (the extension list that an app logged on 16 November). It lists
+`XR_FB_render_model` only for an app whose manifest declares `com.oculus.feature.RENDER_MODEL`.
+
+What an app needs, from Meta's integration guide for the extension:
+
+1. The manifest declares `com.oculus.feature.VIRTUAL_KEYBOARD` (not required),
+   `com.oculus.feature.RENDER_MODEL` (required) and the permission `com.oculus.permission.RENDER_MODEL`.
+   The guide names Quest 2 and Quest Pro and Horizon OS v54 or later.
+2. The instance enables `XR_META_virtual_keyboard` and `XR_FB_render_model`. The system properties
+   (`XrSystemVirtualKeyboardPropertiesMETA`) say whether the runtime supports it.
+3. The app creates the keyboard (`xrCreateVirtualKeyboardMETA`) and its space
+   (`xrCreateVirtualKeyboardSpaceMETA`), and suggests a pose and a scale
+   (`xrSuggestVirtualKeyboardLocationMETA`). The runtime has the final say, so the app reads the pose
+   (`xrLocateSpace`) and the scale (`xrGetVirtualKeyboardScaleMETA`) back.
+4. The app loads the keyboard's model through `XR_FB_render_model`: the path
+   `/model_meta/keyboard/virtual`, with `XR_RENDER_MODEL_SUPPORTS_GLTF_2_0_SUBSET_2_BIT_FB`,
+   because the model has several meshes and transparent textures. `xrLoadRenderModelFB` returns a
+   binary glTF (`.glb`).
+5. The app needs a glTF 2.0 loader for what the model holds: meshes, UVs, normals, tangents, vertex
+   colors, materials, transparent textures, translation-rotation-scale and weight animations, and
+   morph targets (16 for each key). The animation channels carry an `additiveWeightIndex` extra,
+   and an index of -1 means every weight.
+6. The model's glyph textures have a custom URI,
+   `metaVirtualKeyboard://texture/{textureID}?w={width}&h={height}&fmt=RGBA32`. The loader needs a
+   handler that makes a writable texture for each URI and keeps it by its id. Each frame the app
+   asks for the dirty textures (`xrGetVirtualKeyboardDirtyTexturesMETA`) and writes their pixels
+   (`xrGetVirtualKeyboardTextureDataMETA`).
+7. Each frame the app applies the animation states (`xrGetVirtualKeyboardModelAnimationStatesMETA`:
+   an animation index and a fraction), marks the morphed nodes dirty and rebuilds their meshes once,
+   after the textures and all animations.
+8. The app sends the input of each controller ray or hand (`xrSendVirtualKeyboardInputMETA`): the
+   input source, its pose, whether it presses, and the interactor's root pose, which the runtime may
+   change to limit the touch. The app draws its input model at the pose that comes back.
+9. The app tells the runtime which text field has focus (`xrChangeVirtualKeyboardTextContextMETA`),
+   shows the model (`xrSetVirtualKeyboardModelVisibilityMETA`) and waits for the shown event
+   before it accepts input. The model's node named "collision" holds the geometry for the app's own
+   collision.
+10. The runtime sends the typing as events: `XrEventDataVirtualKeyboardCommitTextMETA`,
+    `XrEventDataVirtualKeyboardBackspaceMETA` (repeated while the key is held),
+    `XrEventDataVirtualKeyboardEnterMETA`, and the shown and hidden events. The app turns them
+    into the key events of `AppShell::on_key_event`, as the drawn keyboard does.
+
+Items 4 to 7 need a glTF loader and a renderer for skinned, morphed meshes with textures that
+change. The app's glTF models (`SpatialVolume` with a loader) bring both, so this keyboard can
+follow them. Its handler then replaces the drawn keyboard's on a runtime that lists the extension,
+and the keyboard of Cranpose stays for the others.
 
 ## Flat video
 
