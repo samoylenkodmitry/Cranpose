@@ -5,7 +5,7 @@ use cranpose::DistanceAttenuation;
 /// How a point source in a subspace sounds. Jetpack XR's `PointSourceParams`.
 ///
 /// Jetpack XR's version also sets the directivity of the source and its spread. Cranpose's
-/// panner has neither: a source sounds the same in every direction, and it is a point.
+/// panner has neither. A source is a point that sounds the same in every direction.
 ///
 /// ```
 /// use cranpose::DistanceAttenuation;

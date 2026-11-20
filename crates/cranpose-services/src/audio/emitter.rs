@@ -13,11 +13,12 @@ pub struct EmitterId {
     pub(crate) generation: u32,
 }
 
-/// A point in space that voices play from, and the handle that moves it. Dropping the handle
-/// ends the emitter, and the voices that play from it stop at the audio thread's next render.
+/// A point in space that voices play from. The handle moves it. Dropping the handle ends the
+/// emitter. The voices that play from it stop at the next render of the audio thread.
 ///
-/// [`place`](Self::place) writes the place for the audio thread to read: no call into the
-/// player, no lock and no wait. A frame loop calls it for each emitter in each frame.
+/// [`place`](Self::place) writes the place for the audio thread to read. It makes no call into the
+/// player, takes no lock and waits for nothing. A frame loop calls it for each emitter in each
+/// frame.
 pub struct Emitter {
     scene: Arc<SpatialScene>,
     id: EmitterId,

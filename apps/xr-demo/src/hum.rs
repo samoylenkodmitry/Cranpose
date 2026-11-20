@@ -1,6 +1,6 @@
-// The demo's sound: a hum of harmonics that a spatial source loops. It is made in code, so the app
-// carries no sound file. The torus plays it, and the `XR_DEMO_SOUND` builds play it from a place
-// that stays at the head's side.
+// The demo's sound: a hum of harmonics that a spatial source loops. Code makes it, so the app
+// carries no sound file. The torus plays it. The `XR_DEMO_SOUND` builds play it from a place that
+// stays at the side of the head.
 
 use std::f32::consts::TAU;
 

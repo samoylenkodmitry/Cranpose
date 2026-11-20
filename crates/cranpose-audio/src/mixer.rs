@@ -616,9 +616,9 @@ fn mix_plain_voice(
     audible
 }
 
-// Mixes a voice that plays from an emitter: places it from the emitter's place and the listener's
-// pose, and stands it still while the scene is paused. Returns whether it sounds. A voice whose
-// emitter ended stops.
+// Mixes a voice that plays from an emitter. The place of the emitter and the pose of the listener
+// place the voice. The voice stands still while the scene is paused. Returns whether the voice
+// sounds. A voice whose emitter ended stops.
 fn mix_emitter_voice(
     voice: &mut Voice,
     clip: &ClipData,
@@ -639,7 +639,7 @@ fn mix_emitter_voice(
         } => voice.spatial.placement = panner::place(heard.listener, position, attenuation),
     }
     if block.paused && voice.spatial.is_silent() {
-        // A voice that has faded out waits where it is, and the stream stays open for it
+        // A voice that has faded out waits where it is. The stream stays open for it.
         return true;
     }
     let length = clip.frames() as f64;

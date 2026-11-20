@@ -152,12 +152,12 @@ impl SubspaceModifier {
             .map(|(limits, policy)| (*limits, policy))
     }
 
-    /// Makes the content a source of `source`. The sound comes from the content's pose, a panel's
-    /// or a volume's center, and follows the content when the user carries it. A sound that stands
-    /// at no content is a [`SpatialPointSource`](crate::SpatialPointSource).
+    /// Makes the content a source of `source`. The sound comes from the pose of the content, which
+    /// is the center of a panel or a volume. It follows the content when the user carries it. A
+    /// sound that stands at no content is a [`SpatialPointSource`](crate::SpatialPointSource).
     ///
-    /// Jetpack XR plays a sound at an entity: `SpatialSoundPool.play` takes the entity that it
-    /// comes from. It has no modifier for it.
+    /// Jetpack XR plays a sound at an entity. `SpatialSoundPool.play` takes the entity that the
+    /// sound comes from. Jetpack XR has no modifier for it.
     pub const fn point_source(mut self, source: PointSource) -> Self {
         self.point_source = Some(source);
         self

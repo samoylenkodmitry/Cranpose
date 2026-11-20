@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Checks the spatial audio of an immersive Cranpose app on a headset through adb, with numbers: no
-# person listens. The app is a build of apps/xr-demo made with `XR_DEMO_SOUND=swing`, which plays its
-# hum from a place that stays level with the head, 50 cm to its left for three seconds and then 50 cm
-# to its right, and with the `audio-tap` feature of `cranpose-xr`. The tap logs one line for each second of
-# output: the root mean square of the left and the right channel of the mix, and where the source
-# stands relative to the head. The script reads the lines and fails unless the left level is the higher
-# while the source is at the left and the right level is the higher while it is at the right.
+# Checks the spatial audio of an immersive Cranpose app on a headset through adb with numbers. No
+# person listens. The app is a build of apps/xr-demo made with `XR_DEMO_SOUND=swing` and with the
+# `audio-tap` feature of `cranpose-xr`. The build plays its hum from a place that stays level with
+# the head. The place is 50 cm to the left of the head for three seconds. Then it is 50 cm to the
+# right of the head for three seconds. The tap logs one line for each second of output. The line
+# holds the root mean square of the left channel and of the right channel of the mix and where the
+# source stands relative to the head. The script reads the lines. It fails unless the left level is
+# the higher one while the source is at the left and the right level is the higher one while the
+# source is at the right.
 #
 # The caller holds the device lock and puts the headset on its wearer's face with
 # `adb shell am broadcast -a com.oculus.vrpowermanager.prox_close`. The script sets no property and no
@@ -51,11 +53,16 @@ echo "== the tap's lines, $out/tap.log"
 cat "$out/tap.log"
 
 # One row for each line: the second, the left level, the right level, the paused flag and the
-# source's x relative to the head.
+# source's x relative to the head. A line logs the levels of the second that just ended and the place
+# of the source at the time of the line. The first line after the source changed its side holds
+# levels that mix the two sides, so the check leaves it out.
 rows="$(sed -nE 's/.*second ([0-9]+): left ([0-9.]+) right ([0-9.]+) \(rms\), paused (true|false), the source is at x ([-+0-9.]+) y .*/\1 \2 \3 \4 \5/p' "$out/tap.log")"
 echo "$rows" | awk '
-  $4 == "false" && $5 < -0.3 { lefts++; if ($2 > $3) { left_wins++ } }
-  $4 == "false" && $5 > 0.3 { rights++; if ($3 > $2) { right_wins++ } }
+  $4 == "true" { next }
+  { side = ($5 < -0.3) ? "left" : (($5 > 0.3) ? "right" : "middle") }
+  side != previous { previous = side; next }
+  side == "left" { lefts++; if ($2 > $3) { left_wins++ } }
+  side == "right" { rights++; if ($3 > $2) { right_wins++ } }
   END {
     printf "source at the left: %d seconds, the left level higher in %d\n", lefts, left_wins
     printf "source at the right: %d seconds, the right level higher in %d\n", rights, right_wins

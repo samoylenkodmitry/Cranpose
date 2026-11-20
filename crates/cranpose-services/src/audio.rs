@@ -145,9 +145,9 @@ pub struct PlaybackParams {
     /// The mix bus this voice belongs to.
     pub bus: AudioBus,
     /// The emitter that the voice plays from, or `None` for a voice that plays in the mix as
-    /// it is. A voice with an emitter sounds from the emitter's place: the player takes the
-    /// level of each ear, and the delay between the ears, from where the emitter is relative to
-    /// the listener, and ignores [`pan`](Self::pan).
+    /// it is. A voice with an emitter sounds from the place of the emitter. The player takes the
+    /// level of each ear and the delay between the ears from where the emitter is relative to
+    /// the listener. It ignores [`pan`](Self::pan).
     pub emitter: Option<EmitterId>,
 }
 

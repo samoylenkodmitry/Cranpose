@@ -1,13 +1,13 @@
 //! A cell of words that one thread writes and another reads without waiting.
 //!
-//! The audio callback reads the head's pose and the placement of each source from cells like
-//! this one, so it never takes a lock and never waits for the frame loop that writes them. A
-//! write that overlaps a read makes the read fail, and the reader keeps what it read before.
+//! The audio callback reads the pose of the head and the place of each source from cells like
+//! this one. It takes no lock and never waits for the frame loop that writes them. A write that
+//! overlaps a read makes the read fail. The reader then keeps what it read before.
 
 use std::sync::atomic::{AtomicU32, Ordering, fence};
 
 pub(crate) struct SeqCell<const N: usize> {
-    // Odd while a write is in progress, and one more than twice the writes done otherwise.
+    // Odd while a write is in progress. Otherwise it is twice the number of writes done.
     sequence: AtomicU32,
     words: [AtomicU32; N],
 }
@@ -20,8 +20,8 @@ impl<const N: usize> SeqCell<N> {
         }
     }
 
-    // Stores `words`. Returns `false` and stores nothing while another write is in progress: a
-    // cell has one writer at a time, and a second one only loses its own write.
+    // Stores `words`. Returns `false` and stores nothing while another write is in progress. A
+    // cell has one writer at a time. A second writer only loses its own write.
     pub(crate) fn write(&self, words: [u32; N]) -> bool {
         let before = self.sequence.load(Ordering::Relaxed);
         if before & 1 == 1

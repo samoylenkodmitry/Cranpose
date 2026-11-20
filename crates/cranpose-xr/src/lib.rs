@@ -27,6 +27,12 @@
 //! draws one below the field's panel, or shows the system's where the runtime does, as Android XR
 //! does. [`use_keyboard`] chooses.
 //!
+//! A [`SpatialPointSource`] plays a sound from a pose in a [`Subspace`]. [`SubspaceModifier::point_source`]
+//! makes a panel or a volume the source of a sound. The sound follows the head and the source in each
+//! frame. Cranpose's own panner in the audio mixer gives each ear its level and its delay, so the
+//! runtime has no part in it. The audio player must be Cranpose's engine.
+//! [`SpatialCapabilities::is_spatial_audio_enabled`] says whether it is.
+//!
 //! The `openxr` feature adds the backend for headsets. On Android, as on a Meta Quest, its
 //! [`android_main!`] starts the app as an immersive app. On Linux and Windows its `run` starts
 //! the app in the headset of the machine's OpenXR runtime (SteamVR, Monado, Meta Link) and opens

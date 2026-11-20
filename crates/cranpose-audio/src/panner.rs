@@ -1,23 +1,22 @@
 //! Cranpose's own panner: where a point source sounds in each ear, from where it stands relative
 //! to the listener's head.
 //!
-//! The model has four parts. Each is a plain formula, and none needs a measured head response.
+//! The model has four parts. Each part is a plain formula. None needs a measured head response.
 //!
-//! - The distance gain comes from the source's [`DistanceAttenuation`] and applies to both ears.
+//! - The distance gain comes from the [`DistanceAttenuation`] of the source. It applies to both ears.
 //! - The level difference between the ears grows with the sine of the angle between the source and
-//!   the head's forward axis, as the sideways part of the direction to the source. The ear that
-//!   is farther from the source is quieter by up to [`MAX_LEVEL_DIFFERENCE_DB`].
-//! - The time difference is the Woodworth formula for a spherical head: the far ear hears the
-//!   sound `head_radius / speed_of_sound * (angle + sin(angle))` later, 656 microseconds at most.
-//! - The head shadow is the one-pole, one-zero filter of Brown and Duda (1998). Each ear's
-//!   filter keeps the low frequencies and lifts or cuts the high ones, by how far the source is
-//!   from that ear's axis. A source at the ear gains 6 dB above 2 kHz, and one behind the head
-//!   loses 20 dB.
+//!   the forward axis of the head. That sine is the sideways part of the direction to the source. The
+//!   ear that is farther from the source is quieter by up to [`MAX_LEVEL_DIFFERENCE_DB`].
+//! - The time difference is the Woodworth formula for a spherical head. The far ear hears the sound
+//!   `head_radius / speed_of_sound * (angle + sin(angle))` later, which is 656 microseconds at most.
+//! - The head shadow is the one-pole, one-zero filter of Brown and Duda (1998). The filter of an ear
+//!   keeps the low frequencies. It lifts or cuts the high ones by how far the source is from the axis
+//!   of that ear. A source on the axis lifts them by 6 dB. A source 150 degrees from the axis cuts
+//!   them by 20 dB. The shelf starts near 1.2 kHz.
 //!
-//! The model has no elevation cue and no front and back cue beyond what the shadow of the head
-//! gives: a source above the head and one below it sound alike, and so do a source in front and
-//! one behind. A measured head response would tell them apart. This one runs on every platform
-//! with a few multiplications per voice and ear.
+//! The model has no elevation cue. It has no front and back cue beyond the head shadow. A source above
+//! the head sounds like one below it. A source ahead sounds like one behind. A measured head
+//! response would tell them apart. This model costs a few multiplications for each voice and ear.
 
 use cranpose_services::{AudioListener, DistanceAttenuation};
 
@@ -31,8 +30,8 @@ const SPEED_OF_SOUND: f32 = 343.0;
 // need a level cue that a head shadow alone does not give, so this one is a little larger.
 pub(crate) const MAX_LEVEL_DIFFERENCE_DB: f32 = 6.0;
 
-// The lowest gain factor of the head shadow's high frequencies, at the angle from the ear's axis
-// where a source is farthest from the ear, and that angle, in radians (150 degrees).
+// The lowest gain factor of the high frequencies in the head shadow. It applies at an angle from
+// the axis of the ear of 150 degrees, which is the second constant in radians.
 const SHADOW_MIN_ALPHA: f32 = 0.1;
 const SHADOW_MIN_ANGLE: f32 = 150.0 * std::f32::consts::PI / 180.0;
 
@@ -105,7 +104,7 @@ fn shadow_factor(cosine: f32) -> f32 {
 
 // The coefficients of the head shadow's digital filter at `sample_rate`: b0, b1 and a1 of
 // y[n] = b0 x[n] + b1 x[n-1] - a1 y[n-1]. The analog filter is (1 + alpha s T) / (1 + s T) for the
-// time constant T, and the bilinear transform makes it digital. Its gain at zero frequency is 1.
+// time constant T. The bilinear transform makes it digital. Its gain at zero frequency is 1.
 pub(crate) fn shadow_coefficients(factor: f32, sample_rate: f32) -> [f32; 3] {
     let pole = 2.0 * SHADOW_TIME_CONSTANT * sample_rate;
     let scale = 1.0 / (1.0 + pole);

@@ -1,8 +1,8 @@
 // A build with `XR_DEMO_SOUND=left`, `right` or `swing` plays the hum from a place that stays level
 // with the head, 50 cm from it to its left or right. `swing` switches sides every three seconds. The
-// head does not move on a desk, so these builds show on a device that the sound follows the head's
-// pose: the audio tap of the build logs the level of each ear and where the source stands relative
-// to the head, and the left level is the higher one while the source is at the left.
+// head does not move on a desk. These builds show on a device that the sound follows the pose of the
+// head. The audio tap of the build logs the level of each ear and where the source stands relative to
+// the head. The left level is the higher one while the source is at the left.
 
 use cranpose::{SoundId, prelude::*};
 use cranpose_xr::{Pose, SpatialFrameEffect, SpatialPointSource, SubspaceModifier};

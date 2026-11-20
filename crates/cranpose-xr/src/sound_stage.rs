@@ -50,9 +50,9 @@ impl SoundStage {
         })
     }
 
-    // Sets the listener at `head`, keeps each source's emitter where its source stands and starts
+    // Sets the listener at `head`. Keeps the emitter of each source where the source stands. Starts
     // or ends voices for the sources that entered or left the space. The head is `None` while the
-    // runtime does not track it, and the listener stays where it was.
+    // runtime does not track it. The listener then stays where it was.
     pub(crate) fn update(&mut self, head: Option<Pose>, space: &Space) {
         if let Some(head) = head {
             self.scene.set_listener(AudioListener {
@@ -109,9 +109,9 @@ impl SoundStage {
         });
     }
 
-    // Tells the stage what the app's lifecycle is. The sources sound while the app has input
-    // focus, and stand silent in every other state: under a system panel, while the runtime shows
-    // none of the app and once it ends.
+    // Tells the stage what the lifecycle of the app is. The sources sound while the app has input
+    // focus. They stand silent in every other state: under a system panel, while the runtime shows
+    // none of the app and once the app ends.
     pub(crate) fn lifecycle(&self, state: LifecycleState) {
         self.scene
             .set_paused(!state.is_at_least(LifecycleState::Resumed));

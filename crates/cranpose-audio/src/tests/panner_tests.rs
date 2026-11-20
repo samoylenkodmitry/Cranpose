@@ -82,7 +82,7 @@ fn a_far_source_is_quieter_in_both_ears_by_its_curve() {
     assert!(close(far.gain[0], 0.1) && close(far.gain[1], 0.1));
     let none = place(&head(), [0.0, 0.0, -10.0], DistanceAttenuation::None);
     assert_eq!(none.gain, [1.0, 1.0]);
-    // The distance gain scales the level difference, and leaves the delay as it is
+    // The distance gain scales the level difference. The delay stays as it is
     let far_left = place(&head(), [-10.0, 0.0, 0.0], NATURAL);
     assert!(close(far_left.gain[0], 0.1));
     assert!(close(far_left.gain[1], 0.1 * FAR_AT_AXIS));
@@ -99,7 +99,7 @@ fn a_source_in_the_head_sounds_in_the_middle_with_a_finite_gain() {
 
 #[test]
 fn a_head_that_turns_left_moves_a_source_ahead_to_its_right() {
-    // Turned 90 degrees to the left, the head looks along -x, and what stood at -z is at its right
+    // Turned 90 degrees to the left, the head looks along -x. What stood at -z is at its right
     let placed = place(&turned(90.0), [0.0, 0.0, -1.0], NATURAL);
     assert!(close(placed.gain[1], 1.0));
     assert!(close(placed.gain[0], FAR_AT_AXIS));
@@ -108,7 +108,7 @@ fn a_head_that_turns_left_moves_a_source_ahead_to_its_right() {
     let placed = place(&turned(-90.0), [0.0, 0.0, -1.0], NATURAL);
     assert!(close(placed.gain[0], 1.0));
     assert!(placed.delay[1] > 0.0 && placed.delay[0] == 0.0);
-    // Turned all the way round, the source is behind the head, and sounds as one ahead does
+    // Turned all the way round, the source is behind the head. It sounds as one ahead does
     let placed = place(&turned(180.0), [0.0, 0.0, -1.0], NATURAL);
     assert!(close(placed.gain[0], 1.0) && close(placed.gain[1], 1.0));
 }

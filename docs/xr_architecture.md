@@ -90,7 +90,7 @@ Cranpose developers too:
 - `SpatialGltfModel(state, modifier, content)`: a glTF 2.0 model in a volume, behind the `gltf`
   feature. `rememberSpatialGltfModelState(source)` loads it. See "glTF models".
 - `SpatialPointSource(modifier, source)` and `SubspaceModifier::point_source(source)`: sound that
-  comes from a pose in a `Subspace`, or from a panel or a volume, and follows the head. See "Spatial
+  comes from a pose in a `Subspace` or from a panel or a volume. It follows the head. See "Spatial
   audio". `local_spatial_capabilities()` tells with `is_spatial_audio_enabled()` whether the app
   has the sound.
 
@@ -1454,23 +1454,23 @@ logic and of the numbers that Java gives. It has no run across JNI.
 
 ## Spatial audio
 
-A sound source stands at a pose in a `Subspace`, or at a panel or a volume. Its sound reaches each
-ear with the level and the delay that the source's place relative to the head gives, and follows
-the head and the source in each frame. The model is Cranpose's own panner in the audio mixer. It
-runs on every platform that Cranpose's audio engine runs on, with no help from the runtime.
+A sound source stands at a pose in a `Subspace`, or at a panel or a volume. In each frame the sound
+reaches each ear with the level and the delay that the place of the source relative to the head gives.
+The model is Cranpose's own panner in the audio mixer. Every backend of Cranpose's audio engine runs
+the mixer, so the model needs no help from the runtime.
 
 ### The choice
 
-Three ways to place a sound in a headset exist. The first is the one that this crate takes.
+Three ways to place a sound in a headset exist. This crate takes the first.
 
-| Way | What it gives | Why it is not the choice |
+| Way | What it gives | Why this crate does not take it |
 |---|---|---|
-| Cranpose's own panner in `cranpose-audio`'s mixer | Distance gain, the level and the delay of each ear and a head shadow, from the source's pose and the head's pose, on Android, Linux, macOS, Windows, watchOS and the web | |
-| `android.media.Spatializer` (API 32) | Queries: `isAvailable`, `isEnabled`, `getImmersiveAudioLevel`, `canBeSpatialized` and the head tracker's availability | It renders a stream's channels as virtual speakers around the listener. It has no call that gives a source a position or a distance, so it cannot place a sound at a pose |
-| Jetpack XR's `SpatialSoundPool.play(session, soundPool, soundID, params, entity, ...)` | A system-wide point source that follows an `Entity` | It needs a SceneCore `Session` and `Entity`, which only Android XR has. Cranpose draws through OpenXR and holds neither. A Quest and a PC runtime offer nothing like it |
+| Cranpose's own panner in `cranpose-audio`'s mixer | A distance gain, a level and a delay for each ear and a head shadow. They come from the pose of the source and the pose of the head | |
+| `android.media.Spatializer` (API 32) | Queries about the device: `isAvailable`, `isEnabled`, `getImmersiveAudioLevel`, `canBeSpatialized` and `isHeadTrackerAvailable` | It renders the channels of a stream as virtual speakers around the listener. It has no call that gives a source a position or a distance. A sound at a pose cannot use it |
+| Jetpack XR's `SpatialSoundPool.play(session, soundPool, soundID, params, entity, ...)` | A point source of the system that follows an `Entity` | It takes a SceneCore `Session` and an `Entity`. Cranpose draws through OpenXR and holds neither |
 
-Meta's XR Audio SDK is a licensed download and is not used. A backend for Android XR that hands
-the sources to SceneCore would give the system's panner on that one runtime. It is not there.
+Meta's XR Audio SDK is a licensed download, so this crate does not use it. A backend for Android XR could
+hand the sources to SceneCore. This crate has no such backend.
 
 ### The API
 
@@ -1478,13 +1478,13 @@ The names follow Jetpack XR where it has one:
 
 | Cranpose | Jetpack XR | Difference |
 |---|---|---|
-| `PointSourceParams` | `PointSourceParams` | Only `distance_attenuation`. Jetpack XR also has `directivity` and `spread`; the panner has a point that sounds the same in every direction |
-| `DistanceAttenuation` (`Auto`, `None`, `Linear { .. }`, `Natural { .. }`) | `DistanceAttenuation` (`Auto`, `None`, `Linear`, `Natural`, `Custom`) | No `Custom` curve. A `min_distance` below 0.1 m counts as 0.1 m, where Jetpack XR throws |
-| `PointSource { sound, params, playback, looping }` | the arguments of `SpatialSoundPool.play`: `soundID`, `params`, `volume`, `priority`, `loop`, `rate` | `playback` is Cranpose's `PlaybackParams` (volume, rate, bus). No priority. `looping` is Jetpack XR's `loop = -1`; a count of loops is not there |
-| `SpatialPointSource(modifier, source)` | `SpatialSoundPool.play(.., entity)` at an `Entity` | A composable: the sound plays while it is in the composition. Jetpack XR has no composable for it |
-| `SubspaceModifier::point_source(source)` | the `entity` argument of `play` | The sound comes from the panel's or the volume's own pose, which a carry and a following subspace move |
-| `SpatialCapabilities::is_spatial_audio_enabled()` | `SpatialCapabilities.isSpatialAudioEnabled` | On in a headset when the app's audio player has a spatial scene, which Cranpose's engine has |
-| `SpatialSoundPool.getSpatialSourceType`, `SoundFieldAttributes`, `SpatialMediaPlayer`, `SpatialAudioTrack` | | Not there: no ambisonic sound fields, and no player other than Cranpose's mixer |
+| `PointSourceParams` | `PointSourceParams` | It has `distance_attenuation` only. Jetpack XR adds `directivity` and `spread`. The panner has a point that sounds the same in every direction |
+| `DistanceAttenuation` (`Auto`, `None`, `Linear { .. }`, `Natural { .. }`) | `DistanceAttenuation` (`Auto`, `None`, `Linear`, `Natural`, `Custom`) | It has no `Custom` curve. A `min_distance` below 0.1 m counts as 0.1 m. Jetpack XR throws for it |
+| `PointSource { sound, params, playback, looping }` | The arguments of `SpatialSoundPool.play`: `soundID`, `params`, `volume`, `priority`, `loop`, `rate` | `playback` is Cranpose's `PlaybackParams` with the volume, the rate and the bus. It has no priority. `looping` is the `loop` of -1 in Jetpack XR. A count of loops does not exist |
+| `SpatialPointSource(modifier, source)` | `SpatialSoundPool.play(.., entity)` at an `Entity` | It is a composable. The sound plays while the composable is in the composition. Jetpack XR has no composable for it |
+| `SubspaceModifier::point_source(source)` | The `entity` argument of `play` | The sound comes from the own pose of the panel or the volume. A carry and a following subspace move that pose |
+| `SpatialCapabilities::is_spatial_audio_enabled()` | `SpatialCapabilities.isSpatialAudioEnabled` | It is on in a headset when the audio player of the app has a spatial scene. Cranpose's engine has one |
+| `SpatialSoundPool.getSpatialSourceType`, `SoundFieldAttributes`, `SpatialMediaPlayer`, `SpatialAudioTrack` | | They do not exist here. Cranpose has no ambisonic sound field and no player other than its mixer |
 
 ```rust,ignore
 use cranpose::{PlaybackParams, default_audio};
@@ -1503,7 +1503,7 @@ fn Scene() {
                 PointSource::new(sound).looping(),
             );
         }
-        // A sound at a volume: it moves when a controller's ray carries the volume
+        // A sound at a volume. It moves when a controller's ray carries the volume
         SpatialVolume(
             SubspaceModifier::new()
                 .movable()
@@ -1515,98 +1515,101 @@ fn Scene() {
 }
 ```
 
-A source plays while it is in the composition. A source that does not loop plays once, when it
-enters it. A source changes its voice when its `PointSource` value changes. Outside a headset the
-composables play nothing, and `is_spatial_audio_enabled()` is off, as Jetpack XR's
-`SpatialCapability.SPATIAL_AUDIO` is off where there is no spatial runtime.
+A source plays while it is in the composition. A source that does not loop plays once, when it enters
+the composition. A source starts a new voice when its `PointSource` value changes. Outside a headset
+the composables play nothing. `is_spatial_audio_enabled()` is off there.
 
 ### The model
 
-The mixer takes the place of the source in the head's own axes: x to the right, y up and z behind.
-The model has no state beyond a first-order filter for each ear, and each of its parts is a plain
-formula:
+The mixer takes the place of the source in the axes of the head: x to the right, y up and z behind.
+The model keeps a first-order filter for each ear and nothing else. Each part is a plain formula:
 
-- **Distance.** The source's `DistanceAttenuation` gives one gain for both ears. `Auto` is
-  `Natural` from 1 m: 1 up to a meter, `1 / distance` beyond it, which is 6 dB for each doubling.
-- **Level.** `sideways` is the x of the unit vector to the source, the sine of its angle from the
-  head's forward axis. The ear that is farther from the source is quieter by `6 dB * |sideways|`,
-  and the other ear keeps the gain. A headset's loudspeakers sit at the ears and need this cue.
-- **Delay.** Woodworth's formula for a spherical head of 8.75 cm radius: the far ear hears the
-  sound `radius / speed * (asin(sideways) + sideways)` later, 656 microseconds at the side. Each ear reads the clip
-  at its own position, so the delay costs a second read and no delay line.
-- **Head shadow.** The filter of Brown and Duda (1998), `(1 + alpha s T) / (1 + s T)` with
-  `T = radius / (2 * speed)`, turned digital by the bilinear transform. Each ear's `alpha` falls from
-  2 for a source at that ear's axis to 0.1 for one 150 degrees from it, so the high frequencies rise
-  by 6 dB near the source and fall by 20 dB behind the head. The gain at zero frequency is 1.
+- **Distance.** The `DistanceAttenuation` of the source gives one gain for both ears. `Auto` is
+  `Natural` from 1 m. The gain is 1 up to a meter. Beyond a meter it is `1 / distance`, which is 6 dB
+  for each doubling.
+- **Level.** `sideways` is the x of the unit vector to the source. It is the sine of the angle between
+  the source and the forward axis of the head. The ear that is farther from the source is quieter by
+  `6 dB * |sideways|`. The other ear keeps the gain. The loudspeakers of a headset sit at the ears and
+  need this cue.
+- **Delay.** Woodworth's formula for a spherical head of 8.75 cm radius gives the delay. The far ear
+  hears the sound `radius / speed * (asin(sideways) + sideways)` later. That is 656 microseconds for a
+  source at the side. Each ear reads the clip at its own position, so the delay costs a second read and
+  no delay line.
+- **Head shadow.** The filter of Brown and Duda (1998) is `(1 + alpha s T) / (1 + s T)` with
+  `T = radius / (2 * speed)`. The bilinear transform makes it digital. The `alpha` of an ear is 2 for a
+  source on the axis of that ear. It falls to 0.1 for a source 150 degrees from that axis. The high
+  frequencies of an ear rise by up to 6 dB and fall by up to 20 dB with it. The shelf starts near
+  1.2 kHz. The gain at zero frequency is 1.
 
-The model has no elevation cue. A source above the head and one below it sound alike, and so do a
-source ahead and one behind. It has no Doppler shift, no reverb and no occlusion. A stereo clip
-plays as the mean of its channels, because a point source has one signal. A voice that plays from
-an emitter ignores `PlaybackParams::pan`.
+The model has no elevation cue. A source above the head sounds like one below it. A source ahead sounds
+like one behind. The model has no Doppler shift, no reverb and no occlusion. A stereo clip plays as the
+mean of its channels, because a point source has one signal. A voice that plays from an emitter ignores
+`PlaybackParams::pan`.
 
 ### The audio thread
 
-Nothing in the callback allocates or takes a lock. The frame loop hands three kinds of state to the
-audio thread through `cranpose_services::SpatialScene`, which the audio engine makes and the app's
-`AudioPlayer::spatial_scene()` returns:
+The callback allocates nothing and takes no lock. The frame loop hands three kinds of state to the audio
+thread through `cranpose_services::SpatialScene`. The audio engine makes the scene. The app reaches it
+through `AudioPlayer::spatial_scene()`.
 
-- **The head's pose.** The loop writes it into a cell of atomic words in each frame. The callback
-  reads the cell once for each render call. A write that overlaps the read makes the read fail, and
-  the callback keeps the pose that it read before. A write takes no lock and never waits for a
-  reader.
-- **The emitters.** A source's `Emitter` is a slot of a fixed array of 32 in the scene. Its place and its distance curve
-  sit in a cell as well. Making an emitter claims a slot with a compare and swap, and dropping it
-  frees the slot. A voice names its emitter with the slot and a generation, so a voice whose
-  emitter ended, or whose slot another emitter took, stops at the next render call.
+- **The pose of the head.** The loop writes it into a cell of atomic words in each frame. The callback
+  reads the cell once for each render call. A write that overlaps the read makes the read fail. The
+  callback then keeps the pose that it read before. A write takes no lock and never waits for a reader.
+- **The emitters.** The `Emitter` of a source is a slot in a fixed array of 32 in the scene. Its place
+  and its distance curve sit in a cell as well. Making an emitter claims a slot with a compare and swap.
+  Dropping the emitter frees the slot. A voice names its emitter with the slot and a generation. A voice
+  stops at the next render call when its emitter ended or when another emitter took its slot.
 - **The pause.** One atomic flag.
 
-A pose does not go through the engine's command queue. That queue is for rare events, and the engine
-takes locks and asks the output device whether it runs when it sends a command. A command in each
-frame would also fill the queue while the stream is paused. The voice itself starts with one
-command, when the source enters the composition.
+A pose does not go through the command queue of the engine. That queue serves rare events. The engine
+takes locks and asks the output device whether it runs when it sends a command. A command in each frame
+would also fill the queue while the stream is paused. The voice itself starts with one command, when the
+source enters the composition.
 
-Across one render call each ear's gain, delay and filter coefficients move in a straight line from
-what they were to what the new pose gives, so a head that turns between two frames does not click.
-A voice that plays from no emitter runs the code it ran before this feature, and its output is the
-same bytes.
+Across one render call the gain, the delay and the filter coefficients of each ear move in a straight
+line from the old values to the values of the new pose. A head that turns between two frames does not
+click. A voice that plays from no emitter runs the code that it ran before this feature. Its output has
+the same bytes.
 
 ### The frame loop
 
-`SoundStage` in `src/sound_stage.rs` runs in each frame, after the controllers' moves and the
+`SoundStage` in `src/sound_stage.rs` runs in each frame, after the moves of the controllers and the
 following subspaces:
 
-1. It sets the listener to the head's pose. A head that the runtime does not track leaves the
-   listener where it was.
-2. It reads the sources from the `Space` into reused storage. A source's pose is the live pose of its
-   panel or volume, so a carry moves the sound without a composition, and a source in a following
-   subspace follows the head or the controller.
-3. It makes an emitter and a voice for each new source, ends the ones of a source that left or changed,
-   and writes each emitter's place.
+1. It sets the listener to the pose of the head. The listener stays where it was while the runtime does
+   not track the head.
+2. It reads the sources from the `Space` into reused storage. The pose of a source is the live pose of
+   its panel or volume. A carry moves the sound without a composition. A source in a following subspace
+   follows the head or the controller.
+3. It makes an emitter and a voice for each new source. It ends the voices of a source that left or
+   changed. It writes the place of each emitter.
 
-The `AudioPlayer` of an app that installed no audio engine has no spatial scene. The stage is then
+An app that installed no audio engine has the no-op player, which has no spatial scene. The stage is then
 absent, the capability is off and the composables play nothing.
 
 ### Pause
 
-The stage tells the scene that the app is paused in every lifecycle state but `Resumed`:
-`Created`, `Started`, `Paused`, `Stopped` and `Destroyed`. The runner sets it when it dispatches a
-lifecycle change, as the app sees it in "Focus and pause", so a runtime that shows none of the app
-silences the sources without a composition. A paused voice fades out in one render call and then
-stands still, so the sound goes on from where it stopped. A paused voice keeps the output stream
-open. Sound that does not play from an emitter is the app's own to pause with `local_lifecycle_state()`.
+The stage tells the scene that the app is paused in every lifecycle state except `Resumed`. Those states
+are `Created`, `Started`, `Paused`, `Stopped` and `Destroyed`. The runner sets the flag when it
+dispatches a change of the lifecycle, as the app sees it in "Focus and pause". A runtime that shows none
+of the app silences the sources without a composition. A paused voice fades out in one render call and
+then stands still. The sound goes on from where it stopped. A paused voice keeps the output stream open.
+Sound that does not play from an emitter is the app's to pause with `local_lifecycle_state()`.
 
 ### The tap
 
-The `audio-tap` feature of `cranpose-xr` turns on a tap on the mixed output. The mixer sums the
-squares of the left and right samples that it writes and publishes the root mean square of each once for
-every second of output, into cells that the frame loop reads. The callback does not log. The loop logs one line for each second:
+The `audio-tap` feature of `cranpose-xr` turns on a tap on the mixed output. The mixer sums the squares
+of the left and the right samples that it writes. For every second of output it publishes the root mean
+square of each side into cells. The frame loop reads the cells. The callback does not log. The loop logs
+one line for each second:
 
 ```
 cranpose xr: audio tap, second 7: left 0.3711 right 0.1862 (rms), paused false, the source is at x -0.50 y +0.00 z -0.00 m of the head
 ```
 
-Without the feature the tap is off, and the mixer does one read of a flag in each render call for
-it. `scripts/dev/xr_audio_check.sh` runs the check on a Quest.
+The line holds the levels of the second that just ended. It holds the place of the source at the time of
+the line. Without the feature the tap is off. The mixer then reads one flag in each render call for the
+tap. `scripts/dev/xr_audio_check.sh` runs the check on a Quest.
 
 ## Headsets
 

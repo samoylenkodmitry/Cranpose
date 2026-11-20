@@ -1,5 +1,6 @@
 // The sound that a headset app places in its subspace, as the frame loop hands it to the audio
-// player: where each source's emitter stands relative to the head, and when the app is silent.
+// player: where the emitter of each source stands relative to the head. It also tests when the app
+// is silent.
 
 use std::{
     cell::RefCell,
@@ -414,7 +415,7 @@ fn more_sources_than_emitters_play_as_many_as_there_are_emitters() {
     });
 }
 
-// A headset whose content a test composes: the space, and a state that the content reads.
+// A headset whose content a test composes. It holds the space and a state that the content reads.
 struct Headset {
     robot: RobotTestRule<TestRenderer>,
     space: Space,

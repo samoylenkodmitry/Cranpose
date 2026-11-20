@@ -211,7 +211,7 @@ fn a_source_that_moves_across_the_head_follows_it_without_a_click() {
     let mut h = rig(at_origin());
     let emitter = emitter_at(&h, [-1.0, 0.0, 0.0], NATURAL);
     play_from(&mut h, dc_clip(4_800), true, &emitter, 1.0);
-    // The source stands to the left, and the left ear is the louder one
+    // The source stands to the left. The left ear is the louder one
     let before = Heard::of(&render(&mut h, 1_024));
     assert!(before.level(0) > before.level(1) + 0.4);
     // It jumps to the right between two render calls
@@ -220,7 +220,7 @@ fn a_source_that_moves_across_the_head_follows_it_without_a_click() {
     let after = Heard::of(&render(&mut h, 1_024));
     assert!(after.level(1) > after.level(0) + 0.4);
     // Neither ear's level steps: a gain that changed by 0.5 in one frame would show as a step of
-    // 0.5. The ramp spreads it over the call, and the filters' states follow their coefficients.
+    // 0.5. The ramp spreads it over the call. The states of the filters follow their coefficients.
     for (ear, samples) in crossing.ears.iter().enumerate() {
         let steps = samples.windows(2).map(|pair| (pair[1] - pair[0]).abs());
         let largest = steps.fold(0.0_f32, f32::max);
@@ -239,8 +239,8 @@ fn a_source_that_moves_slowly_past_the_head_passes_through_the_middle() {
         let heard = Heard::of(&render(&mut h, 256));
         sides.push(heard.level(0) - heard.level(1));
     }
-    // From the left ear louder, through equal, to the right ear louder, and the balance crosses
-    // zero once
+    // The left ear is louder at first, then both are equal, then the right ear is louder. The
+    // balance crosses zero once
     assert!(sides[0] > 0.1, "{sides:?}");
     assert!(sides[20] < -0.1, "{sides:?}");
     let crossings = sides
@@ -259,14 +259,14 @@ fn a_paused_scene_is_silent_after_one_render_call_and_the_voice_goes_on_where_it
     let playing = Heard::of(&render(&mut h, 1_000));
     assert!(playing.level(0) > 0.9);
     h.scene.set_paused(true);
-    // The voice fades out across this call, and stands silent from the next one on
+    // The voice fades out across this call. It stands silent from the next one on
     let fading = Heard::of(&render(&mut h, 128));
     assert!(
         fading.ears[0]
             .last()
             .is_some_and(|sample| sample.abs() < 0.02)
     );
-    // Far longer than the clip lasts, and not a sample of sound
+    // The pause lasts far longer than the clip. Not one sample of sound comes out
     for _ in 0..100 {
         let out = render(&mut h, 128);
         assert!(out.iter().all(|sample| *sample == 0.0));
@@ -307,7 +307,7 @@ fn the_tap_reports_the_level_of_each_ear_once_a_second_while_it_is_on() {
         close(levels.left, 1.0) && close(levels.right, 0.501),
         "{levels:?}"
     );
-    // The source moves to the right of the head, and the next second shows it
+    // The source moves to the right of the head. The next second shows it
     emitter.place([1.0, 0.0, 0.0]);
     h.run(48_000);
     let levels = h.scene.tap().levels().expect("two seconds went by");
