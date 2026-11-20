@@ -73,6 +73,14 @@ impl<T> Owned<T> {
             inner: Rc::downgrade(&self.inner),
         }
     }
+
+    pub(crate) fn strong_count(&self) -> usize {
+        Rc::strong_count(&self.inner)
+    }
+
+    pub(crate) fn weak_count(&self) -> usize {
+        Rc::weak_count(&self.inner)
+    }
 }
 
 pub(crate) struct WeakOwned<T> {

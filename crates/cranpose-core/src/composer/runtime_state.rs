@@ -19,8 +19,15 @@ pub(crate) enum HostTableDisposal {
     DisposeWithRetained,
 }
 
+#[derive(Clone, Copy)]
+enum RetainedTakeMode {
+    Restore,
+    Dispose,
+}
+
 pub(crate) struct ComposerRuntimeState {
     retention_by_host: RefCell<HashMap<usize, RetentionManager>>,
+    spare_retention: RefCell<Option<RetentionManager>>,
     pending_movables_by_host: RefCell<HashMap<usize, Vec<PendingMovable>>>,
     retention_policy: Cell<RetentionPolicy>,
     live_hosts: RefCell<HashMap<usize, Weak<SlotsHost>>>,
@@ -34,6 +41,7 @@ impl Default for ComposerRuntimeState {
     fn default() -> Self {
         Self {
             retention_by_host: RefCell::new(HashMap::default()),
+            spare_retention: RefCell::new(None),
             pending_movables_by_host: RefCell::new(HashMap::default()),
             retention_policy: Cell::new(RetentionPolicy::default()),
             live_hosts: RefCell::new(HashMap::default()),
@@ -107,7 +115,7 @@ impl ComposerRuntimeState {
         let subtree = retention
             .get_mut(&host_key)?
             .take_after_restore_preflight(key, preflight);
-        remove_empty_retention_host(&mut retention, host_key);
+        self.remove_empty_retention_host(&mut retention, host_key);
         subtree
     }
 
@@ -122,7 +130,13 @@ impl ComposerRuntimeState {
         let mut retention_by_host = self.retention_by_host.borrow_mut();
         let manager = retention_by_host
             .entry(slots_storage_key(host))
-            .or_insert_with(|| RetentionManager::new(policy));
+            .or_insert_with(|| match self.spare_retention.borrow_mut().take() {
+                Some(mut spare) => {
+                    spare.reset_for_reuse(policy);
+                    spare
+                }
+                None => RetentionManager::new(policy),
+            });
         manager.set_policy(policy);
         if pinned {
             manager.insert_pinned(key, subtree)
@@ -146,16 +160,13 @@ impl ComposerRuntimeState {
         let Some(host_key) = owner_host else {
             return self.take_retained_movable(id);
         };
-        let key = movable_retain_key(id);
         let mut retention_by_host = self.retention_by_host.borrow_mut();
-        let manager = retention_by_host.get_mut(&host_key)?;
-        if !manager.contains(key) {
-            return None;
-        }
-        let host = self.host_for_storage_key(host_key)?;
-        let subtree = manager.take(key)?;
-        remove_empty_retention_host(&mut retention_by_host, host_key);
-        Some((host, subtree))
+        self.take_retained_movable_from_host(
+            &mut retention_by_host,
+            host_key,
+            movable_retain_key(id),
+            RetainedTakeMode::Dispose,
+        )
     }
 
     fn take_retained_movable_by_key(
@@ -163,13 +174,15 @@ impl ComposerRuntimeState {
         key: RetainKey,
     ) -> Option<(Rc<SlotsHost>, crate::slot::DetachedSubtree)> {
         let mut retention_by_host = self.retention_by_host.borrow_mut();
-        let (&host_key, manager) = retention_by_host
-            .iter_mut()
-            .find(|(_, manager)| manager.contains(key))?;
-        let host = self.host_for_storage_key(host_key)?;
-        let subtree = manager.take(key)?;
-        remove_empty_retention_host(&mut retention_by_host, host_key);
-        Some((host, subtree))
+        let host_key = retention_by_host
+            .iter()
+            .find_map(|(&host_key, manager)| manager.contains(key).then_some(host_key))?;
+        self.take_retained_movable_from_host(
+            &mut retention_by_host,
+            host_key,
+            key,
+            RetainedTakeMode::Dispose,
+        )
     }
 
     // Takes a movable's retained content out of a slot table other than the
@@ -181,13 +194,53 @@ impl ComposerRuntimeState {
     ) -> Option<(Rc<SlotsHost>, crate::slot::DetachedSubtree)> {
         let besides_key = slots_storage_key(besides);
         let mut retention_by_host = self.retention_by_host.borrow_mut();
-        let (&host_key, manager) = retention_by_host
-            .iter_mut()
-            .find(|(host_key, manager)| **host_key != besides_key && manager.contains(key))?;
+        let host_key = retention_by_host.iter().find_map(|(&host_key, manager)| {
+            (host_key != besides_key && manager.contains(key)).then_some(host_key)
+        })?;
+        self.take_retained_movable_from_host(
+            &mut retention_by_host,
+            host_key,
+            key,
+            RetainedTakeMode::Restore,
+        )
+    }
+
+    fn take_retained_movable_from_host(
+        &self,
+        retention_by_host: &mut HashMap<usize, RetentionManager>,
+        host_key: usize,
+        key: RetainKey,
+        mode: RetainedTakeMode,
+    ) -> Option<(Rc<SlotsHost>, crate::slot::DetachedSubtree)> {
+        let manager = retention_by_host.get_mut(&host_key)?;
+        if !manager.contains(key) {
+            return None;
+        }
         let host = self.host_for_storage_key(host_key)?;
-        let subtree = manager.take(key)?;
-        remove_empty_retention_host(&mut retention_by_host, host_key);
+        let subtree = match mode {
+            RetainedTakeMode::Restore => manager.take(key)?,
+            RetainedTakeMode::Dispose => manager.take_for_disposal(key)?,
+        };
+        self.remove_empty_retention_host(retention_by_host, host_key);
         Some((host, subtree))
+    }
+
+    fn remove_empty_retention_host(
+        &self,
+        retention_by_host: &mut HashMap<usize, RetentionManager>,
+        host_key: usize,
+    ) {
+        if retention_by_host
+            .get(&host_key)
+            .is_some_and(|manager| manager.is_empty() && manager.evictions_total() == 0)
+            && let Some(manager) = retention_by_host.remove(&host_key)
+            && manager.is_small_for_reuse()
+        {
+            let mut spare = self.spare_retention.borrow_mut();
+            if spare.is_none() {
+                *spare = Some(manager);
+            }
+        }
     }
 
     pub(crate) fn on_movable_owner_dropped(&self, id: Key, owner_host: Option<usize>) {
@@ -529,17 +582,5 @@ impl ComposerRuntimeState {
             .borrow()
             .get(&host_key)
             .map_or_default(RetentionManager::debug_stats)
-    }
-}
-
-fn remove_empty_retention_host(
-    retention_by_host: &mut HashMap<usize, RetentionManager>,
-    host_key: usize,
-) {
-    if retention_by_host
-        .get(&host_key)
-        .is_some_and(|manager| manager.is_empty() && manager.evictions_total() == 0)
-    {
-        retention_by_host.remove(&host_key);
     }
 }

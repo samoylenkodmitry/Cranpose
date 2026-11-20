@@ -32,6 +32,21 @@ impl Drop for RememberedMovable {
     }
 }
 
+// Returns the movable id when `payload` is the sole owner of a remembered
+// movable with no live `MovableContent` handles anywhere outside the slot.
+pub(crate) fn sole_owned_movable_id(payload: &dyn std::any::Any) -> Option<Key> {
+    let owned = payload.downcast_ref::<crate::Owned<RememberedMovable>>()?;
+    (owned.strong_count() == 1 && owned.weak_count() == 0).then(|| owned.with(|owner| owner.id))
+}
+
+// Marks a remembered movable whose content is already being disposed inline
+// with its owning subtree, so dropping the owner performs no redundant lookup.
+pub(crate) fn disarm_remembered_movable(payload: &dyn std::any::Any) {
+    if let Some(owned) = payload.downcast_ref::<crate::Owned<RememberedMovable>>() {
+        owned.with(|owner| owner.ever_shown.set(false));
+    }
+}
+
 /// Composes `content` under an identity that is `key` alone, the same at
 /// every call site, so the subtree can be emitted from any parent and keep
 /// its remembered values, its running effects and its nodes.

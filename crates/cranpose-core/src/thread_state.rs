@@ -165,6 +165,7 @@ pub(crate) struct RuntimeThreadState {
         reason = "a spare state moves into a host as the box it is kept in, without a copy"
     )]
     pub(crate) spare_write_states: RefCell<Vec<Box<crate::slot::SlotWriteSessionState>>>,
+    pub(crate) spare_parked_tails: RefCell<Vec<crate::slot::ParkedTailStorage>>,
     pub(crate) bridges: RefCell<FixedHashMap<u64, Rc<dyn Any>>>,
     #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
     pub(crate) worker_pool: RefCell<crate::worker_pool::Pool>,
@@ -203,6 +204,7 @@ impl RuntimeThreadState {
             spare_commands: RefCell::new(Vec::new()),
             spare_composer_stacks: Cell::new(None),
             spare_write_states: RefCell::new(Vec::new()),
+            spare_parked_tails: RefCell::new(Vec::new()),
             bridges: RefCell::new(fixed_hash_map()),
             #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
             worker_pool: RefCell::new(crate::worker_pool::Pool::new()),
@@ -239,6 +241,7 @@ impl RuntimeThreadState {
             spare_commands,
             spare_composer_stacks,
             spare_write_states,
+            spare_parked_tails,
             bridges,
             #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
             worker_pool,
@@ -267,6 +270,7 @@ impl RuntimeThreadState {
         swap_values(spare_commands, &other.spare_commands);
         spare_composer_stacks.swap(&other.spare_composer_stacks);
         swap_values(spare_write_states, &other.spare_write_states);
+        swap_values(spare_parked_tails, &other.spare_parked_tails);
         swap_values(bridges, &other.bridges);
         #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
         swap_values(worker_pool, &other.worker_pool);

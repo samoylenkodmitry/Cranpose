@@ -12,8 +12,8 @@ use crate::{
     Applier, ApplierGuard, ApplierHost, COMMAND_FLUSH_THRESHOLD, Command, CommandQueue,
     CompositionLocal, ComputedLocalEntry, DirtyBubble, Key, LocalKey, LocalStackSnapshot,
     LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned, ProvidedValue, RecomposeOptions,
-    RecomposeScope, RecomposeScopeInner, RecycledNode, RetentionMode, RuntimeHandle, ScopeId,
-    SlotId, SlotPassOutcome, SlotTable, SlotsHost, SnapshotStateList, SnapshotStateMap,
+    RecomposeScope, RecomposeScopeInner, RecycledNode, RuntimeHandle, ScopeId, SlotId,
+    SlotPassOutcome, SlotTable, SlotsHost, SnapshotStateList, SnapshotStateMap,
     StaticCompositionLocal, SubcomposeState, composer_context,
     retention::RetainKey,
     runtime,
@@ -1110,30 +1110,14 @@ impl Composer {
         }
     }
 
-    fn dispose_detached_nodes(&self, nodes: impl IntoIterator<Item = NodeId>) {
-        for node_id in nodes {
-            self.commands_mut().push(Command::callback(move |applier| {
-                crate::slot::dispose_detached_node_now(applier, node_id)
-            }));
+    fn dispose_detached_nodes(&self, nodes: &[NodeId]) {
+        if nodes.is_empty() {
+            return;
         }
-    }
-
-    fn detached_root_parent_commands(
-        &self,
-        subtree: &crate::slot::DetachedSubtree,
-        context: &'static str,
-    ) -> Result<Vec<(NodeId, Option<NodeId>)>, NodeError> {
-        let mut root_nodes = Vec::new();
-        subtree.collect_root_nodes_checked_into(&mut root_nodes, context);
-        let mut roots = Vec::with_capacity(root_nodes.len());
-        for root in root_nodes {
-            let parent_id = {
-                let mut applier = self.borrow_applier();
-                applier.get_mut(root)?.parent()
-            };
-            roots.push((root, parent_id));
+        let mut commands = self.commands_mut();
+        for &id in nodes {
+            commands.push(Command::DisposeDetachedNode { id });
         }
-        Ok(roots)
     }
 
     pub(super) fn retain_detached_subtree_in_host(
@@ -1147,13 +1131,23 @@ impl Composer {
             self.dispose_detached_subtree_in_host(slots_host, subtree)?;
             return Ok(());
         };
-        let root_detaches = self.detached_root_parent_commands(&subtree, "retention")?;
+        let root_nodes = subtree.collect_checked_root_nodes("retention");
+        let mut detaches = SmallVec::<[(NodeId, NodeId); 4]>::new();
+        {
+            let mut applier = self.borrow_applier();
+            for &root in &root_nodes {
+                if let Some(parent_id) = applier.get_mut(root)?.parent() {
+                    detaches.push((parent_id, root));
+                }
+            }
+        }
         subtree.scopes().for_each(RecomposeScope::deactivate);
-        for (root, parent_id) in root_detaches {
-            if let Some(parent_id) = parent_id {
-                self.commands_mut().push(Command::DetachChild {
+        if !detaches.is_empty() {
+            let mut commands = self.commands_mut();
+            for (parent_id, child_id) in detaches {
+                commands.push(Command::DetachChild {
                     parent_id,
-                    child_id: root,
+                    child_id,
                 });
             }
         }
@@ -1185,48 +1179,19 @@ impl Composer {
         slots_host: &Rc<SlotsHost>,
         subtree: crate::slot::DetachedSubtree,
     ) -> Result<(), NodeError> {
-        let root_nodes = self
-            .detached_root_parent_commands(&subtree, "disposal")?
-            .into_iter()
-            .map(|(root, _)| root);
+        let root_nodes = subtree.collect_checked_root_nodes("disposal");
+        {
+            let mut applier = self.borrow_applier();
+            for &root in &root_nodes {
+                applier.get_mut(root)?;
+            }
+        }
         subtree.scopes().for_each(RecomposeScope::deactivate);
-        self.dispose_detached_nodes(root_nodes);
+        self.dispose_detached_nodes(&root_nodes);
         slots_host.with_table_and_lifecycle_mut(|table, lifecycle| {
             table.invalidate_detached_subtree_anchors(&subtree);
             lifecycle.queue_subtree_disposal(subtree);
         });
-        Ok(())
-    }
-
-    fn handle_detached_children_in_host(
-        &self,
-        slots_host: &Rc<SlotsHost>,
-        parent_scope: Option<ScopeId>,
-        detached: Vec<crate::slot::DetachedSubtree>,
-    ) -> Result<(), NodeError> {
-        for mut subtree in detached {
-            for movable in subtree.split_off_nested_movables() {
-                self.handle_detached_movable_in_host(slots_host, movable)?;
-            }
-            if subtree
-                .root_key_checked()
-                .is_some_and(crate::slot::GroupKey::is_movable)
-            {
-                self.handle_detached_movable_in_host(slots_host, subtree)?;
-                continue;
-            }
-            let retention_mode = subtree
-                .root_scope()
-                .map_or_default(RecomposeScope::retention_mode);
-            match retention_mode {
-                RetentionMode::DisposeWhenInactive => {
-                    self.dispose_detached_subtree_in_host(slots_host, subtree)?;
-                }
-                RetentionMode::RetainWhenInactive => {
-                    self.retain_detached_subtree_in_host(slots_host, parent_scope, subtree)?;
-                }
-            }
-        }
         Ok(())
     }
 
@@ -1253,7 +1218,7 @@ impl Composer {
         {
             log::error!("detached subtree handling failed while closing a group: {err}");
         }
-        self.dispose_detached_nodes(direct_nodes);
+        self.dispose_detached_nodes(&direct_nodes);
     }
 
     pub(crate) fn close_current_group_body_for_scope(&self, scope: &RecomposeScope) {

@@ -56,9 +56,9 @@ pub(in crate::slot) use ranges::{
 };
 pub(crate) use root_before::RootBefore;
 pub use table::SlotTable;
-pub(crate) use table::SlotWriteSession;
 #[cfg(test)]
 pub(crate) use table::ValueSlotError;
+pub(crate) use table::{ParkedTailStorage, SlotWriteSession};
 pub(crate) use types::{
     ActiveGroupId, ActiveSubtreeRoot, BRANCH_PATH_ROOT, ChildCursor, DetachedSubtree,
     FinishGroupResult, GroupKey, GroupKeySeed, GroupStart, GroupStartKind, NodeLifecycle,

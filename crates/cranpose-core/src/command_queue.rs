@@ -15,6 +15,7 @@ pub(crate) const SMALL_CHILD_SYNC_LINEAR_THRESHOLD: usize = 8;
 pub(crate) enum CommandTag {
     BubbleDirty,
     RemoveNode,
+    DisposeDetachedNode,
     AttachChild,
     InsertChild,
     MoveChild,
@@ -29,6 +30,7 @@ impl CommandTag {
         match self {
             Self::BubbleDirty => "BubbleDirty",
             Self::RemoveNode => "RemoveNode",
+            Self::DisposeDetachedNode => "DisposeDetachedNode",
             Self::AttachChild => "AttachChild",
             Self::InsertChild => "InsertChild",
             Self::MoveChild => "MoveChild",
@@ -124,6 +126,10 @@ impl CommandQueue {
             Command::RemoveNode { id } => {
                 self.remove_nodes.push(id);
                 self.push_tag(CommandTag::RemoveNode);
+            }
+            Command::DisposeDetachedNode { id } => {
+                self.remove_nodes.push(id);
+                self.push_tag(CommandTag::DisposeDetachedNode);
             }
             Command::AttachChild {
                 parent_id,
@@ -402,9 +408,10 @@ impl CommandPayloads<'_> {
         cleanup: &mut DeferredChildCleanupQueue,
     ) -> Result<(), NodeError> {
         match tag {
-            CommandTag::BubbleDirty | CommandTag::RemoveNode | CommandTag::Callback => {
-                self.apply_node_command(tag, applier, cleanup)
-            }
+            CommandTag::BubbleDirty
+            | CommandTag::RemoveNode
+            | CommandTag::DisposeDetachedNode
+            | CommandTag::Callback => self.apply_node_command(tag, applier, cleanup),
             CommandTag::AttachChild
             | CommandTag::InsertChild
             | CommandTag::MoveChild
@@ -429,6 +436,10 @@ impl CommandPayloads<'_> {
             CommandTag::RemoveNode => {
                 let id = next_command_payload(&mut self.remove_nodes, tag)?;
                 Command::RemoveNode { id }.apply_with_cleanup(applier, cleanup)?;
+            }
+            CommandTag::DisposeDetachedNode => {
+                let id = next_command_payload(&mut self.remove_nodes, tag)?;
+                Command::DisposeDetachedNode { id }.apply_with_cleanup(applier, cleanup)?;
             }
             CommandTag::Callback => {
                 let callback = next_command_payload(&mut self.callbacks, tag)?;
@@ -522,7 +533,10 @@ impl CommandPayloads<'_> {
                 .apply_with_cleanup(applier, cleanup)?;
             }
             CommandTag::SyncChildren => self.sync_children(applier, cleanup)?,
-            CommandTag::BubbleDirty | CommandTag::RemoveNode | CommandTag::Callback => {
+            CommandTag::BubbleDirty
+            | CommandTag::RemoveNode
+            | CommandTag::DisposeDetachedNode
+            | CommandTag::Callback => {
                 return Err(command_payload_error(tag));
             }
         }

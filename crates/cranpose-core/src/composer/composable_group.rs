@@ -207,26 +207,46 @@ impl Composer {
         GroupStart<crate::slot::ActiveGroupId>,
         Option<crate::slot::GroupKey>,
     ) {
-        if !self.core.shared_state.retains_any() {
+        if lookup == super::MovableLookup::FreshUnshown {
             let started = host.with_write_session(|slots| {
                 let key = slots.reserve_group_key(seed);
-                (!key.is_movable()).then(|| slots.begin_group(key, None, parent_node))
+                slots.begin_group(key, None, parent_node)
             });
-            if let Some(started) = started {
-                return (started, None);
-            }
+            return (started, None);
         }
-        // Retained content is found again by its parent's scope.
-        let parent_scope_id = {
-            let mut stack = self.scope_stack();
-            let top = stack.len().checked_sub(1);
-            top.map(|top| self.frame_scope(&mut stack, top).id())
+        let key = if !self.core.shared_state.retains_any() {
+            match host.with_write_session(|slots| {
+                let key = slots.reserve_group_key(seed);
+                if key.is_movable() {
+                    Err(key)
+                } else {
+                    Ok(slots.begin_group(key, None, parent_node))
+                }
+            }) {
+                Ok(started) => return (started, None),
+                Err(key) => key,
+            }
+        } else {
+            host.with_write_session(|slots| slots.reserve_group_key(seed))
         };
+        // Retained non-movable content is keyed by its parent's scope id; a
+        // deferred parent has never held a scope id, and movable content keys
+        // by its movable id alone.
+        let parent_scope_id = (!key.is_movable())
+            .then(|| {
+                self.core
+                    .scope_stack
+                    .borrow()
+                    .last()
+                    .and_then(super::ScopeFrame::scope)
+                    .map(RecomposeScope::id)
+            })
+            .flatten();
         let super::GroupEntry {
             key,
             restored,
             placeholder_for,
-        } = self.resolve_group_entry(host, seed, parent_scope_id, lookup);
+        } = self.resolve_group_entry(host, key, parent_scope_id, lookup);
         let started =
             host.with_write_session(|slots| slots.begin_group(key, restored, parent_node));
         (started, placeholder_for)

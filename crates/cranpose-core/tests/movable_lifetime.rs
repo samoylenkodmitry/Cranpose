@@ -838,3 +838,120 @@ fn fresh_remember_movable_shown_in_two_hosts_in_same_pass_keeps_single_instance(
     render(&mut rig);
     rig.probe.assert_disposed(&mut rig.composition, node);
 }
+
+#[test]
+fn sole_owned_movable_disposal_still_splits_nested_unowned_movable() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let show_branch = MutableState::with_runtime(true, runtime.clone());
+    let show_second = MutableState::with_runtime(false, runtime);
+    let inner_probe = Rc::new(LifecycleProbe::default());
+    let outer_drops = Rc::new(Cell::new(0usize));
+    let root_key = location_key(file!(), line!(), column!());
+
+    let render = |composition: &mut Composition<MemoryApplier>| {
+        let inner_probe = Rc::clone(&inner_probe);
+        let outer_drops = Rc::clone(&outer_drops);
+        composition
+            .render(root_key, move || {
+                let outer_owned = rememberMovableContentOf({
+                    let inner_probe = Rc::clone(&inner_probe);
+                    move || inner_probe.emit_movable_body(Vec::new(), None)
+                });
+                if show_branch.value() {
+                    let local = rememberMovableContentOf({
+                        let outer_owned = outer_owned.clone();
+                        let outer_drops = Rc::clone(&outer_drops);
+                        move || {
+                            let _drop = remember(|| DropCounter(Rc::clone(&outer_drops)));
+                            emit_wrapper(|| outer_owned.show());
+                        }
+                    });
+                    emit_wrapper(|| local.show());
+                }
+                if show_second.value() {
+                    emit_wrapper(|| outer_owned.show());
+                }
+            })
+            .expect("render composition");
+    };
+
+    render(&mut composition);
+    let inner_node = inner_probe.node.get().expect("inner movable composed");
+    assert_eq!(outer_drops.get(), 0);
+    assert_eq!(inner_probe.unmounts.get(), 0);
+
+    // Leaving the branch disposes `local` inline (sole-owned, weak_count == 0)
+    // while splitting and retaining `outer_owned` whose owner still lives.
+    show_branch.set_value(false);
+    render(&mut composition);
+    assert_eq!(outer_drops.get(), 1, "local sole-owned movable disposed");
+    assert_eq!(
+        inner_probe.unmounts.get(),
+        0,
+        "unowned nested movable stays retained"
+    );
+    assert!(inner_probe.last_launched_active());
+
+    show_second.set_value(true);
+    render(&mut composition);
+    assert_eq!(
+        inner_probe.node.get(),
+        Some(inner_node),
+        "retained nested movable moves to the second parent with its original node"
+    );
+    assert_eq!(inner_probe.unmounts.get(), 0);
+}
+
+#[test]
+fn leaving_owner_with_live_handle_allows_same_pass_sibling_takeover() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let show_a = MutableState::with_runtime(true, runtime.clone());
+    let show_b = MutableState::with_runtime(false, runtime);
+    let shared_movable: Rc<RefCell<Option<MovableContent>>> = Rc::new(RefCell::new(None));
+    let probe = Rc::new(LifecycleProbe::default());
+    let root_key = location_key(file!(), line!(), column!());
+
+    let render = |composition: &mut Composition<MemoryApplier>| {
+        let shared_movable = Rc::clone(&shared_movable);
+        let probe = Rc::clone(&probe);
+        composition
+            .render(root_key, move || {
+                if show_a.value() {
+                    let content = rememberMovableContentOf({
+                        let probe = Rc::clone(&probe);
+                        move || probe.emit_movable_body(Vec::new(), None)
+                    });
+                    *shared_movable.borrow_mut() = Some(content.clone());
+                    emit_wrapper(|| content.show());
+                }
+                if show_b.value()
+                    && let Some(content) = shared_movable.borrow().clone()
+                {
+                    emit_wrapper(|| content.show());
+                }
+            })
+            .expect("render composition");
+    };
+
+    render(&mut composition);
+    let node = probe.node.get().expect("movable composed in branch A");
+
+    // Branch A leaves while a live handle exists and branch B takes it in the
+    // very same pass.
+    show_a.set_value(false);
+    show_b.set_value(true);
+    render(&mut composition);
+    assert_eq!(
+        probe.node.get(),
+        Some(node),
+        "sibling takes over the live movable in the same pass"
+    );
+    assert_eq!(probe.unmounts.get(), 0);
+
+    // Once branch B stops showing it, it disposes because its owner already left.
+    show_b.set_value(false);
+    render(&mut composition);
+    probe.assert_disposed(&mut composition, node);
+}

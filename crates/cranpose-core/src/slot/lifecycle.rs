@@ -35,9 +35,7 @@ impl SlotLifecycleCoordinator {
     }
 
     pub(crate) fn queue_subtree_disposal(&mut self, subtree: DetachedSubtree) {
-        for drop in subtree.into_payload_drops_rev() {
-            self.queue_drop(drop);
-        }
+        self.pending_drops.extend(subtree.into_payload_drops_rev());
     }
 
     pub(crate) fn pop_pending_drop(&mut self) -> Option<DeferredDrop> {

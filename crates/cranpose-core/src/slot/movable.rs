@@ -6,12 +6,19 @@
 //! attached elsewhere, and a detached subtree can give up the movables
 //! nested inside it so each one is retained under its own identity.
 
+use smallvec::SmallVec;
+
 use super::{
     CheckedU32Delta, DetachedSubtree, GroupKey, GroupRecord, SlotTable, SlotWriteSession,
     checked_u32_delta, checked_usize_to_i64,
     segments::{NodeSegment, PayloadSegment, extract_subtree_segment},
 };
-use crate::{AnchorId, Key, collections::map::HashMap, slot::PayloadAnchor};
+use crate::{
+    AnchorId, Key,
+    collections::map::{HashMap, HashSet},
+    movable_content::{disarm_remembered_movable, sole_owned_movable_id},
+    slot::PayloadAnchor,
+};
 
 pub(crate) const MOVABLE_STATIC_KEY: Key = Key(0x6d6f_7661_626c_6521);
 
@@ -159,13 +166,116 @@ impl SlotWriteSession<'_> {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SplitMovables {
+    All,
+    SkipSoleOwnedInSubtree,
+}
+
+const INLINE_OWNED_MOVABLES: usize = 16;
+
+enum SoleOwnedMovables {
+    Inline(SmallVec<[(Key, bool); INLINE_OWNED_MOVABLES]>),
+    Map {
+        owned: HashSet<Key>,
+        kept: HashSet<Key>,
+    },
+}
+
+impl SoleOwnedMovables {
+    fn collect(payloads: &[super::PayloadRecord]) -> Self {
+        let mut inline = SmallVec::<[(Key, bool); INLINE_OWNED_MOVABLES]>::new();
+        let mut overflow: Option<HashSet<Key>> = None;
+        for payload in payloads {
+            let Some(id) = sole_owned_movable_id(&*payload.value) else {
+                continue;
+            };
+            if let Some(owned) = &mut overflow {
+                owned.insert(id);
+            } else if inline.len() < INLINE_OWNED_MOVABLES {
+                inline.push((id, false));
+            } else {
+                let mut owned: HashSet<Key> = inline.drain(..).map(|(key, _)| key).collect();
+                owned.insert(id);
+                overflow = Some(owned);
+            }
+        }
+        match overflow {
+            Some(owned) => Self::Map {
+                owned,
+                kept: HashSet::default(),
+            },
+            None => Self::Inline(inline),
+        }
+    }
+
+    fn mark_kept(&mut self, id: Key) -> bool {
+        match self {
+            Self::Inline(entries) => {
+                for (key, kept) in entries.iter_mut() {
+                    if *key == id {
+                        *kept = true;
+                        return true;
+                    }
+                }
+                false
+            }
+            Self::Map { owned, kept } => {
+                if owned.contains(&id) {
+                    kept.insert(id);
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    fn was_kept(&self, id: Key) -> bool {
+        match self {
+            Self::Inline(entries) => entries.iter().any(|&(key, kept)| kept && key == id),
+            Self::Map { kept, .. } => kept.contains(&id),
+        }
+    }
+
+    fn any_kept(&self) -> bool {
+        match self {
+            Self::Inline(entries) => entries.iter().any(|&(_, kept)| kept),
+            Self::Map { kept, .. } => !kept.is_empty(),
+        }
+    }
+}
+
 impl DetachedSubtree {
     pub(crate) fn split_off_nested_movables(&mut self) -> Vec<Self> {
+        self.split_off_nested_movables_with(SplitMovables::All)
+    }
+
+    // Splits off nested movables that may still outlive this disposed subtree.
+    // Movables whose sole owner lives in this subtree with no external handles
+    // stay in place and dispose directly with the subtree, avoiding a split,
+    // retain, and re-disposal round-trip.
+    pub(crate) fn split_off_unowned_nested_movables(&mut self) -> Vec<Self> {
+        self.split_off_nested_movables_with(SplitMovables::SkipSoleOwnedInSubtree)
+    }
+
+    fn split_off_nested_movables_with(&mut self, mode: SplitMovables) -> Vec<Self> {
         let mut split = Vec::new();
+        let mut owned: Option<SoleOwnedMovables> = None;
         let mut index = 1;
         while index < self.groups.len() {
             let group = &self.groups[index];
-            if !group.key.is_movable() {
+            let Some(movable_id) = group.key.movable_id() else {
+                index += 1;
+                continue;
+            };
+            if mode == SplitMovables::SkipSoleOwnedInSubtree
+                && owned
+                    .get_or_insert_with(|| SoleOwnedMovables::collect(&self.payloads))
+                    .mark_kept(movable_id)
+            {
+                // Keep this movable inside the disposed subtree, but continue
+                // scanning inside it so any nested unowned movables still split.
                 index += 1;
                 continue;
             }
@@ -186,6 +296,17 @@ impl DetachedSubtree {
                 continue;
             }
             split.push(self.split_range(index, end));
+        }
+        if let Some(owned) = owned
+            && owned.any_kept()
+        {
+            for payload in &self.payloads {
+                if let Some(id) = sole_owned_movable_id(&*payload.value)
+                    && owned.was_kept(id)
+                {
+                    disarm_remembered_movable(&*payload.value);
+                }
+            }
         }
         split
     }

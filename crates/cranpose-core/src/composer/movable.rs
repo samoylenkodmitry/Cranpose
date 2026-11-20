@@ -4,8 +4,8 @@ use std::rc::{Rc, Weak};
 
 use super::ComposerRuntimeState;
 use crate::{
-    AnchorId, Composer, Key, NodeError, RecomposeScope, RecomposeScopeInner, ScopeId, SlotsHost,
-    retention::RetainKey,
+    AnchorId, Composer, Key, NodeError, RecomposeScope, RecomposeScopeInner, RetentionMode,
+    ScopeId, SlotsHost, retention::RetainKey,
 };
 
 pub(super) struct GroupEntry {
@@ -96,6 +96,48 @@ impl Composer {
         self.dispose_dropped_movable_owners()
     }
 
+    pub(super) fn handle_detached_children_in_host(
+        &self,
+        slots_host: &Rc<SlotsHost>,
+        parent_scope: Option<ScopeId>,
+        detached: Vec<crate::slot::DetachedSubtree>,
+    ) -> Result<(), NodeError> {
+        for mut subtree in detached {
+            let is_movable_root = subtree
+                .root_key_checked()
+                .is_some_and(crate::slot::GroupKey::is_movable);
+            let retention_mode = if is_movable_root {
+                RetentionMode::RetainWhenInactive
+            } else {
+                subtree
+                    .root_scope()
+                    .map_or_default(RecomposeScope::retention_mode)
+            };
+            let nested_movables =
+                if !is_movable_root && retention_mode == RetentionMode::DisposeWhenInactive {
+                    subtree.split_off_unowned_nested_movables()
+                } else {
+                    subtree.split_off_nested_movables()
+                };
+            for movable in nested_movables {
+                self.handle_detached_movable_in_host(slots_host, movable)?;
+            }
+            if is_movable_root {
+                self.handle_detached_movable_in_host(slots_host, subtree)?;
+                continue;
+            }
+            match retention_mode {
+                RetentionMode::DisposeWhenInactive => {
+                    self.dispose_detached_subtree_in_host(slots_host, subtree)?;
+                }
+                RetentionMode::RetainWhenInactive => {
+                    self.retain_detached_subtree_in_host(slots_host, parent_scope, subtree)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn handle_detached_movable_in_host(
         &self,
         host: &Rc<SlotsHost>,
@@ -125,7 +167,7 @@ impl Composer {
         host: &Rc<SlotsHost>,
         mut subtree: crate::slot::DetachedSubtree,
     ) -> Result<(), NodeError> {
-        for nested in subtree.split_off_nested_movables() {
+        for nested in subtree.split_off_unowned_nested_movables() {
             self.handle_detached_movable_in_host(host, nested)?;
         }
         self.dispose_detached_subtree_in_host(host, subtree)
@@ -174,11 +216,10 @@ impl Composer {
     pub(super) fn resolve_group_entry(
         &self,
         host: &Rc<SlotsHost>,
-        seed: crate::slot::GroupKeySeed,
+        key: crate::slot::GroupKey,
         parent_scope_id: Option<ScopeId>,
         lookup: MovableLookup,
     ) -> GroupEntry {
-        let key = host.with_write_session(|slots| slots.reserve_group_key(seed));
         if lookup == MovableLookup::FreshUnshown {
             return GroupEntry {
                 key,
