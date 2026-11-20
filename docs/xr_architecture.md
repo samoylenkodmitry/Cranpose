@@ -1222,6 +1222,15 @@ screenshots, with the beam running from the hand's aim pose to the button and th
 "Pointers L/R: none / hands". The panel's pointer line reads `XrFrame::pointer`, and the log's
 once-a-second line holds the pointers and the hands' aims.
 
+The full demo shows the room around the headset from its start. A screenshot of the compositor then
+holds a picture of the room, which a device check must not keep. `XR_DEMO_PASSTHROUGH=off` starts the
+demo with the room hidden, so that its screenshots hold the panels on black. A check can test the
+picture for it: in the screenshots of the builds `XR_DEMO_PASSTHROUGH=off`, `XR_DEMO_VOLUME`,
+`XR_DEMO_CONTROLLERS=only` and `XR_DEMO_ROOM=script`, 46 to 99 percent of the pixels are exactly black
+and under 0.4 percent are a dark grey (a brightest channel from 1 to 23).
+`scripts/dev/xr_vrapi_stats.py` reads the frame rate, the app's time for a frame and the GPU's share
+from the line that a Quest's runtime logs each second for the app.
+
 `XR_DEMO_VOLUME=through` builds a scene of a panel and a torus that pierces it, a meter ahead of
 the head where the demo started, and shows nothing else. A compositor that tests depth shows the
 ring's near part over the panel and hides the rest. One that does not shows the panel over all of

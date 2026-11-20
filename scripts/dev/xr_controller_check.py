@@ -15,9 +15,10 @@ each pixel whose color differs between the two screenshots, joins the marked pix
 projects each grip's origin into each eye from the logged poses. An eye passes when a blob of at
 least `--least` pixels lies within `--tolerance` of the eye's width from the projected point of each
 grip that the log shows, and the left controller's blob lies left of the right controller's. It
-prints each blob's box and its distance from the projection, and exits with 1 when a check fails.
-It uses the Python standard library only. It has run on pictures that a script drew, and on no
-headset yet.
+prints each blob's box and its distance from the projection, and exits with 1 when a check fails. A grip
+that projects outside an eye's picture is not checked in that eye.
+It uses the Python standard library only. It has run on pictures that a script drew and on the
+screenshots of a Meta Quest 3 that shows the demo's scripted controllers.
 """
 
 import argparse
@@ -165,6 +166,10 @@ def main():
             if at is None:
                 print(f"  {hand} grip: behind the eye")
                 failed = True
+                continue
+            if not (0 <= at[0] < eye_width and 0 <= at[1] < height):
+                # A grip beside the field of view puts its model outside this eye's picture
+                print(f"  {hand} grip projects to ({at[0]:.0f}, {at[1]:.0f}): outside the eye's picture, not checked")
                 continue
             best = None
             for blob in found:
