@@ -145,6 +145,22 @@ pub(super) fn settle(store: &mut SceneStore, id: RecordId, drawn: Reach) {
     *flags = flags.without(RecordFlags::REACH_STALE);
 }
 
+// Whether all that `inner` reaches lies within `outer`; an unknown reach
+// holds nothing and is held by nothing.
+#[cfg(feature = "window-damage")]
+pub(super) fn holds(outer: Reach, inner: Reach) -> bool {
+    match (outer, inner) {
+        (_, Reach::Empty) => true,
+        (Reach::Finite(outer), Reach::Finite(inner)) => {
+            outer.x <= inner.x
+                && outer.y <= inner.y
+                && inner.x + inner.width <= outer.x + outer.width
+                && inner.y + inner.height <= outer.y + outer.height
+        }
+        _ => false,
+    }
+}
+
 // Where an own draw of a record draws, in the record's space; `None` for a
 // child.
 #[cfg(feature = "window-damage")]
