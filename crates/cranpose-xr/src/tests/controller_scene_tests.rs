@@ -87,6 +87,15 @@ fn projected(x: f32, point: [f32; 3]) -> (f32, f32) {
     )
 }
 
+// The pixel of an eye's picture that holds the position `coordinate`, counted in pixels from the
+// picture's edge.
+fn pixel_holding(coordinate: f32) -> u32 {
+    (0..EYE)
+        .rev()
+        .find(|pixel| *pixel as f32 <= coordinate)
+        .expect("the position lies in the picture")
+}
+
 // The columns of the pixels that are mostly blue: the plain controller's tip, which marks its front.
 fn blue_columns(pixels: &[u8]) -> Vec<u32> {
     pixels
@@ -156,7 +165,7 @@ fn a_controller_in_use_shows_the_plain_model_at_its_grip_in_both_eyes_with_depth
         .near();
     let depth = read_depth(&headset.gpu, &left.depth);
     let (column, row) = projected(-0.032, grip);
-    let value = depth[(row as u32 * EYE + column as u32) as usize];
+    let value = depth[(pixel_holding(row) * EYE + pixel_holding(column)) as usize];
     assert!(
         (1.0 - near / 420.0..=1.0 - near / 580.0).contains(&value),
         "the depth at the grip is {value}"

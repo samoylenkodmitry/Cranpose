@@ -51,9 +51,8 @@ pub(crate) fn StartingChoice() {
 }
 
 fn set_both(models: &ControllerModels, model: ControllerModel) {
-    for hand in [Hand::Left, Hand::Right] {
-        models.set_model(hand, model.clone());
-    }
+    models.set_model(Hand::Left, model.clone());
+    models.set_model(Hand::Right, model);
 }
 
 // A build with nothing but the models. `panel` adds a magenta panel of 40 cm that stands in the
