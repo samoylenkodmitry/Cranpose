@@ -210,6 +210,15 @@ mod resize_policy;
         reason = "the tests reach the module, and its API is public only with the feature"
     )
 )]
+mod scripted_controller;
+#[cfg(any(test, all(feature = "scripted-hand", headset)))]
+#[cfg_attr(
+    not(all(feature = "scripted-hand", headset)),
+    allow(
+        unreachable_pub,
+        reason = "the tests reach the module, and its API is public only with the feature"
+    )
+)]
 mod scripted_hand;
 #[cfg(any(test, headset))]
 mod session_status;
@@ -369,6 +378,8 @@ pub use resize_limits::ResizeLimits;
 pub use resize_policy::ResizePolicy;
 #[cfg(desktop_run)]
 pub use run_error::RunError;
+#[cfg(all(feature = "scripted-hand", headset))]
+pub use scripted_controller::{ScriptedButtons, ScriptedController, script_controller};
 #[cfg(all(feature = "scripted-hand", headset))]
 pub use scripted_hand::{PinchCycle, ScriptedHand, script_hand};
 pub use spatial_capabilities::{SpatialCapabilities, local_spatial_capabilities};

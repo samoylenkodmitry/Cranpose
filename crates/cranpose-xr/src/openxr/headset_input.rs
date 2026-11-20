@@ -172,6 +172,10 @@ impl HeadsetInput {
         frame.recenter = xr_session.recenters.take();
         self.controllers
             .sample(xr_session, time, status, self.trackers.gaze_set(), frame);
+        #[cfg(feature = "scripted-hand")]
+        if frame.focused {
+            crate::scripted_controller::apply(frame);
+        }
         self.trackers
             .sample(xr_session, host, frame.now, time, status, frame);
         let hands = self.hands_point;

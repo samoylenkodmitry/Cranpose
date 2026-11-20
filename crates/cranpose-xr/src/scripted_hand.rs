@@ -219,21 +219,22 @@ pub(crate) fn play(script: &ScriptedHand, frame: &mut XrFrame) {
 }
 
 #[cfg(all(feature = "scripted-hand", headset))]
-static SCRIPT: OnceLock<ScriptedHand> = OnceLock::new();
+static SCRIPTS: [OnceLock<ScriptedHand>; 2] = [OnceLock::new(), OnceLock::new()];
 
-/// Installs the script that the backend plays for the rest of the process. A second script
-/// changes nothing.
+/// Installs the script that the backend plays for its hand, for the rest of the process. A script
+/// for each hand plays at once. A second script for a hand changes nothing.
 #[cfg(all(feature = "scripted-hand", headset))]
 pub fn script_hand(script: ScriptedHand) {
-    if SCRIPT.set(script).is_err() {
-        log::warn!("cranpose xr: a scripted hand is installed already");
+    let hand = script.hand;
+    if SCRIPTS[hand.index()].set(script).is_err() {
+        log::warn!("cranpose xr: a scripted hand is installed for the {hand:?} hand already");
     }
 }
 
-// Plays the installed script, if any, after the trackers wrote the frame's hands.
+// Plays the installed scripts, if any, after the trackers wrote the frame's hands.
 #[cfg(all(feature = "scripted-hand", headset))]
 pub(crate) fn apply(frame: &mut XrFrame) {
-    if let Some(script) = SCRIPT.get() {
+    for script in SCRIPTS.iter().filter_map(OnceLock::get) {
         play(script, frame);
     }
 }
