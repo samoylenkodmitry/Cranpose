@@ -35,7 +35,7 @@ impl ControllerStates {
     // runtime.
     pub(crate) fn new() -> Self {
         Self {
-            settings: ControllerModels::new_settings(),
+            settings: mutableStateOf(Settings::default()),
             offers: mutableStateOf([Offer::Pending, Offer::Pending]),
             shown: mutableStateOf([false; 2]),
             maps: [

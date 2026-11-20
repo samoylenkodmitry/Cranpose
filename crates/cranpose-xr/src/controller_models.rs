@@ -1,6 +1,6 @@
 //! The app's choices about the controllers' models.
 
-use cranpose::{MutableState, mutableStateOf};
+use cranpose::MutableState;
 use cranpose_core::CompositionLocal;
 
 use crate::{ControllerModel, Hand, locals::with_locals};
@@ -45,15 +45,6 @@ impl ControllerModels {
     )]
     pub(crate) fn over(settings: MutableState<Settings>) -> Self {
         Self { settings }
-    }
-
-    // The settings of a new composition: the models on, each hand with the runtime's model.
-    #[cfg_attr(
-        not(any(test, headset)),
-        expect(dead_code, reason = "the headset backend calls it")
-    )]
-    pub(crate) fn new_settings() -> MutableState<Settings> {
-        mutableStateOf(Settings::default())
     }
 
     /// Whether the headset draws the models. Jetpack XR's `Entity.isEnabled`.
