@@ -11,9 +11,11 @@ use cranpose_capabilities::{Use, declare};
 // runtime lists when the app enables no extension, and `all` adds the body, the face and the eyes,
 // which a headset asks the user to allow.
 //
-// `XR_DEMO_VOLUME=through` puts the demo's torus in the plane of the counter panel, so that a
-// part of it lies in front of the panel and a part behind. A compositor that tests depth shows the
-// front part over the panel and hides the rest, and one that does not shows the panel over all of it.
+// `XR_DEMO_VOLUME=through` builds the depth test: a panel and a torus that pierces it, a meter ahead
+// of the head, in place of the demo's content. A compositor that tests depth shows the ring's near
+// half over the panel and hides its far half. One that does not shows the panel over all of it.
+// `XR_DEMO_VOLUME=alone` builds the same scene without the panel, as the reference for
+// `scripts/dev/xr_depth_check.py`.
 fn main() {
     println!("cargo::rerun-if-env-changed=XR_DEMO_VOLUME");
     if let Ok(place) = std::env::var("XR_DEMO_VOLUME") {

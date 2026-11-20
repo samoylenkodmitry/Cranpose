@@ -12,7 +12,7 @@ use super::{
     graphics::Api,
     session::{ProjectionLayer, QuadLayer, RawProjection},
 };
-use crate::volume_plan::{STAGES, Stage, VolumePlan, tests_depth};
+use crate::volume_plan::{STAGES, Stage, VolumePlan, tests_depth, writes_depth};
 
 // A layer of a panel: flat or curved.
 pub(crate) enum Layer<'a> {
@@ -38,10 +38,33 @@ enum RawLayer {
     Cylinder(xr::sys::CompositionLayerCylinderKHR),
 }
 
+// What a layer does with the compositor's depth buffer.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Depth {
+    // Nothing: the layer asks for no depth test
+    Ignored,
+    // The layer tests against the depth that the projection layer of the volumes wrote
+    Tested,
+    // The layer writes its depth, which the layers over it test against
+    Written,
+}
+
 struct Raw {
     layer: RawLayer,
-    // Whether the layer tests against the depth of the projection layer that the frame carries
-    depth_tested: bool,
+    depth: Depth,
+}
+
+// What a frame holds, for the log that names each change once.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Counts {
+    // The layers that the runtime gets, the room's included
+    pub(crate) layers: usize,
+    // How many of them test against the depth of the projection layer
+    pub(crate) tested: usize,
+    // How many write their depth into the compositor's buffer
+    pub(crate) written: usize,
+    // The panels that the frame leaves out, because the runtime takes no more layers
+    pub(crate) left_out: usize,
 }
 
 // The structs that the `next` pointer of a quad or a cylinder names, by what the layer is.
@@ -51,6 +74,8 @@ pub(crate) struct Chains {
     pub(crate) plain: *const c_void,
     // For a layer that tests against the depth of the projection layer
     pub(crate) tested: *const c_void,
+    // For the projection layer that writes its depth into the compositor's buffer
+    pub(crate) written: *const c_void,
 }
 
 pub(crate) struct FrameLayers {
@@ -58,6 +83,7 @@ pub(crate) struct FrameLayers {
     layers: Vec<Raw>,
     projections: Vec<RawProjection>,
     headers: Vec<*const xr::sys::CompositionLayerBaseHeader>,
+    left_out: usize,
 }
 
 impl FrameLayers {
@@ -68,11 +94,13 @@ impl FrameLayers {
             layers: Vec::new(),
             projections: Vec::new(),
             headers: Vec::new(),
+            left_out: 0,
         }
     }
 
     // Replaces the layers with those of `stages`, in the order that the compositor draws them.
-    // `plan` says which stages test depth.
+    // `plan` says which stages test depth. The list holds `room` layers at most. A frame with more
+    // leaves out the panels that stand farthest from the head, which are the first ones.
     pub(crate) fn fill<'a>(
         &mut self,
         stages: Stages<
@@ -82,6 +110,7 @@ impl FrameLayers {
             impl Iterator<Item = QuadLayer<'a>>,
         >,
         plan: Option<VolumePlan>,
+        room: usize,
     ) {
         self.clear();
         let space = self.space;
@@ -92,12 +121,16 @@ impl FrameLayers {
             overlay,
         } = stages;
         let (mut streams, mut panels, mut overlay) = (Some(streams), Some(panels), Some(overlay));
+        let mut panel_layers = 0..0;
         for stage in STAGES {
-            let depth_tested = tests_depth(stage, plan);
-            let raw = |layer| Raw {
-                layer,
-                depth_tested,
+            let depth = if tests_depth(stage, plan) {
+                Depth::Tested
+            } else if writes_depth(stage, plan) {
+                Depth::Written
+            } else {
+                Depth::Ignored
             };
+            let raw = |layer| Raw { layer, depth };
             match stage {
                 Stage::Streams => {
                     for stream in streams.take().into_iter().flatten() {
@@ -114,6 +147,7 @@ impl FrameLayers {
                     }
                 }
                 Stage::Panels => {
+                    let first = self.layers.len();
                     self.layers
                         .extend(panels.take().into_iter().flatten().map(|panel| {
                             raw(match panel {
@@ -123,6 +157,7 @@ impl FrameLayers {
                                 }
                             })
                         }));
+                    panel_layers = first..self.layers.len();
                 }
                 Stage::Overlay => {
                     self.layers.extend(
@@ -135,6 +170,13 @@ impl FrameLayers {
                 }
             }
         }
+        self.left_out = self
+            .layers
+            .len()
+            .saturating_sub(room)
+            .min(panel_layers.len());
+        self.layers
+            .drain(panel_layers.start..panel_layers.start + self.left_out);
     }
 
     // The pointers to the layers' structs, with `bottom` first, for the call that ends the frame.
@@ -149,12 +191,8 @@ impl FrameLayers {
         self.headers.clear();
         self.headers
             .extend(bottom.map(|layer| ptr::from_ref(layer).cast()));
-        for Raw {
-            layer,
-            depth_tested,
-        } in &mut self.layers
-        {
-            let chain = if *depth_tested {
+        for Raw { layer, depth } in &mut self.layers {
+            let chain = if *depth == Depth::Tested {
                 chains.tested
             } else {
                 chains.plain
@@ -172,6 +210,11 @@ impl FrameLayers {
                             .map_or(ptr::null(), |depth| ptr::from_ref(depth).cast());
                     }
                     layer.views = views.as_ptr();
+                    layer.next = if *depth == Depth::Written {
+                        chains.written
+                    } else {
+                        ptr::null()
+                    };
                     ptr::from_ref(&*layer).cast()
                 }
                 RawLayer::Quad(quad) => {
@@ -188,9 +231,15 @@ impl FrameLayers {
         &self.headers
     }
 
-    // How many layers of the list test against the depth of the projection layer.
-    pub(crate) fn tested(&self) -> usize {
-        self.layers.iter().filter(|raw| raw.depth_tested).count()
+    // What the frame holds, when the runtime gets `layers` layers.
+    pub(crate) fn counts(&self, layers: usize) -> Counts {
+        let count = |wanted| self.layers.iter().filter(|raw| raw.depth == wanted).count();
+        Counts {
+            layers,
+            tested: count(Depth::Tested),
+            written: count(Depth::Written),
+            left_out: self.left_out,
+        }
     }
 
     // Empties the list. The raw layers name swapchains. The pointers name the list's own
@@ -199,5 +248,6 @@ impl FrameLayers {
         self.headers.clear();
         self.layers.clear();
         self.projections.clear();
+        self.left_out = 0;
     }
 }

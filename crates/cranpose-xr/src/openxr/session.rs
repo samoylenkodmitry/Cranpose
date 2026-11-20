@@ -13,7 +13,7 @@ use std::{
 use openxr as xr;
 
 use super::{
-    frame_layers::{Chains, FrameLayers, Layer, Stages},
+    frame_layers::{Chains, Counts, FrameLayers, Layer, Stages},
     graphics::{Api, Graphics},
     passthrough::Passthrough,
     recenter_events::RecenterEvents,
@@ -23,7 +23,7 @@ use super::{
 };
 #[cfg(target_os = "android")]
 use crate::stereo_mode::{Eye, EyeView};
-use crate::{FieldOfView, Pose, TrackedPose, volume_plan::VolumePlan};
+use crate::{FieldOfView, Pose, TrackedPose, layer_limit::LayerLimit, volume_plan::VolumePlan};
 
 const VIEW_CONFIGURATION: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
 // How long the app waits for the runtime to stop a running session as the app ends, and how
@@ -285,10 +285,10 @@ pub(crate) struct XrSession {
     status: SessionStatus,
     // The raw layers of the frame that ends. The lists keep their capacity from frame to frame.
     layers: FrameLayers,
-    // The number of layers that the last logged frame had, so that the log names each change once
-    logged_layers: (usize, usize),
-    // The most layers that the system reports it takes. A runtime may take fewer.
-    max_layers: u32,
+    // What the last logged frame held, so that the log names each change once
+    logged_layers: Counts,
+    // The most layers that the runtime takes in a frame
+    limit: LayerLimit,
 }
 
 impl XrSession {
@@ -330,9 +330,10 @@ impl XrSession {
             .enumerate_environment_blend_modes(system, VIEW_CONFIGURATION)
             .unwrap_or_default();
         let passthrough = Passthrough::new(&session, &modes);
-        let max_layers = instance.system_properties(system).map_or(0, |properties| {
-            properties.graphics_properties.max_layer_count
-        });
+        let limit =
+            LayerLimit::reported(instance.system_properties(system).map_or(0, |properties| {
+                properties.graphics_properties.max_layer_count
+            }));
         Ok(Self {
             passthrough,
             recenters: RecenterEvents::default(),
@@ -349,8 +350,8 @@ impl XrSession {
             flips_layers: flips_layers && !Graphics::TOP_ROW_FIRST,
             status: SessionStatus::Idle,
             layers: FrameLayers::new(local_handle),
-            logged_layers: (0, 0),
-            max_layers,
+            logged_layers: Counts::default(),
+            limit,
         })
     }
 
@@ -483,7 +484,9 @@ impl XrSession {
         >,
         plan: Option<VolumePlan>,
     ) -> Result<(), String> {
-        self.layers.fill(stages, plan);
+        let bottom = self.passthrough.layer().filter(|_| self.status.shows());
+        let room = self.limit.layers() - usize::from(bottom.is_some());
+        self.layers.fill(stages, plan, room);
         // A layer over the projection layer tests its fragments against the depth that the
         // projection layer carries, and writes none of its own.
         let depth_test = xr::sys::CompositionLayerDepthTestFB {
@@ -504,6 +507,14 @@ impl XrSession {
             next: ptr::from_ref(&depth_test).cast_mut().cast(),
             ..flip
         };
+        // The projection layer that carries the volumes' depth asks for the depth test too, with the
+        // write on, because the compositor's depth buffer starts at the far plane and only a layer
+        // that writes into it gives the panels over it something to test against
+        let write_depth = xr::sys::CompositionLayerDepthTestFB {
+            compare_op: xr::sys::CompareOpFB::ALWAYS,
+            depth_mask: xr::sys::TRUE,
+            ..depth_test
+        };
         let testing = plan.is_some_and(|plan| plan.tests_depth);
         let named = |flips: bool, tests: bool| -> *const c_void {
             match (flips, tests) {
@@ -516,11 +527,13 @@ impl XrSession {
         let chains = Chains {
             plain: named(self.flips_layers, false),
             tested: named(self.flips_layers, testing),
+            written: if testing {
+                ptr::from_ref(&write_depth).cast()
+            } else {
+                ptr::null()
+            },
         };
-        let headers = self.layers.headers(
-            self.passthrough.layer().filter(|_| self.status.shows()),
-            chains,
-        );
+        let headers = self.layers.headers(bottom, chains);
         // SAFETY: each pointer names the struct of a layer that `self.layers` or
         // `self.passthrough` holds. Nothing moves or drops those until the call returns. The base
         // layer is a transparent wrapper of the header that every layer struct starts with, so a
@@ -534,20 +547,36 @@ impl XrSession {
                 headers.len(),
             )
         };
-        let counts = (references.len(), self.layers.tested());
+        let counts = self.layers.counts(references.len());
         if counts != self.logged_layers {
             self.logged_layers = counts;
             log::info!(
-                "cranpose xr: the frame has {} layers, {} of them test depth, of {} that the system takes",
-                counts.0,
-                counts.1,
-                self.max_layers
+                "cranpose xr: the frame has {} layers, {} of them test depth and {} write it, of {} that the runtime takes, {} panels left out",
+                counts.layers,
+                counts.tested,
+                counts.written,
+                self.limit.layers(),
+                counts.left_out
             );
         }
-        let ended = self
+        let ended = match self
             .stream
             .end(display_time, self.passthrough.blend_mode(), references)
-            .map_err(|error| format!("OpenXR end frame: {error}"));
+        {
+            // The runtime takes fewer layers than it reports. The next frame leaves out the panels
+            // that do not fit, and this one is lost.
+            Err(xr::sys::Result::ERROR_LAYER_LIMIT_EXCEEDED)
+                if self.limit.refused(counts.layers) =>
+            {
+                log::warn!(
+                    "cranpose xr: the runtime refused {} layers and takes {}",
+                    counts.layers,
+                    self.limit.layers()
+                );
+                Ok(())
+            }
+            ended => ended.map_err(|error| format!("OpenXR end frame: {error}")),
+        };
         self.layers.clear();
         ended
     }

@@ -53,6 +53,10 @@ const BALL: f32 = 40.0;
 // shows a different color to each eye.
 #[composable]
 pub fn XrDemo() {
+    if depth_test_build() {
+        DepthTest();
+        return;
+    }
     let presses = rememberMutableStateOf(|| 0_u32);
     let strip_shown = rememberMutableStateOf(|| true);
     let readout = rememberMutableStateOf(Readout::default);
@@ -88,8 +92,14 @@ pub fn XrDemo() {
                 .rotate(0.0, -30.0, 0.0),
         );
         // A volume takes two of the compositor's layers, one for the 3D content and one for its
-        // handle. A Quest takes 16, which the demo's other panels and surfaces leave free.
-        TorusVolume(torus_place());
+        // handle. A Quest takes 16. With both rays and the ball the demo has 18, so the frame
+        // leaves out the two panels that stand farthest from the head.
+        TorusVolume(
+            SubspaceModifier::new()
+                .offset(600.0, -330.0, 100.0)
+                .rotate(0.0, -30.0, 0.0),
+            true,
+        );
         CounterPanel(presses, tracking);
         if strip_shown.get() {
             CurvedStrip();
@@ -99,16 +109,44 @@ pub fn XrDemo() {
     ControllerBall(strip_shown);
 }
 
-// Where the torus stands: beside the panels, or in the plane of the counter panel when the build
-// has `XR_DEMO_VOLUME=through`, so that a part of it lies in front of the panel and a part behind.
-fn torus_place() -> SubspaceModifier {
-    if option_env!("XR_DEMO_VOLUME") == Some("through") {
-        SubspaceModifier::new().offset(0.0, -100.0, 0.0)
-    } else {
-        SubspaceModifier::new()
-            .offset(600.0, -330.0, 100.0)
-            .rotate(0.0, -30.0, 0.0)
-    }
+// The depth test builds are `XR_DEMO_VOLUME=through`, which shows the panel and the torus, and
+// `XR_DEMO_VOLUME=alone`, which shows the torus only. A screenshot of the second build tells how
+// many pixels the whole torus covers.
+const VOLUME_BUILD: Option<&str> = option_env!("XR_DEMO_VOLUME");
+
+fn depth_test_build() -> bool {
+    matches!(VOLUME_BUILD, Some("through" | "alone"))
+}
+
+// A test of the compositor's depth test: a panel and a torus that pierces it, a meter ahead of the
+// head where the demo started. The ring's near half lies in front of the panel's plane and its far
+// half behind it. A compositor that tests depth shows the near half over the panel and hides the far
+// half. One that does not shows the panel over the whole ring. The build shows nothing else, so that a
+// screenshot holds only the panel and the ring.
+#[composable]
+fn DepthTest() {
+    FollowingSubspace(FollowTarget::View(FollowMode::Snap), || {
+        if VOLUME_BUILD != Some("alone") {
+            SpatialPanel(SubspaceModifier::new().size(600.0, 600.0), || {
+                Box(
+                    Modifier::empty()
+                        .fill_max_size()
+                        .background(Color(0.85, 0.2, 0.5, 1.0))
+                        .rounded_corners(24.0)
+                        .padding(24.0),
+                    BoxSpec::default(),
+                    || {
+                        Text(
+                            "This panel stands at z = 0",
+                            Modifier::empty(),
+                            sized(28.0, Some(FontWeight::BOLD)),
+                        );
+                    },
+                );
+            });
+        }
+        TorusVolume(SubspaceModifier::new().rotate(0.0, 45.0, 0.0), false);
+    });
 }
 
 // A ball of 4 cm that floats 10 cm above the left controller, upright wherever the hand tilts.

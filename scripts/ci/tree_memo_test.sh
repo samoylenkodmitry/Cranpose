@@ -63,6 +63,17 @@ else
     echo "ok    an unknown mode fails"
 fi
 
+# The workflows' default shell queues behind the host lock. A measurement holds
+# that lock for half an hour, longer than a 20-minute job (run 44660281125). A
+# memo step only reads or writes a marker, so each one runs under plain bash.
+bad="$(awk '/run: scripts\/ci\/tree_memo.sh/ && prev !~ /shell: bash --noprofile --norc -eo pipefail \{0\}/ { print FILENAME ":" FNR } { prev = $0 }' "$script_dir"/../../.github/workflows/*.yml)"
+if [[ -z "$bad" ]]; then
+    echo "ok    every memo step runs outside the host lock"
+else
+    echo "FAIL  memo steps under the host lock: $bad"
+    failures=$((failures + 1))
+fi
+
 if [[ "$failures" -ne 0 ]]; then
     echo "$failures tree memo check(s) failed" >&2
     exit 1
