@@ -5,8 +5,9 @@ extern crate self as cranpose;
 
 #[cfg(feature = "image-loading")]
 mod async_image;
+#[cfg(feature = "video")]
 mod player_surface;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "video", not(target_arch = "wasm32")))]
 mod player_surface_intake;
 #[cfg(feature = "localization")]
 mod system_languages;
@@ -45,6 +46,8 @@ mod gpu_loss;
 #[cfg(feature = "renderer-wgpu")]
 mod guest_view;
 #[cfg(feature = "renderer-wgpu")]
+pub use cranpose_render_wgpu::SCENE_DEPTH_FORMAT;
+#[cfg(feature = "renderer-wgpu")]
 pub use guest_view::{GuestView, GuestViewError};
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
 mod frame_readback;
@@ -57,6 +60,10 @@ mod scoped_weak_stack;
 pub use android::file_picker::open_content_uri;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 pub use android::finish::finish_activity;
+#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+pub use android::permission_prompt::{
+    AndroidPermission, android_permission, request_android_permissions,
+};
 #[cfg(any(
     test,
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
@@ -246,8 +253,9 @@ pub use cranpose_media::{SoftwareMediaPlayer, path_from_uri, uri_for_path};
 pub use cranpose_services::isSystemInDarkTheme;
 pub use cranpose_services::*;
 pub use cranpose_ui::*;
+#[cfg(feature = "video")]
 pub use player_surface::PlayerSurface;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "video", not(target_arch = "wasm32")))]
 pub use player_surface_intake::{FramePresenter, PlayerSurfaceIntake, PresentError};
 
 static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =
@@ -389,6 +397,8 @@ pub mod prelude {
 
     #[cfg(feature = "image-loading")]
     pub use crate::async_image::AsyncImage;
+    #[cfg(feature = "video")]
+    pub use crate::player_surface::PlayerSurface;
     #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
     pub use crate::{
         AndroidHostWindowPositionError, AndroidHostWindowSizeError, AndroidHostWindowSizeStatus,
@@ -397,7 +407,7 @@ pub mod prelude {
     pub use crate::{
         AndroidOverlayWindowOptions, AppFonts, AppLauncher, AppSettings, WebView, WebViewEvent,
         WindowConfig, WindowModifierExt, WindowResizeDirection, WindowState, composition_api::*,
-        player_surface::PlayerSurface, rememberWindowState, rememberWindowStateAt,
+        rememberWindowState, rememberWindowStateAt,
     };
     #[cfg(all(
         feature = "desktop-menus",

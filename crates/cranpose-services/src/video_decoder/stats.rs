@@ -11,7 +11,9 @@ pub struct DecoderStats {
     /// [`DecoderError::Full`](super::DecoderError::Full) after its wait. The decoder never saw
     /// them.
     pub refused: u64,
-    /// The pictures that the decoder output.
+    /// The pictures that the decoder output. A decoder of Apple's counts a picture after it
+    /// queued the picture for the app and woke the task that waits. Android counts a picture when
+    /// MediaCodec renders it, and its image reaches the app's queue up to one picture later.
     pub decoded: u64,
     /// The pictures that never reached the app after the decoder took their access units. The app
     /// did not take some in time. The platform decoder lost the others while it decoded or

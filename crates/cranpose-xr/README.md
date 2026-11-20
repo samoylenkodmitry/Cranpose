@@ -127,6 +127,61 @@ compositor. `local_spatial_environment()` gives the app the room around its pane
 headset has passthrough, `set_preferred_passthrough_opacity(Some(1.0))` shows it. Check
 `local_spatial_capabilities().current().is_passthrough_control_enabled()` first.
 
+## 3D content
+
+`SpatialVolume` puts 3D content in a `Subspace`. Its content is ordinary composables whose nodes
+carry `mesh_surface`. Cranpose's own 3D scene draws them, so a mesh shows live composable content on
+its surface:
+
+```rust,ignore
+use cranpose::space::{Light, Mat4, Material, Mesh, MeshSurface, Vec3};
+use cranpose_xr::{SpatialVolume, SubspaceModifier};
+
+SpatialVolume(
+    SubspaceModifier::new().size(300.0, 300.0).depth(300.0).movable(),
+    move |scope| {
+        scope.light(Light {
+            direction: Vec3::new(0.45, 0.6, 0.65),
+            ambient: 0.3,
+            shadows: false,
+            size: 0.0,
+        });
+        let mesh = Arc::clone(&torus);
+        Box(
+            Modifier::empty()
+                .required_size(Size::new(512.0, 128.0))
+                .mesh_surface(move || MeshSurface {
+                    mesh: Arc::clone(&mesh),
+                    transform: Mat4::scaling(Vec3::new(100.0, 100.0, 100.0)),
+                    material: Material::Lit,
+                    casts_shadow: false,
+                    solid: true,
+                })
+                .background(Color(0.95, 0.55, 0.15, 1.0)),
+            BoxSpec::default(),
+            || {},
+        );
+    },
+);
+```
+
+The modifier's `width`, `height` and `depth` give a box in dp, which are millimeters, 500 each by
+default. The content's space has its origin at the box's center, x to the right, y down and z away
+from the viewer, and a unit is a dp. The modifier's `offset`, `rotate`, `movable` and `resizable`
+work as on a panel. A controller's ray stops at the box. `scope.on_pointer_event` receives its
+events, with the position in dp on the box's front face. The meshes do not receive the ray.
+
+Jetpack XR 1.0 shows 3D content with `SpatialGltfModel` for a glTF model and `SceneCoreEntity` for a
+SceneCore entity. Cranpose has neither, so its composable has its own name.
+
+A headset composes the content once and draws it for each eye, from that eye's pose and field of
+view, into one projection layer for all volumes. Where the runtime offers a depth swapchain, the
+layer carries the scene's depth (`XR_KHR_composition_layer_depth`), and where it has
+`XR_FB_composition_layer_depth_test` the panels and rays over it are set to test against that depth.
+No headset has run that test yet. Otherwise the panels cover the 3D content. A frame with no volume has no projection layer and costs
+no GPU time. The scene draws with one sample for each pixel, and a movable volume takes two of the
+compositor's layers. A window shows the volume as a 3D view in its box.
+
 ## Video and camera surfaces
 
 `SpatialExternalSurface` gives the app a surface that a hardware video decoder or a camera
@@ -195,6 +250,60 @@ SpatialFrameEffect(move |frame| {
     }
 });
 ```
+
+## Hands, body, face and eyes
+
+An app that wants the user's hands, body, face or eyes asks for them in its build script, with the
+services of `cranpose::capabilities`, and hands the declaration to its launcher:
+
+```rust,ignore
+// build.rs
+use cranpose_capabilities::{Use, declare};
+
+fn main() {
+    declare(&[Use::hand_tracking(), Use::face_tracking()]).emit();
+}
+
+// lib.rs
+cranpose::app_capabilities!();
+
+cranpose_xr::android_main! {
+    launcher: cranpose::AppLauncher::new().with_capabilities(&CAPABILITIES),
+    content: App,
+}
+```
+
+`Use::hand_tracking()`, `Use::body_tracking()`, `Use::face_tracking()` and `Use::eye_tracking()`
+each enable the OpenXR extensions of their kind that the runtime offers, create the trackers once
+the user grants the permissions, and add those permissions to the Android manifest. An app that
+asks for none enables no extension, creates no tracker, makes no call in a frame and adds no
+permission. OpenXR fixes the extensions when the instance is made, before the content composes, so
+a modifier or a composable cannot ask. Jetpack XR asks at run time, with `Session.configure`.
+
+Each frame's `XrFrame` then holds fixed-size arrays that the backend fills in place:
+
+| Field | Holds | OpenXR |
+|---|---|---|
+| `left_hand`, `right_hand`, `hand(Hand)` | a `HandState`: a `TrackingState`, 26 `HandJoint`s at the index of each `HandJointType`, and a `HandAim` with the pinch of each finger | `XR_EXT_hand_tracking`, `XR_FB_hand_tracking_aim` |
+| `body` | a `BodyState`: 70 or 84 `BodyJoint`s at the index of each `BodyJointType`, and a confidence | `XR_FB_body_tracking`, `XR_META_body_tracking_full_body` |
+| `face` | a `FaceState` with Jetpack XR's names: a weight for each `FaceBlendShapeType`, and a confidence for each `FaceConfidenceRegion` | `XR_ANDROID_face_tracking`, or the shared shapes of `XR_FB_face_tracking2` |
+| `meta_face` | a `MetaFaceState` with Meta's names: a weight for each of its 70 `FaceExpression`s, its confidences and its `FaceDataSource`, which is `Audio` on a Quest 3 | `XR_FB_face_tracking2` |
+| `eyes` | `Eyes`: an `EyeState` for each eye, and a combined gaze pose | `XR_FB_eye_tracking_social`, `XR_EXT_eye_gaze_interaction` |
+| `tracking` | the live `TrackingCapabilities` | |
+
+`local_tracking_capabilities()` gives the `TrackingCapabilities` of the session's start, in the
+pattern of `local_spatial_capabilities()`: for each `TrackingFeature` an `availability()` of
+`Unavailable`, `Offered`, `AwaitingPermission`, `PermissionRefused` or `Active`, and which extension
+supplies what. A feature that the app did not ask for is `Offered` when the runtime lists an
+extension for it. Nothing is enabled then, so the list cannot tell whether the headset has the
+sensor. A feature that the app asked for gets the system's answer, so a Quest 3 reports its eyes as
+`Unavailable`. `XrFrame::tracking` follows the permissions that the user grants.
+
+On a Meta Quest the face and eyes need the user's permission, and a Quest 3 estimates the face from
+the microphone, so `Use::face_tracking()` adds `RECORD_AUDIO`. The system's prompt shows before the
+session starts, because the system takes an immersive app off the headset to show it and the runtime
+ends a session that runs. The app waits for the answer. The backend makes a tracker only when every
+permission is granted, and it does not ask again after a refusal.
 
 ## Streamed scenes
 

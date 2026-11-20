@@ -8,11 +8,13 @@ use super::{
     clock,
     controllers::Controllers,
     eye_views,
+    host::Host,
     session::{SessionStatus, XrSession},
     system_properties,
+    tracking::{EyeGazeAction, Trackers, TrackingSetup},
 };
 use crate::{
-    Controller, Haptics, HeadsetProperties, Pose, Ray, Recenter, XrFrame,
+    Controller, Haptics, HeadsetProperties, Pose, Ray, Recenter, RenderViewpoint, XrFrame,
     frame_effects::FrameEffects, pointer::Aim,
 };
 
@@ -22,18 +24,34 @@ pub(crate) struct HeadsetInput {
     // Filled in place each frame
     frame: XrFrame,
     controllers: Controllers,
+    trackers: Trackers,
     effects: FrameEffects,
     haptics: Haptics,
     properties: HeadsetProperties,
 }
 
 impl HeadsetInput {
-    pub(crate) fn new(xr_session: &XrSession) -> Result<Self, String> {
+    pub(crate) fn new(xr_session: &XrSession, tracking: TrackingSetup) -> Result<Self, String> {
         let properties = system_properties::query(xr_session)?;
         log::info!("cranpose xr: headset {properties:?}");
+        // The gaze action joins the controllers' attach, because a session attaches once
+        let mut gaze = tracking
+            .capabilities
+            .is_eye_gaze_interaction_available()
+            .then(|| EyeGazeAction::declare(xr_session.instance()))
+            .transpose()?;
+        let controllers = Controllers::new(xr_session, gaze.as_ref().map(EyeGazeAction::set))?;
+        if let Some(gaze) = &mut gaze {
+            gaze.attach_space(&xr_session.session)?;
+        }
+        let frame = XrFrame {
+            tracking: tracking.capabilities,
+            ..XrFrame::default()
+        };
         Ok(Self {
-            frame: XrFrame::default(),
-            controllers: Controllers::new(xr_session)?,
+            frame,
+            controllers,
+            trackers: Trackers::new(tracking, gaze),
             effects: FrameEffects::default(),
             haptics: Haptics::new(),
             properties,
@@ -70,6 +88,19 @@ impl HeadsetInput {
         self.frame.device_pose
     }
 
+    // The left and the right eye's view in the frame sampled last, or `None` for an eye that the
+    // runtime does not locate.
+    pub(crate) fn eyes(&self) -> [Option<RenderViewpoint>; 2] {
+        [self.frame.left_eye, self.frame.right_eye]
+    }
+
+    // The size of the pictures that the eyes' displays take, in pixels: the left eye's
+    // recommended size.
+    pub(crate) fn eye_image_size(&self) -> (u32, u32) {
+        let [width, height] = self.properties.eye_image_sizes[0].recommended;
+        (width, height)
+    }
+
     // Where each controller is in the frame sampled last, left then right: the place of its grip
     // with the turn of its aim, or `None` for a controller that the runtime does not track. The
     // grip's own forward axis runs along the handle, which points steeply upward when the hand
@@ -92,6 +123,7 @@ impl HeadsetInput {
         xr_session: &mut XrSession,
         state: &xr::FrameState,
         status: SessionStatus,
+        host: &Host,
     ) -> [Option<Aim>; 2] {
         let time = state.predicted_display_time;
         let frame = &mut self.frame;
@@ -113,7 +145,10 @@ impl HeadsetInput {
             time,
         );
         frame.recenter = xr_session.recenters.take();
-        self.controllers.sample(xr_session, time, status, frame);
+        self.controllers
+            .sample(xr_session, time, status, self.trackers.gaze_set(), frame);
+        self.trackers
+            .sample(xr_session, host, frame.now, time, status, frame);
         self.effects.run(&self.frame);
         self.controllers.vibrate(xr_session, self.haptics.take());
         [&self.frame.left_controller, &self.frame.right_controller].map(aim_of)

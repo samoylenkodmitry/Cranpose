@@ -970,13 +970,13 @@ pub(crate) trait FrameCommandRecorder {
             ..Default::default()
         })
     }
-    // A pass onto `colour` against the scene's depth and stencil `depth`,
-    // both cleared and dropped after.
+    // A pass onto `colour` against the scene's depth and stencil `depth`, both
+    // cleared; the stencil and the depth stored as `store`, which keeps a host's.
     fn begin_scene_pass<'p>(
         &'p mut self,
         label: &'static str,
         colour: wgpu::RenderPassColorAttachment<'_>,
-        depth: &wgpu::TextureView,
+        (depth, depth_store): (&wgpu::TextureView, wgpu::StoreOp),
     ) -> wgpu::RenderPass<'p> {
         self.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
             label: Some(label),
@@ -985,7 +985,7 @@ pub(crate) trait FrameCommandRecorder {
                 view: depth,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Discard,
+                    store: depth_store,
                 }),
                 stencil_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(0),

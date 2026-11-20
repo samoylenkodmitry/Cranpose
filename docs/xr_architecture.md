@@ -26,22 +26,24 @@ sharp. Each composable maps to one compositor primitive:
 | `SpatialPanel`: a flat panel of 2D Cranpose content | quad layer | core |
 | `SpatialCurvedRow`: panels on a curve | cylinder layer for each panel | `XR_KHR_composition_layer_cylinder` |
 | `SpatialExternalSurface`: a surface for a video decoder or another engine | swapchain backed by an Android `Surface` | `XR_KHR_android_surface_swapchain` |
-| 3D content: `scene3d` and `mesh_surface` | projection layer with depth | core, `XR_KHR_composition_layer_depth` |
+| `SpatialVolume`: 3D content of `scene3d` and `mesh_surface` | one projection layer for all volumes, with depth where the runtime takes it | core, `XR_KHR_composition_layer_depth`, `XR_FB_composition_layer_depth_test` |
 
 A panel draws only when its content changes. The compositor shows the last image of a layer
 until a new one comes, so a still panel costs no GPU time at all.
 
-The cranvr Quest client proved each primitive on a Quest 3 by hand. Its desktop is a surface
-swapchain fed straight by the hardware decoder. Its console is a quad layer of Cranpose content.
-Its controllers, rays and handles are a Cranpose 3D scene in a projection layer.
+A Quest client proved the surface swapchain and the quad layer on a Quest 3 by hand. Its desktop is
+a surface swapchain fed straight by the hardware decoder. Its console is a quad layer of Cranpose
+content. The controllers' rays and the handles of the panels are quad layers with one
+static picture each (`ray_layers.rs`, `handle_layers.rs`), so they cost no draw. Only
+`SpatialVolume` draws a 3D scene, into a projection layer.
 
 ## The API
 
 Names follow Jetpack XR Compose (`androidx.xr.compose`), so Google's documentation serves
 Cranpose developers too:
 
-- `Subspace { ... }`: the 3D area of an app. Outside a headset it shows as a 3D view in the
-  window.
+- `Subspace { ... }`: the 3D area of an app. Outside a headset it shows its panels side by side in
+  the window, and a `SpatialVolume` in it shows as a 3D view in its box.
 - `SpatialPanel(modifier, shape) { ... }`: 2D Cranpose content on a flat panel.
 - `FollowingSubspace(follow) { ... }`: a `Subspace` whose origin is in front of the user's head.
   Jetpack XR 1.0.0-beta02 spells it `Subspace(follow = FollowTarget.view(FollowMode.snap()))`. It
@@ -70,16 +72,176 @@ Cranpose developers too:
 - `local_spatial_environment()`: the `SpatialEnvironment` with `preferred_passthrough_opacity`
   and `current_passthrough_opacity`, which control the room around the panels.
 - `SpatialFrameEffect(on_frame)`: runs a callback once in each frame of the headset with an
-  `XrFrame`, which holds the head, the eyes and the controllers. See "The headset's state".
+  `XrFrame`, which holds the head, the eyes and the controllers, and, for what the app asks for,
+  the hands, the body, the face and the eyes' gaze. See "The headset's state" and "Tracking hands,
+  body, face and eyes".
+- `local_tracking_capabilities()`: the `TrackingCapabilities` that tell, for each `TrackingFeature`,
+  whether the runtime offers it.
 - `local_haptics()`: the `Haptics` handle that vibrates a hand's controller.
 - `Orbiter`: content attached to the edge of a panel, such as a handle or a toolbar.
 - `SubspaceModifier`: `width`, `height`, `depth`, `size`, `offset`, `rotate`, `with_pose`,
   `movable`, `movable_with`, `resizable`, `resizable_with`, `fill_max_size`, `padding`.
 - `SpatialRoundedCornerShape`: the shape of a panel.
 
-Jetpack XR Compose shows 3D models through SceneCore entities. Cranpose has its own 3D: a
-`scene3d` box and `mesh_surface` content. In a `Subspace` such content draws into the
-projection layer, with a camera made from each eye's view.
+- `SpatialVolume(modifier, content)`: 3D content in a box, drawn by Cranpose's own scene. See "3D
+  content".
+
+## 3D content
+
+`SpatialVolume(modifier, content)` puts 3D content in a `Subspace`. The content is ordinary
+composables whose nodes carry `mesh_surface` or `mesh_surfaces`. Cranpose's own scene draws them, as
+`scene3d` draws them in a window, so a mesh shows live composable content on its surface. Jetpack
+XR 1.0 has `SpatialGltfModel`, which renders a glTF model, and `SceneCoreEntity`, which attaches any
+SceneCore entity. Cranpose has neither. Its composable keeps its own name, after the box that the
+content stands in.
+
+The modifier gives the box: `width`, `height` and `depth` in dp, which are millimeters, 500 each by
+default. The modifier's `offset`, `rotate`, `movable` and `resizable` work as on a panel. The
+content's space has its origin at the box's center, x to the right, y down and z away from the
+viewer, and a unit is a dp. That is the space of a `scene3d`, so the same content shows in a window.
+The box is where a ray stops. The content may reach outside it.
+
+### One scene, composed once
+
+A headset draws the content of all volumes in one scene, because one scene has one depth buffer: a
+nearer volume hides a farther one. The volumes' content composes where the app wrote it, but the
+composition does not emit it there. Each `SpatialVolume` gives its content to the space of the
+headset. A root composable, `VolumeScene`, composes it again at the root of a window root of the
+app's composition (`Modifier::window_root`, the root that Cranpose's host overlays use). The window
+root has its own renderer and the size of one eye's picture. The atlas of the panels does not draw
+it, so a volume that animates redraws no panel.
+
+The content composes once. Its state and its effects are the composition's own. A composition
+local that the app provides between the subspace and the volume does not reach it, because the
+scene composes at the root. The headset provides its own locals there.
+
+Each frame draws the same composition twice. For each eye the headset writes the eye's camera into
+a state that the scene's `scene3d` reads while it draws. Then it calls `GuestView::draw_window`,
+which updates the composition and renders the window root into the eye's texture. The update
+collects the scene with the new camera, so no composition and no layout run between the eyes. A volume's pose is a state too. `transform3d` of the volume's node reads it while
+the scene draws, so carrying a volume composes nothing.
+
+### The eye's camera
+
+A scene's camera is a pinhole whose image center is the middle of its box. An eye's display is off
+center: a Quest's eyes reach farther outward than toward the nose. `EyeCamera` turns an eye's pose
+and field of view from `xrLocateViews` into a `Camera` of the scene. The camera shears x and y by z,
+which moves the image center by a fixed amount at every depth. It has one focal length for both
+directions, the smaller of the horizontal and the vertical, so the picture has square pixels and
+covers the eye's field of view in both directions. The image therefore covers more than the eye's
+field of view along the other direction. The layer submits the field of view that the image covers
+(`EyeCamera::field_of_view`), which holds the eye's own along the limiting direction. A layer that
+submitted the eye's own field of view would shift the picture.
+
+The scene's axes are the room's turned half a turn about x, in millimeters. `scene_from_volume` maps
+a volume's content to the scene from the volume's pose in the room, and the eye's camera maps the
+scene to the eye, so the two share the scene's units. The camera cuts away what lies nearer to the
+eye than a 64th of its focal length in pixels: 12 mm for a focal length of 800 pixels.
+
+A GL swapchain's first row is its bottom one. The camera draws the picture upside down, so the
+runtime reads it upright. This also holds for the depth, which has the same rows. The layer chains
+no `XR_FB_composition_layer_image_layout` to the projection, because that extension's reach over a
+depth image is not specified. A Vulkan image starts with its top row, so its camera does not flip.
+
+### The projection layer and its depth
+
+All volumes draw into one projection layer with a view for each eye. Each view has its own swapchain
+of the eye's recommended size and its own pose and field of view. The layer's flags say that the
+picture's alpha blends over what lies under it (`BLEND_TEXTURE_SOURCE_ALPHA`), so the room and the
+panels' layers show through where no mesh draws. The picture is premultiplied, as the panels' are.
+The scene draws with one sample for each pixel, because the depth that the layer carries is the
+depth of a single sample. The renderer draws the scene into a target of its own and converts it
+into the swapchain's image, as it does for the panels' atlas. It draws straight into an image only
+when the image also takes copies. An sRGB image would then need a view of another format, and a
+swapchain's image has none.
+
+With `XR_KHR_composition_layer_depth` the layer carries the depth of each picture. The renderer's
+scene pass can leave its depth in a view that the host gives it
+(`WgpuRenderer::render_with_scene_depth`), so no copy of the depth is made. The depth swapchain has
+the format that the scene's pipelines draw against, `Depth24PlusStencil8`, which is
+`GL_DEPTH24_STENCIL8` on GLES. The scene's depth is `1 - near / z` for a point at distance `z`
+along the eye's axis: 0 at the near plane and 1 at infinity. The layer's depth info therefore says
+`nearZ` is the camera's near plane in meters and `farZ` is 10 km. The extension allows an infinite
+`farZ`, and a plane 10 km away gives the same depth to a part in a million, so no runtime has an
+infinity to mishandle.
+Wgpu maps `Depth24PlusStencil8` to one of two Vulkan formats by the driver and offers no query that
+says which, so a Vulkan headset has no depth swapchain and submits none. A runtime that offers no
+depth swapchain format submits none either. The picture still shows.
+
+### Layer order and the depth test
+
+The frame's layers, from the bottom: the room's passthrough layer, the streamed scenes, the one
+projection layer of the volumes, the flat and curved panels, the surfaces and the panels' handles,
+and the rays. The projection layer lies under the panels, because the compositor draws a later
+layer over an earlier one.
+
+Where the runtime has `XR_FB_composition_layer_depth_test` and the projection layer carries depth,
+each panel, surface, handle and ray layer chains an `XrCompositionLayerDepthTestFB` with
+`LESS_OR_EQUAL` and no depth write. The design expects the compositor to test that layer's
+fragments against the projection layer's depth, so that a panel behind a 3D object shows behind it
+and a panel in front of the object shows in front of it. Panels still draw over each other in the
+order of their distance, and a panel's rounded corners still blend. The projection layer carries
+its depth in its views and chains no test struct of its own.
+
+No device has run this path. The man page of `XrCompositionLayerDepthTestFB` describes `depthMask` as the switch for writes to
+the composition depth buffer. A Quest has to show whether the projection layer
+needs the struct with `depthMask` set for its depth to reach the compositor's buffer. If it does,
+the struct goes onto the projection layer. If panels vanish, the compare direction is the first
+suspect.
+
+Without the test, the projection layer lies under all panels, and a panel covers the 3D content
+wherever the panel stands, also where the content is nearer. A rule that sorts the one layer among
+the panels fails for two volumes with a panel between them, because a layer has one place in the
+list. The order is the same on every runtime. The depth test corrects it where it exists.
+`volume_plan` holds the rule as a function of the number of volumes, the
+eyes the runtime located and the extensions, and its tests cover it.
+
+A frame with no volume has no projection layer, no swapchain and no draw. The first frame with a
+volume makes the swapchains. The frame after the last volume leaves frees them.
+
+### Pointer
+
+A controller's ray stops at a volume's box. The slab test of `Ray::hit_box` gives the entry point,
+and the pointer sends the app `Enter`, `Move`, `Down`, `Up` and `Exit` events through
+`SpatialVolumeScope::on_pointer_event`, the path that a surface takes. The position is in dp from the
+top left corner of the box's front face, from the entry point's x and y. The depth is not reported.
+The ray does not pick the meshes, so a button on a mesh does not receive the ray. Sending the ray
+into the scene's own picking needs the pixel of the ray's hit in the scene's camera, which a scene
+has per eye, and is a larger change than the pointer's design takes now. A window shows the volume
+under the mouse, where the meshes take input as `mesh_surface` documents.
+
+The handles of a movable or resizable volume stand at its front face, half the depth toward the
+viewer. A handle at the center plane of a deep box would lie behind the entry of a ray that points
+at it. The resize measures on the front face's plane and changes the width and the height. The
+content does not scale with the box.
+
+### What it costs
+
+A frame with volumes updates the composition and renders the window root twice. The scene's draw
+closure reads the camera, so each eye's collection builds the scene again. The depth view that the
+renderer keeps in its pass is the swapchain's own, so the depth costs no copy. The color takes the
+renderer's conversion pass for each eye. The CPU side allocates what `scene3d` allocates for each
+evaluation of its closure. The layer code allocates nothing.
+
+A call of the runtime or of the renderer that fails ends the 3D content with one line in the log
+(`the 3D content ends`). The session and its panels keep running. A runtime that refuses the depth
+swapchain leaves the picture without depth, and the layers over it test nothing.
+
+A volume takes two of the compositor's layers when it is movable: the projection layer and the
+handle. The projection layer is one layer however many volumes there are.
+
+### Measured
+
+On the Android XR emulator (runtime "Android XR" 1.0.0, system "Moohan", GLES) the demo's torus
+shows lit and upright in the place of its pose, with its handle under it, beside the panels. The
+runtime offers `XR_KHR_composition_layer_depth`, `XR_FB_composition_layer_depth_test` and
+`XR_FB_composition_layer_image_layout`. Its swapchain formats are `GL_SRGB8_ALPHA8`, `GL_RGBA8`,
+`GL_RGB10_A2` and `GL_RGBA16F`, so it offers no depth format and the layer carries no depth there.
+Its eye pictures are 2560 by 2558 pixels. With the torus moved through the counter panel's plane the panel, which a later layer draws, covers
+the torus, as the order without a depth test says. The depth path and the depth test have run on no
+device.
+The crate's tests run the scene on the GPU of the development machine: two eyes from one
+composition, the depth that the scene leaves, a volume that moves, and a frame with no volume.
 
 ## The room around the panels
 
@@ -403,6 +565,171 @@ duration. It is `Send` and `Sync`, so a network thread plays what the host sends
 The frame loop applies the newest request of each hand after the frame effects, with
 `xrApplyHapticFeedback`.
 
+## Tracking hands, body, face and eyes
+
+An app reads the user's hands, body, face and eyes in each frame, with Jetpack XR's names where
+Jetpack XR has them. Four kinds of tracking are opt-in. An app that asks for none pays nothing:
+the instance enables no tracking extension, no tracker exists, no call happens in a frame and the
+APK holds no tracking permission.
+
+### How an app asks
+
+The extensions of an OpenXR instance are fixed when the instance is made. Cranpose makes it before
+the content composes, so a modifier or a composable cannot ask for one. Jetpack XR's
+`Session.configure(Config(handTracking = ...))` runs after the session exists. Cranpose reads
+the build script's declaration instead, which also writes the Android permissions:
+
+| Declaration | Feature | OpenXR extensions | Meta Quest permission | Android XR permission |
+|---|---|---|---|---|
+| `Use::hand_tracking()` | `TrackingFeature::Hands` | `XR_EXT_hand_tracking`, `XR_FB_hand_tracking_aim` | `com.oculus.permission.HAND_TRACKING`, `horizonos.permission.HAND_TRACKING` | `android.permission.HAND_TRACKING` |
+| `Use::body_tracking()` | `Body` | `XR_FB_body_tracking`, `XR_META_body_tracking_full_body` | `com.oculus.permission.BODY_TRACKING` | `android.permission.BODY_TRACKING` |
+| `Use::face_tracking()` | `Face` | `XR_FB_face_tracking2`, else `XR_ANDROID_face_tracking` | `com.oculus.permission.FACE_TRACKING`, `horizonos.permission.FACE_TRACKING` and `android.permission.RECORD_AUDIO` | `android.permission.FACE_TRACKING` |
+| `Use::eye_tracking()` | `Eyes` | `XR_FB_eye_tracking_social`, `XR_EXT_eye_gaze_interaction` | `com.oculus.permission.EYE_TRACKING`, `horizonos.permission.EYE_TRACKING` | `android.permission.EYE_TRACKING_FINE` |
+
+The permission names come from Meta's Move API page and Android's XR permissions page. A Quest 3
+on Horizon OS (Android 14) lists them with `pm list permissions`: the hand and body permissions are
+`normal`, which the system grants at install, and the face and eye permissions are `dangerous`. The
+Quest defines the hand, face and eye permissions under both the `com.oculus.permission` and the
+`horizonos.permission` names, in one permission group, and the body permission under the first
+only. Meta's body page was not reachable, so only the device vouches for `BODY_TRACKING`. A Quest 3
+estimates the face from the microphone, so face tracking needs `RECORD_AUDIO`. Each declaration also
+names an optional Oculus feature, written as not required.
+
+The app passes the declaration to its launcher with `with_capabilities(&CAPABILITIES)`, and the
+backend reads it before `xrCreateInstance`. `TrackingRequest` holds the four answers.
+`ExtensionOffer::enabled_for` keeps from the runtime's list the extensions that the request needs
+and no others. An extension comes only with the one it extends: the aim extension needs hand
+tracking and the full body needs body tracking. A face comes from one extension, Meta's before
+Android's.
+
+### What the runtime offers
+
+`local_tracking_capabilities()` returns the `TrackingCapabilities` of the session's start, in the
+pattern of `local_spatial_capabilities()`. The runtime answers a system property structure only for
+an extension that is enabled, so what it can say depends on what the app asked:
+
+- A feature that the app did not ask for is `Offered` when the runtime lists an extension for it,
+  and `Unavailable` otherwise. A listed extension does not prove that the headset has the sensor.
+- A feature that the app asked for also gets the system's answer
+  (`supportsHandTracking`, `supportsBodyTracking`, `supportsFullBodyTracking`,
+  `supportsVisualFaceTracking` or `supportsAudioFaceTracking`, `supportsFaceTracking`,
+  `supportsEyeGazeInteraction`, `supportsEyeTracking`). A Quest 3 lists the eye extensions and has
+  no eye cameras, so its eyes become `Unavailable` when the app asks.
+- The log holds the request and the capabilities once, at `cranpose xr: asked for`.
+
+`XrFrame::tracking` holds the live value: `AwaitingPermission` until the user answers,
+`PermissionRefused` after a refusal and `Active` once the tracker runs.
+
+### Permissions
+
+The Java class `CranposePermissions` comes with any of the four declarations. The backend calls
+`cranpose::android_permission` and `cranpose::request_android_permissions` through it, which are
+`cranpose`'s public path to a run-time permission that differs between devices. Each feature has
+groups of alternative permissions: any one name of a group grants it, because a Quest defines the
+`com.oculus` and `horizonos` names and Android XR the `android` ones. The Java side reports 0 (not
+asked), 1 (granted), 2 (refused) or 3 (refused for good, which Android shows no prompt for any
+more). A group of which the device defines no permission counts as granted, so a headset that gates
+its trackers by no permission gets them at once.
+
+The prompt comes before the session. On a Quest 3 the system takes an immersive app off the headset
+to show a dangerous permission's prompt, and the runtime ends a session that is running: the
+session went from `VISIBLE` through `STOPPING` and `IDLE` to `EXITING` in 30 ms, and the app's loop
+ended. So `ask_before_session` runs before the instance is made, after the loader listed the
+extensions. It requests, in one call, every missing permission of every feature that the app asked
+for and the runtime offers, so a Quest 3 does not ask for the eyes it lacks. It waits until each feature is
+answered, the activity ends or five minutes pass. The wait handles the activity's events, so the
+app stays responsive.
+
+`PermissionStep` is the decision for a feature: `Ready` when every group is granted, `Wait` while a
+group has no answer and `Refused` when the user refused a group. The backend does not ask again
+after a refusal. The tracker is made only at `Ready`: Meta's `xrCreateFaceTracker2FB` succeeds
+before the user grants the permissions, and a tracker made then stays empty, so waiting for the
+refusal of the runtime would not work. After the prompt, a frame does no work for a feature that
+still waits, except once a second: it reads the answers and makes the tracker when they are
+granted, which is how a grant in the system's settings takes effect during the session. After the
+tracker runs or the user refuses, the feature costs no more than the frame's own work. At `Ready`
+a refusal other than `XR_ERROR_PERMISSION_INSUFFICIENT` means that the runtime has no such tracker,
+so the feature becomes `Unavailable`.
+
+### What a frame holds
+
+Every field of `XrFrame` is a fixed-size array or a plain value, so the frame loop allocates
+nothing:
+
+- `HandState`: `tracking_state` (Jetpack XR's `TrackingState`), 26 `HandJoint`s (`pose`, `radius`,
+  `valid` and `tracked`) at the index of each `HandJointType`, and `aim`, the `HandAim` of
+  `XR_FB_hand_tracking_aim`: the aim pose, the `Pinch` (strength and a flag) of each finger and the
+  system gesture. `HandAim::ray()` gives the ray along which the hand points, so a hand works as a
+  pointer. Jetpack XR's `Hand` is the tracked hand and its `HandSide` the side. Cranpose's `Hand`
+  has been the side since the controllers came, so the tracked hand is `HandState`, Jetpack XR's
+  `Hand.State`.
+- `BodyState`: `active`, `confidence`, `joint_count` (70 for the upper body and the hands, 84 with
+  the legs and feet) and 84 `BodyJoint`s at the index of each `BodyJointType`, which have Meta's
+  names. Jetpack XR has no body API.
+- `FaceState`: Jetpack XR's `Face.State`, with a weight for each of its 68 `FaceBlendShapeType`s and
+  a confidence for each `FaceConfidenceRegion`. `XR_ANDROID_face_tracking` writes it directly. For
+  `XR_FB_face_tracking2` the backend maps the 63 shapes that both share, and the tongue's `Out`,
+  by index. The tongue shapes `Left`, `Right`, `Up` and `Down` stay at 0 there. Meta's two
+  confidences go to the lower region and to both upper regions.
+- `MetaFaceState`: every weight of `XR_FB_face_tracking2`, by `FaceExpression`, with its two
+  confidences and its `FaceDataSource`: `Visual` from cameras, `Audio` from the microphone, as a
+  Quest 3 gives. `FaceExpression::blend_shape` and `FaceBlendShapeType::expression` map between
+  the two names.
+- `Eyes`: an `EyeState` for each eye (`XR_FB_eye_tracking_social`: pose and confidence), and the
+  combined gaze pose of `XR_EXT_eye_gaze_interaction`. Jetpack XR's `Eye.State.isOpen` has no
+  source in these extensions.
+
+`XR_EXT_eye_gaze_interaction` is an action, so the backend declares its action set before the
+session attaches its sets, with the controllers', and syncs both in each frame. A tracker that
+the runtime does not locate leaves its state at rest and `Paused`. While the app has no input
+focus every tracked state is at rest.
+
+### The cost of a frame
+
+An app that asked for nothing returns from `Trackers::sample` after one check. An app that asked
+pays one call for each tracker it runs: two `xrLocateHandJointsEXT` (the aim state rides in the
+same call), one `xrLocateBodyJointsFB`, one `xrGetFaceExpressionWeights2FB` or `xrGetFaceStateANDROID`,
+and one `xrGetEyeGazesFB`, or a located space for the gaze. The arrays live in the frame or on the
+stack.
+
+### The demo
+
+`apps/xr-demo` shows the tracking in its counter panel. The section lists each feature with its
+availability and what the frame gives, and it draws a map of the hands: a dot for each fingertip
+that the cameras track, seen from the front. The map is part of the panel. The compositor of a
+Quest 3 takes 16 layers at most (`xrEndFrame` fails above that, although the system properties
+report 32), and the demo already submits that many, so a panel for the section would end the
+session. The demo's volume takes two of them, one for the 3D content and one for its handle. A panel for each fingertip would add ten layers, and a hand's own pointing ray would stop
+at the dot at its fingertip. The build script asks for hand tracking, which needs no prompt on a
+Quest. `XR_DEMO_TRACKING=none` asks for nothing, and `XR_DEMO_TRACKING=all` adds the body, the face
+and the eyes, which the system asks the user to allow.
+
+`XR_DEMO_VOLUME=through` puts the demo's torus in the plane of the counter panel, so that a part of
+it lies in front of the panel and a part behind. A compositor that tests depth shows the front part
+over the panel and hides the rest. One that does not shows the panel over all of it. The log
+names, once for each change, whether the volumes' layer carries depth and how many of the frame's
+layers test it.
+
+### Measured on a Quest 3
+
+On a Quest 3 (Horizon OS, runtime "Oculus" 210.137.0) at the desk, with no hand in view of the
+cameras:
+
+- An app that declares nothing sees `XR_EXT_hand_tracking` and `XR_FB_hand_tracking_aim` in the
+  runtime's list, and none of the body, face and eye extensions. The runtime lists those only to an
+  app whose manifest names their permissions, so such an app reads them as `Unavailable`.
+- An app that declares all four sees the hand, aim, body, full-body and `XR_FB_face_tracking2`
+  extensions, and no eye extension. The eyes are `Unavailable`, because the Quest 3 has no eye
+  cameras.
+- The prompt for the face and the microphone showed before the session started, and the app waited
+  with the face granted and the microphone not. It started the session when the second permission
+  was granted. A prompt that comes while the session runs ended the session in 30 ms.
+- The hand, body and face trackers run. The body gives 84 valid joints, with the legs estimated.
+  The face gives valid weights with the data source `Audio`. The frame effect runs 120 times a
+  second.
+
+The desk shows no hand joints, no aim and no fingertip dots: no hand was in the cameras' view.
+
 ## Flat video
 
 `PlayerSurface(frames, modifier, content_scale)` of `cranpose` draws the pictures of a decoder in
@@ -436,9 +763,11 @@ draws nothing: `YcbcrConverter::new` answers `None`. The steps:
    `VK_ANDROID_external_memory_android_hardware_buffer`, `VK_EXT_queue_family_foreign`,
    `VK_KHR_sampler_ycbcr_conversion`, `VK_KHR_external_memory`, `VK_KHR_dedicated_allocation`,
    `VK_KHR_bind_memory2` and `VK_KHR_get_memory_requirements2` when the driver lists all of them.
-   It chains the `samplerYcbcrConversion` feature, which wgpu-hal leaves off. Any other adapter
-   opens as before. The Android shell gives the composition its `GpuContext`, and gives it the new one
-   after a device loss.
+   The driver's list is the one that wgpu-hal read when it made the adapter, so no second query
+   runs. The callback chains the `samplerYcbcrConversion` feature, which wgpu-hal leaves off. Any
+   other adapter opens as before. Only an app built with the `video` feature of `cranpose` opens
+   its device this way: without it, the device opens as plain wgpu opens it. The Android shell
+   gives the composition its `GpuContext`, and gives it the new one after a device loss.
 2. `vkGetAndroidHardwareBufferPropertiesANDROID` returns the buffer's memory requirements and its
    `VkAndroidHardwareBufferFormatPropertiesANDROID`. The format of a private buffer is
    `VK_FORMAT_UNDEFINED` with an `externalFormat`, and the properties suggest the model, the range
@@ -576,15 +905,17 @@ a pass of the headset backend, and the log says so once.
   and `resizable` handle grabs.
 - Its OpenXR backend: the session, the frame loop, the swapchains, the input actions and the
   extensions. The OpenXR calls sit in a reviewed boundary module.
-- A flat backend for every other platform: the `Subspace` draws as a 3D scene in an ordinary
-  window, as the desktop demo's XR tab does. The web adds WebXR through the same API.
+- A flat backend for every other platform: the `Subspace` draws its panels side by side in an
+  ordinary window, and a `SpatialVolume` draws as a 3D view in its box. The web adds WebXR through
+  the same API.
 
-Cranpose owns the GPU context. On the Quest it uses GLES through wgpu, which the cranvr client
-uses today. On Linux and Windows the OpenXR runtime (SteamVR, Monado, Meta Link, Pimax, Varjo)
-creates the Vulkan instance and device through `XR_KHR_vulkan_enable2`, and wgpu wraps them. The
-backend keeps the difference in its `graphics` module: one file for GLES and one for Vulkan make
-the session and the wgpu device and wrap the swapchain images as wgpu textures. The panels, the
-rays, the handles, the passthrough layer and the cylinder layers do not change. Four things stay
+Cranpose owns the GPU context. On the Quest it uses GLES through wgpu. On Linux and Windows the
+OpenXR runtime (SteamVR, Monado, Meta Link, Pimax, Varjo) creates the Vulkan instance and device
+through `XR_KHR_vulkan_enable2`, and wgpu wraps them. The backend keeps the difference in its
+`graphics` module: one file for GLES and one for Vulkan make the session and the wgpu device and
+wrap the swapchain images as wgpu textures. The panels, the rays, the handles, the passthrough
+layer, the cylinder layers and the projection layer of the volumes do not change, except that a
+Vulkan headset carries no depth for the volumes (see "3D content"). Four things stay
 with Android: the surface swapchains of `SpatialExternalSurface` (a surface panel shows nothing
 in a desktop headset), the stream layer of `StreamedScene` (it imports `AHardwareBuffer`s into GL
 through an EGL image, so a desktop headset shows a streamed scene as nothing until the stream
@@ -613,6 +944,14 @@ shows none of the app's frames. The `xr` service and the backend take care of th
   process's NDK context can hold the application context instead.
 - Each panel's swapchain image starts with its top row, as wgpu writes it, and the layer says
   so with `XR_FB_composition_layer_image_layout`.
+- On Android XR the host takes the activity's events until the activity is resumed and has a
+  window, before it creates the OpenXR instance. The host does so when the runtime offers an
+  `XR_ANDROID_` extension. Android XR's `xrCreateInstance` waits for that state. It polls the
+  calling thread's looper and reads the commands of `android_native_app_glue` from it. This app's
+  glue is android-activity, which keeps its commands in a pipe on the same looper, and the
+  runtime never reads them. Without the wait the call spins at full CPU use and never returns:
+  the log ends after `xrCreateInstance called`. With the wait the runtime logs "already in resume
+  state with window available, skip" and goes on. Other runtimes start as they always did.
 
 The backend also keeps these rules of every runtime and store:
 
@@ -656,7 +995,7 @@ loader.
 | Meta Quest 2, Quest Pro, Quest 3S | Meta | The same entries | No |
 | Pico 4, Pico 4 Ultra | PICO OS 5.9 and later with the Khronos loader | `pvr.app.type`, `pvr.sdk.version`, `pxr.sdk.version_code`, `com.picovr.intent.category.VR` | No |
 | HTC Vive Focus 3, XR Elite | Wave OpenXR | `com.htc.intent.category.VRAPP`, `com.htc.vr.content.NumDoFHmd`, `NumDoFController` and `NumController` | No |
-| Samsung Galaxy XR | Android XR (`libopenxr.google.so`) | `PROPERTY_XR_ACTIVITY_START_MODE` set to the unmanaged full space, `uses-native-library`, `android.software.xr.api.openxr` | No |
+| Samsung Galaxy XR | Android XR (`libopenxr.google.so`) | `PROPERTY_XR_ACTIVITY_START_MODE` set to the unmanaged full space, `uses-native-library`, `android.software.xr.api.openxr` | The Android XR emulator only (system image android-34 `google-xr` v7, runtime "Android XR" 1.0.0, system "Moohan"): the session runs through READY, SYNCHRONIZED, VISIBLE and FOCUSED, and the demo's flat, curved and surface panels and its 3D volume show. No pointer input was tested, and no real headset |
 | Steam Frame | Valve's Android container (Lepton), controllers shown as Oculus Touch | The Khronos category only: no entry of its own was found | No |
 | Play For Dream | Not documented | The Khronos category only: no entry of its own was found | No |
 

@@ -10,10 +10,11 @@ use cranpose_testing::{
 use super::*;
 use crate::{
     MovePolicy, Pose, ResizeLimits, ResizePolicy, SpatialExternalSurface, SpatialMoveEvent,
-    SpatialMoveEventType, SpatialPanel, SpatialResizeEvent, SpatialResizeEventType, StereoMode,
-    SubspaceModifier,
+    SpatialMoveEventType, SpatialPanel, SpatialResizeEvent, SpatialResizeEventType, SpatialVolume,
+    StereoMode, SubspaceModifier,
     handle::HandleKind,
     space::{Mobility, SUBSPACE_ORIGIN, Shape, Space, local_space},
+    volume_host::VolumeScene,
 };
 
 // A panel of 800 by 500 dp a meter ahead, at the atlas's top.
@@ -947,6 +948,166 @@ fn a_movable_surface_is_carried_and_reports_its_pose_like_a_panel() {
     assert!((events[3].pose.position[0] - 0.1).abs() < 1e-4);
     let carried = space.panels()[0].pose;
     assert!((carried.position[0] - 0.1).abs() < 1e-4);
+}
+
+// A headset whose content is a volume that `modifier` places. Its pointer callback writes the
+// events into `seen`.
+fn volume_headset(
+    modifier: SubspaceModifier,
+    seen: &Rc<RefCell<Vec<Seen>>>,
+) -> (RobotTestRule<TestRenderer>, Space) {
+    let held = Rc::new(RefCell::new(None));
+    let (keep, seen) = (Rc::clone(&held), Rc::clone(seen));
+    let mut robot = create_headless_robot_test(500, 400, move || {
+        let space = remember(Space::new).with(Clone::clone);
+        keep.replace(Some(space.clone()));
+        let (seen, modifier, host) = (Rc::clone(&seen), modifier.clone(), space.clone());
+        CompositionLocalProvider([local_space().provides(Some(space))], move || {
+            let seen = Rc::clone(&seen);
+            SpatialVolume(modifier.clone(), move |scope| {
+                let seen = Rc::clone(&seen);
+                scope.on_pointer_event(move |event| {
+                    let primary = event.buttons.contains(PointerButton::Primary);
+                    let place = [event.position.x, event.position.y];
+                    seen.borrow_mut().push((event.kind, place, primary));
+                });
+            });
+            // The scene composes the volume's content, which sets the callback
+            VolumeScene(host);
+        });
+    });
+    robot.wait_for_idle();
+    let space = held.take().expect("the content composed");
+    (robot, space)
+}
+
+// A volume's box is 960 by 540 dp wide and high and 300 dp deep, centered a meter ahead.
+fn box_modifier() -> SubspaceModifier {
+    SubspaceModifier::new().size(960.0, 540.0).depth(300.0)
+}
+
+#[test]
+fn a_ray_stops_at_the_front_of_a_volume_and_gives_the_app_pointer_events_in_dp() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let (_robot, space) = volume_headset(box_modifier(), &seen);
+    let mut frames = Frames::default();
+    let mut frame = |x: f32, trigger: f32| {
+        let (atlas, _) = frames.update([None, aim(x, 0.0, trigger)], &space.panels());
+        assert!(
+            atlas.is_empty(),
+            "the composition hears nothing of a volume"
+        );
+        for gesture in frames.pointer.surface_events() {
+            space.deliver_to_surface(gesture);
+        }
+        let beam = frames.pointer.beams()[1].expect("the right ray shows");
+        (seen.take(), beam.length)
+    };
+    // The front face of the box is 15 cm before its center, which stands a meter ahead
+    let (events, length) = frame(0.0, 0.0);
+    assert!((length - 0.85).abs() < 1e-4, "the ray is {length} m long");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].0, PointerEventKind::Enter);
+    assert!((events[0].1[0] - 480.0).abs() < 0.1 && (events[0].1[1] - 270.0).abs() < 0.1);
+    let (events, _) = frame(0.1, 0.0);
+    assert_eq!(events[0].0, PointerEventKind::Move);
+    assert!((events[0].1[0] - 580.0).abs() < 0.1);
+    let (events, _) = frame(0.1, 1.0);
+    assert_eq!((events[0].0, events[0].2), (PointerEventKind::Down, true));
+    let (events, _) = frame(0.1, 0.0);
+    assert_eq!((events[0].0, events[0].2), (PointerEventKind::Up, false));
+}
+
+#[test]
+fn a_ray_that_enters_a_volume_by_its_side_reports_the_place_on_its_front_face() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let (_robot, space) = volume_headset(box_modifier(), &seen);
+    let mut frames = Frames::default();
+    // From the right, level with the center, pointing left through the box's right face
+    let aim = Some(Aim {
+        ray: Ray {
+            origin: [0.7, 0.0, -1.0],
+            direction: [-1.0, 0.0, 0.0],
+        },
+        pose: Pose::at([0.7, 0.0, -1.0]),
+        trigger: 0.0,
+        stick: 0.0,
+    });
+    frames.update([None, aim], &space.panels());
+    for gesture in frames.pointer.surface_events() {
+        space.deliver_to_surface(gesture);
+    }
+    let seen = seen.take();
+    assert_eq!(seen.len(), 1);
+    // The right edge of the face, at its middle height
+    assert!((seen[0].1[0] - 960.0).abs() < 0.1 && (seen[0].1[1] - 270.0).abs() < 0.1);
+}
+
+#[test]
+fn a_volume_in_front_of_a_panel_takes_the_ray_and_the_panel_behind_it_does_not() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let (_robot, space) = volume_headset(box_modifier(), &seen);
+    // A panel of the atlas stands a meter behind the box's center
+    let behind = PanelSlot {
+        pose: Pose::at([0.0, 0.0, -2.0]),
+        ..PANEL
+    };
+    let mut panels = space.panels();
+    panels.push(behind);
+    let mut frames = Frames::default();
+    let (atlas, cursor) = frames.update([None, aim(0.0, 0.0, 1.0)], &panels);
+    assert!(atlas.is_empty());
+    assert_eq!(cursor, None, "the panel behind shows no cursor");
+}
+
+#[test]
+fn a_movable_volume_is_carried_and_the_scene_reads_its_new_pose() {
+    let events = Rc::new(RefCell::new(Vec::<SpatialMoveEvent>::new()));
+    let heard = Rc::clone(&events);
+    let policy = MovePolicy::system(move |event| heard.borrow_mut().push(event));
+    let (_robot, space) = volume_headset(box_modifier().movable_with(policy), &Rc::default());
+    carry_right(&space);
+
+    assert_eq!(phases(&events.borrow()), CARRY_PHASES);
+    // The scene draws the volume where the user left it, with nothing composed
+    let content = space.volumes().contents().get().remove(0);
+    assert!((content.pose.get().position[0] - 0.1).abs() < 1e-4);
+}
+
+#[test]
+fn a_resizable_volume_reports_the_size_of_its_front_face() {
+    let sizes = Rc::new(RefCell::new(Vec::<SpatialResizeEvent>::new()));
+    let heard = Rc::clone(&sizes);
+    let modifier = box_modifier().resizable(ResizePolicy::custom(move |event| {
+        heard.borrow_mut().push(event);
+    }));
+    let (_robot, space) = volume_headset(modifier, &Rc::default());
+    let volume = space.panels()[0];
+    let mut frames = Frames::default();
+    let mut frame = |shift: [f32; 2], trigger: f32| {
+        frames.update([None, corner_aim(&volume, shift, trigger)], &space.panels());
+        for step in frames.pointer.resizes() {
+            space.resize(step);
+        }
+    };
+    frame([0.0, 0.0], 0.0);
+    frame([0.0, 0.0], 1.0);
+    frame([0.05, -0.05], 1.0);
+    frame([0.05, -0.05], 0.0);
+    let sizes = sizes.borrow();
+    assert_eq!(
+        sizes
+            .iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>(),
+        [
+            SpatialResizeEventType::Start,
+            SpatialResizeEventType::Resizing,
+            SpatialResizeEventType::End
+        ]
+    );
+    assert_eq!(sizes[0].size, [960.0, 540.0]);
+    assert!(sizes[1].size[0] > 960.0 && sizes[1].size[1] > 540.0);
 }
 
 // A ball of 40 by 40 dp at the controllers' height, half a meter ahead of `PANEL`, which `ride`

@@ -27,6 +27,7 @@ const OPENGL_ES3_BIT: egl::Int = 0x0040;
 
 const GL_SRGB8_ALPHA8: u32 = 0x8C43;
 const GL_RGBA8: u32 = 0x8058;
+const GL_DEPTH24_STENCIL8: u32 = 0x88F0;
 
 // An EGL context of OpenGL ES 3 with a small pbuffer, current on the thread that made it.
 pub(crate) struct Graphics {
@@ -49,6 +50,16 @@ impl Graphics {
             wgpu: wgpu::TextureFormat::Rgba8Unorm,
         },
     ];
+
+    // The depth and stencil format that Cranpose's scenes draw against, which a swapchain holds to
+    // hand the scenes' depth to the compositor.
+    pub(crate) const DEPTH_FORMAT: Option<SwapchainFormat> = Some(SwapchainFormat {
+        api: GL_DEPTH24_STENCIL8,
+        wgpu: cranpose::SCENE_DEPTH_FORMAT,
+    });
+
+    // Whether an image needs a layout change before the compositor reads it. GL has no layouts.
+    pub(crate) const LAYOUT_BARRIERS: bool = false;
 
     // Whether an image's first row is its top one, which is how wgpu writes it. GL's first row is
     // the bottom one, so the runtime must flip layers that say so.

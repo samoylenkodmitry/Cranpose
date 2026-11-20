@@ -1,5 +1,6 @@
 // A Cranpose app for headsets. In a Meta Quest its panels stand in the room, and a controller's
 // trigger presses the buttons: one counts, the other shows or hides the room around the panels.
+// A lit torus stands beside them in 3D, and a handle under it lets a controller carry it.
 // A strip above them is bent around the viewer. A ball above the left controller shows or hides
 // the strip when the right controller's ray presses it. The counter panel and the video surface
 // have a handle at their bottom right corner that resizes them, and the counter panel one under it
@@ -29,11 +30,15 @@ mod decoder_limits;
 mod foveated_player;
 mod headset_readout;
 mod pattern_writer;
+mod torus_volume;
+mod tracking_panel;
 
 use clip_player::{ClipPlayer, target_display_time};
 use foveated_player::FoveatedPlayer;
 use headset_readout::{HeadsetClock, HeadsetReadout, Readout, StreamLogs};
-use pattern_writer::{PatternWriter, Split};
+use pattern_writer::PatternWriter;
+use torus_volume::TorusVolume;
+use tracking_panel::{TrackedHands, TrackingSection, TrackingView};
 
 cranpose::app_capabilities!();
 
@@ -54,6 +59,7 @@ pub fn XrDemo() {
     let clock = remember(HeadsetClock::default).with(Clone::clone);
     let logs = remember(StreamLogs::default).with(Clone::clone);
     remember(decoder_limits::log_in_background);
+    let tracking = TrackedHands();
     Subspace(move || {
         HeadsetReadout(presses, readout, clock.clone(), logs.clone());
         // A flat window shows the panels side by side, so the clips come first
@@ -80,23 +86,29 @@ pub fn XrDemo() {
                 .size(320.0, 180.0)
                 .offset(600.0, 260.0, 100.0)
                 .rotate(0.0, -30.0, 0.0),
-            Split::LeftRight,
         );
-        PatternSurface(
-            StereoMode::TopBottom,
-            SubspaceModifier::new()
-                .size(320.0, 180.0)
-                .offset(600.0, -260.0, 100.0)
-                .rotate(0.0, -30.0, 0.0),
-            Split::TopBottom,
-        );
-        CounterPanel(presses);
+        // A volume takes two of the compositor's layers, one for the 3D content and one for its
+        // handle. A Quest takes 16, which the demo's other panels and surfaces leave free.
+        TorusVolume(torus_place());
+        CounterPanel(presses, tracking);
         if strip_shown.get() {
             CurvedStrip();
         }
         PressesPanel(presses, readout);
     });
     ControllerBall(strip_shown);
+}
+
+// Where the torus stands: beside the panels, or in the plane of the counter panel when the build
+// has `XR_DEMO_VOLUME=through`, so that a part of it lies in front of the panel and a part behind.
+fn torus_place() -> SubspaceModifier {
+    if option_env!("XR_DEMO_VOLUME") == Some("through") {
+        SubspaceModifier::new().offset(0.0, -100.0, 0.0)
+    } else {
+        SubspaceModifier::new()
+            .offset(600.0, -330.0, 100.0)
+            .rotate(0.0, -30.0, 0.0)
+    }
 }
 
 // A ball of 4 cm that floats 10 cm above the left controller, upright wherever the hand tilts.
@@ -216,8 +228,8 @@ fn FlatStreamedClip(stats: StreamStats) {
 // The panel with the counter and the button for the room. A handle under it carries it, and a
 // handle at its bottom right corner resizes it. The size is the state that the resize sets.
 #[composable]
-fn CounterPanel(presses: MutableState<u32>) {
-    let size = rememberMutableStateOf(|| [800.0_f32, 500.0]);
+fn CounterPanel(presses: MutableState<u32>, tracking: TrackingView) {
+    let size = rememberMutableStateOf(|| [800.0_f32, 800.0]);
     let [width, height] = size.get();
     SpatialPanel(
         SubspaceModifier::new()
@@ -264,6 +276,7 @@ fn CounterPanel(presses: MutableState<u32>) {
                         },
                     );
                     PassthroughButton();
+                    TrackingSection(tracking);
                 },
             );
         },
@@ -417,14 +430,12 @@ fn PassthroughButton() {
 
 // A surface that a thread fills with the test pattern from its creation to its end.
 #[composable]
-fn PatternSurface(stereo_mode: StereoMode, modifier: SubspaceModifier, split: Split) {
+fn PatternSurface(stereo_mode: StereoMode, modifier: SubspaceModifier) {
     let writer = remember(|| Rc::new(RefCell::new(None::<PatternWriter>))).with(Clone::clone);
     SpatialExternalSurface(stereo_mode, modifier, move |scope| {
         let started = Rc::clone(&writer);
         scope.on_surface_created(move |surface| {
-            started
-                .borrow_mut()
-                .replace(PatternWriter::start(surface, split));
+            started.borrow_mut().replace(PatternWriter::start(surface));
         });
         let stopped = Rc::clone(&writer);
         scope.on_surface_destroyed(move |_| {

@@ -1,11 +1,11 @@
 warning: a callback runs while a RefCell borrow or lock guard is alive
-  --> $DIR/main.rs:6:5
+  --> $DIR/main.rs:8:5
    |
 LL |     on_change();
    |     ^^^^^^^^^^^
    |
 note: the guard, alive until the end of its block
-  --> $DIR/main.rs:5:5
+  --> $DIR/main.rs:7:5
    |
 LL |     let items = cell.borrow();
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -13,17 +13,108 @@ LL |     let items = cell.borrow();
    = note: `#[warn(guard_across_callback)]` on by default
 
 warning: a callback runs while a RefCell borrow or lock guard is alive
-  --> $DIR/main.rs:12:5
+  --> $DIR/main.rs:14:5
    |
 LL |     callback(0);
    |     ^^^^^^^^^^^
    |
 note: the guard, alive until the end of its block
-  --> $DIR/main.rs:11:5
+  --> $DIR/main.rs:13:5
    |
 LL |     let value = lock.lock().unwrap();
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: end the borrow first: copy what the callback needs, or drop the guard
 
-warning: 2 warnings emitted
+warning: a callback runs while a RefCell borrow or lock guard is alive
+  --> $DIR/main.rs:112:5
+   |
+LL |     drops_a_payload(payload);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: the guard, alive until the end of its block
+  --> $DIR/main.rs:111:5
+   |
+LL |     let items = cell.borrow();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: end the borrow first: copy what the callback needs, or drop the guard
+
+warning: a callback runs while a RefCell borrow or lock guard is alive
+  --> $DIR/main.rs:118:5
+   |
+LL |     calls_a_stored_callback(callback);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: the guard, alive until the end of its block
+  --> $DIR/main.rs:117:5
+   |
+LL |     let items = cell.borrow();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: end the borrow first: copy what the callback needs, or drop the guard
+
+warning: a callback runs while a RefCell borrow or lock guard is alive
+  --> $DIR/main.rs:124:5
+   |
+LL |     host.dispose(payload);
+   |     ^^^^^^^^^^^^^^^^^^^^^
+   |
+note: the guard, alive until the end of its block
+  --> $DIR/main.rs:123:5
+   |
+LL |     let mut items = cell.borrow_mut();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: end the borrow first: copy what the callback needs, or drop the guard
+
+warning: a callback runs while a RefCell borrow or lock guard is alive
+  --> $DIR/main.rs:130:5
+   |
+LL |     drop(payload);
+   |     ^^^^^^^^^^^^^
+   |
+note: the guard, alive until the end of its block
+  --> $DIR/main.rs:129:5
+   |
+LL |     let items = cell.borrow();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: end the borrow first: copy what the callback needs, or drop the guard
+
+warning: a callback runs while a RefCell borrow or lock guard is alive
+  --> $DIR/main.rs:136:5
+   |
+LL |     drop(listener);
+   |     ^^^^^^^^^^^^^^
+   |
+note: the guard, alive until the end of its block
+  --> $DIR/main.rs:135:5
+   |
+LL |     let items = cell.borrow();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: end the borrow first: copy what the callback needs, or drop the guard
+
+warning: a callback runs while a RefCell borrow or lock guard is alive
+  --> $DIR/main.rs:142:5
+   |
+LL |     run(|| callback());
+   |     ^^^^^^^^^^^^^^^^^^
+   |
+note: the guard, alive until the end of its block
+  --> $DIR/main.rs:141:5
+   |
+LL |     let items = cell.borrow();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: end the borrow first: copy what the callback needs, or drop the guard
+
+warning: a callback runs while a RefCell borrow or lock guard is alive
+  --> $DIR/main.rs:160:5
+   |
+LL |     dispose_into(&mut items, &QueueHost, payload);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: the guard, alive until the end of its block
+  --> $DIR/main.rs:159:5
+   |
+LL |     let mut items = cell.borrow_mut();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: end the borrow first: copy what the callback needs, or drop the guard
+
+warning: 9 warnings emitted
 

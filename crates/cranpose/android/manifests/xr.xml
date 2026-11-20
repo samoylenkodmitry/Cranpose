@@ -63,9 +63,11 @@
         runtime library is declared with `uses-native-library`, as optional so
         that the other headsets install the app. `android.software.xr.api.openxr`
         is the feature that Google Play reads for the Android XR release track.
-        No permission is needed: the permissions of that page belong to hand,
-        eye and face tracking and to scene understanding, which this app does
-        not use.
+        The permissions of that page belong to hand, eye, face and body
+        tracking and to scene understanding. This manifest names none of them:
+        an app that declares `Use::hand_tracking()` and its siblings in its
+        build script gets the permissions of the tracking it asks for, and one
+        that declares none gets none.
 
     Steam Frame and Play For Dream
         No manifest entry of their own was found. Steam Frame runs an APK

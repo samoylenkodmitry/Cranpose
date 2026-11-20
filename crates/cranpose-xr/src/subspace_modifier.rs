@@ -9,6 +9,9 @@ pub const METERS_PER_DP: f32 = 0.001;
 /// The size of a panel that names none, in dp.
 pub const DEFAULT_PANEL_SIZE: [f32; 2] = [800.0, 500.0];
 
+/// The width, height and depth of a volume that names none, in dp: a cube of half a meter.
+pub const DEFAULT_VOLUME_SIZE: [f32; 3] = [500.0, 500.0, 500.0];
+
 /// The size, place and turn of a spatial composable, in dp. Jetpack XR's `SubspaceModifier`.
 ///
 /// ```
@@ -21,6 +24,7 @@ pub const DEFAULT_PANEL_SIZE: [f32; 2] = [800.0, 500.0];
 #[derive(Clone, Debug, PartialEq)]
 pub struct SubspaceModifier {
     size: [Option<f32>; 2],
+    depth: Option<f32>,
     // The place in meters
     offset: [f32; 3],
     orientation: [f32; 4],
@@ -39,6 +43,7 @@ impl SubspaceModifier {
     pub const fn new() -> Self {
         Self {
             size: [None; 2],
+            depth: None,
             offset: [0.0; 3],
             orientation: [0.0, 0.0, 0.0, 1.0],
             move_policy: None,
@@ -61,6 +66,13 @@ impl SubspaceModifier {
     /// Sets the width and the height, in dp.
     pub const fn size(self, width: f32, height: f32) -> Self {
         self.width(width).height(height)
+    }
+
+    /// Sets the depth, in dp: how far a [`SpatialVolume`](crate::SpatialVolume) reaches back from
+    /// its front face. A panel is flat and ignores it. Jetpack XR's `SubspaceModifier.depth`.
+    pub const fn depth(mut self, depth: f32) -> Self {
+        self.depth = Some(depth);
+        self
     }
 
     /// Moves the content by `x` to the right, `y` up and `z` toward the viewer, in dp.
@@ -140,6 +152,12 @@ impl SubspaceModifier {
             self.size[0].unwrap_or(fallback[0]),
             self.size[1].unwrap_or(fallback[1]),
         ]
+    }
+
+    /// The width, height and depth in dp, with `fallback` for what the modifier leaves out.
+    pub fn size_3d_or(&self, fallback: [f32; 3]) -> [f32; 3] {
+        let [width, height] = self.size_or([fallback[0], fallback[1]]);
+        [width, height, self.depth.unwrap_or(fallback[2])]
     }
 
     /// The pose this modifier gives in its parent's frame, in meters.

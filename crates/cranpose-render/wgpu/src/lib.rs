@@ -75,6 +75,7 @@ mod rrect_shadow;
 mod run_geometry;
 mod run_store;
 mod scene;
+mod scene_depth;
 mod scene_pass;
 mod scissor;
 mod shader_cache;
@@ -121,6 +122,7 @@ pub use render::{
     frame_clear_color, frames_presented, pipelines_created, pipelines_created_off_frame,
 };
 pub use scene::{HitRegion, Scene};
+pub use scene_pass::SCENE_DEPTH_FORMAT;
 pub use shared_shader::{shader_stages_flattened, shader_stages_folded};
 #[cfg(all(not(target_arch = "wasm32"), feature = "test-support"))]
 pub use test_target::TestImages;

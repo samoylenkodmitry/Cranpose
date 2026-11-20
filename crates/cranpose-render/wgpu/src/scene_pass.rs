@@ -51,7 +51,7 @@ fn sample_slot(samples: Multisample) -> usize {
 const KEPT_MESHES: usize = 64;
 /// The depth and stencil a scene's pass draws against: the stencil counts
 /// how many portal windows deep each pixel shows.
-pub(crate) const SCENE_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
+pub const SCENE_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 /// The side of the shadow map, in texels.
 const SHADOW_MAP_SIZE: u32 = 1024;
 /// How far toward the light a point is taken, in the shadow map's depth,

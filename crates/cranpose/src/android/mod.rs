@@ -19,10 +19,15 @@ pub(crate) mod app_update;
 pub(crate) mod camera;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod configuration;
-#[cfg(any(test, all(feature = "renderer-wgpu", target_os = "android")))]
+#[cfg(any(
+    test,
+    all(feature = "video", feature = "renderer-wgpu", target_os = "android")
+))]
 mod crop_window;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod decoder_capabilities;
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+mod device;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod device_auth;
 #[cfg(any(test, feature = "renderer-wgpu"))]
@@ -49,11 +54,14 @@ pub(crate) mod frame_telemetry;
 pub(crate) mod frame_work;
 #[cfg(any(test, feature = "renderer-wgpu"))]
 pub(crate) mod haptics_queue;
-#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+#[cfg(all(feature = "video", feature = "renderer-wgpu", target_os = "android"))]
 mod hardware_buffer_device;
-#[cfg(any(test, all(feature = "renderer-wgpu", target_os = "android")))]
+#[cfg(any(
+    test,
+    all(feature = "video", feature = "renderer-wgpu", target_os = "android")
+))]
 mod hardware_buffer_extensions;
-#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+#[cfg(all(feature = "video", feature = "renderer-wgpu", target_os = "android"))]
 mod hardware_buffer_image;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod heart_rate;
@@ -82,6 +90,8 @@ pub(crate) mod panic_hook;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod perf_hint;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+pub(crate) mod permission_prompt;
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod permissions;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod pipeline_cache;
@@ -103,7 +113,7 @@ pub(crate) mod purchase_wire;
     target_os = "android"
 ))]
 pub(crate) mod purchases;
-#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+#[cfg(all(feature = "video", feature = "renderer-wgpu", target_os = "android"))]
 mod raw_device;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod services;
@@ -123,9 +133,9 @@ pub(crate) mod webview;
 pub(crate) mod wire_escape;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod writable_folder;
-#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+#[cfg(all(feature = "video", feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod ycbcr_converter;
-#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+#[cfg(all(feature = "video", feature = "renderer-wgpu", target_os = "android"))]
 mod ycbcr_pipeline;
 
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]

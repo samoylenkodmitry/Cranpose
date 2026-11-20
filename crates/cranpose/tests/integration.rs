@@ -22,5 +22,9 @@ mod gpu_support;
 mod guest_view;
 #[cfg(feature = "renderer-pixels")]
 mod native_view;
-#[cfg(all(feature = "renderer-wgpu", any(target_os = "macos", target_os = "ios")))]
+#[cfg(all(
+    feature = "video",
+    feature = "renderer-wgpu",
+    any(target_os = "macos", target_os = "ios")
+))]
 mod player_surface;

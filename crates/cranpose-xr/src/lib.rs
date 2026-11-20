@@ -5,14 +5,21 @@
 //! its text sharp. The names follow Jetpack XR Compose. `docs/xr_architecture.md` in the
 //! repository describes the design.
 //!
+//! A [`SpatialVolume`] puts 3D content in a [`Subspace`]: composables whose nodes carry
+//! `mesh_surface`, which a headset draws once for each eye into one projection layer with depth,
+//! and a window shows in a box.
+//!
 //! A [`SpatialExternalSurface`] gives the app a surface that a hardware video decoder or a camera
 //! writes into. The compositor shows its pictures as a layer with no copy. A [`StreamedScene`]
 //! shows frames that another machine rendered, from the head pose that each was rendered for.
 //! Outside a headset it shows the left eye's picture of the newest frame in the layout.
 //!
 //! A [`SpatialFrameEffect`] gives an app the headset's state in each frame: the head, the eyes,
-//! the controllers and the recenter event, as an [`XrFrame`]. [`Haptics`] plays vibrations on the
-//! controllers. A pure Cranpose app can stream a headset to a host with them.
+//! the controllers and the recenter event, as an [`XrFrame`]. An app that asks for it in its build,
+//! with `Use::hand_tracking()`, `Use::body_tracking()`, `Use::face_tracking()` or
+//! `Use::eye_tracking()` of `cranpose::capabilities`, also gets the user's hands, body, face and
+//! gaze there, and [`local_tracking_capabilities`] tells what the runtime offers. [`Haptics`] plays
+//! vibrations on the controllers. A pure Cranpose app can stream a headset to a host with them.
 //!
 //! The `openxr` feature adds the backend for headsets. On Android, as on a Meta Quest, its
 //! [`android_main!`] starts the app as an immersive app. On Linux and Windows its `run` starts
@@ -26,6 +33,10 @@ mod aim_filter;
 mod beam_pose;
 #[cfg(any(test, headset))]
 mod billboard_pose;
+mod body_joint;
+mod body_joint_type;
+mod body_state;
+mod callback_slot;
 #[cfg(any(test, headset))]
 mod carry;
 mod controller;
@@ -35,6 +46,18 @@ mod controller_bindings;
 mod depth_order;
 #[cfg(any(test, headset))]
 mod exit_request;
+#[cfg(any(test, headset))]
+mod extension_offer;
+#[cfg(any(test, headset))]
+mod eye_camera;
+mod eye_state;
+mod eyes;
+mod face_blend_shape_type;
+mod face_confidence_region;
+mod face_data_source;
+mod face_expression;
+mod face_state;
+mod face_tracking_provider;
 mod field_of_view;
 #[cfg(not(target_arch = "wasm32"))]
 mod flat_stream;
@@ -48,13 +71,21 @@ mod frame_effects;
 #[cfg(any(test, all(headset, target_os = "android")))]
 mod frame_queue;
 mod hand;
+mod hand_aim;
+mod hand_joint;
+mod hand_joint_type;
+mod hand_state;
 #[cfg(any(test, headset))]
 mod handle;
 mod haptics;
 mod headset_properties;
 mod interaction_profile;
+#[cfg(any(test, headset))]
+mod joint_flags;
 mod locals;
+mod meta_face_state;
 mod move_policy;
+mod pinch;
 #[cfg(any(test, headset))]
 mod pointer;
 mod pose;
@@ -74,6 +105,7 @@ mod spatial_frame_effect;
 mod spatial_move_event;
 mod spatial_panel;
 mod spatial_resize_event;
+mod spatial_volume;
 mod stereo_mode;
 mod stream_source;
 mod stream_stats;
@@ -83,7 +115,28 @@ mod subspace;
 mod subspace_modifier;
 mod surface_input;
 #[cfg(any(test, headset))]
+mod system_support;
+mod tracking_availability;
+mod tracking_capabilities;
+mod tracking_feature;
+#[cfg(any(test, headset))]
+mod tracking_permission;
+#[cfg(any(test, headset))]
+mod tracking_request;
+mod tracking_state;
+#[cfg(any(test, headset))]
 mod vector;
+#[cfg(any(test, headset))]
+mod volume_host;
+#[cfg(any(test, headset))]
+mod volume_pass;
+#[cfg(any(test, headset))]
+mod volume_plan;
+#[cfg(any(test, headset))]
+mod volume_transform;
+#[cfg(any(test, headset))]
+mod volume_window;
+mod volumes;
 mod xr_frame;
 
 mod android_main;
@@ -94,10 +147,21 @@ mod openxr;
 #[cfg(desktop_run)]
 mod run_error;
 
+pub use body_joint::BodyJoint;
+pub use body_joint_type::BodyJointType;
+pub use body_state::BodyState;
 pub use controller::{Button, Controller, Thumbstick, TrackedPose, Trigger};
 #[doc(hidden)]
 pub use cranpose as __cranpose;
 pub use cranpose::ExternalSurface;
+pub use eye_state::EyeState;
+pub use eyes::Eyes;
+pub use face_blend_shape_type::FaceBlendShapeType;
+pub use face_confidence_region::FaceConfidenceRegion;
+pub use face_data_source::FaceDataSource;
+pub use face_expression::FaceExpression;
+pub use face_state::FaceState;
+pub use face_tracking_provider::FaceTrackingProvider;
 pub use field_of_view::FieldOfView;
 #[cfg(all(desktop_run, not(headset)))]
 pub use flat_run::run;
@@ -105,15 +169,21 @@ pub use follow_mode::{FollowMode, FollowTarget};
 pub use following_subspace::FollowingSubspace;
 pub use foveated_encoding::FoveatedEncoding;
 pub use hand::Hand;
+pub use hand_aim::HandAim;
+pub use hand_joint::HandJoint;
+pub use hand_joint_type::HandJointType;
+pub use hand_state::HandState;
 pub use haptics::{Haptics, Vibration, local_haptics};
 pub use headset_properties::{EyeImageSize, HeadsetProperties, local_headset_properties};
 pub use interaction_profile::InteractionProfile;
+pub use meta_face_state::MetaFaceState;
 pub use move_policy::MovePolicy;
 #[cfg(all(headset, target_os = "android"))]
 #[doc(hidden)]
 pub use openxr::run;
 #[cfg(all(headset, not(target_os = "android")))]
 pub use openxr::run;
+pub use pinch::Pinch;
 pub use pose::Pose;
 pub use ray::{PanelHit, Ray};
 pub use recenter::Recenter;
@@ -130,10 +200,17 @@ pub use spatial_frame_effect::SpatialFrameEffect;
 pub use spatial_move_event::{SpatialMoveEvent, SpatialMoveEventType};
 pub use spatial_panel::SpatialPanel;
 pub use spatial_resize_event::{SpatialResizeEvent, SpatialResizeEventType};
+pub use spatial_volume::{SpatialVolume, SpatialVolumeScope};
 pub use stereo_mode::StereoMode;
 pub use stream_stats::{StreamCounts, StreamStats};
 pub use streamed_scene::StreamedScene;
 pub use streamed_view::{StreamedView, StreamedViews};
 pub use subspace::Subspace;
-pub use subspace_modifier::{DEFAULT_PANEL_SIZE, METERS_PER_DP, SubspaceModifier};
+pub use subspace_modifier::{
+    DEFAULT_PANEL_SIZE, DEFAULT_VOLUME_SIZE, METERS_PER_DP, SubspaceModifier,
+};
+pub use tracking_availability::TrackingAvailability;
+pub use tracking_capabilities::{TrackingCapabilities, local_tracking_capabilities};
+pub use tracking_feature::TrackingFeature;
+pub use tracking_state::TrackingState;
 pub use xr_frame::XrFrame;

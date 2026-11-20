@@ -44,6 +44,7 @@ mod subcomposed_recompose_order;
 mod subcomposed_text;
 #[cfg(feature = "svg")]
 mod svg_painter_integration;
+mod text_cache_full;
 mod text_cache_headroom;
 mod text_contract;
 mod text_font_features;

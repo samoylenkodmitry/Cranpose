@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 
 use cranpose::prelude::*;
-use cranpose_core::{CompositionLocalProvider, remember, rememberMutableStateOf};
+use cranpose_core::{CompositionLocalProvider, mutableStateOf, remember, rememberMutableStateOf};
 use cranpose_testing::{
     create_headless_robot_test,
     robot::{RobotTestRule, TestRenderer},
@@ -572,4 +572,90 @@ fn an_app_that_applies_each_size_resizes_its_panel_through_the_composition() {
         [700.0, 600.0],
         "the room settles at the release"
     );
+}
+
+#[test]
+fn a_volume_takes_no_room_in_the_atlas() {
+    with_space(|space| {
+        let (first, volume, second) = (space.new_panel(), space.new_panel(), space.new_panel());
+        space.place(first, [800.0, 500.0], Pose::IDENTITY, Pose::IDENTITY);
+        space.place_volume(
+            volume,
+            [300.0, 300.0, 300.0],
+            Pose::IDENTITY,
+            Pose::at([0.0, 0.0, -1.0]),
+        );
+        assert_eq!(
+            space.place(second, [300.0, 200.0], Pose::IDENTITY, Pose::IDENTITY),
+            [0.0, 508.0, 300.0, 200.0]
+        );
+        assert_eq!(space.atlas_size(), [800.0, 708.0]);
+        assert_eq!(space.volume_count(), 1);
+    });
+}
+
+#[test]
+fn a_volume_follows_the_depth_and_the_size_that_its_modifier_gives() {
+    with_space(|space| {
+        let volume = space.new_panel();
+        let place = |depth| {
+            space.place_volume(
+                volume,
+                [300.0, 200.0, depth],
+                Pose::IDENTITY,
+                Pose::IDENTITY,
+            );
+            space.panels()[0]
+        };
+        assert_eq!(place(300.0).kind, PanelKind::Volume { depth: 300.0 });
+        let thinner = place(100.0);
+        assert_eq!(thinner.kind, PanelKind::Volume { depth: 100.0 });
+        assert_eq!(thinner.size(), [300.0, 200.0]);
+        // The face that the handles stand at lies half the depth toward the viewer
+        assert!((thinner.face().position[2] - 0.05).abs() < 1e-6);
+    });
+}
+
+#[test]
+fn a_volume_that_leaves_leaves_the_scene_too() {
+    with_space(|space| {
+        let (kept, left) = (space.new_panel(), space.new_panel());
+        for panel in [kept, left] {
+            space.place_volume(panel, [100.0; 3], Pose::IDENTITY, Pose::IDENTITY);
+            space.publish_volume(VolumeContent {
+                id: panel.id,
+                pose: panel.volume_pose,
+                light: mutableStateOf(None),
+                compose: Rc::default(),
+            });
+        }
+        assert_eq!(space.volumes().contents().get().len(), 2);
+        space.remove(left.id);
+        let remaining = space.volumes().contents().get();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, kept.id);
+        assert_eq!(space.volume_count(), 1);
+    });
+}
+
+#[test]
+fn a_volume_that_a_following_subspace_moves_moves_in_the_scene_too() {
+    with_space(|space| {
+        let volume = space.new_panel();
+        space.place_volume(
+            volume,
+            [100.0; 3],
+            Pose::IDENTITY,
+            Pose::at([0.0, 0.0, -1.0]),
+        );
+        assert_eq!(volume.volume_pose.get(), Pose::at([0.0, 0.0, -1.0]));
+        // A new place from the modifier reaches the scene's state at once
+        space.place_volume(
+            volume,
+            [100.0; 3],
+            Pose::IDENTITY,
+            Pose::at([0.5, 0.0, -1.0]),
+        );
+        assert_eq!(volume.volume_pose.get(), Pose::at([0.5, 0.0, -1.0]));
+    });
 }

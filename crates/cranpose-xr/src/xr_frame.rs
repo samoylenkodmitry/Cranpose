@@ -2,15 +2,27 @@
 
 use std::time::Duration;
 
-use crate::{Controller, Hand, Pose, Recenter, RenderViewpoint};
+use crate::{
+    BodyState, Controller, Eyes, FaceState, Hand, HandState, MetaFaceState, Pose, Recenter,
+    RenderViewpoint, TrackingCapabilities,
+};
 
 /// The headset's state for one frame: where the head and the eyes are, what the controllers
-/// report and which events the runtime sent. [`SpatialFrameEffect`](crate::SpatialFrameEffect)
+/// report, which events the runtime sent and, for the tracking that the app asked for, the user's
+/// hands, body, face and eyes. [`SpatialFrameEffect`](crate::SpatialFrameEffect)
 /// gives an app one for each frame.
 ///
 /// Every pose is in the app's room, the OpenXR LOCAL space, whose origin lies where the head was
 /// when the app started, until a [`Recenter`] moves it. The values are predictions for the time
 /// at which the frame's pictures reach the display.
+///
+/// The hands, the body, the face and the eyes stay at rest, with a [`TrackingState`] of `Stopped`,
+/// until the app asks for them in its build with `Use::hand_tracking()`, `Use::body_tracking()`,
+/// `Use::face_tracking()` or `Use::eye_tracking()` of `cranpose::capabilities`, and the user grants
+/// their permissions. An app that asks for none pays nothing in a frame. Every field is a fixed
+/// array, so the frame loop allocates nothing for them.
+///
+/// [`TrackingState`]: crate::TrackingState
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct XrFrame {
@@ -56,6 +68,22 @@ pub struct XrFrame {
     pub right_controller: Controller,
     /// The runtime's change of the room's origin that it announced since the last frame.
     pub recenter: Option<Recenter>,
+    /// The joints of the left hand, which cameras track.
+    pub left_hand: HandState,
+    /// The joints of the right hand, which cameras track.
+    pub right_hand: HandState,
+    /// The joints of the body.
+    pub body: BodyState,
+    /// The weights of the face's blend shapes, with Jetpack XR's names.
+    pub face: FaceState,
+    /// The weights of the face's blend shapes as `XR_FB_face_tracking2` gives them, with Meta's
+    /// names. They stay at rest on a runtime that supplies the face through another extension.
+    pub meta_face: MetaFaceState,
+    /// Where the eyes look.
+    pub eyes: Eyes,
+    /// How far each tracking feature has come in this session. It follows the permissions that the
+    /// user grants.
+    pub tracking: TrackingCapabilities,
 }
 
 impl XrFrame {
@@ -80,6 +108,15 @@ impl XrFrame {
     /// started.
     pub fn floor_height(&self) -> Option<f32> {
         self.stage_pose.map(|stage| stage.position[1])
+    }
+
+    /// The tracked joints of `hand`. A hand that is not tracked has the state of a
+    /// [`HandState`], at rest.
+    pub const fn hand(&self, hand: Hand) -> &HandState {
+        match hand {
+            Hand::Left => &self.left_hand,
+            Hand::Right => &self.right_hand,
+        }
     }
 
     /// The controller of `hand`.

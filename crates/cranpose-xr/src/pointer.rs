@@ -59,7 +59,7 @@ enum Trigger {
 }
 
 // Where the pointer's events go: the app's composition, which one atlas holds for every panel with
-// content, or one surface.
+// content, or one surface or volume, which take the events as a callback of their own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Target {
     Atlas,
@@ -87,7 +87,7 @@ impl Hit {
     fn target(&self) -> Target {
         match self.slot.kind {
             PanelKind::Content => Target::Atlas,
-            PanelKind::Surface(_) => Target::Surface(self.slot.id),
+            PanelKind::Surface(_) | PanelKind::Volume { .. } => Target::Surface(self.slot.id),
         }
     }
 
@@ -120,7 +120,7 @@ struct Hand {
     // The ray in the last frame where the trigger rested, and that frame's time
     rest: Option<(Duration, Ray)>,
     // This frame's ray, the panel it meets and the panel whose handle it meets. A panel
-    // that holds no content, such as a video surface, stops the ray as a panel does.
+    // that holds no content, such as a video surface or a volume, stops the ray as a panel does.
     ray: Option<Ray>,
     hit: Option<Hit>,
     // The hit, if the panel has content, which shows the cursor's dot
@@ -484,7 +484,7 @@ impl Pointer {
         let Some(slot) = panels.iter().find(|slot| slot.id == resized.panel) else {
             return;
         };
-        let Some(size) = resized.resize.size(&ray, &slot.pose) else {
+        let Some(size) = resized.resize.size(&ray, &slot.face()) else {
             return;
         };
         // Sizes are whole dp, so two equal sizes compare equal

@@ -106,9 +106,11 @@ clippy: _disk-guard
 clippy-budget-lower:
     python3 scripts/ci/clippy_budget.py --lower
 
-# The type-aware lints of lints/ (cargo-dylint, on the pinned nightly): each
-# lint's sites against scripts/ci/dylint_budget.toml. Nightly CI runs it.
+# The type-aware lints of lints/ (cargo-dylint, on the pinned nightly): the
+# UI test of each lint, then each lint's sites against
+# scripts/ci/dylint_budget.toml. Nightly CI runs it.
 dylint: _dylint-tools
+    cd lints/guard_across_callback && cargo test
     python3 scripts/ci/dylint_budget.py
 
 # Write the dylint counts that fell below their budget.
@@ -149,10 +151,10 @@ test-emscripten: check-emscripten
 # Lint the iOS simulator binary.
 clippy-ios:
     cargo clippy -p desktop-app --bin cranpose-ios --bin cranpose-liquid-reference --target aarch64-apple-ios-sim --no-default-features --features ios -- -D warnings
-    cargo clippy -p cranpose --target aarch64-apple-ios-sim --no-default-features --features ios,renderer-wgpu,storage-space,device-auth,device-motion -- -D warnings
+    cargo clippy -p cranpose --target aarch64-apple-ios-sim --no-default-features --features ios,renderer-wgpu,storage-space,device-auth,device-motion,video -- -D warnings
 
 # The feature set `clippy-optional-backends` and `clippy-release` both lint.
-optional_backend_features := "desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling,embed"
+optional_backend_features := "desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling,embed,video"
 
 # Portable checks for the experimental watchOS runtime and packager.
 test-watchos:
@@ -359,11 +361,12 @@ clippy-robot:
 # in this build.
 #
 # The third line lints the Android media backend, which no in-repo app
-# enables: it gathered lint errors unseen until an app turned `media` on.
+# enables: it gathered lint errors unseen until an app turned `media` on. It
+# also lints the video import, which the demo's platform crate leaves out.
 clippy-android:
     cargo ndk --platform 24 -t arm64-v8a -t armeabi-v7a -t x86 -t x86_64 clippy -p desktop-app-platform --lib --no-default-features --features android,renderer-wgpu -- -D warnings -A clippy::missing_const_for_thread_local
     cargo clippy --target aarch64-linux-android -p cranpose --no-default-features --features android -- -D warnings -A clippy::missing_const_for_thread_local
-    cargo ndk --platform 24 -t arm64-v8a clippy -p cranpose --no-default-features --features android,renderer-wgpu,media -- -D warnings -A clippy::missing_const_for_thread_local
+    cargo ndk --platform 24 -t arm64-v8a clippy -p cranpose --no-default-features --features android,renderer-wgpu,media,video -- -D warnings -A clippy::missing_const_for_thread_local
 
 # --- code quality gates -----------------------------------------------------
 #
@@ -680,7 +683,7 @@ test-features: test-watchos test-localization
     cargo test --profile ci -p cranpose
     cargo clippy -p cranpose --no-default-features --features webview -- -D warnings
     cargo test --profile ci -p cranpose --no-default-features --features embed
-    cargo test --profile ci -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling
+    cargo test --profile ci -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling,video
     cargo test --profile ci -p cranpose-services --features image-loading,http-native --test integration image_loading
     cargo test --profile ci -p cranpose-services --features storage-space --lib storage
     cargo test --profile ci -p cranpose-testing --features image-loading --test integration async_image
