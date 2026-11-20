@@ -11,11 +11,8 @@ use super::{
 };
 use crate::{
     TrackingAvailability, TrackingCapabilities, TrackingFeature, XrFrame,
-    openxr::{
-        graphics::Api,
-        host::Host,
-        session::{SessionStatus, XrSession},
-    },
+    openxr::{graphics::Api, host::Host, session::XrSession},
+    session_status::SessionStatus,
     tracking_permission::PermissionStep,
 };
 

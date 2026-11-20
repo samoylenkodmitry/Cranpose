@@ -2,7 +2,9 @@
 
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
-use cranpose::{AppSettings, GpuContext, GuestView, remember};
+use cranpose::{
+    AppSettings, GpuContext, GuestView, LifecycleState, dispatch_lifecycle_state, remember,
+};
 use cranpose_core::CompositionLocalProvider;
 use openxr as xr;
 
@@ -16,7 +18,7 @@ use super::{
     panel_layers::{DENSITY, PanelLayers},
     ray_layers::RayLayers,
     runtime::Runtime,
-    session::{ProjectionLayer, QuadLayer, SessionStatus, XrSession},
+    session::{ProjectionLayer, QuadLayer, XrSession},
     stream_layers::StreamLayers,
     surface_layers::SurfaceLayers,
     volume_layers::VolumeLayers,
@@ -29,6 +31,7 @@ use crate::{
     local_haptics, local_headset_properties, local_spatial_capabilities, local_spatial_environment,
     local_tracking_capabilities,
     pointer::Pointer,
+    session_status::{SessionStatus, StatusWatch},
     space::{PanelSlot, Ride, Space, local_space},
     surface_input::Gesture,
     volume_host::VolumeScene,
@@ -48,10 +51,22 @@ pub(crate) fn run_immersive(
     let mut immersive = Immersive::new(runtime, settings, content)?;
     let mut status = SessionStatus::Idle;
     let mut rate = FrameRate::new();
+    let mut watch = StatusWatch::default();
     let mut exit = ExitRequest::default();
     log::info!("cranpose xr: ready");
     while !host.ended(status) {
         status = immersive.xr_session.poll_events()?;
+        // The app learns of a change as Compose's lifecycle, before the frame that it changes
+        if let Some(change) = watch.change(status) {
+            log::info!(
+                "cranpose xr: {:?} ran {} frames, now {:?}, lifecycle {:?}",
+                change.from,
+                change.frames,
+                change.to,
+                change.lifecycle
+            );
+            dispatch_lifecycle_state(change.lifecycle);
+        }
         match exit.poll(status.runs()) {
             ExitStep::Wait => {}
             ExitStep::EndSession => {
@@ -68,10 +83,12 @@ pub(crate) fn run_immersive(
             running => {
                 immersive.frame(running, host)?;
                 rate.tick();
+                watch.ran();
             }
         }
     }
-    log::info!("cranpose xr: ends in {status:?}");
+    log::info!("cranpose xr: ends in {status:?}, lifecycle Destroyed");
+    dispatch_lifecycle_state(LifecycleState::Destroyed);
     // The session ends when `immersive` drops, before the device it draws on. The host closes
     // after that, when the app asked for it.
     drop(immersive);
@@ -173,15 +190,17 @@ impl Immersive {
     }
 
     // One frame of a running session. The controllers move the pointer, the panels that changed
-    // draw and the rays follow the controllers. While the headset shows something over the app
-    // the controllers give no input: the pointer sees them lost, which ends a press. While the
-    // runtime shows none of the app's layers the app draws none and ends the frame empty. The
-    // app's state stays as it was.
+    // draw and the rays follow the controllers. While the app has no input focus the pointer
+    // gets no aim: it sees the controllers lost, which ends a press, and no ray shows. The panels
+    // and the volumes keep drawing, as VRC.Quest.Input.4 requires. While the runtime shows none
+    // of the app's layers the app draws none and ends the frame empty. The app's state stays as
+    // it was.
     fn frame(&mut self, status: SessionStatus, host: &Host) -> Result<(), String> {
         let frame = self.xr_session.begin_frame()?;
-        let aims = self
-            .headset
-            .sample(&mut self.xr_session, &frame, status, host);
+        let aims = status.input(
+            self.headset
+                .sample(&mut self.xr_session, &frame, status, host),
+        );
         self.space.track(
             self.headset.device_pose(),
             self.headset.controllers(),
