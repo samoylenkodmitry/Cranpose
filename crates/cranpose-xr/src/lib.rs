@@ -82,6 +82,8 @@ mod headset_properties;
 mod interaction_profile;
 #[cfg(any(test, headset))]
 mod joint_flags;
+#[cfg(any(test, headset))]
+mod layer_limit;
 mod locals;
 mod meta_face_state;
 mod move_policy;

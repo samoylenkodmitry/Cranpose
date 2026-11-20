@@ -80,3 +80,18 @@ fn panels_and_rays_test_depth_and_the_projection_and_the_streams_do_not() {
         assert!(!tests_depth(stage, None));
     }
 }
+
+#[test]
+fn only_the_projection_layer_writes_depth_and_only_where_layers_test_it() {
+    let written: Vec<_> = STAGES
+        .into_iter()
+        .filter(|stage| writes_depth(*stage, plan(1, BOTH, FULL)))
+        .collect();
+    assert_eq!(written, [Stage::Volumes]);
+    for stage in STAGES {
+        // With no test over it, a write has no reader
+        assert!(!writes_depth(stage, plan(1, BOTH, SUBMITS)));
+        assert!(!writes_depth(stage, plan(0, BOTH, FULL)));
+        assert!(!writes_depth(stage, None));
+    }
+}
