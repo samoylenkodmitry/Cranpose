@@ -149,6 +149,8 @@ mod gltf_fit;
 #[cfg(feature = "gltf")]
 mod gltf_import;
 #[cfg(feature = "gltf")]
+mod gltf_ktx2;
+#[cfg(feature = "gltf")]
 mod gltf_material;
 #[cfg(feature = "gltf")]
 mod gltf_model;

@@ -12,6 +12,7 @@ use crate::{
     gltf_buffers::Buffers,
     gltf_clip::{Channel, Clip, Interpolation, Track, Trs, normalized_rotation},
     gltf_error::GltfError,
+    gltf_ktx2,
     gltf_material::{Alpha, Texture, bake},
     gltf_model::{Draw, GltfModel, MaterialLayer},
     spatial_gltf_model_source::SpatialGltfModelSource,
@@ -49,7 +50,7 @@ pub(crate) fn parse(bytes: &[u8], base: Option<&Path>) -> Result<GltfModel, Gltf
             draws.push(Draw {
                 node,
                 mesh,
-                layer: layers.of(&material, &buffers, base)?,
+                layer: layers.of(&document, &material, &buffers, base)?,
             });
         }
     }
@@ -263,6 +264,7 @@ impl Layers {
     // The index of the layer that shows `material`.
     fn of(
         &mut self,
+        document: &gltf::Document,
         material: &gltf::Material<'_>,
         buffers: &Buffers,
         base: Option<&Path>,
@@ -272,9 +274,8 @@ impl Layers {
             return Ok(layer);
         }
         let pbr = material.pbr_metallic_roughness();
-        let source = pbr.base_color_texture().map(|info| info.texture().source());
-        let texture = match &source {
-            Some(image) => Some(decode(image, buffers, base)?),
+        let texture = match pbr.base_color_texture() {
+            Some(info) => Some(decode(document, &info.texture(), buffers, base)?),
             None => None,
         };
         let alpha = match material.alpha_mode() {
@@ -293,17 +294,47 @@ impl Layers {
     }
 }
 
-// The pixels of `image`.
+// The image that `texture` shows: the one that its `KHR_texture_basisu` extension names, which the
+// extension allows in place of the texture's own source, or else the texture's source.
+fn image_of<'a>(
+    document: &'a gltf::Document,
+    texture: &gltf::Texture<'a>,
+) -> Result<gltf::Image<'a>, GltfError> {
+    let named = texture
+        .extension_value("KHR_texture_basisu")
+        .map(|extension| extension.get("source").and_then(gltf::json::Value::as_u64));
+    let image = match named {
+        Some(Some(index)) => usize::try_from(index)
+            .ok()
+            .and_then(|index| document.images().nth(index)),
+        Some(None) => None,
+        None => texture.source(),
+    };
+    image.ok_or_else(|| {
+        GltfError::Invalid(format!(
+            "texture {} names no image that the file holds",
+            texture.index()
+        ))
+    })
+}
+
+// The pixels of the image of `texture`.
 fn decode(
-    image: &gltf::Image<'_>,
+    document: &gltf::Document,
+    texture: &gltf::Texture<'_>,
     buffers: &Buffers,
     base: Option<&Path>,
 ) -> Result<Texture, GltfError> {
-    let bytes = buffers.image(image, base)?;
-    let decoded = image::load_from_memory(&bytes).map_err(|error| GltfError::Image {
+    let image = image_of(document, texture)?;
+    let bytes = buffers.image(&image, base)?;
+    let failed = |reason: String| GltfError::Image {
         index: image.index(),
-        reason: error.to_string(),
-    })?;
+        reason,
+    };
+    if gltf_ktx2::is_ktx2(&bytes) {
+        return gltf_ktx2::decode(&bytes).map_err(failed);
+    }
+    let decoded = image::load_from_memory(&bytes).map_err(|error| failed(error.to_string()))?;
     let rgba = decoded.into_rgba8();
     Ok(Texture {
         width: rgba.width(),

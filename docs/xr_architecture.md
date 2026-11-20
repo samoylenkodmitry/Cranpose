@@ -324,7 +324,10 @@ images itself: the binary chunk of a `.glb`, `data:` URIs, and files beside a `.
 own `import` feature would do the same, but it needs `base64` 0.13, a second version of a crate that
 the workspace has once. It would also decode every image of the file, where the loader decodes the
 images that a base color texture names, with the PNG and JPEG decoders of the `image` crate. A
-`SpatialGltfModelSource` is a path or bytes. A source made from bytes has no directory, so it
+texture that has no source and names its image in `KHR_texture_basisu`, as the controller models of a
+Meta Quest do, has a KTX2 file of Basis Universal data. The `basisu` crate, a transcoder in Rust,
+turns its first mip level that fits a layer into RGBA pixels. A `SpatialGltfModelSource` is a path or
+bytes. A source made from bytes has no directory, so it
 finds no external buffer.
 
 **What the loader keeps.** One `Mesh` for each triangle primitive (lists, strips and fans), with
@@ -398,7 +401,9 @@ The `gltf` feature adds 770 KB to the stripped arm64 library of the demo, which 
 the feature and 12,605 KB with it. Both come from a local `release-fast` build. The build without
 the feature leaves out the demo's crate too. Of the 770 KB, the `zune_jpeg`, `image` and `png`
 crates take 209 KB, `serde_json` 181 KB, `gltf` and `gltf_json` 58 KB, and `cranpose_xr` 49 KB. The
-shipping `release` profile has other absolute sizes. An app without the feature has none of it.
+shipping `release` profile has other absolute sizes. An app without the feature has none of it. The
+`basisu` transcoder adds 1,120 KB to that library (14,140 KB to 15,261 KB, stripped arm64, the
+Gradle `release` build of the xr-demo).
 
 ### Controller models
 
