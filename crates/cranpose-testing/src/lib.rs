@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 pub use cranpose_app_shell::{accessibility_audit, placed_semantics};
+mod pointer_log;
 /// The robot: a whole app driven by clicks, drags and keys, headless or in
 /// a desktop window.
 pub mod robot;
@@ -27,6 +28,7 @@ pub use placed_semantics::{
     PlacedSemanticsNode, placed_semantics_from_applier, placed_semantics_from_shell,
     placed_semantics_from_trees,
 };
+pub use pointer_log::{PointerLog, SeenPointerEvent};
 pub use robot::*;
 #[cfg(feature = "desktop-robot")]
 pub use robot_assertions::assert_robot_fps_over;

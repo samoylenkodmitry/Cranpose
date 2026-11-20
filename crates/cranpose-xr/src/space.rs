@@ -252,8 +252,9 @@ pub(crate) struct Panel {
     pub(crate) id: u64,
     // Where the panel's part of the atlas starts in dp, from the atlas's top left corner.
     pub(crate) origin: MutableState<[f32; 2]>,
-    // The dot of the cursor on the panel, or `None` while no controller points at it.
-    pub(crate) dot: MutableState<Option<Dot>>,
+    // The dot of each hand's cursor on the panel, left then right, or `None` while that hand's
+    // controller does not point at it.
+    pub(crate) dots: MutableState<[Option<Dot>; 2]>,
     // The surface of a surface panel once the backend has made it.
     pub(crate) surface: MutableState<Option<ExternalSurface>>,
     // The pose of a volume in the room, which the scene of the volumes reads while it draws.
@@ -304,8 +305,8 @@ struct Inner {
 struct Entry {
     slot: PanelSlot,
     panel: Panel,
-    // What the panel's dot state holds, so that a comparison needs no read of the state.
-    dot: Option<Dot>,
+    // What the panel's dots state holds, so that a comparison needs no read of the state.
+    dots: [Option<Dot>; 2],
     // The origin of the panel's subspace. A move reports poses relative to it.
     origin: Pose,
     // Where the user left the panel, relative to `origin`, or `None` while the panel's modifier
@@ -323,11 +324,11 @@ struct Entry {
     // Whether the user resizes the panel now: from the grab to the release
     resizing: bool,
     // For a surface: where the app takes the pointer's events, and what the surface knows of
-    // the pointer
+    // each hand's pointer, left then right
     sink: Option<PointerSink>,
     // For a volume: where the app takes the ray's input events
     input_sink: Option<InputSink>,
-    input: SurfaceInput,
+    input: [SurfaceInput; 2],
     // Whether the panel stands below the panel of the focused text field, as the keyboard does,
     // wherever that panel stands
     dock: Dock,
@@ -518,7 +519,7 @@ impl Space {
         Panel {
             id,
             origin: mutableStateOf([0.0, 0.0]),
-            dot: mutableStateOf(None),
+            dots: mutableStateOf([None; 2]),
             surface: mutableStateOf(None),
             volume_pose: mutableStateOf(Pose::IDENTITY),
         }
@@ -623,7 +624,7 @@ impl Space {
                         ride: Ride::Free,
                     },
                     panel,
-                    dot: None,
+                    dots: [None; 2],
                     origin,
                     carried: None,
                     moving: None,
@@ -633,7 +634,7 @@ impl Space {
                     resizing: false,
                     sink: None,
                     input_sink: None,
-                    input: SurfaceInput::default(),
+                    input: [SurfaceInput::default(); 2],
                     dock: Dock::Free,
                 });
                 (entries.len() - 1, true)
@@ -914,16 +915,16 @@ impl Space {
         not(any(test, headset)),
         expect(dead_code, reason = "the headset backend calls it")
     )]
-    // Shows the cursor on its panel and on no other. A panel draws again only when its dot
-    // changes. A move below the dot's step changes nothing.
-    pub(crate) fn set_cursor(&self, cursor: Option<Cursor>) {
+    // Shows the cursor of `hand` on its panel and on no other. A panel draws again only when one
+    // of its dots changes. A move below the dot's step changes nothing.
+    pub(crate) fn set_cursor(&self, hand: Hand, cursor: Option<Cursor>) {
         for entry in self.inner.entries.borrow_mut().iter_mut() {
             let dot = cursor
                 .filter(|cursor| cursor.panel == entry.slot.id)
                 .map(dot_of);
-            if entry.dot != dot {
-                entry.dot = dot;
-                entry.panel.dot.set(dot);
+            if entry.dots[hand.index()] != dot {
+                entry.dots[hand.index()] = dot;
+                entry.panel.dots.set(entry.dots);
             }
         }
     }

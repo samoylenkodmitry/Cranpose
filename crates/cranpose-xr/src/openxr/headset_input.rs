@@ -14,10 +14,19 @@ use super::{
     tracking::{EyeGazeAction, Trackers, TrackingSetup},
 };
 use crate::{
-    Hand, Haptics, HeadsetProperties, Pose, Recenter, RenderViewpoint, TrackingFeature, XrFrame,
-    frame_effects::FrameEffects, haptics::controller_asks, pointer::Aim, pointer_aim::pointer_aim,
-    session_status::SessionStatus,
+    Hand, Haptics, HeadsetProperties, PointerMapping, PointerSettings, Pose, Recenter,
+    RenderViewpoint, TrackingFeature, XrFrame, aim::Aim, frame_effects::FrameEffects,
+    haptics::controller_asks, pointer_aim::pointer_aim, session_status::SessionStatus,
 };
+
+// The handles on the headset that the app's content reads: the registry of its frame effects, its
+// vibrations, the headset's facts and the pointer's settings.
+pub(crate) struct Handles {
+    pub(crate) effects: FrameEffects,
+    pub(crate) haptics: Haptics,
+    pub(crate) properties: HeadsetProperties,
+    pub(crate) pointer_settings: PointerSettings,
+}
 
 // What the app gets of the headset in a frame, the controllers that it reads, and the callbacks
 // and the vibrations that it set.
@@ -28,6 +37,7 @@ pub(crate) struct HeadsetInput {
     trackers: Trackers,
     effects: FrameEffects,
     haptics: Haptics,
+    pointer_settings: PointerSettings,
     properties: HeadsetProperties,
     // Whether tracked hands point: the app asked for hand tracking
     hands_point: bool,
@@ -58,24 +68,29 @@ impl HeadsetInput {
             trackers: Trackers::new(tracking, gaze),
             effects: FrameEffects::default(),
             haptics: Haptics::new(),
+            pointer_settings: PointerSettings::new(),
             properties,
             hands_point,
         })
     }
 
-    // The registry of the app's frame effects, which the content reads as a composition local.
-    pub(crate) fn effects(&self) -> FrameEffects {
-        self.effects.clone()
+    // The handles that the content reads as composition locals.
+    pub(crate) fn handles(&self) -> Handles {
+        Handles {
+            effects: self.effects.clone(),
+            haptics: self.haptics.clone(),
+            properties: self.properties.clone(),
+            pointer_settings: self.pointer_settings.clone(),
+        }
     }
 
-    // The handle of the app's vibrations, which the content reads as a composition local.
-    pub(crate) fn haptics(&self) -> Haptics {
-        self.haptics.clone()
-    }
-
-    // The headset's facts, which the content reads as a composition local.
-    pub(crate) fn properties(&self) -> HeadsetProperties {
-        self.properties.clone()
+    // The app's choices that the pointer reads each frame: the button mapping, and whether the
+    // beams show.
+    pub(crate) fn pointer_choice(&self) -> (PointerMapping, bool) {
+        (
+            self.pointer_settings.mapping(),
+            self.pointer_settings.beams_visible(),
+        )
     }
 
     // The time at which the frame sampled last reaches the display, on the monotonic clock.
@@ -157,6 +172,10 @@ impl HeadsetInput {
         frame.recenter = xr_session.recenters.take();
         self.controllers
             .sample(xr_session, time, status, self.trackers.gaze_set(), frame);
+        #[cfg(feature = "scripted-hand")]
+        if frame.focused {
+            crate::scripted_controller::apply(frame);
+        }
         self.trackers
             .sample(xr_session, host, frame.now, time, status, frame);
         let hands = self.hands_point;

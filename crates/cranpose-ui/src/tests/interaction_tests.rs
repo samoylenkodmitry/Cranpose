@@ -255,3 +255,71 @@ fn a_disabled_or_removed_hoverable_ends_its_hover() {
         "moving the node to another source ends the hover it reported to the first"
     );
 }
+
+fn deliver_from(node: &impl PointerInputNode, kind: PointerEventKind, id: PointerId) {
+    let handler = node.pointer_input_handler().expect("a pointer handler");
+    handler(PointerEvent::new(kind, Point::ZERO, Point::ZERO).with_id(id));
+}
+
+#[test]
+fn a_hoverable_node_stays_hovered_until_every_pointer_over_it_leaves() {
+    let composition = Composition::new(MemoryApplier::new());
+    let source = MutableInteractionSource::with_runtime(composition.runtime_handle());
+    let hovered = source.collectIsHoveredAsState();
+    let node = hover_node(source, true);
+    let (left, right) = (PointerId(1), PointerId(2));
+
+    deliver_from(&node, PointerEventKind::Enter, left);
+    deliver_from(&node, PointerEventKind::Enter, right);
+    deliver_from(&node, PointerEventKind::Exit, left);
+    assert!(hovered.get(), "the right pointer still hovers the node");
+    deliver_from(&node, PointerEventKind::Exit, right);
+    assert!(!hovered.get());
+}
+
+#[test]
+fn a_press_belongs_to_the_pointer_that_went_down_first() {
+    let composition = Composition::new(MemoryApplier::new());
+    let source = MutableInteractionSource::with_runtime(composition.runtime_handle());
+    let pressed = source.collectIsPressedAsState();
+    let node = InteractionElement {
+        interaction_source: source,
+        tracker: PressTracker,
+    }
+    .create();
+    let (left, right) = (PointerId(1), PointerId(2));
+
+    deliver_from(&node, PointerEventKind::Down, left);
+    assert!(pressed.get());
+    deliver_from(&node, PointerEventKind::Down, right);
+    deliver_from(&node, PointerEventKind::Up, right);
+    assert!(
+        pressed.get(),
+        "the other pointer's release does not end the press"
+    );
+    deliver_from(&node, PointerEventKind::Up, left);
+    assert!(!pressed.get());
+
+    deliver_from(&node, PointerEventKind::Down, right);
+    assert!(
+        pressed.get(),
+        "the pointer that is free takes the next press"
+    );
+}
+
+#[test]
+fn a_finger_that_joins_and_only_moves_does_not_hold_the_hover_after_the_first_pointer_leaves() {
+    let composition = Composition::new(MemoryApplier::new());
+    let source = MutableInteractionSource::with_runtime(composition.runtime_handle());
+    let hovered = source.collectIsHoveredAsState();
+    let node = hover_node(source, true);
+
+    deliver_from(&node, PointerEventKind::Enter, PointerId::PRIMARY);
+    // The shell sends a joining finger's moves with its id, and never an exit for it
+    deliver_from(&node, PointerEventKind::Move, PointerId(2));
+    deliver_from(&node, PointerEventKind::Exit, PointerId::PRIMARY);
+    assert!(
+        !hovered.get(),
+        "the first pointer left, and the finger sends no exit"
+    );
+}

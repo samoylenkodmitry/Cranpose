@@ -27,27 +27,23 @@ use super::{
     volume_layers::VolumeLayers,
 };
 use crate::{
-    Anchors, EntitlementCheck, Planes, SpatialCapabilities, SpatialEnvironment,
+    Anchors, EntitlementCheck, Hand, Planes, SpatialCapabilities, SpatialEnvironment, atlas_input,
     depth_order::sort_back_to_front,
     exit_request::{ExitRequest, ExitStep, leave},
     frame_effects::local_frame_effects,
     keyboard_panel::SoftKeyboardPanel,
     local_anchors, local_entitlement_check, local_haptics, local_headset_properties, local_planes,
-    local_spatial_capabilities, local_spatial_environment, local_tracking_capabilities,
-    pointer::Pointer,
+    local_pointer_settings, local_spatial_capabilities, local_spatial_environment,
+    local_tracking_capabilities,
+    pointers::Pointers,
     session_status::{SessionStatus, StatusWatch},
     soft_keyboard::SoftKeyboard,
     sound_stage::SoundStage,
     space::{PanelSlot, Ride, Space, local_space},
     spatial_store::SpatialStore,
-    surface_input::Gesture,
     volume_host::VolumeScene,
     volume_pick::PickMeshes,
 };
-
-// Where the pointer goes when it leaves every panel: far outside the atlas, so no content stays
-// hovered.
-const AWAY: f32 = -100_000.0;
 
 // Runs `content` on the headset of `runtime` until the headset or the host ends it.
 pub(crate) fn run_immersive(
@@ -138,7 +134,7 @@ struct Immersive {
     store: Rc<SpatialStore>,
     // The events about spatial entities that the last frame read, which keep their storage
     room_events: Vec<SpatialEvent>,
-    pointer: Pointer,
+    pointers: Pointers,
     // The meshes of the volumes that a ray points at, for the pointer to meet
     picks: PickMeshes,
     layers: PanelLayers,
@@ -183,8 +179,7 @@ impl Immersive {
         let capabilities =
             SpatialCapabilities::in_headset(xr_session.passthrough.is_controllable())
                 .with_spatial_audio(sounds.is_some());
-        let (effects, haptics, properties) =
-            (headset.effects(), headset.haptics(), headset.properties());
+        let shared = headset.handles();
         let composed = Rc::new(RefCell::new(None::<Composed>));
         let held = Rc::clone(&composed);
         let mut guest = GuestView::new(settings, &gpu, format.wgpu, 16, 16, DENSITY, move || {
@@ -203,9 +198,10 @@ impl Immersive {
                     local_space().provides(Some(space)),
                     local_spatial_capabilities().provides(capabilities),
                     local_spatial_environment().provides(Some(environment)),
-                    local_frame_effects().provides(Some(effects.clone())),
-                    local_haptics().provides(Some(haptics.clone())),
-                    local_headset_properties().provides(Some(properties.clone())),
+                    local_frame_effects().provides(Some(shared.effects.clone())),
+                    local_haptics().provides(Some(shared.haptics.clone())),
+                    local_pointer_settings().provides(Some(shared.pointer_settings.clone())),
+                    local_headset_properties().provides(Some(shared.properties.clone())),
                     local_tracking_capabilities().provides(tracking.capabilities),
                     local_entitlement_check().provides(check),
                     local_anchors().provides(Some(Anchors::new(Rc::clone(&store)))),
@@ -243,7 +239,7 @@ impl Immersive {
             room,
             store,
             room_events: Vec::new(),
-            pointer: Pointer::default(),
+            pointers: Pointers::default(),
             picks: PickMeshes::default(),
             layers,
             volumes,
@@ -309,9 +305,9 @@ impl Immersive {
         );
         self.space.panels_into(&mut self.panels);
         if let Some(root) = self.volumes.scene_root() {
-            let pressed = self.pointer.pressed_surface();
+            let pressed = self.pointers.pressed_surfaces();
             let pointed = |slot: &PanelSlot| {
-                pressed == Some(slot.id)
+                pressed.contains(&Some(slot.id))
                     || aims
                         .iter()
                         .flatten()
@@ -320,20 +316,27 @@ impl Immersive {
             self.picks
                 .refresh((&mut self.guest, root), &self.space, &self.panels, pointed);
         }
-        let (events, cursor) = self.pointer.update(aims, time, (&self.panels, &self.picks));
-        send(&mut self.guest, events);
+        self.pointers.update(
+            aims,
+            time,
+            (&self.panels, &self.picks),
+            self.headset.pointer_choice(),
+        );
+        atlas_input::deliver(self.guest.shell(), self.pointers.atlas());
         match &self.system_keyboard {
             Some(system) => system.pump(&mut self.guest),
             None => self.keyboard.pump(self.guest.shell(), &self.space),
         }
-        for gesture in self.pointer.surface_events() {
+        for gesture in self.pointers.surface_events() {
             self.space.deliver_to_surface(gesture);
         }
-        self.space.set_cursor(cursor);
-        for step in self.pointer.moves() {
+        for (hand, cursor) in Hand::BOTH.into_iter().zip(self.pointers.cursors()) {
+            self.space.set_cursor(hand, cursor);
+        }
+        for step in self.pointers.moves() {
             self.space.carry(step);
         }
-        for step in self.pointer.resizes() {
+        for step in self.pointers.resizes() {
             self.space.resize(step);
         }
         self.follow_environment();
@@ -411,8 +414,8 @@ impl Immersive {
         if let Some(head) = &head {
             sort_back_to_front(panels, head.position, |slot| &slot.pose);
         }
-        let beams = self.pointer.beams();
-        let active = self.pointer.handle();
+        let beams = self.pointers.beams();
+        let active = self.pointers.handles();
         let head_position = head.as_ref().map(|head| head.position);
         let (layers, surfaces, handles) = (&self.layers, &self.surfaces, &self.handles);
         let shown = panels
@@ -445,25 +448,5 @@ impl Immersive {
         let passthrough = &mut self.xr_session.passthrough;
         passthrough.set_opacity(self.environment.preference().unwrap_or(0.0));
         self.environment.show(passthrough.opacity());
-    }
-}
-
-fn send(guest: &mut GuestView, events: &[Gesture]) {
-    let shell = guest.shell();
-    for event in events {
-        match *event {
-            Gesture::Move { x, y } => {
-                shell.set_cursor(x, y);
-            }
-            Gesture::Press => {
-                shell.pointer_pressed();
-            }
-            Gesture::Release => {
-                shell.pointer_released();
-            }
-            Gesture::Leave => {
-                shell.set_cursor(AWAY, AWAY);
-            }
-        }
     }
 }

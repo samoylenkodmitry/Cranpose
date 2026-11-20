@@ -2165,6 +2165,23 @@ handlers. A drag then goes on along the ray. Each `pointer` number is a pointer
 of its own. A clickable follows the first pointer that pressed it. A second
 controller that presses and lets go over it does not click it.
 
+#### Point with several pointers on a flat window
+
+A flat window has one primary pointer, the mouse or the first finger, and a pointer that
+joins its gesture, a second finger. A pointer that acts on its own, such as a controller's ray
+in a headset's panels, has a place, a hover, held buttons and a gesture of its own.
+`AppShell::independent_pointer_moved(pointer, x, y)` moves it, `independent_pointer_pressed(pointer,
+button)` and `independent_pointer_released(pointer, button)` press and release one of its buttons,
+`independent_pointer_scrolled(pointer, dx, dy)` scrolls under it, and
+`independent_pointer_exited(pointer)` takes it away. A press hit-tests at the pointer's place and
+keeps the nodes that it reached as that pointer's gesture. The pointer's moves and its release reach
+them wherever it is. Without a press the pointer hovers. Every event carries the pointer's id, and a
+button other than the primary one arrives as `PointerEventKind::ButtonDown`. Two such pointers press
+and drag two nodes at once. Nodes that hold a gesture, such as scrolling lists, sliders, clickables
+and the press and hover interaction sources, serve the pointer that went down first. The id
+`PointerId::PRIMARY` stays with the window's own mouse or finger, and these calls refuse it.
+`cranpose_testing::PointerLog` records the events that reach a node, for a test.
+
 #### Renderers
 
 The WGPU renderer draws scenes in full. The pixels renderer draws the surfaces

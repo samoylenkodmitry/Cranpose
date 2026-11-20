@@ -4,12 +4,34 @@
 
 use std::{cell::RefCell, rc::Rc};
 
+use cranpose_foundation::{PointerEvent, PointerId};
 use cranpose_ui_layout::Axis;
 
 use super::{
     Modifier, NestedTarget, PointerEventKind, ScrollGestureDetector, ScrollGestureState,
     ScrollMotionContext, ScrollTarget,
 };
+
+// The first pointer that goes down holds the gesture, and the others pass by until it lifts: a
+// second finger, and the other controller of a headset.
+#[derive(Default)]
+struct Holder(Option<PointerId>);
+
+impl Holder {
+    // Whether `event` is for the gesture: it comes from the holder, or from any pointer while none
+    // holds. A down takes the hold, and an up or a cancel of the holder gives it back.
+    fn admits(&mut self, event: &PointerEvent) -> bool {
+        if self.0.is_some_and(|held| held != event.id) {
+            return false;
+        }
+        match event.kind {
+            PointerEventKind::Down => self.0 = Some(event.id),
+            PointerEventKind::Up | PointerEventKind::Cancel => self.0 = None,
+            _ => {}
+        }
+        true
+    }
+}
 
 pub(super) struct DragGesture<S: ScrollTarget> {
     pub(super) target: S,
@@ -121,10 +143,11 @@ where
             let _lifetime = lifetime;
             scope
                 .await_pointer_event_scope(|await_scope| async move {
+                    let mut holder = Holder::default();
                     loop {
                         let event = await_scope.await_pointer_event().await;
 
-                        if !event.id.is_primary() {
+                        if !holder.admits(&event) {
                             continue;
                         }
 

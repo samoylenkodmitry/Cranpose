@@ -2,7 +2,7 @@
 
 use crate::{
     Controller, HandAim, HandState, InputSource, InteractionProfile, Ray, TrackingState,
-    pointer::Aim,
+    aim::{Aim, Buttons},
 };
 
 // The aim that the pointer takes for one hand, or `None` while nothing points for it.
@@ -37,17 +37,29 @@ pub(crate) fn pointer_aim(controller: &Controller, hand: Option<&HandState>) -> 
     }
 }
 
-// The aim that a controller's actions give. The hand interaction profile has no thumbstick.
+// The aim that a controller's actions give. The hand interaction profile has no thumbstick and no
+// other button: its grasp is the squeeze, which presses nothing.
 fn of_controller(controller: &Controller, source: InputSource) -> Option<Aim> {
     let aim = controller.aim?;
+    let (stick, buttons) = match source {
+        InputSource::Controller => (
+            [controller.thumbstick.x, controller.thumbstick.y],
+            Buttons {
+                squeeze: controller.squeeze.value,
+                primary: controller.primary.pressed,
+                secondary: controller.secondary.pressed,
+                stick_click: controller.thumbstick.pressed,
+                menu: controller.menu,
+            },
+        ),
+        InputSource::Hands => ([0.0; 2], Buttons::default()),
+    };
     Some(Aim {
         ray: Ray::of_aim(&aim.pose),
         pose: aim.pose,
         trigger: controller.trigger.value,
-        stick: match source {
-            InputSource::Controller => controller.thumbstick.y,
-            InputSource::Hands => 0.0,
-        },
+        stick,
+        buttons,
         source,
     })
 }
@@ -63,7 +75,8 @@ fn of_hand(aim: &HandAim) -> Option<Aim> {
         ray: aim.ray(),
         pose: aim.pose,
         trigger: aim.index.strength,
-        stick: 0.0,
+        stick: [0.0; 2],
+        buttons: Buttons::default(),
         source: InputSource::Hands,
     })
 }

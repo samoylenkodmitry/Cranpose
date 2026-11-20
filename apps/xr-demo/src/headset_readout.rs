@@ -14,8 +14,8 @@ use std::{
 
 use cranpose::prelude::*;
 use cranpose_xr::{
-    Hand, Haptics, InputSource, SpatialFrameEffect, StreamCounts, StreamStats, Vibration, XrFrame,
-    local_haptics,
+    Controller, Hand, Haptics, InputSource, SpatialFrameEffect, StreamCounts, StreamStats,
+    Vibration, XrFrame, local_haptics,
 };
 
 // How long one measure of the frame rate takes.
@@ -57,9 +57,61 @@ pub(crate) struct StreamLogs {
     pub(crate) foveated: StreamStats,
 }
 
+// What the panel shows of one controller's buttons, rounded so that a change below the rounding
+// does not redraw: the trigger and the grip in percent, the two face buttons, the thumbstick's lean
+// in tenths to the right and forward, its click and the menu button.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub(crate) struct ControllerReadout {
+    pub(crate) trigger_percent: f32,
+    pub(crate) squeeze_percent: f32,
+    pub(crate) faces: [bool; 2],
+    pub(crate) stick_tenths: [f32; 2],
+    pub(crate) stick_click: bool,
+    pub(crate) menu: bool,
+}
+
+impl ControllerReadout {
+    fn of(controller: &Controller) -> Self {
+        let percent = |value: f32| (value.clamp(0.0, 1.0) * 100.0).round();
+        let tenths = |lean: f32| (lean.clamp(-1.0, 1.0) * 10.0).round();
+        Self {
+            trigger_percent: percent(controller.trigger.value),
+            squeeze_percent: percent(controller.squeeze.value),
+            faces: [controller.primary.pressed, controller.secondary.pressed],
+            stick_tenths: [
+                tenths(controller.thumbstick.x),
+                tenths(controller.thumbstick.y),
+            ],
+            stick_click: controller.thumbstick.pressed,
+            menu: controller.menu,
+        }
+    }
+
+    // The line that shows the buttons of the controller in hand `side`: the face buttons are named
+    // as the controller prints them, and show only while they are down.
+    pub(crate) fn line(self, side: Hand) -> String {
+        let (name, faces) = match side {
+            Hand::Left => ("L", ["X", "Y"]),
+            Hand::Right => ("R", ["A", "B"]),
+        };
+        let [lean_x, lean_y] = self.stick_tenths.map(|tenths| tenths / 10.0);
+        let down = |name: &'static str, down: bool| if down { name } else { "-" };
+        format!(
+            "{name} trig {} grip {} {}{} {lean_x:+.1},{lean_y:+.1} {}{}",
+            self.trigger_percent,
+            self.squeeze_percent,
+            down(faces[0], self.faces[0]),
+            down(faces[1], self.faces[1]),
+            down("C", self.stick_click),
+            down("M", self.menu),
+        )
+    }
+}
+
 // What the panel shows, rounded: the head's height above where it started in centimeters, the
-// right trigger and the pinch of the right hand's index finger in percent, the input that points
-// for each hand and the frames that the effect saw in the last second.
+// right trigger and the pinch of the right hand's index finger in percent, the buttons of each
+// controller, the input that points for each hand and the frames that the effect saw in the last
+// second.
 #[derive(Clone, Copy, Default, PartialEq)]
 pub(crate) struct Readout {
     // Whole centimeters and whole percent, rounded so a change below them does not redraw
@@ -67,6 +119,7 @@ pub(crate) struct Readout {
     pub(crate) trigger_percent: f32,
     pub(crate) pinch_percent: f32,
     // Left, then right
+    pub(crate) controllers: [ControllerReadout; 2],
     pub(crate) pointers: [Option<InputSource>; 2],
     pub(crate) frames_per_second: u32,
 }
@@ -119,6 +172,8 @@ impl Tracker {
                 .right_hand
                 .aim
                 .map_or(0.0, |aim| (aim.index.strength * 100.0).round()),
+            controllers: [&frame.left_controller, &frame.right_controller]
+                .map(ControllerReadout::of),
             pointers: [frame.left_pointer, frame.right_pointer],
             frames_per_second: self.frames_per_second,
         };

@@ -24,8 +24,8 @@ cranpose_xr::android_main! {
 
 In a headset each panel is a layer of the headset's compositor, which samples the panel's
 pixels once at the display's resolution, so its text stays sharp. A dp is a millimeter in the
-room. The controllers point at the panels, and their triggers press. Outside a headset the
-panels draw flat, side by side.
+room. Each controller points at the panels, and its trigger presses. Both controllers work at once.
+Outside a headset the panels draw flat, side by side.
 
 A panel or a surface with `SubspaceModifier::movable()` has a handle under it: a sphere that shows
 from any side. A controller grabs it from any side and carries the panel.
@@ -563,7 +563,7 @@ permission is granted, and it does not ask again after a refusal.
 
 A tracked hand points at the panels, the curved panels and the volumes, and a pinch presses. The app
 asks for it with `Use::hand_tracking()`, as above. Its buttons, sliders and handles take the hand
-as they take a controller, because one pointer serves both.
+as they take a controller, because the pointer of each hand serves both.
 
 - A controller that the runtime tracks points first. A hand points only on a side with no
   controller in use, so a user can hold a controller in one hand and point with the other.
@@ -591,7 +591,112 @@ A build that turns on the `scripted-hand` feature can play a hand in place of th
 check where no hand can be tracked, such as an emulator. `script_hand(ScriptedHand::pointing(hand,
 from, at, PinchCycle::default()))` installs a hand whose aim pose points at a place in the room and
 whose index finger pinches in a cycle. The frame holds it as a tracked hand, so the pointer treats
-it as the cameras' hand. The feature is off by default.
+it as the cameras' hand. A script for each hand plays at once. The feature is off by default.
+
+## One pointer for each hand
+
+Each hand has a pointer of its own, whether a controller or a tracked hand drives it. The two
+pointers hover, press, capture and drag with separate state, and they reach the composition under
+separate pointer ids. Two drags on two panels run together. Two presses on one panel arrive at its
+nodes as two pointers, as two fingers do: a node sees a `Down` of each id, and each id has its own
+`Move`s and its own `Up`. The nodes of the UI that hold a press, a hover or a scroll gesture, such as
+`clickable`, sliders, scrolling lists and the press and hover interaction sources, hold the pointer
+that went down first and let the other pass by until it lifts.
+
+A panel that one hand carries or resizes by its handle has no handle for the other hand until the
+first lets go. The other hand presses, drags and scrolls on any panel meanwhile, also on the panel
+that the first hand carries. A hand that the runtime stops tracking lets its presses go, and the
+other hand goes on.
+
+The ids are `PointerId(1)` for the left hand and `PointerId(2)` for the right hand. `PointerId(0)`
+stays with the window's own mouse or finger. A surface or a volume gives its callback the events of
+each hand with that hand's id, and a volume's `InputEvent` names the hand in `pointer_type`.
+
+### Controller buttons
+
+`XrFrame::controller(hand)` gives the state of every input of a controller:
+
+| Field | What it holds |
+| --- | --- |
+| `trigger` | `value` from 0 to 1, `pressed` (from 0.6 until it falls below 0.4) and `touched` |
+| `squeeze` | The grip: `value` and `pressed`, with the same marks |
+| `primary` | The first face button, A on the right hand and X on the left: `pressed` and `touched` |
+| `secondary` | The second face button, B on the right hand and Y on the left |
+| `thumbstick` | `x` and `y` from -1 to 1, `pressed` for the click and `touched` |
+| `menu` | Whether the menu button is down. Only the left Touch controller has one |
+| `thumbrest_touched` | Whether the thumb rests beside the stick |
+
+The backend binds these inputs for the Meta Touch, Touch Plus and Touch Pro controllers, the Valve
+Index, HTC Vive, Vive Cosmos and Vive Focus 3, the Microsoft and Samsung motion controllers, the
+HP Mixed Reality controllers, the PICO 4 and Neo 3 controllers, the Magic Leap 2 controller and the Khronos
+generic and simple profiles. The hand interaction profiles give the pinch as the trigger and the
+grasp as the squeeze. A profile with a click where another has a value gives 0 or 1, so `pressed`
+follows the click. An input that a profile lacks stays at rest. Jetpack XR has no controller type,
+so the names follow the Touch controllers.
+
+### From buttons to pointer buttons
+
+The pointer maps controller inputs to Compose's pointer buttons. A panel sees a press of the
+secondary button as a `PointerEventKind::ButtonDown(PointerButton::Secondary)` and its release as a
+`ButtonUp`. The thumbstick scrolls the panel under the pointer with `PointerEventKind::Scroll`
+events, as a wheel does. The default follows a desktop mouse:
+
+| Input | Pointer button |
+| --- | --- |
+| trigger, or the pinch of a tracked hand | primary (left click) |
+| first face button (A on the right hand, X on the left) | secondary (right click) |
+| thumbstick click | middle |
+| thumbstick lean | scrolls 800 dp each second at full lean: forward is up, right is right |
+
+The grip, the second face button and the menu button press nothing by default. The first face
+button gives the right click because the thumb is free to press it while the fingers hold the
+controller and point. The grip stays free for an app that grabs objects with it, which is what Meta's
+guidance for Touch controllers gives it. The menu button stays free for the app's own menu.
+
+The trigger also takes the handles of panels, whatever it presses. Another button goes where the
+trigger's press is, else where the ray points. It goes nowhere while the hand carries a panel, and
+the thumbstick pushes that panel then instead of scrolling.
+
+An app changes the mapping with `PointerSettings`, which `local_pointer_settings()` gives. The
+change counts from the next frame, from any thread:
+
+```rust,ignore
+use cranpose::PointerButton;
+use cranpose_xr::{ControllerInput, PointerMapping, local_pointer_settings};
+
+if let Some(settings) = local_pointer_settings().current() {
+    settings.set_mapping(
+        PointerMapping::new()
+            // The grip is a right click, the first face button presses nothing, and the stick
+            // scrolls the other way, half as fast
+            .with_button(ControllerInput::Squeeze, Some(PointerButton::Secondary))
+            .with_button(ControllerInput::Primary, None)
+            .with_scroll_speed(-400.0),
+    );
+}
+```
+
+Haptics stay per hand: `Haptics::vibrate(hand, vibration)` reaches the controller of that hand.
+
+### Beams
+
+A controller's beam draws only while the app shows a panel, a curved panel or a volume that the
+controller's ray can reach. A Subspace with no visible content has no beam and submits no beam layer.
+A panel that rides a controller is out of that controller's reach, so the ray of the hand that
+carries the only panel has no beam. An app that draws its own rays hides the beams with
+`PointerSettings::set_beams_visible(false)`. The pointer works with the beams hidden. Jetpack XR has
+no such call.
+
+### Scripted controllers
+
+A build with the `scripted-hand` feature can also play controllers in place of the runtime's, for a
+check where no controller exists, such as an emulator. `script_controller(script)` installs a
+`ScriptedController` for one hand, and a script for each hand plays at once. A script lists steps
+with `moving_to(duration, (position, at), ScriptedButtons)` and `holding(duration, buttons)`: in each
+step the controller and its aim move in a straight line, and the buttons stay as given.
+`ScriptedController::handle_of(panel, size)` gives the place of the handle that carries a movable
+panel. The frame holds the result as the `Controller` of that hand with the Touch Plus profile, so
+the pointer, the buttons and the haptics take it as they take a real controller.
 
 ## Anchors and planes
 

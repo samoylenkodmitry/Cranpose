@@ -30,10 +30,13 @@ pub(crate) enum Input {
 }
 
 impl Input {
-    // The inputs that the pointer uses: where it aims, whether it presses and how far a stick
-    // leans forward. A profile whose full list the runtime rejects still binds these.
+    // The inputs that the pointer needs to point and to scroll: where it aims, whether it presses
+    // and how far a stick leans. A profile whose full list the runtime rejects still binds these.
     pub(crate) const fn points(self) -> bool {
-        matches!(self, Self::AimPose | Self::Trigger | Self::StickY)
+        matches!(
+            self,
+            Self::AimPose | Self::Trigger | Self::StickX | Self::StickY
+        )
     }
 }
 

@@ -31,7 +31,7 @@ impl Space {
         not(any(test, headset)),
         expect(dead_code, reason = "the headset backend calls it")
     )]
-    // Tells the surface that `gesture` names what the pointer did on it, as Compose's pointer
+    // Tells the surface that `gesture` names what a hand's pointer did on it, as Compose's pointer
     // event, and a volume as the input event of a ray. A surface that takes no pointer events sees
     // nothing.
     pub(crate) fn deliver_to_surface(&self, gesture: &SurfaceGesture) {
@@ -41,12 +41,12 @@ impl Space {
                 .iter_mut()
                 .find(|entry| entry.slot.id == gesture.surface)
                 .and_then(|entry| {
-                    let (event, action) = entry.input.event(gesture.gesture)?;
-                    let input = entry
-                        .input_sink
-                        .clone()
-                        .zip(gesture.ray)
-                        .map(|(sink, ray)| (sink, input_event(&ray, action, &entry.slot.pose)));
+                    let (event, action) =
+                        entry.input[gesture.hand.index()].event(gesture.hand, gesture.gesture)?;
+                    let input = action.and_then(|action| {
+                        let (sink, ray) = entry.input_sink.clone().zip(gesture.ray)?;
+                        Some((sink, input_event(&ray, action, &entry.slot.pose)))
+                    });
                     Some((entry.sink.clone(), event, input))
                 })
         };

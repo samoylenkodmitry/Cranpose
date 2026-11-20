@@ -1,6 +1,7 @@
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
+    time::Duration,
 };
 
 use cranpose::{
@@ -15,19 +16,30 @@ use cranpose_testing::{
 
 use super::*;
 use crate::{
-    Controller, HandAim, HandState, MovePolicy, Pinch, Pose, ResizeLimits, ResizePolicy,
-    SpatialExternalSurface, SpatialMoveEvent, SpatialMoveEventType, SpatialPanel,
-    SpatialResizeEvent, SpatialResizeEventType, SpatialVolume, StereoMode, SubspaceModifier,
-    TrackedPose, TrackingState, XrFrame,
+    Controller, HandAim, HandState, InputSource, MovePolicy, Pinch, PointerMapping, Pose, Ray,
+    ResizeLimits, ResizePolicy, SpatialExternalSurface, SpatialMoveEvent, SpatialMoveEventType,
+    SpatialPanel, SpatialResizeEvent, SpatialResizeEventType, SpatialVolume, StereoMode,
+    SubspaceModifier, TrackedPose, TrackingState, XrFrame,
+    aim::{Aim, Buttons},
+    atlas_input,
     handle::HandleKind,
     pointer_aim::pointer_aim,
     scripted_hand::{PinchCycle, ScriptedHand, play},
-    space::{Mobility, SUBSPACE_ORIGIN, Shape, Space, local_space},
+    space::{
+        Cursor, Mobility, PanelKind, PanelMove, PanelResize, PanelSlot, Ride, SUBSPACE_ORIGIN,
+        Shape, Space, local_space,
+    },
+    surface_input::{Gesture, HandGesture},
     volume_host::VolumeScene,
+    volume_pick::PickMeshes,
 };
 
+// The press and the release of the primary button, which a trigger or a pinch makes.
+const PRESS: Gesture = Gesture::Press(PointerButton::Primary);
+const RELEASE: Gesture = Gesture::Release(PointerButton::Primary);
+
 // A panel of 800 by 500 dp a meter ahead, at the atlas's top.
-const PANEL: PanelSlot = PanelSlot {
+pub(super) const PANEL: PanelSlot = PanelSlot {
     id: 1,
     kind: PanelKind::Content,
     atlas: [0.0, 0.0, 800.0, 500.0],
@@ -53,49 +65,39 @@ const BEHIND: PanelSlot = PanelSlot {
 };
 
 // A controller at `x` meters that points straight ahead, turned right by `yaw` degrees.
-fn aim(x: f32, yaw: f32, trigger: f32) -> Option<Aim> {
+pub(super) fn aim(x: f32, yaw: f32, trigger: f32) -> Option<Aim> {
     let (sin, cos) = yaw.to_radians().sin_cos();
-    Some(Aim {
-        ray: Ray {
-            origin: [x, 0.0, 0.0],
-            direction: [sin, 0.0, -cos],
-        },
-        pose: Pose::at([x, 0.0, 0.0]),
-        trigger,
-        stick: 0.0,
-        source: InputSource::Controller,
-    })
+    let ray = Ray {
+        origin: [x, 0.0, 0.0],
+        direction: [sin, 0.0, -cos],
+    };
+    Some(Aim::pulling(ray, Pose::at([x, 0.0, 0.0]), trigger))
 }
 
 // A controller at `origin` that points at `target`, with its trigger pulled by `trigger`.
-fn aim_at(origin: [f32; 3], target: [f32; 3], trigger: f32) -> Option<Aim> {
+pub(super) fn aim_at(origin: [f32; 3], target: [f32; 3], trigger: f32) -> Option<Aim> {
     let to_target = [
         target[0] - origin[0],
         target[1] - origin[1],
         target[2] - origin[2],
     ];
     let length = to_target.iter().map(|v| v * v).sum::<f32>().sqrt();
-    Some(Aim {
-        ray: Ray {
-            origin,
-            direction: to_target.map(|v| v / length),
-        },
-        pose: Pose::at(origin),
-        trigger,
-        stick: 0.0,
-        source: InputSource::Controller,
-    })
+    let ray = Ray {
+        origin,
+        direction: to_target.map(|v| v / length),
+    };
+    Some(Aim::pulling(ray, Pose::at(origin), trigger))
 }
 
 // A controller at `x` that points at the handle under `slot`'s panel, with its trigger pulled by
 // `trigger`.
-fn handle_aim(slot: &PanelSlot, x: f32, trigger: f32) -> Option<Aim> {
+pub(super) fn handle_aim(slot: &PanelSlot, x: f32, trigger: f32) -> Option<Aim> {
     aim_at([x, 0.0, 0.0], crate::carry::handle_center(slot), trigger)
 }
 
 // A hand that the cameras track at `x` meters, pointing straight ahead turned right by `yaw`
 // degrees, whose index finger pinches by `strength`.
-fn tracked_hand(x: f32, yaw: f32, strength: f32) -> HandState {
+pub(super) fn tracked_hand(x: f32, yaw: f32, strength: f32) -> HandState {
     let half = (-yaw).to_radians() / 2.0;
     HandState {
         tracking_state: TrackingState::Tracking,
@@ -116,7 +118,7 @@ fn tracked_hand(x: f32, yaw: f32, strength: f32) -> HandState {
 
 // The pointer's aim for `hand` when no controller is in use, in an app that asked for hand
 // tracking.
-fn hand_aim_of(hand: &HandState) -> Option<Aim> {
+pub(super) fn hand_aim_of(hand: &HandState) -> Option<Aim> {
     pointer_aim(&Controller::default(), Some(hand))
 }
 
@@ -132,6 +134,7 @@ fn controller_in_use(x: f32, trigger: f32) -> Controller {
         trigger: crate::Trigger {
             value: trigger,
             touched: true,
+            ..crate::Trigger::default()
         },
         ..Controller::default()
     }
@@ -139,22 +142,37 @@ fn controller_in_use(x: f32, trigger: f32) -> Controller {
 
 // Frames 10 ms apart.
 #[derive(Default)]
-struct Frames {
-    pointer: Pointer,
+pub(super) struct Frames {
+    pub(super) pointer: Pointers,
     frame: u64,
     picks: PickMeshes,
+    pub(super) mapping: PointerMapping,
 }
 
 impl Frames {
-    fn update(
+    // One frame with `aims`, left then right. The gestures for the composition of both hands come
+    // in the order that they happened, and the cursor is the right hand's, else the left's.
+    pub(super) fn update(
         &mut self,
         aims: [Option<Aim>; 2],
         panels: &[PanelSlot],
     ) -> (Vec<Gesture>, Option<Cursor>) {
+        let (events, cursors) = self.step(aims, panels);
+        let gestures = events.into_iter().map(|event| event.gesture).collect();
+        (gestures, cursors[1].or(cursors[0]))
+    }
+
+    // The same, with the gestures tagged with their hands and the cursor of each hand.
+    pub(super) fn step(
+        &mut self,
+        aims: [Option<Aim>; 2],
+        panels: &[PanelSlot],
+    ) -> (Vec<HandGesture>, [Option<Cursor>; 2]) {
         self.frame += 1;
         let time = Duration::from_millis(10 * self.frame);
-        let (events, cursor) = self.pointer.update(aims, time, (panels, &self.picks));
-        (events.to_vec(), cursor)
+        self.pointer
+            .update(aims, time, (panels, &self.picks), (self.mapping, true));
+        (self.pointer.atlas().to_vec(), self.pointer.cursors())
     }
 
     fn right(&mut self, x: f32, yaw: f32, trigger: f32) -> (Vec<Gesture>, Option<Cursor>) {
@@ -181,10 +199,10 @@ fn a_trigger_over_a_panel_moves_presses_and_releases() {
         Some((1, 400.0, 250.0))
     );
     let (events, cursor) = frames.right(0.0, 0.0, 1.0);
-    assert_eq!(events, [Gesture::Press]);
+    assert_eq!(events, [PRESS]);
     assert!(cursor.is_some_and(|cursor| cursor.pressed));
     let (events, _) = frames.right(0.0, 0.0, 0.0);
-    assert_eq!(events, [Gesture::Release]);
+    assert_eq!(events, [RELEASE]);
 }
 
 #[test]
@@ -192,9 +210,9 @@ fn a_half_pulled_trigger_neither_presses_nor_releases() {
     let mut frames = Frames::default();
     frames.right(0.0, 0.0, 0.0);
     assert!(frames.right(0.0, 0.0, 0.5).0.is_empty());
-    assert_eq!(frames.right(0.0, 0.0, 0.7).0, [Gesture::Press]);
+    assert_eq!(frames.right(0.0, 0.0, 0.7).0, [PRESS]);
     assert!(frames.right(0.0, 0.0, 0.5).0.is_empty());
-    assert_eq!(frames.right(0.0, 0.0, 0.3).0, [Gesture::Release]);
+    assert_eq!(frames.right(0.0, 0.0, 0.3).0, [RELEASE]);
 }
 
 #[test]
@@ -203,10 +221,7 @@ fn a_press_takes_the_point_from_before_the_pull() {
     frames.right(0.0, 0.0, 0.0);
     frames.right(0.05, 0.0, 0.3);
     let (events, cursor) = frames.right(0.1, 0.0, 0.8);
-    assert_eq!(
-        events,
-        [Gesture::Move { x: 400.0, y: 250.0 }, Gesture::Press]
-    );
+    assert_eq!(events, [Gesture::Move { x: 400.0, y: 250.0 }, PRESS]);
     assert_eq!(cursor.map(|cursor| cursor.x), Some(400.0));
 }
 
@@ -223,7 +238,7 @@ fn a_shaking_press_clicks_and_a_turning_press_drags() {
     }
     // The release lets go at the held point before the pointer follows the ray again
     let (events, _) = frames.right(0.0, 0.0, 0.0);
-    assert_eq!(events.first(), Some(&Gesture::Release));
+    assert_eq!(events.first(), Some(&RELEASE));
 
     frames.right(0.0, 0.0, 1.0);
     let moved = (0..60).any(|_| {
@@ -242,19 +257,13 @@ fn a_press_whose_pull_turned_the_controller_holds_its_point_while_held_long() {
         frames.right(0.0, 6.0, 0.3);
     }
     let (events, _) = frames.right(0.0, 6.0, 1.0);
-    assert_eq!(
-        events,
-        [Gesture::Move { x: 400.0, y: 250.0 }, Gesture::Press]
-    );
+    assert_eq!(events, [Gesture::Move { x: 400.0, y: 250.0 }, PRESS]);
     for _ in 0..60 {
         let (events, cursor) = frames.right(0.0, 6.0, 1.0);
         assert!(events.is_empty());
         assert_eq!(cursor.map(|cursor| cursor.x), Some(400.0));
     }
-    assert_eq!(
-        frames.right(0.0, 6.0, 0.0).0.first(),
-        Some(&Gesture::Release)
-    );
+    assert_eq!(frames.right(0.0, 6.0, 0.0).0.first(), Some(&RELEASE));
 }
 
 #[test]
@@ -271,10 +280,7 @@ fn letting_go_of_a_long_press_does_not_drag() {
         assert!(events.is_empty());
         assert_eq!(cursor.map(|cursor| cursor.x), Some(400.0));
     }
-    assert_eq!(
-        frames.right(0.0, 8.0, 0.3).0.first(),
-        Some(&Gesture::Release)
-    );
+    assert_eq!(frames.right(0.0, 8.0, 0.3).0.first(), Some(&RELEASE));
 }
 
 #[test]
@@ -285,7 +291,7 @@ fn a_pull_that_aims_anew_presses_where_the_ray_points_now() {
         frames.right(0.0, 15.0, 0.3);
     }
     let (events, cursor) = frames.right(0.0, 15.0, 1.0);
-    assert_eq!(events.last(), Some(&Gesture::Press));
+    assert_eq!(events.last(), Some(&PRESS));
     assert!(cursor.is_some_and(|cursor| cursor.x > 600.0));
 }
 
@@ -307,25 +313,45 @@ fn a_trigger_held_from_outside_does_not_press_on_entry() {
     assert_eq!(events, [Gesture::Move { x: 400.0, y: 250.0 }]);
     assert!(cursor.is_some_and(|cursor| !cursor.pressed));
     assert!(frames.right(0.0, 0.0, 0.0).0.is_empty());
-    assert_eq!(frames.right(0.0, 0.0, 1.0).0, [Gesture::Press]);
+    assert_eq!(frames.right(0.0, 0.0, 1.0).0, [PRESS]);
 }
 
 #[test]
-fn the_pointer_keeps_its_hand_while_pressed() {
+fn a_press_of_one_hand_leaves_the_other_hand_free_to_press_and_release() {
     let mut frames = Frames::default();
     frames.update([None, aim(0.0, 0.0, 1.0)], &[PANEL]);
+    // The left hand points 10 cm to the right of the right hand's point and pulls its trigger
     let both = |left: f32, right: f32| [aim(0.1, 0.0, left), aim(0.0, 0.0, right)];
-    let (events, cursor) = frames.update(both(1.0, 1.0), &[PANEL]);
-    assert!(events.is_empty());
-    assert_eq!(cursor.map(|cursor| cursor.x), Some(400.0));
+    let (events, _) = frames.step(both(1.0, 1.0), &[PANEL]);
     assert_eq!(
-        frames.update(both(1.0, 0.0), &[PANEL]).0,
-        [Gesture::Release]
+        events,
+        [
+            HandGesture {
+                hand: Side::Left,
+                gesture: Gesture::Move { x: 500.0, y: 250.0 }
+            },
+            HandGesture {
+                hand: Side::Left,
+                gesture: PRESS
+            }
+        ],
+        "the left hand's pull presses at once, with the right hand's press still down"
     );
-    assert!(frames.update(both(0.0, 0.0), &[PANEL]).0.is_empty());
+    let (events, _) = frames.step(both(1.0, 0.0), &[PANEL]);
     assert_eq!(
-        frames.update(both(1.0, 0.0), &[PANEL]).0,
-        [Gesture::Move { x: 500.0, y: 250.0 }, Gesture::Press]
+        events,
+        [HandGesture {
+            hand: Side::Right,
+            gesture: RELEASE
+        }]
+    );
+    let (events, _) = frames.step(both(0.0, 0.0), &[PANEL]);
+    assert_eq!(
+        events,
+        [HandGesture {
+            hand: Side::Left,
+            gesture: RELEASE
+        }]
     );
 }
 
@@ -335,7 +361,7 @@ fn a_lost_controller_releases_its_press() {
     frames.right(0.0, 0.0, 0.0);
     frames.right(0.0, 0.0, 1.0);
     let (events, _) = frames.update([None, None], &[PANEL]);
-    assert_eq!(events, [Gesture::Release, Gesture::Leave]);
+    assert_eq!(events, [RELEASE, Gesture::Leave]);
 }
 
 #[test]
@@ -357,9 +383,10 @@ fn a_ray_reaches_a_far_panel_and_shows_its_full_length_where_it_meets_nothing() 
     frames.update([None, aim(0.0, 0.0, 0.0)], &[far]);
     let beam = frames.pointer.beams()[1];
     assert!(beam.is_some_and(|beam| (beam.length - 6.0).abs() < 1e-3));
-    frames.update([None, aim(0.0, 0.0, 0.0)], &[]);
+    // A ray that misses the panel still shows, as long as a panel stands in its reach
+    frames.update([None, aim(0.0, 60.0, 0.0)], &[PANEL]);
     let beam = frames.pointer.beams()[1];
-    assert!(beam.is_some_and(|beam| (beam.length - RAY_LENGTH).abs() < 1e-4));
+    assert!(beam.is_some_and(|beam| (beam.length - 3.0).abs() < 1e-4));
 }
 
 #[test]
@@ -373,7 +400,7 @@ fn a_pull_on_a_handle_carries_the_panel() {
     let mut frames = Frames::default();
     let (events, _) = frames.update([None, at_handle(0.0, 0.0)], &[movable]);
     assert!(events.is_empty());
-    assert_eq!(frames.pointer.handle(), Some((1, HandleKind::Move)));
+    assert_eq!(frames.pointer.handles()[1], Some((1, HandleKind::Move)));
     frames.update([None, at_handle(0.0, 1.0)], &[movable]);
     assert_eq!(
         frames.pointer.moves(),
@@ -408,7 +435,7 @@ fn a_pull_on_a_handle_carries_the_panel() {
 }
 
 // A movable `PANEL`: its bottom edge is at y = -0.25.
-const MOVABLE: PanelSlot = PanelSlot {
+pub(super) const MOVABLE: PanelSlot = PanelSlot {
     mobility: Mobility::Movable,
     ..PANEL
 };
@@ -420,7 +447,7 @@ fn a_pull_on_a_handle_from_behind_the_panel_carries_it() {
     let behind = |trigger: f32| aim_at([0.1, 0.3, -3.0], center, trigger);
     let mut frames = Frames::default();
     frames.update([None, behind(0.0)], &[MOVABLE]);
-    assert_eq!(frames.pointer.handle(), Some((1, HandleKind::Move)));
+    assert_eq!(frames.pointer.handles()[1], Some((1, HandleKind::Move)));
     frames.update([None, behind(1.0)], &[MOVABLE]);
     assert_eq!(
         frames.pointer.moves(),
@@ -440,7 +467,7 @@ fn a_pull_beside_a_handle_does_not_carry() {
         let beside = |trigger: f32| aim_at(origin, [x + 0.1, y, z], trigger);
         let mut frames = Frames::default();
         frames.update([None, beside(0.0)], &[MOVABLE]);
-        assert_eq!(frames.pointer.handle(), None, "{origin:?}");
+        assert_eq!(frames.pointer.handles()[1], None, "{origin:?}");
         frames.update([None, beside(1.0)], &[MOVABLE]);
         assert!(frames.pointer.moves().is_empty(), "{origin:?}");
     }
@@ -451,9 +478,9 @@ fn a_pull_just_above_the_bottom_edge_of_a_movable_panel_presses() {
     let mut frames = Frames::default();
     let aim = |trigger: f32| aim_at([0.0, -0.245, 0.0], [0.0, -0.245, -1.0], trigger);
     frames.update([None, aim(0.0)], &[MOVABLE]);
-    assert_eq!(frames.pointer.handle(), None);
+    assert_eq!(frames.pointer.handles()[1], None);
     let (events, _) = frames.update([None, aim(1.0)], &[MOVABLE]);
-    assert!(events.contains(&Gesture::Press));
+    assert!(events.contains(&PRESS));
     assert!(frames.pointer.moves().is_empty());
 }
 
@@ -496,7 +523,7 @@ fn a_pull_on_the_corner_handle_resizes_the_panel_and_reports_each_size() {
     let mut frames = Frames::default();
     let (events, _) = frames.update([None, corner_aim(&panel, [0.0; 2], 0.0)], &[panel]);
     assert!(events.is_empty());
-    assert_eq!(frames.pointer.handle(), Some((1, HandleKind::Resize)));
+    assert_eq!(frames.pointer.handles()[1], Some((1, HandleKind::Resize)));
 
     let (events, _) = frames.update([None, corner_aim(&panel, [0.0; 2], 1.0)], &[panel]);
     assert!(events.is_empty(), "the handle takes the pull");
@@ -598,9 +625,9 @@ fn a_pull_on_the_panel_next_to_the_corner_handle_still_presses() {
         let aim = |trigger: f32| aim_at([0.0; 3], [target[0], target[1], -1.0], trigger);
         let mut frames = Frames::default();
         frames.update([None, aim(0.0)], &[panel]);
-        assert_eq!(frames.pointer.handle(), None, "{target:?}");
+        assert_eq!(frames.pointer.handles()[1], None, "{target:?}");
         let (events, _) = frames.update([None, aim(1.0)], &[panel]);
-        assert!(events.contains(&Gesture::Press), "{target:?}: {events:?}");
+        assert!(events.contains(&PRESS), "{target:?}: {events:?}");
         assert!(frames.pointer.resizes().is_empty(), "{target:?}");
     }
 }
@@ -612,7 +639,7 @@ fn a_pull_beside_the_corner_handle_neither_resizes_nor_presses() {
     let aim = |trigger: f32| corner_aim(&panel, [0.1, 0.0], trigger);
     let mut frames = Frames::default();
     frames.update([None, aim(0.0)], &[panel]);
-    assert_eq!(frames.pointer.handle(), None);
+    assert_eq!(frames.pointer.handles()[1], None);
     let (events, _) = frames.update([None, aim(1.0)], &[panel]);
     assert!(events.is_empty());
     assert!(frames.pointer.resizes().is_empty());
@@ -664,7 +691,7 @@ fn a_panel_that_moves_and_resizes_has_a_handle_for_each() {
     };
     let mut frames = Frames::default();
     frames.update([None, handle_aim(&both, 0.0, 0.0)], &[both]);
-    assert_eq!(frames.pointer.handle(), Some((1, HandleKind::Move)));
+    assert_eq!(frames.pointer.handles()[1], Some((1, HandleKind::Move)));
     frames.update([None, handle_aim(&both, 0.0, 1.0)], &[both]);
     assert_eq!(frames.pointer.moves().len(), 1);
     assert!(frames.pointer.resizes().is_empty());
@@ -672,7 +699,7 @@ fn a_panel_that_moves_and_resizes_has_a_handle_for_each() {
     // The ray's filter lags a jump from one handle to the other, so the other grab starts anew
     let mut frames = Frames::default();
     frames.update([None, corner_aim(&both, [0.0; 2], 0.0)], &[both]);
-    assert_eq!(frames.pointer.handle(), Some((1, HandleKind::Resize)));
+    assert_eq!(frames.pointer.handles()[1], Some((1, HandleKind::Resize)));
     frames.update([None, corner_aim(&both, [0.0; 2], 1.0)], &[both]);
     assert_eq!(frames.pointer.resizes().len(), 1);
     assert!(frames.pointer.moves().is_empty());
@@ -686,7 +713,7 @@ fn a_panel_on_a_curve_has_no_corner_handle() {
     };
     let mut frames = Frames::default();
     frames.update([None, corner_aim(&RESIZABLE, [0.0; 2], 0.0)], &[curved]);
-    assert_eq!(frames.pointer.handle(), None);
+    assert_eq!(frames.pointer.handles()[1], None);
 }
 
 #[test]
@@ -765,14 +792,19 @@ fn phases(events: &[SpatialMoveEvent]) -> Vec<SpatialMoveEventType> {
 // The user grabs the handle, carries the panel 10 cm to the right in two frames and lets go, as
 // the frame loop of the headset runs it.
 fn carry_right(space: &Space) {
-    let mut pointer = Pointer::default();
+    let mut pointer = Pointers::default();
     for (frame, (x, trigger)) in [(0.0, 0.0), (0.0, 1.0), (0.05, 1.0), (0.1, 1.0), (0.1, 0.0)]
         .into_iter()
         .enumerate()
     {
         let aim = handle_aim(&space.panels()[0], x, trigger);
         let time = Duration::from_millis(10 * frame as u64);
-        pointer.update([None, aim], time, (&space.panels(), &PickMeshes::default()));
+        pointer.update(
+            [None, aim],
+            time,
+            (&space.panels(), &PickMeshes::default()),
+            (PointerMapping::default(), true),
+        );
         for step in pointer.moves() {
             space.carry(step);
         }
@@ -841,7 +873,7 @@ fn a_custom_policy_leaves_the_pose_to_the_app() {
 // The user grabs the corner handle, drags it 10 cm to the right and 5 cm down and lets go, as the
 // frame loop of the headset runs it. The ray's filter settles during the 3 s of the drag.
 fn resize_right(space: &Space) {
-    let mut pointer = Pointer::default();
+    let mut pointer = Pointers::default();
     let frames = [([0.0, 0.0], 0.0), ([0.0, 0.0], 1.0)]
         .into_iter()
         .chain((0..300).map(|_| ([0.1, -0.05], 1.0)))
@@ -849,7 +881,12 @@ fn resize_right(space: &Space) {
     for (frame, (shift, trigger)) in frames.enumerate() {
         let aim = corner_aim(&space.panels()[0], shift, trigger);
         let time = Duration::from_millis(10 * frame as u64);
-        pointer.update([None, aim], time, (&space.panels(), &PickMeshes::default()));
+        pointer.update(
+            [None, aim],
+            time,
+            (&space.panels(), &PickMeshes::default()),
+            (PointerMapping::default(), true),
+        );
         for step in pointer.resizes() {
             space.resize(step);
         }
@@ -1096,7 +1133,8 @@ fn a_ray_that_enters_a_volume_by_its_side_reports_the_place_on_its_front_face() 
         },
         pose: Pose::at([0.7, 0.0, -1.0]),
         trigger: 0.0,
-        stick: 0.0,
+        stick: [0.0; 2],
+        buttons: Buttons::default(),
         source: InputSource::Controller,
     });
     frames.update([None, aim], &space.panels());
@@ -1285,7 +1323,7 @@ fn a_controllers_own_ray_ignores_the_panels_that_ride_it() {
         "the ray ends at the panel behind the ball"
     );
     let (events, _) = frames.update([aim(0.0, 0.0, 1.0), None], &panels);
-    assert_eq!(events, [Gesture::Press]);
+    assert_eq!(events, [PRESS]);
 
     // The right ray hits the ball and presses it as it does any panel
     let mut frames = Frames::default();
@@ -1296,7 +1334,7 @@ fn a_controllers_own_ray_ignores_the_panels_that_ride_it() {
         "the ray ends at the ball"
     );
     let (events, cursor) = frames.update([None, aim(0.0, 0.0, 1.0)], &panels);
-    assert_eq!(events, [Gesture::Press]);
+    assert_eq!(events, [PRESS]);
     assert!(cursor.is_some_and(|cursor| cursor.pressed && cursor.panel == 3));
 }
 
@@ -1335,10 +1373,10 @@ fn a_pinch_over_a_panel_moves_presses_and_releases() {
     assert!((beam.length - 1.0).abs() < 1e-4);
     assert_eq!(frames.pointer.beams()[0], None);
     let (events, cursor) = frames.right_hand(0.0, 0.0, 1.0);
-    assert_eq!(events, [Gesture::Press]);
+    assert_eq!(events, [PRESS]);
     assert!(cursor.is_some_and(|cursor| cursor.pressed));
     let (events, _) = frames.right_hand(0.0, 0.0, 0.0);
-    assert_eq!(events, [Gesture::Release]);
+    assert_eq!(events, [RELEASE]);
 }
 
 #[test]
@@ -1346,9 +1384,9 @@ fn a_half_closed_pinch_neither_presses_nor_releases() {
     let mut frames = Frames::default();
     frames.right_hand(0.0, 0.0, 0.0);
     assert!(frames.right_hand(0.0, 0.0, 0.5).0.is_empty());
-    assert_eq!(frames.right_hand(0.0, 0.0, 0.7).0, [Gesture::Press]);
+    assert_eq!(frames.right_hand(0.0, 0.0, 0.7).0, [PRESS]);
     assert!(frames.right_hand(0.0, 0.0, 0.5).0.is_empty());
-    assert_eq!(frames.right_hand(0.0, 0.0, 0.3).0, [Gesture::Release]);
+    assert_eq!(frames.right_hand(0.0, 0.0, 0.3).0, [RELEASE]);
 }
 
 #[test]
@@ -1362,10 +1400,7 @@ fn a_pinching_hand_clicks_through_a_shake_and_drags_when_it_turns() {
         assert!(events.is_empty());
         assert_eq!(cursor.map(|cursor| cursor.x), Some(400.0));
     }
-    assert_eq!(
-        frames.right_hand(0.0, 0.0, 0.0).0.first(),
-        Some(&Gesture::Release)
-    );
+    assert_eq!(frames.right_hand(0.0, 0.0, 0.0).0.first(), Some(&RELEASE));
 
     frames.right_hand(0.0, 0.0, 1.0);
     let moved = (0..60).any(|_| {
@@ -1382,10 +1417,7 @@ fn closing_the_pinch_turns_the_hand_and_the_press_keeps_the_point_before_it() {
     // The pinch's own motion turns the aim by 6 degrees before the fingers meet
     frames.right_hand(0.0, 3.0, 0.3);
     let (events, cursor) = frames.right_hand(0.0, 6.0, 1.0);
-    assert_eq!(
-        events,
-        [Gesture::Move { x: 400.0, y: 250.0 }, Gesture::Press]
-    );
+    assert_eq!(events, [Gesture::Move { x: 400.0, y: 250.0 }, PRESS]);
     assert_eq!(cursor.map(|cursor| cursor.x), Some(400.0));
 }
 
@@ -1393,14 +1425,14 @@ fn closing_the_pinch_turns_the_hand_and_the_press_keeps_the_point_before_it() {
 fn a_hand_that_makes_the_system_gesture_does_not_press_and_lets_a_press_go() {
     let mut frames = Frames::default();
     frames.right_hand(0.0, 0.0, 0.0);
-    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [Gesture::Press]);
+    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [PRESS]);
     let mut gesture = tracked_hand(0.0, 0.0, 1.0);
     if let Some(aim) = &mut gesture.aim {
         aim.system_gesture = true;
     }
     // The palm turns up and the pinch is the menu's. The press ends and its ray goes away
     let (events, cursor) = frames.right_state(&gesture);
-    assert_eq!(events, [Gesture::Release, Gesture::Leave]);
+    assert_eq!(events, [RELEASE, Gesture::Leave]);
     assert_eq!(cursor, None);
     assert_eq!(frames.pointer.beams(), [None, None]);
     for _ in 0..5 {
@@ -1413,7 +1445,7 @@ fn a_hand_that_makes_the_system_gesture_does_not_press_and_lets_a_press_go() {
     assert_eq!(events, [Gesture::Move { x: 400.0, y: 250.0 }]);
     assert!(frames.right_hand(0.0, 0.0, 1.0).0.is_empty());
     assert!(frames.right_hand(0.0, 0.0, 0.0).0.is_empty());
-    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [Gesture::Press]);
+    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [PRESS]);
 }
 
 #[test]
@@ -1424,22 +1456,19 @@ fn a_pinch_that_is_closed_when_the_hand_appears_does_not_press() {
     assert!(cursor.is_some_and(|cursor| !cursor.pressed));
     assert!(frames.right_hand(0.0, 0.0, 1.0).0.is_empty());
     assert!(frames.right_hand(0.0, 0.0, 0.0).0.is_empty());
-    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [Gesture::Press]);
+    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [PRESS]);
 }
 
 #[test]
 fn a_hand_that_the_cameras_lose_lets_its_press_go_and_presses_again_after_a_new_pinch() {
     let mut frames = Frames::default();
     frames.right_hand(0.0, 0.0, 0.0);
-    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [Gesture::Press]);
+    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [PRESS]);
     let lost = HandState {
         tracking_state: TrackingState::Paused,
         ..HandState::default()
     };
-    assert_eq!(
-        frames.right_state(&lost).0,
-        [Gesture::Release, Gesture::Leave]
-    );
+    assert_eq!(frames.right_state(&lost).0, [RELEASE, Gesture::Leave]);
     // The cameras find the hand with its fingers still together
     assert!(
         frames
@@ -1447,9 +1476,9 @@ fn a_hand_that_the_cameras_lose_lets_its_press_go_and_presses_again_after_a_new_
             .0
             .contains(&Gesture::Move { x: 400.0, y: 250.0 })
     );
-    assert!(!frames.right_hand(0.0, 0.0, 1.0).0.contains(&Gesture::Press));
+    assert!(!frames.right_hand(0.0, 0.0, 1.0).0.contains(&PRESS));
     frames.right_hand(0.0, 0.0, 0.0);
-    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [Gesture::Press]);
+    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [PRESS]);
 }
 
 #[test]
@@ -1458,28 +1487,28 @@ fn a_switch_from_the_controller_to_the_hand_in_a_press_releases_it_cleanly() {
     frames.update([None, aim(0.0, 0.0, 0.0)], &[PANEL]);
     assert_eq!(
         frames.update([None, aim(0.0, 0.0, 1.0)], &[PANEL]).0,
-        [Gesture::Press]
+        [PRESS]
     );
     // The user lets go of the controller and the cameras find the hand, with its fingers open
     let (events, cursor) = frames.right_hand(0.0, 0.0, 0.0);
-    assert_eq!(events, [Gesture::Release, Gesture::Leave]);
+    assert_eq!(events, [RELEASE, Gesture::Leave]);
     assert_eq!(cursor, None);
     assert_eq!(
         frames.right_hand(0.0, 0.0, 0.0).0,
         [Gesture::Move { x: 400.0, y: 250.0 }]
     );
-    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [Gesture::Press]);
-    assert_eq!(frames.right_hand(0.0, 0.0, 0.0).0, [Gesture::Release]);
+    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [PRESS]);
+    assert_eq!(frames.right_hand(0.0, 0.0, 0.0).0, [RELEASE]);
 }
 
 #[test]
 fn a_switch_from_the_hand_to_the_controller_in_a_press_releases_it_cleanly() {
     let mut frames = Frames::default();
     frames.right_hand(0.0, 0.0, 0.0);
-    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [Gesture::Press]);
+    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [PRESS]);
     // The controller's trigger is down as the controller takes the side over
     let (events, _) = frames.update([None, aim(0.0, 0.0, 1.0)], &[PANEL]);
-    assert_eq!(events, [Gesture::Release, Gesture::Leave]);
+    assert_eq!(events, [RELEASE, Gesture::Leave]);
     assert!(
         frames
             .update([None, aim(0.0, 0.0, 1.0)], &[PANEL])
@@ -1496,7 +1525,7 @@ fn a_switch_from_the_hand_to_the_controller_in_a_press_releases_it_cleanly() {
     assert_eq!(frames.update([None, aim(0.0, 0.0, 0.0)], &[PANEL]).0, []);
     assert_eq!(
         frames.update([None, aim(0.0, 0.0, 1.0)], &[PANEL]).0,
-        [Gesture::Press]
+        [PRESS]
     );
 }
 
@@ -1518,7 +1547,7 @@ fn a_controller_in_one_hand_and_a_hand_on_the_other_side_each_point() {
     // The pinch of the right hand takes the pointer from the left controller
     let right = hand_aim_of(&tracked_hand(0.3, 0.0, 1.0));
     let (events, cursor) = frames.update([left, right], &[PANEL]);
-    assert_eq!(events.last(), Some(&Gesture::Press));
+    assert_eq!(events.last(), Some(&PRESS));
     assert!(cursor.is_some_and(|cursor| cursor.pressed));
 }
 
@@ -1577,21 +1606,15 @@ fn counting_button() -> (RobotTestRule<TestRenderer>, Rc<Cell<u32>>) {
 // the events sent to the window as the frame loop of the headset sends them.
 fn clicks_of(aims: impl IntoIterator<Item = Option<Aim>>) -> u32 {
     let (mut robot, clicks) = counting_button();
-    let mut pointer = Pointer::default();
+    let mut pointer = Pointers::default();
     for (frame, aim) in (0_u64..).zip(aims) {
-        let (events, _) = pointer.update(
+        pointer.update(
             [None, aim],
             millis(10 * frame),
             (&[BUTTON_PANEL], &PickMeshes::default()),
+            (PointerMapping::default(), true),
         );
-        for gesture in events {
-            match *gesture {
-                Gesture::Move { x, y } => robot.mouse_move(x, y),
-                Gesture::Press => robot.mouse_down(),
-                Gesture::Release => robot.mouse_up(),
-                Gesture::Leave => robot.mouse_move(-100_000.0, -100_000.0),
-            }
-        }
+        atlas_input::deliver(robot.shell_mut(), pointer.atlas());
         robot.wait_for_idle();
     }
     clicks.get()
