@@ -85,6 +85,8 @@ Cranpose developers too:
 
 - `SpatialVolume(modifier, content)`: 3D content in a box, drawn by Cranpose's own scene. See "3D
   content".
+- `SpatialGltfModel(state, modifier, content)`: a glTF 2.0 model in a volume, behind the `gltf`
+  feature. `rememberSpatialGltfModelState(source)` loads it. See "glTF models".
 
 ## 3D content
 
@@ -92,8 +94,8 @@ Cranpose developers too:
 composables whose nodes carry `mesh_surface` or `mesh_surfaces`. Cranpose's own scene draws them, as
 `scene3d` draws them in a window, so a mesh shows live composable content on its surface. Jetpack
 XR 1.0 has `SpatialGltfModel`, which renders a glTF model, and `SceneCoreEntity`, which attaches any
-SceneCore entity. Cranpose has neither. Its composable keeps its own name, after the box that the
-content stands in.
+SceneCore entity. Cranpose has no SceneCore entities. Its composable keeps its own name, after the
+box that the content stands in. A glTF model has `SpatialGltfModel` (see "glTF models").
 
 The modifier gives the box: `width`, `height` and `depth` in dp, which are millimeters, 500 each by
 default. The modifier's `offset`, `rotate`, `movable` and `resizable` work as on a panel. The
@@ -213,6 +215,95 @@ The handles of a movable or resizable volume stand at its front face, half the d
 viewer. A handle at the center plane of a deep box would lie behind the entry of a ray that points
 at it. The resize measures on the front face's plane and changes the width and the height. The
 content does not scale with the box.
+
+### glTF models
+
+`SpatialGltfModel(state, modifier, content)` is a `SpatialVolume` whose content is a glTF 2.0 model.
+It needs the `gltf` feature of `cranpose-xr`, which adds the `gltf`, `image`, `base64` and
+`percent-encoding` crates. An app without the feature has none of that code. The web builds do not
+link `cranpose-xr`, so their size does not change.
+
+**Loading.** `rememberSpatialGltfModelState(source)` starts an effect that reads the file in
+`withBlocking`, on the shared pool of worker threads. The state holds `Loading`, `Loaded` or
+`Failed(GltfError)`. The composable shows nothing until the state is `Loaded`, as Jetpack XR's does.
+The `gltf` crate parses the JSON and the binary container. The loader resolves the buffers and the
+images itself: the binary chunk of a `.glb`, `data:` URIs, and files beside a `.gltf`. The crate's
+own `import` feature would do the same, but it needs `base64` 0.13, a second version of a crate that
+the workspace has once. It would also decode every image of the file, where the loader decodes the
+images that a base color texture names, with the PNG and JPEG decoders of the `image` crate. A
+`SpatialGltfModelSource` is a path or bytes. A source made from bytes has no directory, so it
+finds no external buffer.
+
+**What the loader keeps.** One `Mesh` for each triangle primitive (lists, strips and fans), with
+the file's positions, normals and the texture coordinates of the base color texture. One picture for
+each material: the base color texture multiplied by the base color factor, baked once into
+the pixels (the factor is linear light, the texture is sRGB), with the alpha mode applied. A
+material with no texture is one color. The node tree of the default scene, each node as
+translation, rotation and scale. The animations. The loader leaves out skins and morph targets,
+cameras, lights, vertex colors, the other material properties and the texture samplers. The scene's
+sampler clamps, so a texture does not repeat. A texture beyond 2048 pixels is halved until it fits,
+because each texture is one offscreen layer.
+
+**Axes and fit.** glTF has y up and z toward the viewer, in meters. The volume's content has y down
+and z away, in dp. One matrix, `ModelFit::root`, takes the model's middle to the box's middle,
+scales by the fit and turns the model half a turn about x. The node transforms and the animation stay
+in glTF space, and a node's world transform is `local.then(parent)`. The half turn keeps the
+handedness, so no triangle changes its winding. The fit follows Jetpack XR's measure policy. Each
+side has the ratio of the modifier's size to the model's own side. A side with no size set has the ratio one. The
+model scales by the smallest ratio, up or down. The box takes the modifier's size on the sides that
+set one and the scaled size elsewhere. With no size set the model has its own size, 1000 dp for a
+meter. The box of the model at rest gives its sides. An animation does not change the fit.
+
+**Drawing.** The volume's content has one node for each material, however many nodes of the file
+use it. The node's content is the material's picture (an `Image` or a color), and its
+`mesh_surfaces` holds one surface for each primitive of the material, in the node's frame. Each
+surface's transform is the node's world transform times the fit. A material shared by thirty nodes
+costs one offscreen layer. The surfaces are lit. The scene's light is the default light of the
+model, from the upper left, until the `content` callback sets another.
+
+**Animation.** The loader keeps the keys of each channel: translation, rotation and scale with
+`LINEAR` (a spherical interpolation along the short arc for rotation), `STEP` and `CUBICSPLINE`.
+A `GltfAnimation` holds a state and a clock. A composable of the model runs an effect while one
+animation plays. The effect advances the clocks by the frame time (at most 0.1 s a frame), poses the
+nodes into one preallocated array of world transforms, and bumps a counter that the draw closures
+read. The closures build their surfaces again for the new transforms, so an animation composes
+nothing. A model with no playing animation runs no effect and builds its surfaces once. A start and a
+stop between two frames leave the state unchanged and change the pose, so each start and stop also
+counts into the effect's key.
+
+A frame that animates a material with more than one primitive allocates the list of the material's
+surfaces, because `MeshSurfaces::new` takes a `Vec`. A material with one primitive allocates
+nothing.
+
+### glTF models on a Quest 3
+
+Measured on a Quest 3 from the compositor's screenshots (`adb exec-out screencap -p`) and
+`scripts/dev/xr_model_check.py`. The crate's texture has magenta and lime tiles in a white frame. The
+`XR_DEMO_VOLUME=model` build shows the crate alone, so its screenshots hold those hues only in the
+crate. The full demo's test patterns have the same hues, so the numbers of the full demo come from
+the crate's region (`--region 3500,1500,4100,2000`, in the screenshot's pixels).
+
+| Build | Left eye | Right eye |
+| --- | --- | --- |
+| `XR_DEMO_VOLUME=model`: the crate alone, standing still, magenta pixels | 103,340 | 102,475 |
+| the same, lime pixels | 99,682 | 99,116 |
+
+Three screenshots of one run differ by 0.1 percent. The two eyes see the crate from their own places,
+so their counts differ by about 1 percent. The picture shows three faces in each eye with the tiles
+upright. The full demo shows the crate beside the torus at 120 frames a second. At the demo's first
+head pose the right eye sees the crate at its lower right, and the left eye's view ends before it. In
+the crate's region of the right eye, 33,137 magenta and 32,355 lime pixels show, and 63,423 pixels
+change their class between two screenshots a second apart, so the animation runs in the headset's
+frame loop. The crate shares the projection layer of the torus's volume, so it adds no layer. The
+log shows the layer count that the earlier measurement of the depth test gave (18 asked, 16 taken,
+two panels left out; see "The layer limit"), with no change after the model loads. It has no
+`glTF model:` failure and no `the 3D content ends`.
+
+The `gltf` feature adds 770 KB to the stripped arm64 library of the demo, which is 11,835 KB without
+the feature and 12,605 KB with it. Both come from a local `release-fast` build. The build without
+the feature leaves out the demo's crate too. Of the 770 KB, the `zune_jpeg`, `image` and `png`
+crates take 209 KB, `serde_json` 181 KB, `gltf` and `gltf_json` 58 KB, and `cranpose_xr` 49 KB. The
+shipping `release` profile has other absolute sizes. An app without the feature has none of it.
 
 ### What it costs
 
@@ -1280,7 +1371,7 @@ Quest lists no `android.hardware.vr.headtracking` among its system features.
 | 1 | `cranpose-xr` with an OpenXR session, one `SpatialPanel` on a quad layer and a controller ray that presses its button | an APK built from this repository runs on a Quest 3, with no streaming library in its dependencies |
 | 2 | `SpatialCurvedRow` on cylinder layers | a curved panel shows text as sharp as a flat one |
 | 3 | `SpatialExternalSurface` | a hardware decoder writes into a panel with no copy |
-| 4 | 3D content, `movable`, `resizable`, `Orbiter`, passthrough | a 3D scene, handles and the room around the panels |
+| 4 | 3D content, glTF models, `movable`, `resizable`, `Orbiter`, passthrough | a 3D scene, a glTF model, handles and the room around the panels |
 | 5 | cranvr's Quest client on `cranpose-xr` | its desktop, console and overlay use the API |
 | 6 | Store readiness: focus and pause (the loss of input focus and the power button are shown on a Quest 3; the passthrough entry and the headset's removal are not run), the entitlement check behind a feature (the failing check and its quit are shown on a Quest 3; a passing check needs a store app), other runtimes | an app passes the Meta store's checks |
 

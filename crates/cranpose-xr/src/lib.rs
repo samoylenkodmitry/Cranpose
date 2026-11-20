@@ -7,7 +7,8 @@
 //!
 //! A [`SpatialVolume`] puts 3D content in a [`Subspace`]: composables whose nodes carry
 //! `mesh_surface`, which a headset draws once for each eye into one projection layer with depth,
-//! and a window shows in a box.
+//! and a window shows in a box. With the `gltf` feature, a `SpatialGltfModel` shows a glTF 2.0
+//! model there, with its textures and animations.
 //!
 //! A [`SpatialExternalSurface`] gives the app a surface that a hardware video decoder or a camera
 //! writes into. The compositor shows its pictures as a layer with no copy. A [`StreamedScene`]
@@ -81,6 +82,22 @@ mod foveated_unwarp;
 mod frame_effects;
 #[cfg(any(test, all(headset, target_os = "android")))]
 mod frame_queue;
+#[cfg(feature = "gltf")]
+mod gltf_animation;
+#[cfg(feature = "gltf")]
+mod gltf_buffers;
+#[cfg(feature = "gltf")]
+mod gltf_clip;
+#[cfg(feature = "gltf")]
+mod gltf_error;
+#[cfg(feature = "gltf")]
+mod gltf_fit;
+#[cfg(feature = "gltf")]
+mod gltf_import;
+#[cfg(feature = "gltf")]
+mod gltf_material;
+#[cfg(feature = "gltf")]
+mod gltf_model;
 mod hand;
 mod hand_aim;
 mod hand_joint;
@@ -130,6 +147,14 @@ mod spatial_curved_row;
 mod spatial_environment;
 mod spatial_external_surface;
 mod spatial_frame_effect;
+#[cfg(feature = "gltf")]
+mod spatial_gltf_model;
+#[cfg(feature = "gltf")]
+mod spatial_gltf_model_source;
+#[cfg(feature = "gltf")]
+mod spatial_gltf_model_state;
+#[cfg(feature = "gltf")]
+mod spatial_gltf_model_status;
 mod spatial_move_event;
 mod spatial_panel;
 mod spatial_resize_event;
@@ -198,6 +223,10 @@ pub use flat_run::run;
 pub use follow_mode::{FollowMode, FollowTarget};
 pub use following_subspace::FollowingSubspace;
 pub use foveated_encoding::FoveatedEncoding;
+#[cfg(feature = "gltf")]
+pub use gltf_animation::{GltfAnimation, GltfAnimationState};
+#[cfg(feature = "gltf")]
+pub use gltf_error::GltfError;
 pub use hand::Hand;
 pub use hand_aim::HandAim;
 pub use hand_joint::HandJoint;
@@ -231,6 +260,14 @@ pub use spatial_curved_row::SpatialCurvedRow;
 pub use spatial_environment::{SpatialEnvironment, local_spatial_environment};
 pub use spatial_external_surface::{SpatialExternalSurface, SpatialExternalSurfaceScope};
 pub use spatial_frame_effect::SpatialFrameEffect;
+#[cfg(feature = "gltf")]
+pub use spatial_gltf_model::SpatialGltfModel;
+#[cfg(feature = "gltf")]
+pub use spatial_gltf_model_source::SpatialGltfModelSource;
+#[cfg(feature = "gltf")]
+pub use spatial_gltf_model_state::{SpatialGltfModelState, rememberSpatialGltfModelState};
+#[cfg(feature = "gltf")]
+pub use spatial_gltf_model_status::SpatialGltfModelStatus;
 pub use spatial_move_event::{SpatialMoveEvent, SpatialMoveEventType};
 pub use spatial_panel::SpatialPanel;
 pub use spatial_resize_event::{SpatialResizeEvent, SpatialResizeEventType};

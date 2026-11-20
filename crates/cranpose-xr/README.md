@@ -172,7 +172,8 @@ work as on a panel. A controller's ray stops at the box. `scope.on_pointer_event
 events, with the position in dp on the box's front face. The meshes do not receive the ray.
 
 Jetpack XR 1.0 shows 3D content with `SpatialGltfModel` for a glTF model and `SceneCoreEntity` for a
-SceneCore entity. Cranpose has neither, so its composable has its own name.
+SceneCore entity. Cranpose has no SceneCore entities, so its composable has its own name. It has a
+`SpatialGltfModel` too (see "glTF models").
 
 A headset composes the content once and draws it for each eye, from that eye's pose and field of
 view, into one projection layer for all volumes. Where the runtime offers a depth swapchain, the
@@ -182,6 +183,64 @@ A Quest 3 shows the panels behind the 3D content where they stand behind it. Oth
 panels cover the 3D content. A frame with no volume has no projection layer and costs
 no GPU time. The scene draws with one sample for each pixel, and a movable volume takes two of the
 compositor's layers. A window shows the volume as a 3D view in its box.
+
+## glTF models
+
+The `gltf` feature adds `SpatialGltfModel`, which shows a glTF 2.0 model in a volume, after Jetpack XR's
+composable of the same name. An app without the feature has none of the code and none of its
+dependencies (`gltf`, `image`, `base64` and `percent-encoding`).
+
+```rust,ignore
+use cranpose_xr::{
+    SpatialGltfModel, SpatialGltfModelSource, SpatialGltfModelStatus, SubspaceModifier,
+    rememberSpatialGltfModelState,
+};
+
+// A source made from bytes is a new source each time, so the app keeps it
+let source = remember(|| SpatialGltfModelSource::from_bytes(MODEL_GLB)).with(Clone::clone);
+let state = rememberSpatialGltfModelState(source);
+SpatialGltfModel(
+    state.clone(),
+    SubspaceModifier::new().size(300.0, 300.0).depth(300.0),
+    |_| {},
+);
+// The animations exist once the model has loaded. An effect keyed by the status starts them
+// once, where a call in the composable's body would start them again at each composition.
+let status = state.status();
+LaunchedEffect(status.clone(), async move |_| {
+    if status == SpatialGltfModelStatus::Loaded {
+        for animation in state.animations() {
+            animation.set_looping(true);
+            animation.start();
+        }
+    }
+});
+```
+
+A source is a file (`.glb`, or `.gltf` with embedded buffers or files beside it) or bytes. The model
+loads on a worker thread. `state.status()` is `Loading`, `Loaded` or `Failed(GltfError)`, and the
+composable shows nothing until it is `Loaded`. The model keeps its proportions and scales to fit the
+box that the modifier sets, as in Jetpack XR. A side that the modifier leaves out never makes the
+model larger than its own size. With no size at all the model has its own size, a meter for each
+glTF unit.
+
+The scene shows the node tree of the file's default scene with each node's transform. Each mesh
+carries its material's base color, which is the base color texture times the base color factor. The
+`OPAQUE` and `MASK` alpha modes work, and `BLEND` keeps the alpha of the base color. The scene has
+one directional light for all volumes. The model sets a default light, and the `content` callback
+may set another with `scope.light`.
+
+`GltfAnimation` (Jetpack XR's `GltfAnimation`) plays the translation, rotation and scale channels
+of a node, with the `LINEAR`, `STEP` and `CUBICSPLINE` interpolations: `start`, `stop`, `pause` and
+`resume`, a loop and a speed. Skins and morph targets are not animated: a skinned mesh stands in its
+bind pose. The loader leaves out the rest of a glTF material (metallic, roughness, normal,
+occlusion and emissive values, texture transforms, texture samplers), the file's cameras and lights,
+vertex colors, and primitives that are not triangles. A texture clamps at its edges and never
+repeats. A texture wider or higher than 2048 pixels is halved until it fits.
+
+Jetpack XR's `SpatialGltfModelState` also lists the model's `nodes`. Cranpose has no counterpart,
+and its `SpatialGltfModelSource` has `from_path` and `from_bytes` where Jetpack XR's has `fromPath`,
+`fromUri` and `fromResource`. The doc comments say where each call differs.
 
 ## Video and camera surfaces
 

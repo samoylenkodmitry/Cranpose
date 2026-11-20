@@ -53,11 +53,26 @@ scripted-hand = ["openxr"]
 # passes run with no timing.
 stream-costs = ["openxr"]
 
+# `SpatialGltfModel`: glTF 2.0 models (`.gltf` and `.glb`) in a `SpatialVolume`. Off, the crate has
+# no glTF code and none of its dependencies.
+gltf = [
+    "dep:gltf",
+    "dep:image",
+    "dep:base64",
+    "dep:percent-encoding",
+    "dep:thiserror",
+]
+
 [dependencies]
+base64 = { version = "0.23.1", optional = true }
 # `video`: a flat stream draws through `PlayerSurfaceIntake`.
 cranpose = { workspace = true, features = ["video"] }
 cranpose-core = { workspace = true }
+gltf = { version = "1.4.1", default-features = false, features = ["utils", "names"], optional = true }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"], optional = true }
 log = "0.4"
+percent-encoding = { version = "2.3.2", optional = true }
+thiserror = { version = "2.0.21", optional = true }
 
 # The OpenXR backend needs the platform side of Cranpose: the activity on
 # Android, and on a desktop the flat window that `run` opens when the machine
@@ -75,7 +90,6 @@ glow = { version = "0.18", optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))'.dependencies]
 cranpose = { workspace = true, features = ["desktop"] }
-thiserror = { version = "2.0.21", optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 openxr = { version = "0.22", optional = true }
