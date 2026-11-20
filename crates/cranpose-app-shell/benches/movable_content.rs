@@ -28,17 +28,24 @@ const DEFAULT_FRAMES: usize = 128;
 const ITEM_COUNT: usize = 2048;
 const ROW_HEIGHT: f32 = 36.0;
 const VIEWPORT: (u32, u32) = (360, 360);
+const HEAVY_ITEM_COUNT: usize = 16_384;
+const HEAVY_ROW_HEIGHT: f32 = 4.0;
+const HEAVY_ROWS_PER_FRAME: f32 = 32.0;
+const HEAVY_MOVABLES_PER_ROW: usize = 8;
+const HEAVY_VIEWPORT: (u32, u32) = (360, 2048);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BenchCase {
     LazyMovableScroll,
+    LazyMovableHeavy,
     LazyContextMenuScroll,
     MovableParentFlip,
 }
 
 impl BenchCase {
-    const ALL: [Self; 3] = [
+    const ALL: [Self; 4] = [
         Self::LazyMovableScroll,
+        Self::LazyMovableHeavy,
         Self::LazyContextMenuScroll,
         Self::MovableParentFlip,
     ];
@@ -46,6 +53,7 @@ impl BenchCase {
     fn name(self) -> &'static str {
         match self {
             Self::LazyMovableScroll => "lazy_movable_scroll",
+            Self::LazyMovableHeavy => "lazy_movable_heavy",
             Self::LazyContextMenuScroll => "lazy_context_menu_scroll",
             Self::MovableParentFlip => "movable_parent_flip",
         }
@@ -54,6 +62,7 @@ impl BenchCase {
     fn parse(raw: &str) -> Option<Self> {
         match raw {
             "lazy_movable_scroll" => Some(Self::LazyMovableScroll),
+            "lazy_movable_heavy" => Some(Self::LazyMovableHeavy),
             "lazy_context_menu_scroll" => Some(Self::LazyContextMenuScroll),
             "movable_parent_flip" => Some(Self::MovableParentFlip),
             _ => None,
@@ -104,18 +113,24 @@ impl Config {
 }
 
 enum Driver {
-    Lazy(Rc<Cell<Option<LazyListState>>>),
+    Lazy {
+        state: Rc<Cell<Option<LazyListState>>>,
+        scroll_delta: f32,
+    },
     Flip(Rc<Cell<Option<MutableState<bool>>>>),
 }
 
 impl Driver {
     fn step(&self, shell: &mut AppShell<GraphRenderer>) {
         match self {
-            Self::Lazy(handle) => {
+            Self::Lazy {
+                state: handle,
+                scroll_delta,
+            } => {
                 let state = handle.get().expect("lazy list state captured");
                 let consumed = shell
                     .app_context()
-                    .enter(|| state.dispatch_scroll_delta(-ROW_HEIGHT));
+                    .enter(|| state.dispatch_scroll_delta(*scroll_delta));
                 assert!(consumed.abs() > 0.0, "lazy scroll frame must advance");
                 shell.update();
                 while shell.run_idle_prefetch(None, |_| false) {}
@@ -155,6 +170,39 @@ fn MovableRowBody(index: usize) {
 }
 
 #[composable]
+fn HeavyMovableRowBody(index: usize) {
+    Box(
+        Modifier::empty().fill_max_width().height(HEAVY_ROW_HEIGHT),
+        BoxSpec::default(),
+        move || {
+            for slot in 0..HEAVY_MOVABLES_PER_ROW {
+                with_key(&slot, || {
+                    let content = rememberMovableContentOf(move || {
+                        Box(
+                            Modifier::empty()
+                                .size_points(40.0, HEAVY_ROW_HEIGHT)
+                                .background(Color(
+                                    ((index + slot) % 7) as f32 / 7.0,
+                                    0.35,
+                                    0.75,
+                                    1.0,
+                                )),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    });
+                    Box(
+                        Modifier::empty().size_points(40.0, HEAVY_ROW_HEIGHT),
+                        BoxSpec::default(),
+                        move || content.show(),
+                    );
+                });
+            }
+        },
+    );
+}
+
+#[composable]
 fn ContextMenuRowBody(index: usize) {
     LiquidContextMenu(
         Modifier::empty().fill_max_width().height(ROW_HEIGHT),
@@ -175,16 +223,22 @@ fn ContextMenuRowBody(index: usize) {
 fn LazyMovableList(handle: Rc<Cell<Option<LazyListState>>>, case: BenchCase) {
     let list = rememberLazyListState();
     handle.set(Some(list));
+    let item_count = match case {
+        BenchCase::LazyMovableHeavy => HEAVY_ITEM_COUNT,
+        BenchCase::LazyMovableScroll | BenchCase::LazyContextMenuScroll => ITEM_COUNT,
+        BenchCase::MovableParentFlip => unreachable!("flip uses its own root"),
+    };
     LazyColumn(
         Modifier::empty().fill_max_size(),
         list,
         LazyColumnSpec::default(),
         move |scope| {
             scope.items(
-                LazyItems::new(ITEM_COUNT).key(|index| index as u64),
+                LazyItems::new(item_count).key(|index| index as u64),
                 move |index| {
                     with_key(&(index as u64), || match case {
                         BenchCase::LazyMovableScroll => MovableRowBody(index),
+                        BenchCase::LazyMovableHeavy => HeavyMovableRowBody(index),
                         BenchCase::LazyContextMenuScroll => ContextMenuRowBody(index),
                         BenchCase::MovableParentFlip => unreachable!("flip uses its own root"),
                     });
@@ -239,23 +293,38 @@ fn MovableFlipRoot(handle: Rc<Cell<Option<MutableState<bool>>>>) {
 
 #[inline(never)]
 fn start_shell(case: BenchCase) -> (AppShell<GraphRenderer>, Driver) {
-    let (width, height) = VIEWPORT;
+    let (width, height) = match case {
+        BenchCase::LazyMovableHeavy => HEAVY_VIEWPORT,
+        BenchCase::LazyMovableScroll
+        | BenchCase::LazyContextMenuScroll
+        | BenchCase::MovableParentFlip => VIEWPORT,
+    };
     let key = location_key(file!(), line!(), column!());
     match case {
-        BenchCase::LazyMovableScroll => {
+        BenchCase::LazyMovableScroll | BenchCase::LazyMovableHeavy => {
             cranpose_ui::set_idle_prefetch_passes(true);
             let handle = Rc::new(Cell::new(None));
             let captured = Rc::clone(&handle);
             let mut shell = AppShell::new_with_size(
                 GraphRenderer::default(),
                 key,
-                move || LazyMovableList(Rc::clone(&captured), BenchCase::LazyMovableScroll),
+                move || LazyMovableList(Rc::clone(&captured), case),
                 (width, height),
                 (width as f32, height as f32),
             );
             shell.update();
             while shell.run_idle_prefetch(None, |_| false) {}
-            (shell, Driver::Lazy(handle))
+            let scroll_delta = match case {
+                BenchCase::LazyMovableHeavy => -(HEAVY_ROW_HEIGHT * HEAVY_ROWS_PER_FRAME),
+                _ => -ROW_HEIGHT,
+            };
+            (
+                shell,
+                Driver::Lazy {
+                    state: handle,
+                    scroll_delta,
+                },
+            )
         }
         BenchCase::LazyContextMenuScroll => {
             cranpose_ui::set_idle_prefetch_passes(true);
@@ -275,7 +344,13 @@ fn start_shell(case: BenchCase) -> (AppShell<GraphRenderer>, Driver) {
             );
             shell.update();
             while shell.run_idle_prefetch(None, |_| false) {}
-            (shell, Driver::Lazy(handle))
+            (
+                shell,
+                Driver::Lazy {
+                    state: handle,
+                    scroll_delta: -ROW_HEIGHT,
+                },
+            )
         }
         BenchCase::MovableParentFlip => {
             cranpose_ui::set_idle_prefetch_passes(false);

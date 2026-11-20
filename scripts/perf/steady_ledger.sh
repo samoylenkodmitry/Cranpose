@@ -71,6 +71,7 @@ readonly LAYOUTS=(
 )
 readonly MOVABLE_LAYOUTS=(
     "movable-lazy --case=lazy_movable_scroll"
+    "movable-heavy --case=lazy_movable_heavy"
     "movable-context-menu --case=lazy_context_menu_scroll"
     "movable-flip --case=movable_parent_flip"
 )
@@ -78,13 +79,13 @@ readonly MOVABLE_LAYOUTS=(
 readonly START_ROW=wall-t20
 # The layouts whose counted frames an A/B also runs under callgrind, beside
 # the start of START_ROW and the dashboard.
-readonly INSTRUCTION_ROWS=" gauntlet-t12 patchwork-t17 feed "
+readonly INSTRUCTION_ROWS=" gauntlet-t12 patchwork-t17 feed movable-heavy "
 # The layouts whose scene changes in the counted window: nodes come and go,
 # texts change and caches fill. The blocks that their window leaves live
 # follow the scene's phase (from -101 to +2 a frame on the gauntlet t16 at
 # one commit), so the comparison prints that count and leaves it out of the
 # verdict. Every other row must leave nothing live.
-readonly PHASED_ROWS=" patchwork-t17 gauntlet-t16 gauntlet-t12 feed ticker movable-lazy movable-context-menu "
+readonly PHASED_ROWS=" patchwork-t17 gauntlet-t16 gauntlet-t12 feed ticker "
 
 # What the A/Bs of all lanes on a host share: the lock that lets one fat LTO
 # build run at a time, and the measured bases. STEADY_LEDGER_SHARED moves
@@ -186,7 +187,9 @@ jobs_of() {
         for layout in "${MOVABLE_LAYOUTS[@]}"; do
             row=${layout%% *}
             echo "$row" >> "$dir/runs/$run/order"
-            [ -z "$instructions" ] || echo "$run $side mc-instr $layout"
+            if [ -n "$instructions" ] && [[ $INSTRUCTION_ROWS == *" $row "* ]]; then
+                echo "$run $side mc-instr $layout"
+            fi
             for kind in mc-copy mc-empty mc-count; do
                 echo "$run $side $kind $layout"
             done

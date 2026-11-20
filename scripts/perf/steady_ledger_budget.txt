@@ -103,6 +103,11 @@ movable-lazy     realloc                      2.13       0.00
 movable-lazy     live                         1.03       0.00
 movable-lazy     copied                      24456          0
 movable-lazy     realloc_bytes                 290          0
+movable-heavy    malloc                    6823.58       0.57
+movable-heavy    realloc                    214.98       0.00
+movable-heavy    live                         0.00       0.00
+movable-heavy    copied                    1385838          0
+movable-heavy    realloc_bytes               37250          0
 movable-context-menu malloc                 164.98       0.00
 movable-context-menu realloc                  2.20       0.00
 movable-context-menu live                     2.23       0.00

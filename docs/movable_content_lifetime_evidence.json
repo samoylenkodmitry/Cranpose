@@ -2,7 +2,7 @@
   "issue": 2385,
   "pr": 2403,
   "merge_base": "319c13aa71b30e1e27ec4787ec8573b144e8badd",
-  "measured_core_commit": "5c01d65d2",
+  "measured_core_commit": "5a6f56407",
   "last_release": {
     "tag": "v0.27.0",
     "commit": "068863738"
@@ -14,35 +14,85 @@
     "movable_content": {
       "movable-lazy": {
         "base_319c13aa7": {
-          "malloc": 91.916667,
+          "malloc": 91.933333,
           "realloc": 2.233333,
           "live": 29.333333,
-          "copied_bytes": 25971.466667,
+          "copied": 25971.466667,
           "realloc_bytes": 387.533333,
-          "instructions_per_frame": 206132.3
+          "instructions": 206349.4
         },
-        "head_3_runs": {
+        "head_with_scan": {
+          "malloc": 88.666667,
+          "realloc": 2.133333,
+          "live": 1.033333,
+          "copied": 24456.4,
+          "realloc_bytes": 289.733333,
+          "instructions": 204100.016667
+        },
+        "head_skip_scan_3_runs": {
           "run_1": {
             "malloc": 88.666667,
             "realloc": 2.133333,
             "live": 1.033333,
-            "copied_bytes": 24456.4,
+            "copied": 24456.4,
             "realloc_bytes": 289.733333,
-            "instructions_per_frame": 204107.116667
+            "instructions": 203301.616667
           },
           "run_2": {
             "malloc": 88.666667,
             "realloc": 2.133333,
             "live": 1.033333,
-            "copied_bytes": 24456.4,
+            "copied": 24456.4,
             "realloc_bytes": 289.733333
           },
           "run_3": {
             "malloc": 88.666667,
             "realloc": 2.133333,
             "live": 1.033333,
-            "copied_bytes": 24456.4,
+            "copied": 24456.4,
             "realloc_bytes": 289.733333
+          }
+        }
+      },
+      "movable-heavy": {
+        "base_319c13aa7": {
+          "malloc": 6191.533333,
+          "realloc": 210.766667,
+          "live": 2738.516667,
+          "copied": 2315972.8,
+          "realloc_bytes": 56215.666667,
+          "instructions": 39399327.066667
+        },
+        "head_with_scan": {
+          "malloc": 6727.05,
+          "realloc": 214.983333,
+          "live": 0.0,
+          "copied": 2106605.866667,
+          "realloc_bytes": 37249.6,
+          "instructions": 27070885.0
+        },
+        "head_skip_scan_3_runs": {
+          "run_1": {
+            "malloc": 6823.583333,
+            "realloc": 214.983333,
+            "live": 0.0,
+            "copied": 1385837.866667,
+            "realloc_bytes": 37249.6,
+            "instructions": 19011717.85
+          },
+          "run_2": {
+            "malloc": 6823.016667,
+            "realloc": 214.983333,
+            "live": 0.0,
+            "copied": 1385837.866667,
+            "realloc_bytes": 37249.6
+          },
+          "run_3": {
+            "malloc": 6823.016667,
+            "realloc": 214.983333,
+            "live": 0.0,
+            "copied": 1385837.866667,
+            "realloc_bytes": 37249.6
           }
         }
       },
@@ -51,31 +101,39 @@
           "malloc": 161.05,
           "realloc": 2.3,
           "live": 20.35,
-          "copied_bytes": 25265.233333,
+          "copied": 25265.233333,
           "realloc_bytes": 526.6,
-          "instructions_per_frame": 230360.916667
+          "instructions": 230555.4
         },
-        "head_3_runs": {
+        "head_with_scan": {
+          "malloc": 164.983333,
+          "realloc": 2.2,
+          "live": 2.233333,
+          "copied": 24634.566667,
+          "realloc_bytes": 475.2,
+          "instructions": 229210.733333
+        },
+        "head_skip_scan_3_runs": {
           "run_1": {
             "malloc": 164.983333,
             "realloc": 2.2,
             "live": 2.233333,
-            "copied_bytes": 24634.566667,
+            "copied": 24634.566667,
             "realloc_bytes": 475.2,
-            "instructions_per_frame": 229025.55
+            "instructions": 228468.733333
           },
           "run_2": {
             "malloc": 164.983333,
             "realloc": 2.2,
             "live": 2.233333,
-            "copied_bytes": 24634.566667,
+            "copied": 24634.566667,
             "realloc_bytes": 475.2
           },
           "run_3": {
             "malloc": 164.983333,
             "realloc": 2.2,
             "live": 2.233333,
-            "copied_bytes": 24634.566667,
+            "copied": 24634.566667,
             "realloc_bytes": 475.2
           }
         }
@@ -85,31 +143,39 @@
           "malloc": 5.0,
           "realloc": 0.0,
           "live": 0.0,
-          "copied_bytes": 1073.333333,
+          "copied": 1073.333333,
           "realloc_bytes": 0.0,
-          "instructions_per_frame": 52711.316667
+          "instructions": 52822.15
         },
-        "head_3_runs": {
+        "head_with_scan": {
+          "malloc": 5.0,
+          "realloc": 0.0,
+          "live": 0.0,
+          "copied": 1073.333333,
+          "realloc_bytes": 0.0,
+          "instructions": 52889.316667
+        },
+        "head_skip_scan_3_runs": {
           "run_1": {
             "malloc": 5.0,
             "realloc": 0.0,
             "live": 0.0,
-            "copied_bytes": 1073.333333,
+            "copied": 1073.333333,
             "realloc_bytes": 0.0,
-            "instructions_per_frame": 52758.416667
+            "instructions": 52843.316667
           },
           "run_2": {
             "malloc": 5.0,
             "realloc": 0.0,
             "live": 0.0,
-            "copied_bytes": 1073.333333,
+            "copied": 1073.333333,
             "realloc_bytes": 0.0
           },
           "run_3": {
             "malloc": 5.0,
             "realloc": 0.0,
             "live": 0.0,
-            "copied_bytes": 1073.333333,
+            "copied": 1073.333333,
             "realloc_bytes": 0.0
           }
         }
@@ -117,14 +183,61 @@
     },
     "non_movable_callgrind_totals": {
       "scroll_frame": {
-        "base_319c13aa7": 232485439,
-        "head": 232681036,
-        "delta_pct": 0.0841
+        "base_319c13aa7": 232469293,
+        "head_skip_scan": 232619603,
+        "delta_pct": 0.0647
       },
       "lazy_scroll": {
-        "base_319c13aa7": 564771815,
-        "head": 564908120,
-        "delta_pct": 0.0241
+        "base_319c13aa7": 564388879,
+        "head_skip_scan": 564886010,
+        "delta_pct": 0.0881
+      }
+    },
+    "callgrind_self_instruction_attributions": {
+      "movable_heavy_withscan_to_skipscan_per_frame": {
+        "total_delta": -8059167.2,
+        "total_delta_pct": -29.771,
+        "host_holding_movable": {
+          "from": 7938054.8,
+          "to": 0.0,
+          "delta": -7938054.8
+        }
+      },
+      "movable_heavy_base_to_skipscan_per_frame": {
+        "total_delta": -20387609.2,
+        "total_delta_pct": -51.746,
+        "open_group_in_active_pass": {
+          "from": 11243400.1,
+          "to": 156280.0,
+          "delta": -11087120.1
+        },
+        "retention_raw_table_find": {
+          "from": 5024819.6,
+          "to": 43868.7,
+          "delta": -4980950.9
+        },
+        "retention_hashmap_lookup": {
+          "from": 4925440.0,
+          "to": 17888.0,
+          "delta": -4907552.0
+        }
+      },
+      "scroll_frame_base_to_skipscan_total": {
+        "total_delta": 150310,
+        "total_delta_pct": 0.0647,
+        "begin_slot_host_pass": 20712,
+        "slot_host_pass_guard_close": 15534,
+        "composer_scope_and_drop_glue_inlining_net": 71321,
+        "libc_allocator_and_memcpy": 33031
+      },
+      "lazy_scroll_base_to_skipscan_total": {
+        "total_delta": 497131,
+        "total_delta_pct": 0.0881,
+        "begin_slot_host_pass": 20376,
+        "slot_host_pass_guard_close": 15282,
+        "open_group_in_active_pass": 6115,
+        "composer_scope_and_drop_glue_inlining_net": 71000,
+        "libc_allocator_and_memcpy": 353250
       }
     }
   },
