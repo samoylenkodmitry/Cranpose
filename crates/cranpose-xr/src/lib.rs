@@ -7,7 +7,8 @@
 //!
 //! A [`SpatialVolume`] puts 3D content in a [`Subspace`]: composables whose nodes carry
 //! `mesh_surface`, which a headset draws once for each eye into one projection layer with depth,
-//! and a window shows in a box.
+//! and a window shows in a box. With the `gltf` feature, a `SpatialGltfModel` shows a glTF 2.0
+//! model there, with its textures and animations.
 //!
 //! A [`SpatialExternalSurface`] gives the app a surface that a hardware video decoder or a camera
 //! writes into. The compositor shows its pictures as a layer with no copy. A [`StreamedScene`]
@@ -21,6 +22,10 @@
 //! gaze there, and [`local_tracking_capabilities`] tells what the runtime offers. A tracked hand
 //! with no controller in it points at the panels and presses with a pinch, as a controller does. [`Haptics`] plays
 //! vibrations on the controllers. A pure Cranpose app can stream a headset to a host with them.
+//!
+//! A text field in a panel opens a keyboard when it takes focus, with no code in the app. A headset
+//! draws one below the field's panel, or shows the system's where the runtime does, as Android XR
+//! does. [`use_keyboard`] chooses.
 //!
 //! The `openxr` feature adds the backend for headsets. On Android, as on a Meta Quest, its
 //! [`android_main!`] starts the app as an immersive app. On Linux and Windows its `run` starts
@@ -51,6 +56,7 @@ mod controller;
 mod controller_bindings;
 #[cfg(any(test, headset))]
 mod depth_order;
+mod dock;
 mod entitlement;
 mod entitlement_check;
 #[cfg(any(test, headset))]
@@ -81,6 +87,22 @@ mod foveated_unwarp;
 mod frame_effects;
 #[cfg(any(test, all(headset, target_os = "android")))]
 mod frame_queue;
+#[cfg(feature = "gltf")]
+mod gltf_animation;
+#[cfg(feature = "gltf")]
+mod gltf_buffers;
+#[cfg(feature = "gltf")]
+mod gltf_clip;
+#[cfg(feature = "gltf")]
+mod gltf_error;
+#[cfg(feature = "gltf")]
+mod gltf_fit;
+#[cfg(feature = "gltf")]
+mod gltf_import;
+#[cfg(feature = "gltf")]
+mod gltf_material;
+#[cfg(feature = "gltf")]
+mod gltf_model;
 mod hand;
 mod hand_aim;
 mod hand_joint;
@@ -94,6 +116,13 @@ mod input_source;
 mod interaction_profile;
 #[cfg(any(test, headset))]
 mod joint_flags;
+#[cfg(any(test, headset))]
+mod key_layout;
+mod keyboard;
+#[cfg(any(test, headset))]
+mod keyboard_panel;
+#[cfg(any(test, headset))]
+mod keyboard_state;
 #[cfg(any(test, headset))]
 mod layer_limit;
 mod locals;
@@ -126,6 +155,8 @@ mod resize_policy;
 mod scripted_hand;
 #[cfg(any(test, headset))]
 mod session_status;
+#[cfg(any(test, headset))]
+mod soft_keyboard;
 mod sound_sources;
 #[cfg(any(test, headset))]
 mod sound_stage;
@@ -135,6 +166,14 @@ mod spatial_curved_row;
 mod spatial_environment;
 mod spatial_external_surface;
 mod spatial_frame_effect;
+#[cfg(feature = "gltf")]
+mod spatial_gltf_model;
+#[cfg(feature = "gltf")]
+mod spatial_gltf_model_source;
+#[cfg(feature = "gltf")]
+mod spatial_gltf_model_state;
+#[cfg(feature = "gltf")]
+mod spatial_gltf_model_status;
 mod spatial_move_event;
 mod spatial_panel;
 mod spatial_point_source;
@@ -204,6 +243,10 @@ pub use flat_run::run;
 pub use follow_mode::{FollowMode, FollowTarget};
 pub use following_subspace::FollowingSubspace;
 pub use foveated_encoding::FoveatedEncoding;
+#[cfg(feature = "gltf")]
+pub use gltf_animation::{GltfAnimation, GltfAnimationState};
+#[cfg(feature = "gltf")]
+pub use gltf_error::GltfError;
 pub use hand::Hand;
 pub use hand_aim::HandAim;
 pub use hand_joint::HandJoint;
@@ -213,6 +256,7 @@ pub use haptics::{Haptics, Vibration, local_haptics};
 pub use headset_properties::{EyeImageSize, HeadsetProperties, local_headset_properties};
 pub use input_source::InputSource;
 pub use interaction_profile::InteractionProfile;
+pub use keyboard::{Keyboard, use_keyboard};
 pub use meta_face_state::MetaFaceState;
 pub use move_policy::MovePolicy;
 pub use on_not_entitled::OnNotEntitled;
@@ -239,6 +283,14 @@ pub use spatial_curved_row::SpatialCurvedRow;
 pub use spatial_environment::{SpatialEnvironment, local_spatial_environment};
 pub use spatial_external_surface::{SpatialExternalSurface, SpatialExternalSurfaceScope};
 pub use spatial_frame_effect::SpatialFrameEffect;
+#[cfg(feature = "gltf")]
+pub use spatial_gltf_model::SpatialGltfModel;
+#[cfg(feature = "gltf")]
+pub use spatial_gltf_model_source::SpatialGltfModelSource;
+#[cfg(feature = "gltf")]
+pub use spatial_gltf_model_state::{SpatialGltfModelState, rememberSpatialGltfModelState};
+#[cfg(feature = "gltf")]
+pub use spatial_gltf_model_status::SpatialGltfModelStatus;
 pub use spatial_move_event::{SpatialMoveEvent, SpatialMoveEventType};
 pub use spatial_panel::SpatialPanel;
 pub use spatial_point_source::SpatialPointSource;

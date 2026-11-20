@@ -63,6 +63,7 @@ fn PlacedPanel(
     space.set_point_source(id, modifier.attached_point_source());
     space.set_resizable(id, modifier.resize());
     space.set_shape(id, shape);
+    space.set_dock(id, modifier.dock());
     DisposableEffect(id, move |_| {
         DisposableEffectResult::new(move || space.remove(id))
     });

@@ -17,13 +17,17 @@ use std::{
 use cranpose::{ExternalSurface, MutableState, mutableStateOf};
 use cranpose_core::CompositionLocal;
 
+#[cfg(any(test, headset))]
+pub(crate) mod field_dock;
+
 use crate::{
-    FollowTarget, Hand, METERS_PER_DP, MovePolicy, PanelHit, PointSource, Pose, Ray, Recenter,
-    ResizeLimits, ResizePolicy, SpatialMoveEvent, SpatialMoveEventType, SpatialResizeEvent,
+    FollowTarget, Hand, METERS_PER_DP, MovePolicy, PanelHit, Pose, Ray, Recenter, ResizeLimits,
+    ResizePolicy, SpatialMoveEvent, SpatialMoveEventType, SpatialResizeEvent,
     SpatialResizeEventType, StereoMode,
+    dock::Dock,
     follow_origin::{FollowOrigins, Standing},
     locals::with_locals,
-    sound_sources::{SoundPlace, SoundSources},
+    sound_sources::SoundSources,
     stream_source::StreamSource,
     surface_input::{PointerSink, SurfaceGesture, SurfaceInput},
     volumes::{VolumeContent, Volumes},
@@ -274,6 +278,13 @@ struct Inner {
     // The content of the volumes and the camera that draws them, made when the first composable
     // that needs them asks, because their states belong to a composition's runtime
     volumes: OnceCell<Volumes>,
+    // The panel that holds the focused text field, which the panels below a field stand under
+    #[cfg(any(test, headset))]
+    field_panel: Cell<Option<u64>>,
+    // The keyboard that the headset draws for a focused text field, made when the headset's
+    // content asks, because its state belongs to a composition's runtime
+    #[cfg(any(test, headset))]
+    keyboard: OnceCell<crate::soft_keyboard::SoftKeyboard>,
     // The size in pixels of one eye's picture of the volumes, in logical pixels
     #[cfg_attr(
         not(any(test, headset)),
@@ -308,6 +319,9 @@ struct Entry {
     // the pointer
     sink: Option<PointerSink>,
     input: SurfaceInput,
+    // Whether the panel stands below the panel of the focused text field, as the keyboard does,
+    // wherever that panel stands
+    dock: Dock,
 }
 
 // The place of a panel in a following subspace.
@@ -367,6 +381,10 @@ impl Space {
                 next_id: Cell::new(1),
                 curves: Cell::new(true),
                 volumes: OnceCell::new(),
+                #[cfg(any(test, headset))]
+                field_panel: Cell::new(None),
+                #[cfg(any(test, headset))]
+                keyboard: OnceCell::new(),
                 scene_size,
             }),
         }
@@ -598,6 +616,7 @@ impl Space {
                     resizing: false,
                     sink: None,
                     input: SurfaceInput::default(),
+                    dock: Dock::Free,
                 });
                 (entries.len() - 1, true)
             }
@@ -657,6 +676,47 @@ impl Space {
         if let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == id) {
             entry.sink = sink;
         }
+    }
+
+    // Sets where the panel `id` stands in relation to the panel of the focused text field.
+    pub(crate) fn set_dock(&self, id: u64, dock: Dock) {
+        let mut entries = self.inner.entries.borrow_mut();
+        if let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == id) {
+            entry.dock = dock;
+        }
+    }
+
+    // The keyboard that the headset draws for a focused text field.
+    #[cfg(any(test, headset))]
+    pub(crate) fn keyboard(&self) -> crate::soft_keyboard::SoftKeyboard {
+        self.inner
+            .keyboard
+            .get_or_init(crate::soft_keyboard::SoftKeyboard::new)
+            .clone()
+    }
+
+    // The panel that holds the focused text field, or `None` while no panel does. The panels that
+    // stand below the field's panel stand under it.
+    #[cfg(any(test, headset))]
+    pub(crate) fn set_field_panel(&self, panel: Option<u64>) {
+        self.inner.field_panel.set(panel);
+    }
+
+    // The panel of content that covers the point `at` of the atlas, in dp. The panels that stand
+    // below a field's panel are left out: they hold no field.
+    #[cfg(any(test, headset))]
+    pub(crate) fn panel_at(&self, at: [f32; 2]) -> Option<u64> {
+        let [x, y] = at;
+        self.inner
+            .entries
+            .borrow()
+            .iter()
+            .filter(|entry| entry.slot.kind == PanelKind::Content && entry.dock == Dock::Free)
+            .find(|entry| {
+                let [left, top, width, height] = entry.slot.atlas;
+                (left..left + width).contains(&x) && (top..top + height).contains(&y)
+            })
+            .map(|entry| entry.slot.id)
     }
 
     // Sets the shape of the panel `id`.
@@ -802,54 +862,6 @@ impl Space {
         self.inner.sounds.borrow_mut().remove(id);
     }
 
-    // A new id for a point source of sound.
-    pub(crate) fn new_sound_id(&self) -> u64 {
-        let id = self.inner.next_id.get();
-        self.inner.next_id.set(id + 1);
-        id
-    }
-
-    // Registers the source `id` at `pose` of the subspace with `origin`, or moves it there.
-    pub(crate) fn place_point_source(
-        &self,
-        id: u64,
-        source: PointSource,
-        origin: Origin,
-        pose: Pose,
-    ) {
-        let sounds = &mut *self.inner.sounds.borrow_mut();
-        sounds.place(id, source, origin, pose);
-    }
-
-    // Forgets the source `id`.
-    pub(crate) fn remove_point_source(&self, id: u64) {
-        self.inner.sounds.borrow_mut().remove(id);
-    }
-
-    // Makes the panel `id` a source of `source`, or stops it from being one. The source stands at
-    // the panel's pose, wherever a carry or a following subspace puts it.
-    pub(crate) fn set_point_source(&self, id: u64, source: Option<PointSource>) {
-        self.inner.sounds.borrow_mut().attach(id, source);
-    }
-
-    #[cfg_attr(
-        not(any(test, headset)),
-        expect(dead_code, reason = "the headset backend calls it")
-    )]
-    // Puts the sources and where they stand now into `places`. See `SoundSources::places_into`.
-    pub(crate) fn sounds_into(&self, places: &mut Vec<SoundPlace>) {
-        let entries = self.inner.entries.borrow();
-        let panel_pose = |panel| {
-            let entry = entries.iter().find(|entry| entry.slot.id == panel);
-            entry.map(|entry| entry.slot.pose)
-        };
-        let follow = self.inner.follow_origins.borrow();
-        self.inner
-            .sounds
-            .borrow()
-            .places_into(places, panel_pose, &follow);
-    }
-
     // The scene of the volumes takes the content of the volume `content.id`, or replaces what it
     // took.
     pub(crate) fn publish_volume(&self, content: VolumeContent) {
@@ -864,8 +876,9 @@ impl Space {
     // at each frame, so the list keeps its storage.
     pub(crate) fn panels_into(&self, panels: &mut Vec<PanelSlot>) {
         let curves = self.inner.curves.get();
+        let entries = self.inner.entries.borrow();
         panels.clear();
-        panels.extend(self.inner.entries.borrow().iter().map(|entry| PanelSlot {
+        panels.extend(entries.iter().map(|entry| PanelSlot {
             shape: if curves {
                 entry.slot.shape
             } else {
@@ -873,6 +886,8 @@ impl Space {
             },
             ..entry.slot
         }));
+        #[cfg(any(test, headset))]
+        field_dock::dock(&entries, self.inner.field_panel.get(), panels);
     }
 
     #[cfg(test)]
@@ -975,6 +990,8 @@ pub(crate) fn local_subspace_origin() -> CompositionLocal<Origin> {
 pub(crate) fn local_space() -> CompositionLocal<Option<Space>> {
     with_locals(|locals| locals.space.clone())
 }
+
+mod sounds;
 
 #[cfg(test)]
 #[path = "tests/space_tests.rs"]

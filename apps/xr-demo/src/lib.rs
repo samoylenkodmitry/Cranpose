@@ -1,12 +1,15 @@
 // A Cranpose app for headsets. In a Meta Quest its panels stand in the room, and a controller's
 // trigger or a hand's pinch presses the buttons: one counts, the other shows or hides the room
 // around the panels.
-// A lit torus stands beside them in 3D, and a handle under it lets a controller carry it.
+// A lit torus stands beside them in 3D, and a handle under it lets a controller carry it. A glTF
+// crate with a texture turns beside the torus.
 // A strip above them is bent around the viewer. A ball above the left controller shows or hides
 // the strip when the right controller's ray presses it. The counter panel and the video surface
 // have a handle at their bottom right corner that resizes them, and the counter panel one under it
-// that carries it. On the desktop the panels draw flat, and a panel plays two clips through the
-// platform's decoder and a player surface.
+// that carries it. A text field in a small panel over the counter panel opens a keyboard when it
+// takes focus: the system's on Android XR, and the one that Cranpose draws below the panel elsewhere.
+// On the desktop the panels draw flat, and a panel plays two clips through the platform's decoder
+// and a player surface.
 
 use std::{
     cell::{OnceCell, RefCell},
@@ -28,6 +31,7 @@ use player_demo::Clips;
 use player_demo::sized;
 
 mod clip_player;
+mod crate_model;
 mod decoder_limits;
 mod foveated_player;
 mod headset_readout;
@@ -38,8 +42,10 @@ mod scripted_hand;
 mod sound_probe;
 mod torus_volume;
 mod tracking_panel;
+mod type_panel;
 
 use clip_player::{ClipPlayer, target_display_time};
+use crate_model::CrateModel;
 use foveated_player::FoveatedPlayer;
 use headset_readout::{HeadsetClock, HeadsetReadout, Readout, StreamLogs};
 use hum::rememberHum;
@@ -47,6 +53,7 @@ use pattern_writer::PatternWriter;
 use sound_probe::{SoundProbe, probe_build};
 use torus_volume::TorusVolume;
 use tracking_panel::{TrackedHands, TrackingSection, TrackingView};
+use type_panel::TypePanel;
 
 cranpose::app_capabilities!();
 
@@ -102,10 +109,11 @@ pub fn XrDemo() {
                 .rotate(0.0, -30.0, 0.0),
         );
         // A volume takes two of the compositor's layers, one for the 3D content and one for its
-        // handle. A Quest takes 16. With both rays and the ball the demo has 18, so the frame
-        // leaves out the two panels that stand farthest from the head. The torus hums: the sound
-        // comes from the torus and follows it when a controller carries it. A build that plays the
-        // hum from the head's side leaves the torus silent.
+        // handle. A Quest takes 16. With both rays, the ball and the text panel the demo has more,
+        // and the open keyboard is one more, so the frame leaves out the panels that stand
+        // farthest from the head. The torus hums: the sound comes from the torus and follows it
+        // when a controller carries it. A build that plays the hum from the head's side leaves
+        // the torus silent.
         TorusVolume(
             SubspaceModifier::new()
                 .offset(600.0, -330.0, 100.0)
@@ -116,7 +124,16 @@ pub fn XrDemo() {
         if let Some(sound) = hum.filter(|_| probe_build()) {
             SoundProbe(sound);
         }
+        // The crate's volume has no handle, so it adds no layer to the frame: the torus's volume
+        // already brings the projection layer, which all volumes share
+        CrateModel(
+            SubspaceModifier::new()
+                .offset(950.0, -330.0, 100.0)
+                .rotate(0.0, -30.0, 0.0),
+            true,
+        );
         CounterPanel(presses, tracking);
+        TypePanel();
         if strip_shown.get() {
             CurvedStrip();
         }
@@ -141,11 +158,13 @@ fn EntitlementChoice() {
 
 // The depth test builds are `XR_DEMO_VOLUME=through`, which shows the panel and the torus, and
 // `XR_DEMO_VOLUME=alone`, which shows the torus only. A screenshot of the second build tells how
-// many pixels the whole torus covers.
+// many pixels the whole torus covers. `XR_DEMO_VOLUME=model` shows the glTF crate only, standing
+// still and turned to show three faces, so that a screenshot tells how many pixels its texture
+// covers in each eye.
 const VOLUME_BUILD: Option<&str> = option_env!("XR_DEMO_VOLUME");
 
 fn depth_test_build() -> bool {
-    matches!(VOLUME_BUILD, Some("through" | "alone"))
+    matches!(VOLUME_BUILD, Some("through" | "alone" | "model"))
 }
 
 // A test of the compositor's depth test: a panel and a torus that pierces it, a meter ahead of the
@@ -155,6 +174,12 @@ fn depth_test_build() -> bool {
 // screenshot holds only the panel and the ring.
 #[composable]
 fn DepthTest() {
+    if VOLUME_BUILD == Some("model") {
+        FollowingSubspace(FollowTarget::View(FollowMode::Snap), || {
+            CrateModel(SubspaceModifier::new().rotate(20.0, 30.0, 0.0), false);
+        });
+        return;
+    }
     FollowingSubspace(FollowTarget::View(FollowMode::Snap), || {
         if VOLUME_BUILD != Some("alone") {
             SpatialPanel(SubspaceModifier::new().size(600.0, 600.0), || {
@@ -628,8 +653,15 @@ fn clip_views(index: u64, base: Duration) -> StreamedViews {
 
 #[cfg(all(feature = "android", target_os = "android"))]
 fn launcher() -> AppLauncher {
-    if let Some(hand) = scripted_hand::from_build(option_env!("XR_DEMO_SCRIPTED_HAND")) {
+    if let Some(hand) = scripted_hand::from_build(
+        option_env!("XR_DEMO_SCRIPTED_HAND"),
+        option_env!("XR_DEMO_SCRIPTED_TEXT"),
+    ) {
         cranpose_xr::script_hand(hand);
+    }
+    // `XR_DEMO_KEYBOARD=drawn` draws the keyboard on Android XR too, where the system shows its own
+    if option_env!("XR_DEMO_KEYBOARD") == Some("drawn") {
+        cranpose_xr::use_keyboard(cranpose_xr::Keyboard::Drawn);
     }
     AppLauncher::new().with_capabilities(&CAPABILITIES)
 }

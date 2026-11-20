@@ -172,7 +172,8 @@ work as on a panel. A controller's ray stops at the box. `scope.on_pointer_event
 events, with the position in dp on the box's front face. The meshes do not receive the ray.
 
 Jetpack XR 1.0 shows 3D content with `SpatialGltfModel` for a glTF model and `SceneCoreEntity` for a
-SceneCore entity. Cranpose has neither, so its composable has its own name.
+SceneCore entity. Cranpose has no SceneCore entities, so its composable has its own name. It has a
+`SpatialGltfModel` too (see "glTF models").
 
 A headset composes the content once and draws it for each eye, from that eye's pose and field of
 view, into one projection layer for all volumes. Where the runtime offers a depth swapchain, the
@@ -182,6 +183,64 @@ A Quest 3 shows the panels behind the 3D content where they stand behind it. Oth
 panels cover the 3D content. A frame with no volume has no projection layer and costs
 no GPU time. The scene draws with one sample for each pixel, and a movable volume takes two of the
 compositor's layers. A window shows the volume as a 3D view in its box.
+
+## glTF models
+
+The `gltf` feature adds `SpatialGltfModel`, which shows a glTF 2.0 model in a volume, after Jetpack XR's
+composable of the same name. An app without the feature has none of the code and none of its
+dependencies (`gltf`, `image`, `base64` and `percent-encoding`).
+
+```rust,ignore
+use cranpose_xr::{
+    SpatialGltfModel, SpatialGltfModelSource, SpatialGltfModelStatus, SubspaceModifier,
+    rememberSpatialGltfModelState,
+};
+
+// A source made from bytes is a new source each time, so the app keeps it
+let source = remember(|| SpatialGltfModelSource::from_bytes(MODEL_GLB)).with(Clone::clone);
+let state = rememberSpatialGltfModelState(source);
+SpatialGltfModel(
+    state.clone(),
+    SubspaceModifier::new().size(300.0, 300.0).depth(300.0),
+    |_| {},
+);
+// The animations exist once the model has loaded. An effect keyed by the status starts them
+// once, where a call in the composable's body would start them again at each composition.
+let status = state.status();
+LaunchedEffect(status.clone(), async move |_| {
+    if status == SpatialGltfModelStatus::Loaded {
+        for animation in state.animations() {
+            animation.set_looping(true);
+            animation.start();
+        }
+    }
+});
+```
+
+A source is a file (`.glb`, or `.gltf` with embedded buffers or files beside it) or bytes. The model
+loads on a worker thread. `state.status()` is `Loading`, `Loaded` or `Failed(GltfError)`, and the
+composable shows nothing until it is `Loaded`. The model keeps its proportions and scales to fit the
+box that the modifier sets, as in Jetpack XR. A side that the modifier leaves out never makes the
+model larger than its own size. With no size at all the model has its own size, a meter for each
+glTF unit.
+
+The scene shows the node tree of the file's default scene with each node's transform. Each mesh
+carries its material's base color, which is the base color texture times the base color factor. The
+`OPAQUE` and `MASK` alpha modes work, and `BLEND` keeps the alpha of the base color. The scene has
+one directional light for all volumes. The model sets a default light, and the `content` callback
+may set another with `scope.light`.
+
+`GltfAnimation` (Jetpack XR's `GltfAnimation`) plays the translation, rotation and scale channels
+of a node, with the `LINEAR`, `STEP` and `CUBICSPLINE` interpolations: `start`, `stop`, `pause` and
+`resume`, a loop and a speed. Skins and morph targets are not animated: a skinned mesh stands in its
+bind pose. The loader leaves out the rest of a glTF material (metallic, roughness, normal,
+occlusion and emissive values, texture transforms, texture samplers), the file's cameras and lights,
+vertex colors, and primitives that are not triangles. A texture clamps at its edges and never
+repeats. A texture wider or higher than 2048 pixels is halved until it fits.
+
+Jetpack XR's `SpatialGltfModelState` also lists the model's `nodes`. Cranpose has no counterpart,
+and its `SpatialGltfModelSource` has `from_path` and `from_bytes` where Jetpack XR's has `fromPath`,
+`fromUri` and `fromResource`. The doc comments say where each call differs.
 
 ## Video and camera surfaces
 
@@ -437,6 +496,63 @@ check where no hand can be tracked, such as an emulator. `script_hand(ScriptedHa
 from, at, PinchCycle::default()))` installs a hand whose aim pose points at a place in the room and
 whose index finger pinches in a cycle. The frame holds it as a tracked hand, so the pointer treats
 it as the cameras' hand. The feature is off by default.
+
+## Text entry
+
+A text field asks for the platform's software keyboard when it takes focus, as it does on a phone.
+The options of `BasicTextField` hold the request (`show_keyboard_on_focus`), and a tap on a focused
+field repeats it. A headset answers with one of two keyboards. An app needs no code for it.
+
+The keyboard that Cranpose draws is a `SpatialPanel` of keys. It opens below the panel that holds
+the focused field, in the plane of that panel, and it closes when focus leaves the field. It follows
+the panel: a panel that the user carries, or that follows a controller, takes the keyboard along.
+A controller's ray and a hand's pinch press the keys, because the keys are ordinary buttons.
+A key does not take the focus from the field.
+
+- The keys are the digits, the 26 letters in the QWERTY order, shift, backspace, enter, space, the
+  comma and the period, a key that shows a page of symbols (`?123`) and back (`abc`), and a key that
+  hides the keyboard. The symbols page holds `@ # $ % & * ( ) - + ! " ' : ; / ? = _ [ ] { } < > \ |`.
+- Each key sends the key event that a hardware keyboard sends for it (`KeyEvent`, with the `Key`
+  and the text that the US layout gives), and the backend hands it to the shell after the pointer's
+  events of the frame. The text reaches the field through the path of a hardware keyboard, so the
+  `on_key_event` modifiers of the app see it too. A letter in a capital carries the shift modifier.
+- One press of shift makes the next letter a capital. A second press locks shift, and a third
+  unlocks it.
+- Enter runs the keyboard action of a single-line field (`on_keyboard_action`). Without one the
+  action is Done, which hides the keyboard. In a multi-line field enter starts a new line.
+- The hide key closes the keyboard and leaves the focus in the field. A tap on the field opens the
+  keyboard again.
+- The keyboard has the Latin alphabet only. It has no other layout, no suggestions, no composing
+  text and no repeat of a held key.
+- The open keyboard is one more layer of the frame. A runtime takes 16 layers at least, so an app
+  that stands near the limit loses the panel that stands farthest from the head, as with any other
+  panel.
+
+On Android XR the system shows its own input method over an immersive app. A text field then opens
+that keyboard in place of the drawn one, through the same request. The keyboard is a panel of the
+system. The system gives it the input focus, so the app's lifecycle is `Paused` while it shows, and
+the app's pointer gets no aim. The back action hides the keyboard, and the app resumes. What the
+keyboard types reaches the field as the text of an input connection, so the field takes
+suggestions, other languages and voice input from the keyboard. Android XR shows the keyboard only
+for an app whose activity has an editor view, which the backend adds.
+
+`use_keyboard(Keyboard::Drawn)` draws the keyboard of Cranpose on every runtime, also where the
+system shows its own. `Keyboard::System`, the default, uses the system's keyboard where the runtime
+shows it and draws the keyboard elsewhere. The choice counts if it comes before the app starts,
+in the launcher's setup. Jetpack XR Compose has no such choice. There the system's input method
+types, and Compose opens it as it does on a phone.
+
+```rust,ignore
+cranpose_xr::use_keyboard(cranpose_xr::Keyboard::Drawn);
+```
+
+A build that turns on the `scripted-hand` feature can type on the keyboard of Cranpose with
+`ScriptedHand::typing`. The hand presses a field, and then the keys that type a text, one press in
+each cycle. It shows the keyboard in an emulator, where no hand can be tracked.
+
+Meta's own keyboard for Quest apps, `XR_META_virtual_keyboard`, is not used. It needs the app to
+draw the keyboard's model, which the runtime hands over as glTF through `XR_FB_render_model`.
+`docs/xr_architecture.md` lists what it needs.
 
 ## Streamed scenes
 

@@ -64,8 +64,9 @@ impl SpatialVolumeScope {
 ///
 /// Jetpack XR shows 3D content through `SpatialGltfModel`, which renders a glTF model, and
 /// `SceneCoreEntity`, which attaches any SceneCore entity. Its current subspace package has no
-/// `Volume`. Cranpose has neither a glTF model nor SceneCore entities, so its composable has its
-/// own name, after the box that the content stands in.
+/// `Volume`. Cranpose has no SceneCore entities, so its composable has its own name, after the box
+/// that the content stands in. A glTF model has its own composable, `SpatialGltfModel`, which the
+/// `gltf` feature adds. It is a volume whose content is the model.
 ///
 /// The content is ordinary composables whose nodes carry
 /// [`mesh_surface`](cranpose::Modifier::mesh_surface) or

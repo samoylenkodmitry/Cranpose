@@ -16,7 +16,7 @@ use super::{
     graphics::Graphics,
     handle_layers::HandleLayers,
     headset_input::HeadsetInput,
-    host::Host,
+    host::{Host, SystemKeyboard},
     panel_layers::{DENSITY, PanelLayers},
     ray_layers::RayLayers,
     runtime::Runtime,
@@ -30,10 +30,12 @@ use crate::{
     depth_order::sort_back_to_front,
     exit_request::{ExitRequest, ExitStep, leave},
     frame_effects::local_frame_effects,
+    keyboard_panel::SoftKeyboardPanel,
     local_entitlement_check, local_haptics, local_headset_properties, local_spatial_capabilities,
     local_spatial_environment, local_tracking_capabilities,
     pointer::Pointer,
     session_status::{SessionStatus, StatusWatch},
+    soft_keyboard::SoftKeyboard,
     sound_stage::SoundStage,
     space::{PanelSlot, Ride, Space, local_space},
     surface_input::Gesture,
@@ -54,7 +56,7 @@ pub(crate) fn run_immersive(
 ) -> Result<(), String> {
     // A run that follows another in the same process starts as the first did
     dispatch_lifecycle_state(LifecycleState::Created);
-    let mut immersive = Immersive::new(runtime, settings, entitlement.is_some(), content)?;
+    let mut immersive = Immersive::new(host, runtime, settings, entitlement.is_some(), content)?;
     let mut status = SessionStatus::Idle;
     let mut rate = FrameRate::new();
     let mut watch = StatusWatch::default();
@@ -112,6 +114,10 @@ pub(crate) fn run_immersive(
 struct Immersive {
     guest: GuestView,
     space: Space,
+    // The keyboard that a focused text field opens: the system's where the runtime shows it, else
+    // the one that Cranpose draws
+    keyboard: SoftKeyboard,
+    system_keyboard: Option<SystemKeyboard>,
     environment: SpatialEnvironment,
     // The app's handle on the entitlement check, when one runs
     entitlement: Option<EntitlementCheck>,
@@ -134,6 +140,7 @@ struct Immersive {
 
 impl Immersive {
     fn new(
+        host: &Host,
         runtime: Runtime,
         settings: &AppSettings,
         entitled: bool,
@@ -182,6 +189,7 @@ impl Immersive {
                 || {
                     content();
                     VolumeScene(volume_space.clone());
+                    SoftKeyboardPanel(volume_space.clone());
                 },
             );
         })
@@ -193,9 +201,18 @@ impl Immersive {
             .clone()
             .ok_or("the content did not compose")?;
         space.set_curves_shown(xr_session.shows_cylinders());
+        // The first composition made the keyboard, because its panel asks for it
+        let keyboard = space.keyboard();
+        let system_keyboard = host.system_keyboard();
+        match &system_keyboard {
+            Some(system) => system.install(&mut guest),
+            None => keyboard.install(guest.shell()),
+        }
         Ok(Self {
             guest,
             space,
+            keyboard,
+            system_keyboard,
             environment,
             entitlement,
             pointer: Pointer::default(),
@@ -251,6 +268,10 @@ impl Immersive {
         self.space.panels_into(&mut self.panels);
         let (events, cursor) = self.pointer.update(aims, time, &self.panels);
         send(&mut self.guest, events);
+        match &self.system_keyboard {
+            Some(system) => system.pump(&mut self.guest),
+            None => self.keyboard.pump(self.guest.shell(), &self.space),
+        }
         for gesture in self.pointer.surface_events() {
             self.space.deliver_to_surface(gesture);
         }
