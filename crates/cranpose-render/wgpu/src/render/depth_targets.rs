@@ -5,6 +5,8 @@ const KEPT_INTERIOR_TARGETS: usize = 4;
 
 const KEPT_SCENE_TARGETS: usize = 2;
 
+const KEPT_PLACEHOLDERS: usize = 2;
+
 // The transient depth buffers passes draw against, by target size.
 #[derive(Default)]
 pub(crate) struct DepthTargets {
@@ -16,6 +18,8 @@ pub(crate) struct DepthTargets {
     // The depth and stencil a host gave for the frame that draws now, whose scenes draw against it
     // and leave their depth in it.
     hosted_scene: Option<((u32, u32), wgpu::TextureView)>,
+    // The colour attachments of the passes that only write depth, by size and format.
+    placeholders: IdlePool<((u32, u32), wgpu::TextureFormat, wgpu::TextureView)>,
 }
 
 impl DepthTargets {
@@ -68,8 +72,42 @@ impl DepthTargets {
         (view, false)
     }
 
+    // The view that the host gave for the frame that draws now, if it has `size`.
+    pub(crate) fn host(&self, size: (u32, u32)) -> Option<wgpu::TextureView> {
+        self.hosted_scene
+            .as_ref()
+            .filter(|(hosted, _)| *hosted == size)
+            .map(|(_, view)| view.clone())
+    }
+
+    // A colour target of `format` and `size` for a pass that writes only depth: a scene pipeline
+    // has a colour target even where it writes no colour. The pass clears it and drops it, so a
+    // tiled GPU keeps it in tile memory.
+    pub(crate) fn placeholder(
+        &mut self,
+        device: &wgpu::Device,
+        size: (u32, u32),
+        format: wgpu::TextureFormat,
+    ) -> wgpu::TextureView {
+        let view = match self
+            .placeholders
+            .take(|(kept, kept_format, _)| *kept == size && *kept_format == format)
+        {
+            Some((_, _, view)) => view,
+            None => transient_attachment(device, ("Scene depth pass colour", format, 1), size),
+        };
+        self.placeholders.put(
+            (size, format, view.clone()),
+            KEPT_PLACEHOLDERS,
+            u64::MAX,
+            |_| 0,
+        );
+        view
+    }
+
     pub(super) fn end_frame(&mut self) {
         self.interior.end_frame();
+        self.placeholders.end_frame();
     }
 }
 

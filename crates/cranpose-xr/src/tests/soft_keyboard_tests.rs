@@ -26,6 +26,7 @@ use crate::{
         local_space,
     },
     surface_input::Gesture,
+    volume_pick::PickMeshes,
 };
 
 // The panel of the field is the second one in the atlas, so its part of the atlas does not start
@@ -98,7 +99,9 @@ impl Headset {
         self.frames += 1;
         let time = Duration::from_millis(10 * self.frames);
         let panels = self.space.panels();
-        let (events, _) = self.pointer.update([None, aim], time, &panels);
+        let (events, _) = self
+            .pointer
+            .update([None, aim], time, (&panels, &PickMeshes::default()));
         for gesture in events {
             match *gesture {
                 Gesture::Move { x, y } => self.robot.mouse_move(x, y),

@@ -142,6 +142,7 @@ fn controller_in_use(x: f32, trigger: f32) -> Controller {
 struct Frames {
     pointer: Pointer,
     frame: u64,
+    picks: PickMeshes,
 }
 
 impl Frames {
@@ -152,7 +153,7 @@ impl Frames {
     ) -> (Vec<Gesture>, Option<Cursor>) {
         self.frame += 1;
         let time = Duration::from_millis(10 * self.frame);
-        let (events, cursor) = self.pointer.update(aims, time, panels);
+        let (events, cursor) = self.pointer.update(aims, time, (panels, &self.picks));
         (events.to_vec(), cursor)
     }
 
@@ -771,7 +772,7 @@ fn carry_right(space: &Space) {
     {
         let aim = handle_aim(&space.panels()[0], x, trigger);
         let time = Duration::from_millis(10 * frame as u64);
-        pointer.update([None, aim], time, &space.panels());
+        pointer.update([None, aim], time, (&space.panels(), &PickMeshes::default()));
         for step in pointer.moves() {
             space.carry(step);
         }
@@ -848,7 +849,7 @@ fn resize_right(space: &Space) {
     for (frame, (shift, trigger)) in frames.enumerate() {
         let aim = corner_aim(&space.panels()[0], shift, trigger);
         let time = Duration::from_millis(10 * frame as u64);
-        pointer.update([None, aim], time, &space.panels());
+        pointer.update([None, aim], time, (&space.panels(), &PickMeshes::default()));
         for step in pointer.resizes() {
             space.resize(step);
         }
@@ -1123,6 +1124,90 @@ fn a_volume_in_front_of_a_panel_takes_the_ray_and_the_panel_behind_it_does_not()
     let (atlas, cursor) = frames.update([None, aim(0.0, 0.0, 1.0)], &panels);
     assert!(atlas.is_empty());
     assert_eq!(cursor, None, "the panel behind shows no cursor");
+}
+
+// A volume of 960 by 540 dp and 300 dp deep, centered a meter ahead, that holds a square mesh of
+// 200 dp in its center plane.
+fn square_volume() -> (PanelSlot, PickMeshes) {
+    let slot = PanelSlot {
+        id: 9,
+        kind: PanelKind::Volume { depth: 300.0 },
+        atlas: [0.0, 0.0, 960.0, 540.0],
+        pose: Pose::at([0.0, 0.0, -1.0]),
+        mobility: Mobility::Fixed,
+        shape: Shape::Flat,
+        resize: None,
+        room: [960.0, 540.0],
+        ride: Ride::Free,
+    };
+    let square = std::sync::Arc::new(cranpose::space::Mesh::plane());
+    let mut picks = PickMeshes::default();
+    picks.replace(slot.id, |visit| {
+        let surface = cranpose::space::MeshSurface {
+            mesh: square,
+            transform: cranpose::space::Mat4::IDENTITY,
+            material: cranpose::space::Material::Unlit,
+            casts_shadow: false,
+            solid: true,
+        };
+        visit(&cranpose::MeshVisit {
+            node: Some(cranpose_core::NodeId(4)),
+            mesh: 0,
+            surface: &surface,
+            // The plane is the unit square from the corner: 200 dp wide around the center
+            to_frame: cranpose::space::Mat4::scaling(cranpose::space::Vec3::new(200.0, 200.0, 1.0))
+                .then(&cranpose::space::Mat4::translation(
+                    cranpose::space::Vec3::new(-100.0, -100.0, 0.0),
+                )),
+        });
+    });
+    (slot, picks)
+}
+
+#[test]
+fn a_ray_stops_at_the_mesh_inside_a_volume_and_passes_through_its_empty_box() {
+    let (volume, picks) = square_volume();
+    let mut frames = Frames {
+        picks,
+        ..Frames::default()
+    };
+    // A panel of the atlas stands a meter behind the volume's center
+    let behind = PanelSlot {
+        pose: Pose::at([0.0, 0.0, -2.0]),
+        ..PANEL
+    };
+    let panels = [volume, behind];
+    // A ray at the mesh stops at its plane, a meter away, beyond the box's front face at 85 cm.
+    // The gesture's place is the hit's, 5 cm right of the center, from the face's corner.
+    frames.update([None, aim(0.05, 0.0, 0.0)], &panels);
+    let beam = frames.pointer.beams()[1].expect("the ray shows");
+    assert!((beam.length - 1.0).abs() < 1e-4, "{}", beam.length);
+    let [gesture] = frames.pointer.surface_events() else {
+        panic!("one gesture on the volume");
+    };
+    assert_eq!(gesture.surface, volume.id);
+    let Gesture::Move { x, y } = gesture.gesture else {
+        panic!("a move");
+    };
+    assert!(
+        (x - 530.0).abs() < 0.1 && (y - 270.0).abs() < 0.1,
+        "{x} {y}"
+    );
+    let hit = gesture
+        .ray
+        .and_then(|ray| ray.hit)
+        .expect("the ray names its mesh");
+    assert_eq!(hit.mesh.node, cranpose_core::NodeId(4));
+
+    // A ray inside the box and beside the mesh passes through: it leaves the volume and meets the
+    // panel behind it
+    let (atlas, _) = frames.update([None, aim(0.25, 0.0, 0.0)], &panels);
+    assert_eq!(
+        frames.pointer.surface_events()[0].gesture,
+        Gesture::Leave,
+        "the ray left the volume"
+    );
+    assert_eq!(atlas.len(), 1, "the panel behind hears the ray");
 }
 
 #[test]
@@ -1494,7 +1579,11 @@ fn clicks_of(aims: impl IntoIterator<Item = Option<Aim>>) -> u32 {
     let (mut robot, clicks) = counting_button();
     let mut pointer = Pointer::default();
     for (frame, aim) in (0_u64..).zip(aims) {
-        let (events, _) = pointer.update([None, aim], millis(10 * frame), &[BUTTON_PANEL]);
+        let (events, _) = pointer.update(
+            [None, aim],
+            millis(10 * frame),
+            (&[BUTTON_PANEL], &PickMeshes::default()),
+        );
         for gesture in events {
             match *gesture {
                 Gesture::Move { x, y } => robot.mouse_move(x, y),

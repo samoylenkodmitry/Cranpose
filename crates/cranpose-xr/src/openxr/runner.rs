@@ -40,6 +40,7 @@ use crate::{
     space::{PanelSlot, Ride, Space, local_space},
     surface_input::Gesture,
     volume_host::VolumeScene,
+    volume_pick::PickMeshes,
 };
 
 // Where the pointer goes when it leaves every panel: far outside the atlas, so no content stays
@@ -122,6 +123,8 @@ struct Immersive {
     // The app's handle on the entitlement check, when one runs
     entitlement: Option<EntitlementCheck>,
     pointer: Pointer,
+    // The meshes of the volumes that a ray points at, for the pointer to meet
+    picks: PickMeshes,
     layers: PanelLayers,
     volumes: VolumeLayers,
     streams: StreamLayers,
@@ -216,6 +219,7 @@ impl Immersive {
             environment,
             entitlement,
             pointer: Pointer::default(),
+            picks: PickMeshes::default(),
             layers,
             volumes,
             streams,
@@ -266,7 +270,19 @@ impl Immersive {
                 .cast_unsigned(),
         );
         self.space.panels_into(&mut self.panels);
-        let (events, cursor) = self.pointer.update(aims, time, &self.panels);
+        if let Some(root) = self.volumes.scene_root() {
+            let pressed = self.pointer.pressed_surface();
+            let pointed = |slot: &PanelSlot| {
+                pressed == Some(slot.id)
+                    || aims
+                        .iter()
+                        .flatten()
+                        .any(|aim| slot.hit(&aim.ray).is_some())
+            };
+            self.picks
+                .refresh((&mut self.guest, root), &self.space, &self.panels, pointed);
+        }
+        let (events, cursor) = self.pointer.update(aims, time, (&self.panels, &self.picks));
         send(&mut self.guest, events);
         match &self.system_keyboard {
             Some(system) => system.pump(&mut self.guest),

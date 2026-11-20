@@ -57,6 +57,7 @@ mod body_state;
 mod callback_slot;
 #[cfg(any(test, headset))]
 mod carry;
+mod content_ray;
 mod controller;
 #[cfg(any(test, headset))]
 mod controller_bindings;
@@ -106,9 +107,13 @@ mod gltf_fit;
 #[cfg(feature = "gltf")]
 mod gltf_import;
 #[cfg(feature = "gltf")]
+mod gltf_layer_spaces;
+#[cfg(feature = "gltf")]
 mod gltf_material;
 #[cfg(feature = "gltf")]
 mod gltf_model;
+#[cfg(feature = "gltf")]
+mod gltf_model_node;
 mod hand;
 mod hand_aim;
 mod hand_joint;
@@ -118,6 +123,9 @@ mod hand_state;
 mod handle;
 mod haptics;
 mod headset_properties;
+mod hit_info;
+mod input_action;
+mod input_event;
 mod input_source;
 mod interaction_profile;
 #[cfg(any(test, headset))]
@@ -132,6 +140,7 @@ mod keyboard_state;
 #[cfg(any(test, headset))]
 mod layer_limit;
 mod locals;
+mod mesh_ref;
 mod meta_face_state;
 mod move_policy;
 mod on_not_entitled;
@@ -210,7 +219,11 @@ mod volume_host;
 #[cfg(any(test, headset))]
 mod volume_pass;
 #[cfg(any(test, headset))]
+mod volume_pick;
+#[cfg(any(test, headset))]
 mod volume_plan;
+#[cfg(any(test, headset))]
+mod volume_samples;
 #[cfg(any(test, headset))]
 mod volume_transform;
 #[cfg(any(test, headset))]
@@ -253,6 +266,8 @@ pub use foveated_encoding::FoveatedEncoding;
 pub use gltf_animation::{GltfAnimation, GltfAnimationState};
 #[cfg(feature = "gltf")]
 pub use gltf_error::GltfError;
+#[cfg(feature = "gltf")]
+pub use gltf_model_node::GltfModelNode;
 pub use hand::Hand;
 pub use hand_aim::HandAim;
 pub use hand_joint::HandJoint;
@@ -260,6 +275,9 @@ pub use hand_joint_type::HandJointType;
 pub use hand_state::HandState;
 pub use haptics::{Haptics, Vibration, local_haptics};
 pub use headset_properties::{EyeImageSize, HeadsetProperties, local_headset_properties};
+pub use hit_info::HitInfo;
+pub use input_action::InputAction;
+pub use input_event::InputEvent;
 pub use input_source::InputSource;
 pub use interaction_profile::InteractionProfile;
 pub use keyboard::{Keyboard, use_keyboard};

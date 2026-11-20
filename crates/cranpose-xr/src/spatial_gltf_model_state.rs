@@ -3,11 +3,12 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose::{LaunchedEffect, composable, space::Mat4, withBlocking};
-use cranpose_core::{MutableState, mutableStateOf, rememberKeyed};
+use cranpose_core::{MutableState, NodeId, mutableStateOf, rememberKeyed};
 
 use crate::{
-    gltf_animation::GltfAnimation, gltf_clip::Trs, gltf_error::GltfError, gltf_import::import,
-    gltf_model::GltfModel, spatial_gltf_model_source::SpatialGltfModelSource,
+    HitInfo, gltf_animation::GltfAnimation, gltf_clip::Trs, gltf_error::GltfError,
+    gltf_import::import, gltf_layer_spaces::LayerSpaces, gltf_model::GltfModel,
+    gltf_model_node::GltfModelNode, spatial_gltf_model_source::SpatialGltfModelSource,
     spatial_gltf_model_status::SpatialGltfModelStatus,
 };
 
@@ -23,6 +24,8 @@ pub(crate) struct NodePoses {
 pub(crate) struct LayerDraws {
     pub(crate) owner: usize,
     pub(crate) more: Vec<usize>,
+    // The spaces that the layer's node takes, moved in place as the nodes move
+    pub(crate) spaces: LayerSpaces,
 }
 
 // A loaded model with the parts that only the composition can hold.
@@ -31,6 +34,8 @@ pub(crate) struct LoadedModel {
     pub(crate) animations: Vec<GltfAnimation>,
     // For each layer of the model, the draws that it covers
     pub(crate) layers: Vec<LayerDraws>,
+    // The node of the composition that carries each layer, once the layer composed
+    layer_nodes: RefCell<Vec<Option<NodeId>>>,
     // Counts the starts and stops of the animations, which change the pose
     pub(crate) requests: MutableState<u32>,
     poses: RefCell<NodePoses>,
@@ -65,13 +70,16 @@ impl LoadedModel {
                     *none = Some(LayerDraws {
                         owner: draw,
                         more: Vec::new(),
+                        spaces: LayerSpaces::new(),
                     });
                 }
             }
         }
+        let layers: Vec<LayerDraws> = layers.into_iter().flatten().collect();
         let loaded = Self {
+            layer_nodes: RefCell::new(vec![None; layers.len()]),
             // Every layer comes from a draw, so each has an owner
-            layers: layers.into_iter().flatten().collect(),
+            layers,
             model,
             animations,
             requests,
@@ -96,6 +104,33 @@ impl LoadedModel {
         }
         self.revision
             .update(|revision| *revision = revision.wrapping_add(1));
+    }
+
+    // Records the node of the composition that carries `layer`, which a ray's hit names.
+    pub(crate) fn note_layer_node(&self, layer: usize, node: NodeId) {
+        if let Some(slot) = self.layer_nodes.borrow_mut().get_mut(layer) {
+            *slot = Some(node);
+        }
+    }
+
+    // The glTF node whose mesh is the mesh `mesh_index` of the layer that the composition node
+    // `entity` carries.
+    fn node_of(&self, entity: NodeId, mesh_index: usize) -> Option<GltfModelNode> {
+        let layer = self
+            .layer_nodes
+            .borrow()
+            .iter()
+            .position(|node| *node == Some(entity))?;
+        let draws = &self.layers[layer];
+        let draw = match mesh_index {
+            0 => draws.owner,
+            more => *draws.more.get(more - 1)?,
+        };
+        let index = self.model.draws[draw].node;
+        Some(GltfModelNode {
+            index,
+            name: self.model.names[index].clone(),
+        })
     }
 
     // Runs `read` on the transform of each node, from the node's own space to the model's. A
@@ -165,6 +200,13 @@ impl SpatialGltfModelState {
         for animation in self.animations() {
             animation.stop();
         }
+    }
+
+    /// The glTF node whose mesh a ray hit: the node of the loaded model that carries the mesh that
+    /// `hit` names. `None` while the model has not loaded, and for a hit on a mesh that the
+    /// volume's own content added. Jetpack XR gives the node as the entity that a hit names.
+    pub fn node_of(&self, hit: &HitInfo) -> Option<GltfModelNode> {
+        self.loaded()?.node_of(hit.input_entity, hit.mesh_index)
     }
 
     // The model, once it has loaded.

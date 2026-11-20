@@ -1,6 +1,9 @@
 //! 3D content in a subspace: Cranpose's own scene, drawn by a headset once for each eye.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use cranpose::{
     Box, BoxSpec, Modifier, PointerEvent, composable,
@@ -11,11 +14,11 @@ use cranpose_core::{
 };
 
 use crate::{
-    SubspaceModifier,
+    InputEvent, SubspaceModifier,
     callback_slot::{Callback, invoke},
     space::{Space, local_space, local_subspace_origin},
     subspace_modifier::DEFAULT_VOLUME_SIZE,
-    surface_input::PointerSink,
+    surface_input::{InputSink, PointerSink},
     volumes::VolumeContent,
 };
 
@@ -23,10 +26,15 @@ use crate::{
 #[derive(Default)]
 struct PointerSlot(RefCell<Option<Callback<PointerEvent>>>);
 
+// The callback that the content registered for the input events of a ray.
+#[derive(Default)]
+struct InputSlot(RefCell<Option<Callback<InputEvent>>>);
+
 /// The scope of the content of a [`SpatialVolume`], where the content sets its light and the
 /// callback for a controller's ray. Jetpack XR has no such scope.
 pub struct SpatialVolumeScope {
     pointer: Rc<PointerSlot>,
+    input: Rc<InputSlot>,
     light: MutableState<Option<Light>>,
 }
 
@@ -41,21 +49,42 @@ impl SpatialVolumeScope {
         self.light.set(Some(light));
     }
 
-    /// Sets the callback that receives the pointer events of a controller's ray on the volume's
-    /// box, as Compose's pointer input gives them to a composable. A ray stops at the box whether
-    /// or not the callback is set. The positions are in dp from the top left corner of the
-    /// box's front face, seen from the front, along its width and height: the place where the ray
-    /// entered the box, projected onto that face. The depth is not reported. The events are
-    /// `Enter` when the ray first meets the box, `Move` while it moves over it, `Down` when the
-    /// trigger goes down, `Up` when it goes up and `Exit` when the ray leaves. An `Up` comes also
-    /// when the ray left the box during the press, or the controller was lost.
+    /// Sets the callback that receives the pointer events of a ray on the volume, as Compose's
+    /// pointer input gives them to a composable. A ray stops at the volume's box whether or not the
+    /// callback is set, and where the content has meshes it stops at the nearest triangle of a
+    /// mesh. The positions are in dp from the top left corner of the box's front face, seen from the
+    /// front, along its width and height. For a volume with meshes the position is where the ray
+    /// meets the nearest mesh, projected onto that face. For a volume with none it is the place
+    /// where the ray entered the box. The depth is not reported: [`on_input_event`](Self::on_input_event)
+    /// has it. The events are `Enter` when the ray first meets the volume, `Move` while it moves over
+    /// it, `Down` when the trigger goes down, `Up` when it goes up and `Exit` when the ray leaves.
+    /// An `Up` comes also when the ray left the volume during the press, or the controller was
+    /// lost.
     ///
-    /// The composables of the content do not receive the ray: it does not pick the meshes. A
-    /// window shows the content under the mouse, where the meshes take pointer input as
+    /// A window shows the content under the mouse, where the meshes take pointer input as
     /// [`mesh_surface`](cranpose::Modifier::mesh_surface) documents, and never runs this callback.
     /// Jetpack XR gives such input through the `interactionPolicy` parameter of its panels.
     pub fn on_pointer_event(&self, callback: impl FnMut(PointerEvent) + 'static) {
         *self.pointer.0.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// Sets the callback that receives the events of a controller's or a hand's ray on the
+    /// volume's meshes, as Jetpack XR's `InputEvent` gives them to the listener of an
+    /// `InteractableComponent`.
+    ///
+    /// The ray meets the meshes of the content on the CPU: the nearest triangle of any mesh in the
+    /// volume that the ray crosses, from either side. An [`InputEvent`] has the ray in the volume's
+    /// content space and, in its [`hit_info`](InputEvent::hit_info), the mesh that it meets, which
+    /// node of the content carries the mesh and the hit's place in dp. A `Down`, the `Move`s that
+    /// follow and the `Up` name the mesh that the press began on, as Jetpack XR's events do, also
+    /// where the ray has left it. A volume whose content has no mesh takes the ray at its box and
+    /// gives events with no `hit_info`.
+    ///
+    /// The meshes are those that the headset's last draw left in the scene, so a mesh that moves
+    /// in a frame is hit where it stood in the frame before. A mesh that is not drawn is not hit.
+    /// A window shows the volume under the mouse and never runs this callback.
+    pub fn on_input_event(&self, callback: impl FnMut(InputEvent) + 'static) {
+        *self.input.0.borrow_mut() = Some(Box::new(callback));
     }
 }
 
@@ -78,17 +107,21 @@ impl SpatialVolumeScope {
 /// The content's space has its origin at the box's center, x to the right, y down and z away from
 /// the viewer, and a unit is a dp, which is a millimeter in a subspace. The box is `modifier`'s
 /// [`width`](SubspaceModifier::width), [`height`](SubspaceModifier::height) and
-/// [`depth`](SubspaceModifier::depth), 500 dp each by default. The box is where a controller's ray
-/// stops. The content is not scaled to the box and may reach outside it. The camera cuts away
+/// [`depth`](SubspaceModifier::depth), 500 dp each by default. A controller's ray meets the box
+/// first, and then the nearest triangle of the content's meshes inside it (see
+/// [`on_input_event`](SpatialVolumeScope::on_input_event)). A volume with no mesh stops the ray at
+/// its box. The content is not scaled to the box and may reach outside it. The camera cuts away
 /// what lies nearer to the eye than a 64th of its focal length in pixels: 12 mm for a focal length
 /// of 800 pixels.
 ///
 /// A headset draws the content of all volumes together, into one projection layer with a view for
 /// each eye. The content composes once. Each eye then draws it from that eye's own pose and field
-/// of view, with no composition in between. The scene draws with one sample for each pixel, so
-/// the edges of a mesh are not smoothed. Its depth buffer hides a farther mesh behind a nearer
-/// one, also between volumes. The layer carries that depth where the runtime takes it. While the
-/// app has no volume, the headset draws no scene and makes no layer.
+/// of view, with no composition in between. The scene takes four samples in each pixel where the
+/// device takes four in its colour and depth formats, and one elsewhere, so the edges of a mesh
+/// show smooth. Its depth buffer hides a farther mesh behind a nearer one, also between volumes.
+/// The layer carries that depth where the runtime takes it. A pixel that an edge covers in part
+/// carries the depth of the surface at its centre. While the app has no volume, the headset draws
+/// no scene and makes no layer.
 ///
 /// The composables of the content compose at the root of the volumes' scene, which is a window of
 /// the app's composition. They share the composition's state. A composition local that the app
@@ -135,15 +168,18 @@ fn PlacedVolume(
     space.set_resizable(id, modifier.resize());
     let parts = rememberScopeParts();
     // The sink stays for the volume's life. A volume with no callback takes no events.
-    let sink = remember({
-        let pointer = Rc::clone(&parts.pointer);
+    let (sink, input_sink) = remember({
+        let (pointer, input) = (Rc::clone(&parts.pointer), Rc::clone(&parts.input));
         move || {
             let sink: PointerSink = Rc::new(move |event| invoke(&pointer.0, event));
-            sink
+            let input_sink: InputSink = Rc::new(move |event| invoke(&input.0, event));
+            (sink, input_sink)
         }
     })
     .with(Clone::clone);
     space.set_surface_sink(id, Some(sink));
+    space.set_input_sink(id, Some(input_sink));
+    let node = remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
     // The scene composes the content at its own root, with the scope that this call made
     let mut content = content;
     let light = parts.light;
@@ -153,6 +189,7 @@ fn PlacedVolume(
         pose: panel.volume_pose,
         light,
         compose: Rc::new(RefCell::new(Some(compose))),
+        node,
     });
     DisposableEffect(id, move |_| {
         DisposableEffectResult::new(move || space.remove(id))
@@ -163,6 +200,7 @@ fn PlacedVolume(
 #[derive(Clone)]
 struct ScopeParts {
     pointer: Rc<PointerSlot>,
+    input: Rc<InputSlot>,
     light: MutableState<Option<Light>>,
 }
 
@@ -170,6 +208,7 @@ struct ScopeParts {
 fn rememberScopeParts() -> ScopeParts {
     remember(|| ScopeParts {
         pointer: Rc::new(PointerSlot::default()),
+        input: Rc::new(InputSlot::default()),
         light: mutableStateOf(None),
     })
     .with(Clone::clone)
@@ -179,6 +218,7 @@ impl ScopeParts {
     fn scope(&self) -> SpatialVolumeScope {
         SpatialVolumeScope {
             pointer: Rc::clone(&self.pointer),
+            input: Rc::clone(&self.input),
             light: self.light,
         }
     }

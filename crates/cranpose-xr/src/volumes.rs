@@ -1,9 +1,12 @@
 //! The volumes of a space: what each one hands to the scene that draws them.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
-use cranpose::space::{Camera, Light, Mat4};
-use cranpose_core::{MutableState, mutableStateOf};
+use cranpose::space::{Camera, Light, Mat4, Multisample};
+use cranpose_core::{MutableState, NodeId, mutableStateOf};
 
 use crate::{Pose, callback_slot::Callback};
 
@@ -22,6 +25,9 @@ pub(crate) struct VolumeContent {
     pub(crate) light: MutableState<Option<Light>>,
     // Composes the volume's content
     pub(crate) compose: Rc<RefCell<Option<Callback<()>>>>,
+    // The node of the scene that holds the volume's content, which the scene's composition sets and
+    // a ray's pick reads
+    pub(crate) node: Rc<Cell<Option<NodeId>>>,
 }
 
 impl PartialEq for VolumeContent {
@@ -39,6 +45,11 @@ pub(crate) struct Volumes {
         expect(dead_code, reason = "the headset's scene reads it")
     )]
     camera: MutableState<Camera>,
+    #[cfg_attr(
+        not(any(test, headset)),
+        expect(dead_code, reason = "the headset's scene reads it")
+    )]
+    samples: MutableState<Multisample>,
 }
 
 impl Volumes {
@@ -50,6 +61,7 @@ impl Volumes {
                 view: Mat4::IDENTITY,
                 focal_length: 1.0,
             }),
+            samples: mutableStateOf(Multisample::Off),
         }
     }
 
@@ -80,10 +92,33 @@ impl Volumes {
 
     #[cfg_attr(
         not(any(test, headset)),
+        expect(dead_code, reason = "the headset's pointer calls it")
+    )]
+    // The node of the scene that holds the content of the volume `id`, once the scene composed it.
+    pub(crate) fn node_of(&self, id: u64) -> Option<NodeId> {
+        self.contents.read(|contents| {
+            contents
+                .iter()
+                .find(|content| content.id == id)
+                .and_then(|content| content.node.get())
+        })
+    }
+
+    #[cfg_attr(
+        not(any(test, headset)),
         expect(dead_code, reason = "the headset's scene calls it")
     )]
     // The camera of the eye that the next draw shows, which a draw reads.
     pub(crate) fn camera(&self) -> MutableState<Camera> {
         self.camera
+    }
+
+    #[cfg_attr(
+        not(any(test, headset)),
+        expect(dead_code, reason = "the headset's scene calls it")
+    )]
+    // The samples that the scene takes in each pixel, which a draw reads.
+    pub(crate) fn samples(&self) -> MutableState<Multisample> {
+        self.samples
     }
 }

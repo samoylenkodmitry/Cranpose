@@ -1,11 +1,11 @@
 //! A glTF model in a subspace.
 
-use std::{rc::Rc, sync::Arc};
+use std::rc::Rc;
 
 use cranpose::{
-    Alignment, Box, BoxSpec, Color, ContentScale, Image, LaunchedEffect, Modifier, Size,
-    composable,
-    space::{Light, Mat4, Material, MeshSurface, MeshSurfaces, Vec3},
+    Alignment, Box, BoxSpec, Color, ContentScale, GraphicsLayer, Image, LaunchedEffect, Modifier,
+    Size, composable,
+    space::{Light, Mat4, Vec3},
 };
 use cranpose_core::key;
 
@@ -176,49 +176,41 @@ fn ModelLayers(loaded: Rc<LoadedModel>, fit: Mat4) {
 
 #[composable]
 fn ModelLayer(loaded: Rc<LoadedModel>, layer: usize, fit: Mat4) {
+    let noted = Rc::clone(&loaded);
     let picture = loaded.model.layers[layer].clone();
     let size = Size::new(picture.size[0] as f32, picture.size[1] as f32);
     let modifier = Modifier::empty()
         .required_size(size)
-        .mesh_surfaces(move || {
+        .graphics_layer(move || {
             let draws = &loaded.layers[layer];
-            loaded.read_worlds(|worlds| {
-                let surface = |draw: usize| {
-                    let draw = &loaded.model.draws[draw];
-                    MeshSurface {
-                        mesh: Arc::clone(&draw.mesh),
-                        transform: worlds[draw.node].then(&fit),
-                        material: Material::Lit,
-                        casts_shadow: false,
-                        solid: true,
-                    }
-                };
-                MeshSurfaces::new(
-                    surface(draws.owner),
-                    draws.more.iter().map(|&draw| surface(draw)).collect(),
-                )
-            })
-        });
-    match picture.content {
-        LayerContent::Color([red, green, blue, alpha]) => {
-            Box(
-                modifier.background(Color(red, green, blue, alpha)),
-                BoxSpec::default(),
-                || {},
-            );
-        }
-        LayerContent::Bitmap(bitmap) => {
-            Box(modifier, BoxSpec::default(), move || {
-                Image(
-                    bitmap.clone(),
-                    None,
-                    Modifier::empty().fill_max_size(),
-                    Alignment::CENTER,
-                    ContentScale::FillBounds,
-                    1.0,
-                    None,
-                );
+            let space = loaded.read_worlds(|worlds| {
+                draws
+                    .spaces
+                    .space((&loaded.model, draws), |node| worlds[node].then(&fit))
             });
-        }
-    }
+            GraphicsLayer {
+                space: Some(space),
+                clip: true,
+                ..GraphicsLayer::DEFAULT
+            }
+        });
+    let node = match picture.content {
+        LayerContent::Color([red, green, blue, alpha]) => Box(
+            modifier.background(Color(red, green, blue, alpha)),
+            BoxSpec::default(),
+            || {},
+        ),
+        LayerContent::Bitmap(bitmap) => Box(modifier, BoxSpec::default(), move || {
+            Image(
+                bitmap.clone(),
+                None,
+                Modifier::empty().fill_max_size(),
+                Alignment::CENTER,
+                ContentScale::FillBounds,
+                1.0,
+                None,
+            );
+        }),
+    };
+    noted.note_layer_node(layer, node);
 }
