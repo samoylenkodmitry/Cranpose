@@ -27,7 +27,9 @@ fn ControllerNode(states: ControllerStates, hand: Hand) {
     if !states.is_shown(hand) {
         return;
     }
-    match states.look(hand) {
+    let look = states.look(hand);
+    log::info!("cranpose xr: the {hand:?} controller shows {look:?}");
+    match look {
         Look::Nothing => {}
         Look::Plain => PlainController(states.map(hand)),
         Look::Model => model(states, hand),

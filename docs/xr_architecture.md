@@ -476,6 +476,17 @@ part uses it.
 **The scene's light.** A volume sets the scene's light. Where no volume sets one, the controllers'
 models stand in the default light of the glTF models.
 
+**The demo.** The counter panel has a button that cycles the choice of both hands: the runtime's
+model, the plain model and none. The environment variable `XR_DEMO_CONTROLLERS` builds the
+measurements. It holds names that a comma separates. `only` shows nothing but the models. `plain`
+and `off` start with that choice. `panel` adds a magenta panel of 40 cm in the vertical plane through
+the left controller's grip, so that the part of the model behind the plane hides and the part in front
+shows. A build with `only` or `panel` logs the eyes' poses and fields of view, the grips and the
+frames of the last second, once a second. `scripts/dev/xr_controller_session.sh` runs one build on a
+Quest and saves the log and the compositor's picture. `scripts/dev/xr_controller_check.py` marks the
+pixels that differ between the picture of the `only` build and that of the `only,off` build, joins
+them into blobs and projects the logged grips into each eye.
+
 ### What it costs
 
 A frame with volumes updates the composition and renders the window root twice. The scene's draw
