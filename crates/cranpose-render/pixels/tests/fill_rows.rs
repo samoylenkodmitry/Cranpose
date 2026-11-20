@@ -13,8 +13,11 @@ use cranpose_ui_graphics::{Brush, Color, CornerRadii, Rect};
 const WIDTH: u32 = 64;
 const HEIGHT: u32 = 48;
 
-const BACKGROUND: Color = Color::from_rgb_u8(20, 30, 40);
-const SOLID: Color = Color::from_rgb_u8(200, 120, 40);
+// The bytes of the two opaque colors whose pixels the tests check.
+const BACKGROUND_BYTES: [u8; 3] = [20, 30, 40];
+const SOLID_BYTES: [u8; 3] = [200, 120, 40];
+const BACKGROUND: Color = color(BACKGROUND_BYTES);
+const SOLID: Color = color(SOLID_BYTES);
 const TOP: Color = Color::from_rgb_u8(76, 201, 240);
 const BOTTOM: Color = Color::from_rgb_u8(67, 97, 238);
 
@@ -214,10 +217,12 @@ fn pictures(shell: &mut AppShell<PixelsRenderer>, format: Format) -> (Vec<u32>, 
     })
 }
 
-// The value `color` takes as an opaque pixel of `format`.
-fn opaque(color: Color, format: Format) -> u32 {
-    let [red, green, blue] =
-        [color.0, color.1, color.2].map(|channel| (channel * 255.0).round() as u8);
+const fn color([red, green, blue]: [u8; 3]) -> Color {
+    Color::from_rgb_u8(red, green, blue)
+}
+
+// The value the opaque color of `bytes` takes as a pixel of `format`.
+fn opaque([red, green, blue]: [u8; 3], format: Format) -> u32 {
     match format {
         Format::Rgba => u32::from_ne_bytes([red, green, blue, 255]),
         Format::Rgb565(order) => {
@@ -250,7 +255,7 @@ fn a_clip_that_cuts_a_fill_s_rows_keeps_the_pixels_the_fill_paints_inside_it() {
             clipped_whole, clipped_by_pixel,
             "{format:?}: the clipped fills drawn whole differ from them drawn a pixel at a time"
         );
-        let background = opaque(BACKGROUND, format);
+        let background = opaque(BACKGROUND_BYTES, format);
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
                 let expected = if inside_clip(x, y) {
@@ -290,8 +295,8 @@ fn a_fill_no_pixel_wide_paints_nothing_and_one_a_pixel_wide_paints_its_column() 
             whole, by_pixel,
             "{format:?}: the narrow fills drawn whole differ from them drawn a pixel at a time"
         );
-        let background = opaque(BACKGROUND, format);
-        let solid = opaque(SOLID, format);
+        let background = opaque(BACKGROUND_BYTES, format);
+        let solid = opaque(SOLID_BYTES, format);
         for y in NARROW_ROWS {
             for x in [
                 EMPTY_SOLID,
@@ -328,7 +333,7 @@ fn a_fill_that_ends_at_the_buffer_s_last_pixel_paints_it() {
         let last = whole.len() - 1;
         assert_ne!(
             whole[last],
-            opaque(BACKGROUND, format),
+            opaque(BACKGROUND_BYTES, format),
             "{format:?}: the fill paints the last pixel"
         );
         // The last pixel alone, into a buffer of one pixel.
