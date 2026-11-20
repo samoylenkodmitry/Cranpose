@@ -31,6 +31,7 @@ use player_demo::Clips;
 use player_demo::sized;
 
 mod clip_player;
+mod controller_models;
 mod crate_model;
 mod decoder_limits;
 mod foveated_player;
@@ -47,6 +48,7 @@ mod tracking_panel;
 mod type_panel;
 
 use clip_player::{ClipPlayer, target_display_time};
+use controller_models::{ControllerModelsButton, ModelsOnly, StartingChoice, models_only};
 use crate_model::CrateModel;
 use foveated_player::FoveatedPlayer;
 use headset_readout::{HeadsetClock, HeadsetReadout, Readout, StreamLogs};
@@ -80,6 +82,11 @@ pub fn XrDemo() {
         RoomDemo(room_panel::scripted(ROOM_BUILD));
         return;
     }
+    if models_only() {
+        ModelsOnly();
+        return;
+    }
+    StartingChoice();
     let presses = rememberMutableStateOf(|| 0_u32);
     let strip_shown = rememberMutableStateOf(|| true);
     let readout = rememberMutableStateOf(Readout::default);
@@ -397,6 +404,7 @@ fn CounterPanel(presses: MutableState<u32>, tracking: TrackingView) {
                         },
                     );
                     PassthroughButton();
+                    ControllerModelsButton();
                     TrackingSection(tracking);
                 },
             );

@@ -10,6 +10,13 @@
 //! and a window shows in a box. With the `gltf` feature, a `SpatialGltfModel` shows a glTF 2.0
 //! model there, with its textures and animations.
 //!
+//! A headset draws a model at each controller in use, in the same 3D layer and with the same depth
+//! as the volumes. The runtime's own model of the controller shows where the app declared
+//! `Use::controller_models()` in its build and the runtime has one (a Meta Quest does, through
+//! `XR_FB_render_model`, and the `gltf` feature loads it). Elsewhere a plain model that Cranpose
+//! builds shows. [`ControllerModels`], which [`local_controller_models`] gives, turns the models
+//! off or replaces them. A tracked hand with no controller in it shows no model.
+//!
 //! A [`SpatialExternalSurface`] gives the app a surface that a hardware video decoder or a camera
 //! writes into. The compositor shows its pictures as a layer with no copy. A [`StreamedScene`]
 //! shows frames that another machine rendered, from the head pose that each was rendered for.
@@ -170,6 +177,8 @@ mod layer_limit;
 mod locals;
 mod mesh_ref;
 mod meta_face_state;
+#[cfg(any(test, headset))]
+mod model_asks;
 #[cfg(any(test, headset))]
 mod model_path;
 mod move_policy;

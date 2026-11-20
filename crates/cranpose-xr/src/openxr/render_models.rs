@@ -13,7 +13,7 @@ use openxr as xr;
 use super::session::XrSession;
 use crate::{
     Hand, InteractionProfile, controller_look::Offer, controller_states::ControllerStates,
-    model_path::controller_path,
+    model_asks::ModelAsks, model_path::controller_path,
 };
 
 // Whether the app declared `Use::controller_models()` in its build, which writes the manifest
@@ -37,32 +37,17 @@ impl ModelRequest {
     }
 }
 
-// How far the query of one hand has come.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Step {
-    // The runtime has not been asked
-    Untried,
-    // The runtime had no model that it could give: it listed no path, said that the model is not
-    // available yet, or failed. Another controller in the hand makes it ask again.
-    Waiting,
-    // The runtime gave its model
-    Done,
-}
-
 pub(crate) struct RenderModels {
     // Whether the instance has the extension
     enabled: bool,
-    steps: [Step; 2],
-    // Whether each hand held a controller when the backend last looked
-    held: [bool; 2],
+    asks: ModelAsks,
 }
 
 impl RenderModels {
     pub(crate) fn new(enabled: bool) -> Self {
         Self {
             enabled,
-            steps: [Step::Untried; 2],
-            held: [false; 2],
+            asks: ModelAsks::new(),
         }
     }
 
@@ -91,28 +76,21 @@ impl RenderModels {
         if !self.enabled {
             return offers;
         }
+        let due = self.asks.due(profiles);
         for hand in Hand::BOTH {
-            let index = hand.index();
-            let held = profiles[index].is_some_and(|profile| !profile.is_hand());
-            let due = match self.steps[index] {
-                Step::Untried => true,
-                Step::Waiting => held && !self.held[index],
-                Step::Done => false,
-            };
-            self.held[index] = held;
-            if !due {
+            if !due[hand.index()] {
                 continue;
             }
-            let (step, offer) = match ask(xr_session, hand) {
-                Ok(Some(bytes)) => (Step::Done, Offer::Bytes(bytes)),
-                Ok(None) => (Step::Waiting, Offer::Absent),
+            let offer = match ask(xr_session, hand) {
+                Ok(Some(bytes)) => Offer::Bytes(bytes),
+                Ok(None) => Offer::Absent,
                 Err(error) => {
                     log::warn!("cranpose xr: the {hand:?} controller's model: {error}");
-                    (Step::Waiting, Offer::Absent)
+                    Offer::Absent
                 }
             };
-            self.steps[index] = step;
-            offers[index] = Some(offer);
+            self.asks.answered(hand, &offer);
+            offers[hand.index()] = Some(offer);
         }
         offers
     }
@@ -158,7 +136,96 @@ fn ask(xr_session: &XrSession, hand: Hand) -> Result<Option<Arc<[u8]>>, String> 
             properties.flags,
             bytes.len()
         );
+        #[cfg(feature = "gltf")]
+        log_summary(hand, &bytes);
         return Ok(Some(Arc::from(bytes)));
     }
     Ok(None)
+}
+
+// TEMPORARY: what a runtime's model holds, for the first report from a headset.
+#[cfg(feature = "gltf")]
+fn log_summary(hand: Hand, bytes: &[u8]) {
+    let gltf = match gltf::Gltf::from_slice(bytes) {
+        Ok(gltf) => gltf,
+        Err(error) => {
+            log::warn!("cranpose xr: model {hand:?} does not parse: {error}");
+            let head = String::from_utf8_lossy(&bytes[..bytes.len().min(2000)]).into_owned();
+            log::info!("cranpose xr: model {hand:?} head: {head:?}");
+            return;
+        }
+    };
+    let document = &gltf.document;
+    log::info!(
+        "cranpose xr: model {hand:?}: {} nodes, {} meshes, {} materials, {} images, {} skins, {} animations, {} textures, extensions used {:?}, required {:?}",
+        document.nodes().count(),
+        document.meshes().count(),
+        document.materials().count(),
+        document.images().count(),
+        document.skins().count(),
+        document.animations().count(),
+        document.textures().count(),
+        document.extensions_used().collect::<Vec<_>>(),
+        document.extensions_required().collect::<Vec<_>>(),
+    );
+    for node in document.nodes() {
+        log::info!(
+            "cranpose xr: model {hand:?} node {} {:?} mesh {:?} skin {} children {:?} t {:?}",
+            node.index(),
+            node.name(),
+            node.mesh().map(|mesh| mesh.index()),
+            node.skin().is_some(),
+            node.children()
+                .map(|child| child.index())
+                .collect::<Vec<_>>(),
+            node.transform().decomposed().0,
+        );
+    }
+    for animation in document.animations() {
+        log::info!(
+            "cranpose xr: model {hand:?} animation {:?}: {} channels",
+            animation.name(),
+            animation.channels().count()
+        );
+    }
+    for image in document.images() {
+        match image.source() {
+            gltf::image::Source::View { mime_type, .. } => {
+                log::info!(
+                    "cranpose xr: model {hand:?} image {} {mime_type}",
+                    image.index()
+                );
+            }
+            gltf::image::Source::Uri { uri, mime_type } => {
+                log::info!(
+                    "cranpose xr: model {hand:?} image {} {mime_type:?} uri {}",
+                    image.index(),
+                    &uri[..uri.len().min(40)]
+                );
+            }
+        }
+    }
+    for material in document.materials() {
+        let pbr = material.pbr_metallic_roughness();
+        log::info!(
+            "cranpose xr: model {hand:?} material {:?} color {:?} texture {}",
+            material.name(),
+            pbr.base_color_factor(),
+            pbr.base_color_texture().is_some()
+        );
+    }
+    for mesh in document.meshes() {
+        for primitive in mesh.primitives() {
+            let (low, high) = (primitive.bounding_box().min, primitive.bounding_box().max);
+            log::info!(
+                "cranpose xr: model {hand:?} mesh {} primitive {} box {low:?} {high:?} attributes {:?}",
+                mesh.index(),
+                primitive.index(),
+                primitive
+                    .attributes()
+                    .map(|(semantic, _)| format!("{semantic:?}"))
+                    .collect::<Vec<_>>(),
+            );
+        }
+    }
 }

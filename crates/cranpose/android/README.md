@@ -130,6 +130,12 @@ for Android XR's anchor storage and planes. `Use::plane_tracking()` adds `USE_SC
 names, which the user allows with the system's prompt. `cranpose-xr` reads the declaration to enable the
 extensions.
 
+`Use::controller_models()` writes `com.oculus.permission.RENDER_MODEL` and the optional feature
+`com.oculus.feature.RENDER_MODEL`, which make the Horizon OS runtime list `XR_FB_render_model` to the
+app. `cranpose-xr` reads the declaration to enable the extension and draws the runtime's model of
+each controller. The system grants the permission at install and asks nobody. An app that declares
+nothing still shows `cranpose-xr`'s plain controller model.
+
 `Use::update()` also selects the package installer, its receiver and
 `REQUEST_INSTALL_PACKAGES`. The launcher registers the updater when the declared
 capabilities include updates.

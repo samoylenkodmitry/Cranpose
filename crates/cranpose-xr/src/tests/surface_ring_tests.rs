@@ -7,7 +7,8 @@ use super::*;
 
 // A layer that shows one mesh three times: an owner and two more.
 fn meshes() -> Vec<Arc<Mesh>> {
-    vec![Arc::new(Mesh::plane()); 3]
+    let mesh = Arc::new(Mesh::plane());
+    vec![Arc::clone(&mesh), Arc::clone(&mesh), mesh]
 }
 
 // The map that puts a surface at `x` along the x axis.
