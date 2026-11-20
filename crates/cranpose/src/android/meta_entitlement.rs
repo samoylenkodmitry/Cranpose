@@ -51,7 +51,7 @@ pub fn meta_entitlement(app: &android_activity::AndroidApp) -> MetaEntitlement {
         )
         .and_then(jni::JValueOwned::i)
     });
-    state.map_or(MetaEntitlement::Unavailable, MetaEntitlement::from_state)
+    MetaEntitlement::from_answer(state.ok())
 }
 
 /// Why the check ended as it did, for a log. It is empty while the check runs and when the

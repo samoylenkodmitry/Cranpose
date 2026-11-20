@@ -23,3 +23,15 @@ fn a_number_that_the_java_does_not_give_means_the_check_has_not_started() {
         );
     }
 }
+
+#[test]
+fn a_call_that_gives_no_number_means_the_check_is_unavailable() {
+    assert_eq!(
+        MetaEntitlement::from_answer(None),
+        MetaEntitlement::Unavailable
+    );
+    assert_eq!(
+        MetaEntitlement::from_answer(Some(2)),
+        MetaEntitlement::Entitled
+    );
+}
