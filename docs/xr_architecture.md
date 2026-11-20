@@ -1042,9 +1042,11 @@ shows none of the app's frames. The `xr` service and the backend take care of th
 The backend also keeps these rules of every runtime and store:
 
 - A session that is VISIBLE but not FOCUSED, such as under the system menu, gets no controller
-  input. The pointer sees both controllers lost, which ends a press and drops a carried panel.
-  The panels still draw.
-- A session that is not VISIBLE gets frames with no layers and no drawing.
+  input. The pointer gets no aim from any source, a controller or a hand. It sees both controllers
+  lost, which ends a press and drops a carried panel. No ray shows. The panels and the volumes
+  still draw, and the app's lifecycle is `Paused`.
+- A session that is not VISIBLE gets frames with no layers and no drawing, and the app's
+  lifecycle is `Stopped`.
 - An app closes itself with `cranpose_services::request_exit()`, as in a flat app. On each turn the
   loop reads `exit_requested()`. While the session runs, it calls `xrRequestExitSession` once. The
   runtime moves the session to STOPPING, the backend ends it, and the loop leaves when the session
@@ -1066,6 +1068,97 @@ The backend also keeps these rules of every runtime and store:
 - The loop takes the activity's key and touch events from the queue and leaves them unhandled.
   An event left in the queue makes Android show an "app is not responding" dialog five seconds
   later.
+
+## Store readiness: focus and pause
+
+Meta's Virtual Reality Checks (VRCs) for Quest apps give an immersive app three rules about focus
+and pause.
+
+- VRC.Quest.Input.4: An app that has lost input focus keeps rendering. It hides the hands and the
+  controllers of the user or shows them at rest. It ignores their input. The app loses input focus
+  when the user opens the Universal Menu or when a windowed app takes the focus. Audio input is
+  not restricted. When the focus returns, the app shows the hands and the controllers again.
+  It takes input again.
+- VRC.Quest.Functional.2: A single-player app pauses its interactive elements when Horizon OS asks
+  it to. Non-interactive elements such as ambient sound may go on. A multiplayer app is exempt.
+  The system asks when the user opens an immersive system view such as passthrough or the
+  boundary setup. It asks when the user turns the display off with the power button. It asks when
+  Auto Sleep ends after the user took the headset off. A Quest 3S has no proximity sensor, so it
+  has no such trigger. The rule lets an app pause on the loss of input focus instead.
+- Taking the headset off: Meta calls the app's reaction optional, such as a pause menu or marking
+  the user inactive. The system pauses the app when Auto Sleep ends.
+
+The rules conflict for the state in which the app has no input focus and the system has not
+paused it. Input.4 wants frames. Functional.2 wants the interactive elements to stop and lets the
+app choose how. The backend follows Input.4 for the picture. It gives the app the state for the
+rest. An app without input focus gets no input, shows no ray and keeps its layers on display. It
+keeps composing and drawing. The app stops what it considers interactive when its lifecycle
+leaves `Resumed`.
+
+| OpenXR session state | Backend status | Lifecycle (`local_lifecycle_state()`) | Layers | Composition and drawing | Input |
+|---|---|---|---|---|---|
+| FOCUSED | `Focused` | `Resumed` | the app's | yes | controllers and hands |
+| VISIBLE | `Visible` | `Paused` | the app's | yes | none, no ray |
+| READY, SYNCHRONIZED | `Hidden` | `Created` until the runtime first shows the app, then `Stopped` | none | none | none |
+| STOPPING, IDLE | `Idle` | `Stopped` | no frames | none | none |
+| EXITING, LOSS_PENDING, activity destroyed | `Exit` | `Destroyed` | no frames | none | none |
+
+The lifecycle maps as Compose maps a window. It is `Resumed` while the window has focus, `Paused`
+while it shows without focus and `Stopped` while it does not show. The backend publishes the
+lifecycle on each change of the status, before the frame that the change affects. A new run in
+the same process starts at `Created` again. The listeners of the lifecycle that the crates of an
+XR app hold act on it as follows:
+
+- `collectAsStateWithLifecycle` and `repeat_on_lifecycle` collect from `Started` on. They go on
+  under `Paused` and stop under `Stopped`.
+- A prompt of `device_auth` shows when the app is `Resumed`. A prompt that waits during a pause
+  shows when the focus returns.
+- The system languages refresh on `Resumed`.
+- The media service stops its playback on `Destroyed`.
+- `Paused` runs the durable saves that the app registered, as an Android activity's pause does.
+  The frame loop waits for them for up to `durable_save_deadline()`, which is 2 s unless the host
+  says otherwise. An app with no durable save waits for nothing.
+
+Jetpack XR Compose has no composition local for the session's state. An XR app reads the
+lifecycle of its activity, so `local_lifecycle_state()`, `LifecycleEffect` and `observe_lifecycle`
+of Cranpose serve it. `XrFrame::focused` gives the same answer in a frame effect.
+
+Each change of the status logs one line with the frames that the app ran in the status that it
+left:
+
+```
+cranpose xr: Focused ran 943 frames, now Visible, lifecycle Paused
+```
+
+### Focus and pause on a Quest 3
+
+The Quest 3 (runtime "Oculus" 210.137.0) gave the sequences below. `scripts/dev/xr_focus_check.sh`
+runs the first and the third through adb. It saves the compositor's picture of each step.
+
+| Trigger | Activity | Session states in order | Lifecycle |
+|---|---|---|---|
+| The Files panel opens over the app (`systemux://file-manager`) | none | VISIBLE | `Paused` |
+| Another immersive app starts. The app starts again 10 s later | `onPause`, `onStop`, then `onStart`, `onResume` | VISIBLE, SYNCHRONIZED, STOPPING, IDLE (no frame for 10.6 s), READY, SYNCHRONIZED, VISIBLE, FOCUSED | `Paused`, `Stopped`, then `Resumed` |
+| The app starts again while the Files panel is open | `onPause`, `onResume` within 10 ms | FOCUSED only, or SYNCHRONIZED, STOPPING, IDLE, READY, SYNCHRONIZED, VISIBLE, FOCUSED in one batch of events (both happened) | `Resumed`, or `Stopped` then `Resumed` |
+| The power button (`adb shell input keyevent POWER`) | `onPause`, `onStop` | VISIBLE, SYNCHRONIZED, STOPPING, IDLE within 100 ms of `onPause` | `Paused`, `Stopped`: the loop ran no frame while the display was off |
+| Home | `onPause`, `onStop`, destroy | VISIBLE, SYNCHRONIZED, STOPPING, IDLE | `Stopped`, then `Destroyed`: the loop ends. The next start in the same process begins at `Created` and reaches `Resumed` |
+
+Under the Files panel the app ran about 115 frames each second. The picture of both eyes kept the
+panels, the video surface and the 3D torus. No ray showed. The readout of the demo said
+`Lifecycle Paused`. After the app came to the front it said `Lifecycle Resumed`. The ray was back.
+The demo's decoder showed 30 frames each second in FOCUSED, under the Files panel and after the
+return. In IDLE the frame effect that logs the count did not run. The log has no line for the
+10.6 s. After the 10.6 s in IDLE the same process resumed with its composition: the log has no
+second `ready` line.
+
+Not run on a device:
+
+- The Universal Menu that the controller's system button opens. Its passthrough entry. A person
+  must press them.
+- The simulated removal of the headset and the Auto Sleep that follows.
+
+A runtime that sends `VISIBLE` for these cases gets the treatment of the Files panel. A runtime that
+sends `STOPPING` gets the treatment of the second row.
 
 ## Headsets
 
@@ -1109,7 +1202,7 @@ Quest lists no `android.hardware.vr.headtracking` among its system features.
 | 3 | `SpatialExternalSurface` | a hardware decoder writes into a panel with no copy |
 | 4 | 3D content, `movable`, `resizable`, `Orbiter`, passthrough | a 3D scene, handles and the room around the panels |
 | 5 | cranvr's Quest client on `cranpose-xr` | its desktop, console and overlay use the API |
-| 6 | Store readiness: focus and pause, the entitlement check behind a feature, other runtimes | an app passes the Meta store's checks |
+| 6 | Store readiness: focus and pause (the loss of input focus and the power button are shown on a Quest 3; the passthrough entry and the headset's removal are not run), the entitlement check behind a feature (open), other runtimes | an app passes the Meta store's checks |
 
 The cranvr client still uses a streaming library for games. Its own protocol replaces it after
 step 5, outside this repository.

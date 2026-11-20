@@ -103,7 +103,16 @@ mod resize;
 mod resize_limits;
 mod resize_policy;
 #[cfg(any(test, all(feature = "scripted-hand", headset)))]
+#[cfg_attr(
+    not(all(feature = "scripted-hand", headset)),
+    allow(
+        unreachable_pub,
+        reason = "the tests reach the module, and its API is public only with the feature"
+    )
+)]
 mod scripted_hand;
+#[cfg(any(test, headset))]
+mod session_status;
 mod space;
 mod spatial_capabilities;
 mod spatial_curved_row;

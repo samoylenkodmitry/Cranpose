@@ -4,11 +4,11 @@ use openxr as xr;
 
 use super::{
     hand_actions::{HandActions, HandInput, failed},
-    session::{SessionStatus, XrSession},
+    session::XrSession,
 };
 use crate::{
     Controller, Hand, InteractionProfile, XrFrame, controller_bindings::bindings,
-    haptics::HapticCommand,
+    haptics::HapticCommand, session_status::SessionStatus,
 };
 
 // The user path of each hand, left then right.

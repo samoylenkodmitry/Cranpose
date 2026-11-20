@@ -365,7 +365,7 @@ fn CurvedStrip() {
 fn PressesPanel(presses: MutableState<u32>, readout: MutableState<Readout>) {
     SpatialPanel(
         SubspaceModifier::new()
-            .size(320.0, 320.0)
+            .size(320.0, 350.0)
             .offset(600.0, 0.0, 100.0)
             .rotate(0.0, -30.0, 0.0),
         move || {
@@ -396,8 +396,9 @@ fn PressesPanel(presses: MutableState<u32>, readout: MutableState<Readout>) {
     );
 }
 
-// The lines of the headset's readout. Outside a headset the frame effect never runs, and they
-// stay at their start.
+// The lines of the headset's readout and the app's lifecycle as the headset reports it: resumed
+// with input focus, paused under the system menu, stopped while the session does not run.
+// Outside a headset the frame effect never runs. The readout stays at its start then.
 #[composable]
 fn ReadoutLines(readout: MutableState<Readout>) {
     let Readout {
@@ -428,6 +429,7 @@ fn ReadoutLines(readout: MutableState<Readout>) {
         format!("Right pinch {pinch_percent}%"),
         format!("Pointers L/R: {left} / {right}"),
         format!("Frame effect {frames_per_second} Hz"),
+        format!("Lifecycle {:?}", local_lifecycle_state().current()),
     ] {
         Text(line, Modifier::empty(), sized(18.0, None));
     }

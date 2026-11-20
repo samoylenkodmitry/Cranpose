@@ -9,13 +9,14 @@ use super::{
     controllers::Controllers,
     eye_views,
     host::Host,
-    session::{SessionStatus, XrSession},
+    session::XrSession,
     system_properties,
     tracking::{EyeGazeAction, Trackers, TrackingSetup},
 };
 use crate::{
     Hand, Haptics, HeadsetProperties, Pose, Recenter, RenderViewpoint, TrackingFeature, XrFrame,
     frame_effects::FrameEffects, haptics::controller_asks, pointer::Aim, pointer_aim::pointer_aim,
+    session_status::SessionStatus,
 };
 
 // What the app gets of the headset in a frame, the controllers that it reads, and the callbacks
