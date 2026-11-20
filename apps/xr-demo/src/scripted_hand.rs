@@ -160,8 +160,8 @@ fn two_controllers() -> Vec<ScriptedController> {
         .holding(HALF, REST)
         .holding(HALF, stick_click)
         .moving_to(SECOND, (right_from, list), REST)
-        .holding(SECOND, lean(-1.0))
-        .holding(SECOND, lean(1.0))
+        .holding(2 * SECOND, lean(-0.3))
+        .holding(2 * SECOND, lean(0.3))
         .holding(HALF, REST)
         .repeating();
     let left = carried(Hand::Left, left_from, counter_handle, [-0.15, 0.12, 0.0])
@@ -173,7 +173,7 @@ fn two_controllers() -> Vec<ScriptedController> {
         .holding(HALF, REST)
         .holding(HALF, PULL)
         .holding(HALF, REST)
-        .holding(5 * HALF, REST)
+        .holding(9 * HALF, REST)
         .repeating();
     vec![left, right]
 }
