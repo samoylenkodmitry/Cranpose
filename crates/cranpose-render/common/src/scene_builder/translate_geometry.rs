@@ -1,10 +1,11 @@
 use cranpose_core::{MemoryApplier, NodeId, RecordId, collections::map::HashMap};
-use cranpose_ui::{Point, Rect};
+use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
 use cranpose_ui_graphics::GraphicsLayer;
 
 use super::{
-    AbsOrigin, Inherited, LowerContext, TranslateAncestorContext, inline_leaf::retext_kept_inline,
-    placing_transform, publish_retained_window_geometry, text_node, translate_layer::PlacedChild,
+    AbsOrigin, Inherited, LowerContext, ParentOrigin, TranslateAncestorContext,
+    inline_leaf::retext_kept_inline, placing_transform, publish_retained_window_geometry,
+    text_node, translate_layer::PlacedChild,
 };
 use crate::{
     NodeUpdate,
@@ -16,37 +17,55 @@ use crate::{
 #[derive(Clone, Copy)]
 pub(super) struct TranslateGeometry {
     pub(super) content_offset: Point,
-    pub(super) window_transform: Option<ProjectiveTransform>,
-    pub(super) top_left: Point,
-    child_origin: Point,
+    // Where the node lies in the window; `None` when no node of the update
+    // reads it.
+    window: Option<WindowPlace>,
+}
+
+#[derive(Clone, Copy)]
+struct WindowPlace {
+    top_left: Point,
+    transform: Option<ProjectiveTransform>,
 }
 
 impl TranslateGeometry {
+    // The geometry of a node laid out as `layout_state`, its place in the
+    // window worked out from `parent_abs` when the update reads it.
     pub(super) fn new(
         layout_state: &cranpose_ui::widgets::LayoutState,
         graphics_layer: &GraphicsLayer,
         local_bounds: Rect,
-        parent_abs: AbsOrigin,
+        parent_abs: Option<AbsOrigin>,
     ) -> Self {
-        let content_offset = layout_state.content_offset();
-        let top_left = Point {
-            x: parent_abs.content_origin.x + layout_state.position().x,
-            y: parent_abs.content_origin.y + layout_state.position().y,
-        };
-        let window_transform = laid_out_transform_to_window(
-            parent_abs.window_transform,
-            top_left,
-            local_bounds,
-            graphics_layer,
-        );
+        let window = parent_abs.map(|parent_abs| {
+            let top_left = Point {
+                x: parent_abs.content_origin.x + layout_state.position().x,
+                y: parent_abs.content_origin.y + layout_state.position().y,
+            };
+            WindowPlace {
+                top_left,
+                transform: laid_out_transform_to_window(
+                    parent_abs.window_transform,
+                    top_left,
+                    local_bounds,
+                    graphics_layer,
+                ),
+            }
+        });
         Self {
-            content_offset,
-            window_transform,
-            top_left,
-            child_origin: Point {
-                x: top_left.x + content_offset.x,
-                y: top_left.y + content_offset.y,
-            },
+            content_offset: layout_state.content_offset(),
+            window,
+        }
+    }
+
+    // Hands `slices`, of a node of `size`, where the node lies in the
+    // window when the update worked it out, else its pointer input size
+    // alone: a node whose slices hold a window origin sink always has it
+    // worked out.
+    pub(super) fn publish(self, slices: &ModifierNodeSlices, size: Size) {
+        match self.window {
+            Some(window) => slices.publish_window_geometry(window.top_left, window.transform, size),
+            None => slices.publish_pointer_input_size(size),
         }
     }
 
@@ -64,15 +83,20 @@ impl TranslateGeometry {
                     || container.translated_content_context(),
                 parent_content_offset: self.content_offset,
             },
-            parent_abs: self.child_abs(),
+            parent_abs: self
+                .child_abs()
+                .map_or(ParentOrigin::Unread, ParentOrigin::Known),
         }
     }
 
-    pub(super) fn child_abs(self) -> AbsOrigin {
-        AbsOrigin {
-            content_origin: self.child_origin,
-            window_transform: self.window_transform,
-        }
+    pub(super) fn child_abs(self) -> Option<AbsOrigin> {
+        self.window.map(|window| AbsOrigin {
+            content_origin: Point {
+                x: window.top_left.x + self.content_offset.x,
+                y: window.top_left.y + self.content_offset.y,
+            },
+            window_transform: window.transform,
+        })
     }
 }
 
@@ -148,8 +172,10 @@ fn move_kept_layer(
         position,
         children.inherited.parent_content_offset,
     );
-    if store.layer(record).has_origin_sinks() {
-        publish_retained_window_geometry(applier, store.layer(record), children.parent_abs);
+    if store.layer(record).has_origin_sinks()
+        && let Some(parent_abs) = children.parent_abs.resolve(store)
+    {
+        publish_retained_window_geometry(applier, store.layer(record), parent_abs);
     }
 }
 
@@ -166,7 +192,8 @@ fn write_kept_label(
 ) {
     let written = match store.layer(record).kind() {
         RecordKind::Leaf => {
-            retext_kept_inline(applier, store, record, LowerContext::beneath(children))
+            let context = LowerContext::beneath(children, store);
+            retext_kept_inline(applier, store, record, context)
         }
         RecordKind::Layer | RecordKind::Wrapper | RecordKind::DrawGroup => {
             text_node::retext_kept_leaf(applier, store, record, children) == Some(true)

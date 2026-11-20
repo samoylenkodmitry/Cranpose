@@ -44,6 +44,8 @@ use node_layer::{
     outer_draws, placing_transform, set_bounds, slices_hit_something, take_wrapped_layer,
     with_node_layer, write_node_content, write_node_layer, write_wrapper,
 };
+mod parent_origin;
+use parent_origin::ParentOrigin;
 mod translate_layer;
 pub(crate) use translate_layer::TranslateScratch;
 use translate_layer::{
@@ -324,7 +326,7 @@ fn update_dirty_root(
 ) -> Result<GraphChanges, GraphRebuildReason> {
     let ancestors = TranslateAncestorContext {
         inherited: Inherited::default(),
-        parent_abs: AbsOrigin::ROOT,
+        parent_abs: ParentOrigin::Known(AbsOrigin::ROOT),
     };
     if kind == NodeUpdate::Draws
         && redraw_retained_layer(applier, store, root, Level::Root, ancestors.inherited)
@@ -435,7 +437,7 @@ struct Inherited {
 #[derive(Clone, Copy)]
 struct TranslateAncestorContext {
     inherited: Inherited,
-    parent_abs: AbsOrigin,
+    parent_abs: ParentOrigin,
 }
 
 // Whether a node lowers as the graph's root, the one node that may be a
@@ -566,8 +568,10 @@ fn move_retained_layer(
         ancestors.inherited.parent_content_offset,
     );
     let moved = store.layer(layer);
-    if moved.has_origin_sinks() {
-        publish_retained_window_geometry(applier, moved, ancestors.parent_abs);
+    if moved.has_origin_sinks()
+        && let Some(parent_abs) = ancestors.parent_abs.resolve(store)
+    {
+        publish_retained_window_geometry(applier, moved, parent_abs);
     }
     Some(previous.changes_against(&HitGraphState::of(moved)))
 }
@@ -629,7 +633,16 @@ fn update_layer_properties(
         {
             return None;
         }
-        let context = LowerContext::beneath(ancestors);
+        // A layer update keeps the node's modifier slices, so the store's
+        // note of the window origin sinks in the layer's subtree holds.
+        let context = LowerContext {
+            inherited: ancestors.inherited,
+            parent_abs: if store.layer(target).has_origin_sinks() {
+                ancestors.parent_abs.resolve(store)
+            } else {
+                None
+            },
+        };
         let previous = HitGraphState::of(store.layer(target));
         let child_context = with_node_layer(node_id, slices, state, context, |head, children| {
             assign_layer(store, target, head);

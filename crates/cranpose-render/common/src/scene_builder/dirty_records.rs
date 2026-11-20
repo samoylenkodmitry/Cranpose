@@ -5,8 +5,9 @@
 use cranpose_core::{MemoryApplier, NodeId, RecordId, collections::map::HashMap};
 
 use super::{
-    AbsOrigin, GraphChanges, Inherited, Level, LowerContext, TranslateAncestorContext,
-    inline_leaf::fold_kept_leaf, note_space_change, read_placed_node_data, rebuild_tracking_hits,
+    AbsOrigin, GraphChanges, Inherited, Level, LowerContext, ParentOrigin,
+    TranslateAncestorContext, inline_leaf::fold_kept_leaf, note_space_change,
+    parent_origin::children_origin, read_placed_node_data, rebuild_tracking_hits,
     redraw_retained_layer, release_for_rebuild, remove_dirty_descendants,
     try_update_retained_layer, update_dirty_inline, write_node_layer,
 };
@@ -124,7 +125,7 @@ struct Lineage {
     // Whether the parent or a record above it lies in 3D.
     in_space: bool,
     // Where the children of the parent lie. Absent until an update reads
-    // it: a redraw never does.
+    // it: only one that publishes window origins does.
     children: Option<AbsOrigin>,
 }
 
@@ -155,13 +156,17 @@ impl Lineage {
             .children
             .get_or_insert_with(|| children_origin(store, self.parent))
     }
-}
 
-fn children_origin(store: &SceneStore, record: RecordId) -> AbsOrigin {
-    let above = store
-        .parent(record)
-        .map_or(AbsOrigin::ROOT, |parent| children_origin(store, parent));
-    above.children_of(store.layer(record))
+    // Where the children of the parent lie, for the update of `record`, one
+    // of them: worked out now and kept for the siblings when a node beneath
+    // `record` publishes window origins, else at the first read.
+    fn origin_for(&mut self, store: &SceneStore, record: RecordId) -> ParentOrigin {
+        if store.layer(record).has_origin_sinks() {
+            ParentOrigin::Known(self.children(store))
+        } else {
+            ParentOrigin::Beneath(self.parent)
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -206,7 +211,7 @@ fn update_dirty_layer(
     {
         return Some(GraphChanges::default());
     }
-    let children = lineage.children(store);
+    let parent_abs = lineage.origin_for(store, layer);
     if let Some(changes) = try_update_retained_layer(
         applier,
         store,
@@ -216,7 +221,7 @@ fn update_dirty_layer(
         Level::Child,
         TranslateAncestorContext {
             inherited: pass.inherited,
-            parent_abs: children,
+            parent_abs,
         },
     ) {
         return Some(changes);
@@ -225,7 +230,7 @@ fn update_dirty_layer(
     // remains to update for them, and a dirty one would otherwise go
     // unmatched and rebuild the whole scene.
     remove_dirty_descendants(store, layer, dirty_nodes);
-    let context = pass.lower_context(Some(children));
+    let context = pass.lower_context(Some(lineage.children(store)));
     let hit_graph_dirty = rebuild_tracking_hits(store, layer, |store, layer| {
         release_for_rebuild(store, layer);
         read_placed_node_data(applier, node_id, Level::Child, |data| {

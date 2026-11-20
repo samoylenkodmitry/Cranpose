@@ -8,7 +8,7 @@ use cranpose_ui::{
 
 use super::{
     SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, TranslatedContainer, Wrapping,
-    read_node_data,
+    modifier_slices_have_origin_sinks, read_node_data,
     translate_layer::{
         apply_translated_container_state, translate_layer_from_data, translated_write,
     },
@@ -103,12 +103,18 @@ pub(super) fn translate_leaf_text(
     if !refresh_text_node(drawn_text(store, container)?, &parts) {
         return None;
     }
+    // A label holds no records beneath it, so only its own slices publish.
+    let parent_abs = if modifier_slices_have_origin_sinks(slices) {
+        ancestors.parent_abs.resolve(store)
+    } else {
+        None
+    };
     let layer = store.layer(container);
     let geometry = TranslateGeometry::new(
         layout_state,
         layer.graphics_layer(),
         layer.local_bounds(),
-        ancestors.parent_abs,
+        parent_abs,
     );
     store.set_content_offset(container, geometry.content_offset);
     let offset = ancestors.inherited.parent_content_offset;
