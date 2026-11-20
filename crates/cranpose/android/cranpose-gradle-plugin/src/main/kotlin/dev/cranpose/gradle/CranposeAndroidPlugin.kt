@@ -80,6 +80,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
         cranpose.xrStore.convention(
             project.providers.gradleProperty(XR_STORE_PROPERTY).orElse(DEFAULT_XR_STORE)
         )
+        cranpose.metaAppId.convention(project.providers.gradleProperty(META_APP_ID_PROPERTY))
         cranpose.environment.convention(emptyMap())
         cranpose.label.convention(project.rootProject.name)
         cranpose.theme.convention("@android:style/Theme.NoTitleBar.Fullscreen")
@@ -337,6 +338,11 @@ class CranposeAndroidPlugin : Plugin<Project> {
         android.defaultConfig.manifestPlaceholders["cranposeXrOpenxr"] = store.openxr
         android.defaultConfig.manifestPlaceholders["cranposeXrExcludeFromRecents"] =
             store.excludeFromRecents
+        // Only the `meta-entitlement` manifest reads this
+        if ("meta-entitlement" in cranpose.services.get()) {
+            android.defaultConfig.manifestPlaceholders["cranposeMetaAppId"] =
+                requireMetaAppId(cranpose.metaAppId.orNull)
+        }
 
         configureAbis(cranpose, android)
 
@@ -347,6 +353,23 @@ class CranposeAndroidPlugin : Plugin<Project> {
                 "**/lib${cranpose.libraryName.get()}.so"
             )
         }
+    }
+
+    /**
+     * The id that the Meta Horizon developer dashboard gives the app (My Apps,
+     * then Development, then API). It is all digits. The build never guesses
+     * one: an entitlement check against another app's id is a check of
+     * nothing.
+     */
+    private fun requireMetaAppId(id: String?): String {
+        if (id.isNullOrBlank() || !id.all { it.isDigit() }) {
+            throw GradleException(
+                "the meta-entitlement service needs the app's id from the Meta Horizon " +
+                    "developer dashboard: set cranposeMetaAppId or cranpose { metaAppId }. " +
+                    "It is all digits; this build got \"${id.orEmpty()}\""
+            )
+        }
+        return id
     }
 
     private fun xrStoreEntries(store: String): XrStoreEntries =
@@ -599,6 +622,9 @@ class CranposeAndroidPlugin : Plugin<Project> {
          */
         const val XR_STORE_PROPERTY = "cranposeXrStore"
 
+        /** Names the app's Meta Horizon id for the `meta-entitlement` service. */
+        const val META_APP_ID_PROPERTY = "cranposeMetaAppId"
+
         /** The store a build goes to when nothing names one. */
         const val DEFAULT_XR_STORE = "meta"
 
@@ -641,6 +667,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
             "billing",
             "camera",
             "haptics",
+            "meta-entitlement",
             "microphone-standby",
             "network",
             "notifications",
@@ -652,14 +679,17 @@ class CranposeAndroidPlugin : Plugin<Project> {
 
         /**
          * Extra Java source directories a service contributes, relative to
-         * `androidRoot()`. Most services are manifest-only; `billing` also
-         * carries `CranposeBilling`, which needs the Play Billing library, and
-         * `wearable` carries `CranposeWearable`, which needs Google Play
-         * services' wearable library, so both live outside the base `java/`
-         * every application compiles.
+         * `androidRoot()`. Most services are manifest-only. Three carry Java
+         * that needs a library of its own, so each lives outside the base
+         * `java/` that every application compiles. `billing` carries
+         * `CranposeBilling` for the Play Billing library. `wearable` carries
+         * `CranposeWearable` for Google Play services' wearable library.
+         * `meta-entitlement` carries `CranposeMetaEntitlement` for the Meta
+         * Platform SDK.
          */
         val SERVICE_JAVA_SOURCE = mapOf(
             "billing" to "java-billing",
+            "meta-entitlement" to "java-meta-entitlement",
             "microphone-standby" to "java-microphone-standby",
             "wearable" to "java-wearable",
         )
@@ -667,6 +697,10 @@ class CranposeAndroidPlugin : Plugin<Project> {
         /** Third-party dependencies a service needs beyond the framework's own. */
         val SERVICE_DEPENDENCIES = mapOf(
             "billing" to listOf("com.android.billingclient:billing:9.1.0"),
+            // The Meta Platform SDK, under the Meta Platform Technologies SDK
+            // License Agreement, which binds whoever downloads or uses it. An
+            // application that does not list the service fetches nothing of it.
+            "meta-entitlement" to listOf("com.meta.horizon.platform.ovr:android-platform-sdk:77.0.1"),
             "wearable" to listOf(
                 "com.google.android.gms:play-services-wearable:20.0.1",
                 "androidx.wear:wear-remote-interactions:1.1.0",

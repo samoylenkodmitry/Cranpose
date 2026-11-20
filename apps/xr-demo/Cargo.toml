@@ -28,6 +28,9 @@ required-features = ["desktop"]
 default = ["renderer-wgpu", "desktop"]
 renderer-wgpu = ["cranpose/renderer-wgpu", "player-demo/renderer-wgpu"]
 desktop = ["cranpose/desktop", "cranpose-xr/openxr", "dep:env_logger"]
+# The entitlement check of the Meta Horizon Store. The Gradle build also lists the
+# `meta-entitlement` service and sets `cranposeMetaAppId`; see `just android-xr-entitlement`.
+meta-entitlement = ["cranpose-xr/meta-entitlement"]
 android = ["renderer-wgpu", "cranpose/android", "cranpose-xr/openxr", "cranpose-xr/stream-costs", "cranpose-xr/scripted-hand", "player-demo/android"]
 
 [dependencies]

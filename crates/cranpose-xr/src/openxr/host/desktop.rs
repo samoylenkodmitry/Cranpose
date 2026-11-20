@@ -8,7 +8,8 @@ use openxr as xr;
 
 use crate::{
     RunError,
-    openxr::{runner::run_immersive, runtime::Runtime},
+    entitlement_watch::Answer,
+    openxr::{entitlement_run::EntitlementRun, runner::run_immersive, runtime::Runtime},
     session_status::SessionStatus,
     tracking_permission::PermissionAnswer,
     tracking_request::TrackingRequest,
@@ -52,6 +53,19 @@ impl Host {
         true
     }
 
+    // A desktop has no store that checks the app: no check runs.
+    pub(crate) fn begin_entitlement(&self) -> bool {
+        false
+    }
+
+    pub(crate) fn entitlement_answer(&self) -> Answer {
+        Answer::Checking
+    }
+
+    pub(crate) fn entitlement_detail(&self) -> String {
+        String::new()
+    }
+
     // Waits while the headset shows something else. The session alone ends a desktop run.
     pub(crate) fn ended(&self, status: SessionStatus) -> bool {
         if !status.runs() {
@@ -83,7 +97,9 @@ pub fn run<Fonts: LauncherFonts>(
     match Runtime::connect(&host, request) {
         Ok(runtime) => {
             let settings = launcher.into_settings();
-            run_immersive(&host, runtime, &settings, content).map_err(RunError::Headset)
+            let entitlement = EntitlementRun::start(&host);
+            run_immersive(&host, runtime, &settings, entitlement, content)
+                .map_err(RunError::Headset)
         }
         Err(reason) => {
             log::info!("cranpose xr: {reason}; the flat window opens");

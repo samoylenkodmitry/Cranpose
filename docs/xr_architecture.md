@@ -1166,7 +1166,11 @@ The backend also keeps these rules of every runtime and store:
   An event left in the queue makes Android show an "app is not responding" dialog five seconds
   later.
 
-## Store readiness: focus and pause
+## Store readiness
+
+The Meta Horizon Store checks a store app for its pause and focus behavior and for its entitlement.
+
+### Focus and pause
 
 Meta's Virtual Reality Checks (VRCs) for Quest apps give an immersive app three rules about focus
 and pause.
@@ -1257,6 +1261,76 @@ Not run on a device:
 A runtime that sends `VISIBLE` for these cases gets the treatment of the Files panel. A runtime that
 sends `STOPPING` gets the treatment of the second row.
 
+### The entitlement check
+
+The Meta Horizon Store needs a store app to check at its start that the viewer owns the app, and
+to quit when the check fails. Meta's Platform SDK does the check. It is a Java library with two
+native libraries (`libovrplatformloader.so`, `libpsdk_jni.so`). All of it comes in one Maven
+Central artifact (`com.meta.horizon.platform.ovr:android-platform-sdk`). A pure Rust app
+reaches it through a small Java class, as the billing service does.
+
+**The license.** The SDK is under the Meta Platform Technologies SDK License Agreement
+(<https://developers.meta.com/vr/licenses/oculussdk/>). The agreement says that downloading or
+using the SDK is acceptance. It binds the person or the entity that does so. It bars
+sublicensing and any use that puts the SDK under an open-source license. So the repository holds
+none of the SDK. It names the Maven coordinate behind three switches that are off by default, and
+whoever turns them on accepts the agreement. The docs of the feature and of the Gradle service say
+so.
+
+**The parts.**
+
+- The cargo feature `meta-entitlement` of `cranpose-xr` (and of `cranpose`) compiles the check in.
+  Without it no code calls the Java class. `local_entitlement_check()` is `None` then.
+- The Gradle service `meta-entitlement` adds `crates/cranpose/android/java-meta-entitlement`
+  (`CranposeMetaEntitlement`) and the dependency on the SDK. An app that does not list it fetches
+  and packs nothing of the SDK: no `com.meta.horizon.platform` class and no `libovrplatformloader.so`.
+- The app id comes from the build: `cranposeMetaAppId` (or `cranpose { metaAppId }`) fills the
+  `com.meta.horizon.platform.ovr.OCULUS_APP_ID` entry of the merged manifest. The build fails when
+  the service is listed and the id is missing or not all digits. The Java class reads the entry as
+  an object, because the manifest compiler stores an all-digit value as a number.
+
+**The flow.** `Host::begin_entitlement` calls `CranposeMetaEntitlement.cranposeMetaEntitlementBegin`
+before the backend connects to the runtime, because Meta asks for the check within 10 seconds of
+the launch and the connection can wait for a permission prompt. The class calls
+`Core.asyncInitialize(appId, activity)` and, when that succeeds, `Entitlements.getIsViewerEntitled()`.
+The SDK answers on the Java main thread. The answer sits in a volatile field. The app's handle
+(`EntitlementCheck`) lives in the composition, as the state of any composable does. The loop
+reads it. The loop asks for the answer every 100 ms while the check runs (`EntitlementWatch`) and
+stops asking at the outcome, so a frame pays for no JNI call. An exception, an initialization that fails, an error answer, a missing
+Gradle service and 30 seconds with no answer all end the check as `NotEntitled`, because Meta's
+guide counts each as a failed check and an app must not run unchecked when the platform is silent.
+
+**A quit app keeps its process.** Android caches the process after the activity finishes. The
+SDK's message pump goes on logging at verbose level. The Java class keeps a running check and an
+entitled answer for the process. A failed check starts again with the next run of the loop in the
+same process, so a failure that came from a busy platform does not lock an owner out until Android
+ends the process. Each run on the Quest below started after a force-stop, so this restart is not run
+on a device.
+
+**What the app does next.** The default is `OnNotEntitled::Quit`: the backend logs the result and
+calls `request_exit`. The loop that already closes an app ends the session and finishes the
+activity. An app picks `OnNotEntitled::Continue` through `EntitlementCheck::set_on_not_entitled`
+in its first composition and reads `EntitlementCheck::entitlement` to limit itself. Jetpack XR has
+no entitlement API, so the names are this crate's.
+
+**Measured on a Quest 3** (runtime 210.137.0), with the demo (`just android-xr-entitlement <id>`)
+installed through adb and a placeholder app id (`1234567890123456`). The placeholder names no
+store app. An adb install is not a store install, so the check must fail. It does. The
+Platform SDK says why: the user does not have the app in the library.
+
+| Build | Log of the app | What the app did |
+|---|---|---|
+| Default policy | `Meta entitlement: the check starts for app 1234567890123456`, 0.64 s later `Meta entitlement: the viewer is not entitled: code 8, http -1, user does not have app in library`, then `cranpose xr: entitlement check: NotEntitled (...); the app quits` and `cranpose xr: ends in Exit, lifecycle Destroyed` | The loop logged the result 0.3 s after the SDK answered, because it asks every 100 ms and waits up to 100 ms per turn before the session shows. The session ended 54 ms later and the activity finished. The Quest showed the app that was open before. The process stayed as a cached process |
+| `XR_DEMO_ENTITLEMENT=continue` (the app picks `OnNotEntitled::Continue`) | The same lines, ending in `NotEntitled (...); the app goes on` | The app ran on. Its readout showed `Entitlement NotEntitled` and `Lifecycle Resumed` |
+| The feature on and the Gradle service missing | `ClassNotFoundException` for `dev.cranpose.android.CranposeMetaEntitlement`, `the Meta entitlement check cannot start; list the meta-entitlement service in the Gradle build`, then `entitlement check: NotEntitled (the build carries no entitlement service); the app quits` | The app quit at once: a build never runs unchecked |
+| The feature off | No line about the check | The APK holds no `com.meta.horizon.platform` class, no `CranposeMetaEntitlement` and neither `libovrplatformloader.so` nor `libpsdk_jni.so`. The build with the service has all of them |
+
+`scripts/dev/xr_entitlement_check.sh` runs a build through adb and prints these lines.
+
+Not run on a device: a store install that the check finds entitled. It needs an app in the Meta
+Horizon store, a user who owns it and a real app id. The success path has tests of the decision
+logic and of the numbers that Java gives. It has no run across JNI.
+
 ## Headsets
 
 One APK carries the manifest entries of every runtime below. A runtime reads its own entries and
@@ -1299,7 +1373,7 @@ Quest lists no `android.hardware.vr.headtracking` among its system features.
 | 3 | `SpatialExternalSurface` | a hardware decoder writes into a panel with no copy |
 | 4 | 3D content, glTF models, `movable`, `resizable`, `Orbiter`, passthrough | a 3D scene, a glTF model, handles and the room around the panels |
 | 5 | cranvr's Quest client on `cranpose-xr` | its desktop, console and overlay use the API |
-| 6 | Store readiness: focus and pause (the loss of input focus and the power button are shown on a Quest 3; the passthrough entry and the headset's removal are not run), the entitlement check behind a feature (open), other runtimes | an app passes the Meta store's checks |
+| 6 | Store readiness: focus and pause (the loss of input focus and the power button are shown on a Quest 3; the passthrough entry and the headset's removal are not run), the entitlement check behind a feature (the failing check and its quit are shown on a Quest 3; a passing check needs a store app), other runtimes | an app passes the Meta store's checks |
 
 The cranvr client still uses a streaming library for games. Its own protocol replaces it after
 step 5, outside this repository.

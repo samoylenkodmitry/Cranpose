@@ -19,10 +19,10 @@ use cranpose::{CropRect, DecodedFrames, prelude::*};
 use cranpose_ui::text::FontWeight;
 use cranpose_xr::{
     DEFAULT_PANEL_SIZE, FieldOfView, FollowMode, FollowTarget, FollowingSubspace, Hand,
-    InputSource, Pose, ResizeLimits, ResizePolicy, SpatialCurvedRow, SpatialExternalSurface,
-    SpatialPanel, StereoMode, StreamStats, StreamedScene, StreamedView, StreamedViews, Subspace,
-    SubspaceModifier, local_headset_properties, local_spatial_capabilities,
-    local_spatial_environment,
+    InputSource, OnNotEntitled, Pose, ResizeLimits, ResizePolicy, SpatialCurvedRow,
+    SpatialExternalSurface, SpatialPanel, StereoMode, StreamStats, StreamedScene, StreamedView,
+    StreamedViews, Subspace, SubspaceModifier, local_entitlement_check, local_headset_properties,
+    local_spatial_capabilities, local_spatial_environment,
 };
 #[cfg(not(target_os = "android"))]
 use player_demo::Clips;
@@ -71,6 +71,7 @@ pub fn XrDemo() {
     let logs = remember(StreamLogs::default).with(Clone::clone);
     remember(decoder_limits::log_in_background);
     let tracking = TrackedHands();
+    EntitlementChoice();
     Subspace(move || {
         HeadsetReadout(presses, readout, clock.clone(), logs.clone());
         // A flat window shows the panels side by side, so the clips come first
@@ -122,6 +123,20 @@ pub fn XrDemo() {
         PressesPanel(presses, readout);
     });
     ControllerBall(strip_shown);
+}
+
+// A build with the `meta-entitlement` feature quits when the store's check fails. A build made with
+// `XR_DEMO_ENTITLEMENT=continue` goes on instead. Its readout shows what the check found.
+const ENTITLEMENT_BUILD: Option<&str> = option_env!("XR_DEMO_ENTITLEMENT");
+
+#[composable]
+fn EntitlementChoice() {
+    if ENTITLEMENT_BUILD == Some("continue")
+        && let Some(check) = local_entitlement_check().current()
+    {
+        // The choice is made once, before the check can answer
+        remember(move || check.set_on_not_entitled(OnNotEntitled::Continue));
+    }
 }
 
 // The depth test builds are `XR_DEMO_VOLUME=through`, which shows the panel and the torus, and
@@ -384,7 +399,7 @@ fn CurvedStrip() {
 fn PressesPanel(presses: MutableState<u32>, readout: MutableState<Readout>) {
     SpatialPanel(
         SubspaceModifier::new()
-            .size(320.0, 350.0)
+            .size(320.0, 380.0)
             .offset(600.0, 0.0, 100.0)
             .rotate(0.0, -30.0, 0.0),
         move || {
@@ -451,6 +466,13 @@ fn ReadoutLines(readout: MutableState<Readout>) {
         format!("Lifecycle {:?}", local_lifecycle_state().current()),
     ] {
         Text(line, Modifier::empty(), sized(18.0, None));
+    }
+    if let Some(check) = local_entitlement_check().current() {
+        Text(
+            format!("Entitlement {:?}", check.entitlement()),
+            Modifier::empty(),
+            sized(18.0, None),
+        );
     }
 }
 

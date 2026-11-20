@@ -3,6 +3,7 @@
 mod clock;
 mod controllers;
 mod cylinder_layers;
+mod entitlement_run;
 #[cfg(target_os = "android")]
 mod external_texture;
 mod eye_views;
