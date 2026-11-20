@@ -4,7 +4,7 @@
 // after the collect, which records how it drew each record, it adds the
 // areas they are drawn in now.
 
-use cranpose_core::{RecordId, RecordRef, collections::growth_slack::GrowthSlack};
+use cranpose_core::{RecordRef, collections::growth_slack::GrowthSlack};
 use cranpose_render_common::{
     scene_store::{
         BLUR_PIXEL_SLACK, JournalEntry, JournalRead, Reach, RecordEvent, RecordEvents, SceneStore,
@@ -338,7 +338,6 @@ pub(crate) struct TargetState {
     // that frame takes it.
     marks: Vec<(u32, Visit)>,
     stamp: u32,
-    path: Vec<RecordId>,
     captures: Vec<Capture>,
     // While frames keep changing most of the window, the frames left to
     // skip: 1, 4, 16, 64 and then [`MAX_SKIPPED`] after each such frame.
@@ -597,7 +596,6 @@ impl TargetState {
         if self.skipped >= RELEASE_SKIPS {
             self.shown = Vec::new();
             self.changed = Vec::new();
-            self.path = Vec::new();
             self.captures = Vec::new();
         }
     }
@@ -710,7 +708,7 @@ impl TargetState {
     // or that shows a scene, else its own as the walk kept it. A record gone
     // from the store is found under `parent`.
     fn area_of(
-        &mut self,
+        &self,
         store: &SceneStore,
         (record, scope): (RecordRef, Scope),
         parent: Option<RecordRef>,
@@ -775,7 +773,7 @@ impl TargetState {
     // draws. A record gone from the store is found under `parent`; one whose
     // parent went too lies in the area of that parent.
     fn ancestor_area(
-        &mut self,
+        &self,
         store: &SceneStore,
         record: RecordRef,
         parent: Option<RecordRef>,
@@ -790,31 +788,33 @@ impl TargetState {
                 None => None,
             },
         };
-        self.path.clear();
-        while let Some(id) = current {
-            self.path.push(id);
-            current = store.parent(id);
-        }
-        for &ancestor in self.path.iter().rev() {
+        // Up from the parent, each ancestor that holds the area replaces the
+        // one below it: the last is the topmost.
+        let mut holder = None;
+        while let Some(ancestor) = current {
             let area = self
                 .shown(store.record_ref(ancestor))
                 .map(|shown| shown.area);
-            if scene_of(store.layer(ancestor)).is_some() {
-                return Some(match area {
+            let holds = if scene_of(store.layer(ancestor)).is_some() {
+                Some(match area {
                     Some(Area::Drawn(pixels)) => Area::Composite(pixels),
                     Some(area) => area,
                     None => Area::Hidden,
-                });
-            }
-            match area {
-                Some(Area::Drawn(_) | Area::Unknown) => {}
-                Some(area) => return Some(area),
-                // An ancestor new since the frame: the record moved under
-                // it, and its old parent's change holds where it was.
-                None => return Some(Area::Hidden),
-            }
+                })
+            } else {
+                match area {
+                    Some(Area::Drawn(_) | Area::Unknown) => None,
+                    Some(area) => Some(area),
+                    // An ancestor new since the frame: the record moved
+                    // under it, and its old parent's change holds where it
+                    // was.
+                    None => Some(Area::Hidden),
+                }
+            };
+            holder = holds.or(holder);
+            current = store.parent(ancestor);
         }
-        None
+        holder
     }
 
     // Where the subtree of `record` lands at the origin the frame before
