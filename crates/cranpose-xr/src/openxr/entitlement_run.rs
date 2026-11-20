@@ -8,7 +8,7 @@ use crate::{
     entitlement_watch::{EntitlementWatch, Verdict},
 };
 
-// One run of the check, and what the loop knows of its progress. The app's handle on the check
+// One run of the check and what the loop knows of its progress. The app's handle on the check
 // lives in the composition, which does not exist yet when the check starts, so each turn gets it.
 pub(crate) struct EntitlementRun {
     watch: EntitlementWatch,

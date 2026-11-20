@@ -1,4 +1,4 @@
-//! The app's view of the entitlement check, and its choice of what a failure does.
+//! The app's view of the entitlement check and its choice of what a failure does.
 
 use cranpose::{MutableState, mutableStateOf};
 use cranpose_core::CompositionLocal;

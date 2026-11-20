@@ -1,7 +1,7 @@
 //! The loop's reading of the entitlement check: when it asks the platform and what it does with
 //! the answer.
 //!
-//! The Platform SDK answers on its own thread, and the answer waits in a field. The loop asks for
+//! The Platform SDK answers on its own thread. The answer waits in a field. The loop asks for
 //! it a few times each second while the check runs and stops asking once it has the answer, so a
 //! frame pays for no call. A check that gets no answer for too long counts as failed, because an
 //! app must not run unchecked when the platform stays silent.
@@ -14,7 +14,7 @@ use crate::{Entitlement, OnNotEntitled};
 const ASK_EVERY: Duration = Duration::from_millis(100);
 
 // How long a check may run before it counts as failed. Meta asks for the check within 10 seconds
-// of the launch, and the SDK answers within a few seconds.
+// of the launch. The SDK answers within a few seconds.
 pub(crate) const DEADLINE: Duration = Duration::from_secs(30);
 
 // What the platform says about the check. Only an Android build with the `meta-entitlement`
@@ -53,7 +53,7 @@ impl EntitlementWatch {
     }
 
     // One turn of the loop, `now` after the check began. Asks the platform when the last ask is
-    // old enough. Returns the outcome once, and `None` while the check runs.
+    // old enough. Returns the outcome once. Returns `None` while the check runs.
     pub(crate) fn step(
         &mut self,
         now: Duration,

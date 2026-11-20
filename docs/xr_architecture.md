@@ -1203,17 +1203,18 @@ before the backend connects to the runtime, because Meta asks for the check with
 the launch and the connection can wait for a permission prompt. The class calls
 `Core.asyncInitialize(appId, activity)` and, when that succeeds, `Entitlements.getIsViewerEntitled()`.
 The SDK answers on the Java main thread. The answer sits in a volatile field. The app's handle
-(`EntitlementCheck`) lives in the composition, as the state of any composable does, and the loop
+(`EntitlementCheck`) lives in the composition, as the state of any composable does. The loop
 reads it. The loop asks for the answer every 100 ms while the check runs (`EntitlementWatch`) and
 stops asking at the outcome, so a frame pays for no JNI call. An exception, an initialization that fails, an error answer, a missing
 Gradle service and 30 seconds with no answer all end the check as `NotEntitled`, because Meta's
 guide counts each as a failed check and an app must not run unchecked when the platform is silent.
 
-**A quit app keeps its process.** Android caches the process after the activity finishes, and the
+**A quit app keeps its process.** Android caches the process after the activity finishes. The
 SDK's message pump goes on logging at verbose level. The Java class keeps a running check and an
 entitled answer for the process. A failed check starts again with the next run of the loop in the
 same process, so a failure that came from a busy platform does not lock an owner out until Android
-ends the process.
+ends the process. Each run on the Quest below started after a force-stop, so this restart is not run
+on a device.
 
 **What the app does next.** The default is `OnNotEntitled::Quit`: the backend logs the result and
 calls `request_exit`. The loop that already closes an app ends the session and finishes the
@@ -1223,7 +1224,7 @@ no entitlement API, so the names are this crate's.
 
 **Measured on a Quest 3** (runtime 210.137.0), with the demo (`just android-xr-entitlement <id>`)
 installed through adb and a placeholder app id (`1234567890123456`). The placeholder names no
-store app, and an adb install is not a store install, so the check must fail. It does, and the
+store app. An adb install is not a store install, so the check must fail. It does. The
 Platform SDK says why: the user does not have the app in the library.
 
 | Build | Log of the app | What the app did |
@@ -1237,7 +1238,7 @@ Platform SDK says why: the user does not have the app in the library.
 
 Not run on a device: a store install that the check finds entitled. It needs an app in the Meta
 Horizon store, a user who owns it and a real app id. The success path has tests of the decision
-logic and of the numbers that Java gives, and no run across JNI.
+logic and of the numbers that Java gives. It has no run across JNI.
 
 ## Headsets
 

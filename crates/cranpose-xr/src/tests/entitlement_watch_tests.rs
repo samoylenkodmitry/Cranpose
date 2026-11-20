@@ -7,7 +7,7 @@ use crate::{
 
 const SECOND: Duration = Duration::from_secs(1);
 
-// A watch that the platform answers `answer` at every ask, and how many asks it got.
+// A watch that the platform answers `answer` at every ask, with the count of the asks.
 fn step(
     watch: &mut EntitlementWatch,
     now: Duration,

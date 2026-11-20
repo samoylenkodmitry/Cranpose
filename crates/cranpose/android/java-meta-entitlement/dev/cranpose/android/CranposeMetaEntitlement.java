@@ -30,7 +30,7 @@ import com.meta.horizon.platform.ovr.requests.Request;
  * failed check, as the guide says.
  *
  * <p>Threading. {@link #cranposeMetaEntitlementBegin} runs on the native-activity thread and
- * returns at once. The SDK answers on the Java main thread, and the answer sits in a volatile
+ * returns at once. The SDK answers on the Java main thread. The answer sits in a volatile
  * field that the Rust side polls through {@link #cranposeMetaEntitlementState}.
  */
 public final class CranposeMetaEntitlement {
@@ -52,10 +52,10 @@ public final class CranposeMetaEntitlement {
     private CranposeMetaEntitlement() {}
 
     /**
-     * Starts the check. A check that runs, and a check that found the viewer entitled, keep
+     * Starts the check. A check that runs and a check that found the viewer entitled keep
      * their state, so a process that starts its immersive loop again does not ask the platform
-     * again. A check that failed starts anew: the process of a quit app stays cached, and a
-     * failure that came from a busy platform must not lock the owner out of it.
+     * again. A check that failed starts anew. The process of a quit app stays cached. A failure
+     * that came from a busy platform must not lock the owner out of it.
      */
     public static synchronized void cranposeMetaEntitlementBegin(Activity activity) {
         if (state == STATE_CHECKING || state == STATE_ENTITLED) {

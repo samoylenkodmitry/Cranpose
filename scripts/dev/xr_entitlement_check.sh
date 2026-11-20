@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs an immersive Cranpose app that was built with the `meta-entitlement` feature on a Meta Quest
-# through adb, and shows what the entitlement check found and what the app did next. An APK that
+# through adb. It shows what the entitlement check found and what the app did next. An APK that
 # is not installed from the store fails the check, so the expected result of a sideloaded build is
 # `NotEntitled`. The app then quits, or goes on when it chose `OnNotEntitled::Continue`.
 #

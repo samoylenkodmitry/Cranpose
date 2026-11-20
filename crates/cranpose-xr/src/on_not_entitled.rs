@@ -9,7 +9,7 @@ pub enum OnNotEntitled {
     /// the check to quit, so this is the default.
     #[default]
     Quit,
-    /// The app goes on, and [`EntitlementCheck::entitlement`] tells it `NotEntitled`, so that it
+    /// The app goes on. [`EntitlementCheck::entitlement`] tells it `NotEntitled`, so that it
     /// can limit itself, as a demo does. Meta's guide allows this.
     ///
     /// [`EntitlementCheck::entitlement`]: crate::EntitlementCheck::entitlement
