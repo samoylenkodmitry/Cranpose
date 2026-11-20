@@ -1,6 +1,6 @@
 //! A glTF model in a subspace.
 
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use cranpose::{
     Alignment, Box, BoxSpec, Color, ContentScale, Image, Modifier, Size, composable,
@@ -101,18 +101,18 @@ pub fn SpatialGltfModel(
 
 #[composable]
 fn ModelVolume(
-    loaded: Arc<LoadedModel>,
+    loaded: Rc<LoadedModel>,
     modifier: SubspaceModifier,
     content: impl FnMut(&SpatialVolumeScope) + 'static,
 ) {
     let fit = ModelFit::new(&loaded.model, modifier.size_limits());
-    ModelAnimations(Arc::clone(&loaded));
+    ModelAnimations(Rc::clone(&loaded));
     let mut content = content;
     SpatialVolume(
         modifier.size(fit.size[0], fit.size[1]).depth(fit.size[2]),
         move |scope| {
             scope.light(DEFAULT_LIGHT);
-            ModelLayers(Arc::clone(&loaded), fit.root);
+            ModelLayers(Rc::clone(&loaded), fit.root);
             content(scope);
         },
     );
@@ -121,7 +121,7 @@ fn ModelVolume(
 // Runs the animations while one plays. A frame with none costs nothing: no effect runs, so the
 // model draws no more often than it did.
 #[composable]
-fn ModelAnimations(loaded: Arc<LoadedModel>) {
+fn ModelAnimations(loaded: Rc<LoadedModel>) {
     if loaded.animations.is_empty() {
         return;
     }
@@ -131,7 +131,7 @@ fn ModelAnimations(loaded: Arc<LoadedModel>) {
         .any(|animation| animation.animation_state() == GltfAnimationState::Playing);
     let requests = loaded.requests.get();
     cranpose::LaunchedEffect(
-        (playing, requests, Arc::clone(&loaded)),
+        (playing, requests, Rc::clone(&loaded)),
         async move |scope| {
             // A change of what plays poses the nodes once, which covers a stop and the end of a run
             loaded.pose();
@@ -155,15 +155,15 @@ fn ModelAnimations(loaded: Arc<LoadedModel>) {
 // One node for each material of the model: the picture of the material, drawn on every mesh that
 // the material covers.
 #[composable]
-fn ModelLayers(loaded: Arc<LoadedModel>, fit: Mat4) {
+fn ModelLayers(loaded: Rc<LoadedModel>, fit: Mat4) {
     for layer in 0..loaded.layers.len() {
-        let loaded = Arc::clone(&loaded);
+        let loaded = Rc::clone(&loaded);
         key(layer, move || ModelLayer(loaded, layer, fit));
     }
 }
 
 #[composable]
-fn ModelLayer(loaded: Arc<LoadedModel>, layer: usize, fit: Mat4) {
+fn ModelLayer(loaded: Rc<LoadedModel>, layer: usize, fit: Mat4) {
     let picture = loaded.model.layers[layer].clone();
     let size = Size::new(picture.size[0] as f32, picture.size[1] as f32);
     let modifier = Modifier::empty()

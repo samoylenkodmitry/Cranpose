@@ -123,21 +123,29 @@ impl Scene {
     }
 }
 
+// What the loader knows of one primitive's mesh.
+#[derive(Clone)]
+enum Made {
+    Not,
+    // A primitive of points or lines, or with no triangle, which draws nothing
+    Nothing,
+    Mesh(Arc<Mesh>),
+}
+
 // The meshes made so far, so that nodes that share a primitive share its mesh.
-struct Meshes(Vec<Vec<Option<Option<Arc<Mesh>>>>>);
+struct Meshes(Vec<Vec<Made>>);
 
 impl Meshes {
     fn new(document: &gltf::Document) -> Self {
         Self(
             document
                 .meshes()
-                .map(|mesh| vec![None; mesh.primitives().count()])
+                .map(|mesh| vec![Made::Not; mesh.primitives().count()])
                 .collect(),
         )
     }
 
-    // The mesh of `primitive`, made on first use, or `None` for a primitive that is not a list of
-    // triangles.
+    // The mesh of `primitive`, made on first use, or `None` for a primitive that draws nothing.
     fn of(
         &mut self,
         mesh: usize,
@@ -146,18 +154,20 @@ impl Meshes {
         tex_coord: u32,
     ) -> Result<Option<Arc<Mesh>>, GltfError> {
         let slot = &mut self.0[mesh][primitive.index()];
-        if slot.is_none() {
-            *slot = Some(
-                primitive_mesh(primitive, buffers, tex_coord)
-                    .map_err(|reason| GltfError::Mesh {
-                        mesh,
-                        primitive: primitive.index(),
-                        reason,
-                    })?
-                    .map(Arc::new),
-            );
+        if matches!(slot, Made::Not) {
+            let made = primitive_mesh(primitive, buffers, tex_coord).map_err(|reason| {
+                GltfError::Mesh {
+                    mesh,
+                    primitive: primitive.index(),
+                    reason,
+                }
+            })?;
+            *slot = made.map_or(Made::Nothing, |mesh| Made::Mesh(Arc::new(mesh)));
         }
-        Ok(slot.clone().flatten())
+        Ok(match slot {
+            Made::Mesh(mesh) => Some(Arc::clone(mesh)),
+            Made::Not | Made::Nothing => None,
+        })
     }
 }
 
@@ -253,8 +263,9 @@ impl Layers {
             return Ok(layer);
         }
         let pbr = material.pbr_metallic_roughness();
-        let texture = match pbr.base_color_texture() {
-            Some(info) => Some(decode(&info.texture().source(), buffers, base)?),
+        let source = pbr.base_color_texture().map(|info| info.texture().source());
+        let texture = match &source {
+            Some(image) => Some(decode(image, buffers, base)?),
             None => None,
         };
         let alpha = match material.alpha_mode() {

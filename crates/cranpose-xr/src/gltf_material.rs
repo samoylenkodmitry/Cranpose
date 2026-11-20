@@ -102,7 +102,7 @@ fn tint(texture: &mut Texture, factor: [f32; 4], alpha: Alpha) {
     let colored = factor[..3].iter().any(|&channel| channel != 1.0);
     // The decode of each byte, worked out once
     let linear: [f32; 256] = std::array::from_fn(|byte| decode(byte as f32 / 255.0));
-    for pixel in texture.rgba.chunks_exact_mut(4) {
+    for pixel in texture.rgba.as_chunks_mut::<4>().0 {
         if colored {
             for (channel, &scale) in pixel[..3].iter_mut().zip(&factor[..3]) {
                 *channel = to_byte(encode(linear[usize::from(*channel)] * scale));

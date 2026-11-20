@@ -114,7 +114,7 @@ fn the_buffer_of_a_gltf_is_read_from_the_file_next_to_it() {
 
 #[test]
 fn bytes_have_no_directory_to_find_an_external_buffer_in() {
-    let source = SpatialGltfModelSource::from_bytes(&bytes_of("triangle_external.gltf"));
+    let source = SpatialGltfModelSource::from_bytes(bytes_of("triangle_external.gltf"));
     match import(&source) {
         Err(GltfError::MissingBuffer { index: 0, reason }) => {
             assert!(reason.contains("triangle_external.bin"), "{reason}");
@@ -158,7 +158,7 @@ fn files_that_are_not_models_fail_with_a_reason() {
         ("a glb with a cut json chunk", glb[..60].to_vec()),
     ];
     for (name, bytes) in broken {
-        let result = import(&SpatialGltfModelSource::from_bytes(&bytes));
+        let result = import(&SpatialGltfModelSource::from_bytes(bytes));
         assert!(
             matches!(result, Err(GltfError::Invalid(_))),
             "{name}: {result:?}"

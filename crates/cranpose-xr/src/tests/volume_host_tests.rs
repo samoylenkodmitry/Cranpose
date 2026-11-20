@@ -65,6 +65,10 @@ struct Probes {
     seen: Rc<RefCell<Vec<u32>>>,
 }
 
+// What a test composes in the subspace of a headset: it gets the probes and a state that advances
+// once for each frame of the host.
+type VolumeComposer = Rc<dyn Fn(&Probes, MutableState<u32>)>;
+
 // A headset with one volume: a red quad of `QUAD` dp a meter ahead, in the plane of the volume's
 // center, which stands in a subspace of the app's content.
 fn headset() -> Headset {
@@ -78,9 +82,8 @@ fn headset() -> Headset {
     }))
 }
 
-// A headset whose subspace holds what `volume` composes. `volume` gets the probes and a state that
-// advances once for each frame of the host.
-fn headset_of(volume: Rc<dyn Fn(&Probes, MutableState<u32>)>) -> Headset {
+// A headset whose subspace holds what `volume` composes.
+fn headset_of(volume: VolumeComposer) -> Headset {
     let gpu = gpu();
     let probes = Probes {
         compositions: Rc::new(Cell::new(0)),

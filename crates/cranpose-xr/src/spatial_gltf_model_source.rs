@@ -2,6 +2,7 @@
 
 use std::{
     borrow::Cow,
+    fmt,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -19,14 +20,25 @@ use crate::gltf_error::GltfError;
 /// [`from_bytes`](Self::from_bytes).
 ///
 /// Two sources are equal when they name the same path or share the same bytes, so a state keyed by
-/// a source loads again only when the source changes.
-#[derive(Clone, Debug)]
+/// a source loads again only when the source changes. A source made from bytes is a new source each
+/// time it is made, so a composable keeps it with `remember`.
+#[derive(Clone)]
 pub struct SpatialGltfModelSource(Origin);
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 enum Origin {
     Path(PathBuf),
     Bytes(Arc<[u8]>),
+}
+
+// A source that holds bytes prints their number, because a model is megabytes.
+impl fmt::Debug for SpatialGltfModelSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.0 {
+            Origin::Path(path) => f.debug_tuple("SpatialGltfModelSource").field(path).finish(),
+            Origin::Bytes(bytes) => write!(f, "SpatialGltfModelSource({} bytes)", bytes.len()),
+        }
+    }
 }
 
 impl PartialEq for SpatialGltfModelSource {
@@ -50,8 +62,8 @@ impl SpatialGltfModelSource {
     /// A model in `bytes`, the content of a `.glb` or of a `.gltf` whose buffers and images are
     /// embedded. A `.gltf` that names an external file fails to load, because bytes have no
     /// directory to find it in. Jetpack XR has no counterpart.
-    pub fn from_bytes(bytes: &[u8]) -> Self {
-        Self(Origin::Bytes(Arc::from(bytes)))
+    pub fn from_bytes(bytes: impl Into<Arc<[u8]>>) -> Self {
+        Self(Origin::Bytes(bytes.into()))
     }
 
     // The file's bytes and the directory that its relative URIs name files in, or the shared bytes

@@ -1,3 +1,5 @@
+#![cfg(feature = "gltf")]
+
 // A glTF model in a window, where no headset draws it: the volume shows the model in a box of the
 // modifier's size, seen from the front, with its texture.
 

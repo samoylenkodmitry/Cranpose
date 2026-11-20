@@ -1,6 +1,6 @@
 //! The state of a glTF model that a [`SpatialGltfModel`](crate::SpatialGltfModel) shows.
 
-use std::{cell::RefCell, sync::Arc};
+use std::{cell::RefCell, rc::Rc};
 
 use cranpose::{LaunchedEffect, composable, space::Mat4, withBlocking};
 use cranpose_core::{MutableState, mutableStateOf, rememberKeyed};
@@ -122,7 +122,7 @@ pub struct SpatialGltfModelState {
 #[derive(Clone)]
 pub(crate) enum Load {
     Loading,
-    Loaded(Arc<LoadedModel>),
+    Loaded(Rc<LoadedModel>),
     Failed(GltfError),
 }
 
@@ -130,7 +130,7 @@ impl PartialEq for Load {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Loading, Self::Loading) => true,
-            (Self::Loaded(a), Self::Loaded(b)) => Arc::ptr_eq(a, b),
+            (Self::Loaded(a), Self::Loaded(b)) => Rc::ptr_eq(a, b),
             (Self::Failed(a), Self::Failed(b)) => a == b,
             _ => false,
         }
@@ -166,7 +166,7 @@ impl SpatialGltfModelState {
     }
 
     // The model, once it has loaded.
-    pub(crate) fn loaded(&self) -> Option<Arc<LoadedModel>> {
+    pub(crate) fn loaded(&self) -> Option<Rc<LoadedModel>> {
         match self.load.get() {
             Load::Loaded(loaded) => Some(loaded),
             Load::Loading | Load::Failed(_) => None,
@@ -185,7 +185,7 @@ pub fn rememberSpatialGltfModelState(source: SpatialGltfModelSource) -> SpatialG
         let source = source.clone();
         let loaded = withBlocking(move || import(&source)).await;
         load.set(match loaded {
-            Ok(Ok(model)) => Load::Loaded(Arc::new(LoadedModel::new(model))),
+            Ok(Ok(model)) => Load::Loaded(Rc::new(LoadedModel::new(model))),
             Ok(Err(error)) => failed(error),
             Err(error) => failed(GltfError::Aborted(error.to_string())),
         });
