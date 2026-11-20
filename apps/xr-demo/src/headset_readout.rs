@@ -1,5 +1,5 @@
-// The headset's state as the demo's panel shows it: the head's height, the right trigger and the
-// rate of the frame effect. The effect runs in each frame of the headset. It sets the panel's state
+// The headset's state as the demo's panel shows it: the head's height, the right trigger, the right
+// hand's pinch, the input that points for each hand and the rate of the frame effect. The effect runs in each frame of the headset. It sets the panel's state
 // only when a rounded value changes, so a still headset redraws nothing.
 
 use std::{
@@ -14,7 +14,8 @@ use std::{
 
 use cranpose::prelude::*;
 use cranpose_xr::{
-    Hand, Haptics, SpatialFrameEffect, StreamCounts, StreamStats, Vibration, XrFrame, local_haptics,
+    Hand, Haptics, InputSource, SpatialFrameEffect, StreamCounts, StreamStats, Vibration, XrFrame,
+    local_haptics,
 };
 
 // How long one measure of the frame rate takes.
@@ -57,12 +58,16 @@ pub(crate) struct StreamLogs {
 }
 
 // What the panel shows, rounded: the head's height above where it started in centimeters, the
-// right trigger in percent and the frames that the effect saw in the last second.
+// right trigger and the pinch of the right hand's index finger in percent, the input that points
+// for each hand and the frames that the effect saw in the last second.
 #[derive(Clone, Copy, Default, PartialEq)]
 pub(crate) struct Readout {
     // Whole centimeters and whole percent, rounded so a change below them does not redraw
     pub(crate) head_cm: Option<f32>,
     pub(crate) trigger_percent: f32,
+    pub(crate) pinch_percent: f32,
+    // Left, then right
+    pub(crate) pointers: [Option<InputSource>; 2],
     pub(crate) frames_per_second: u32,
 }
 
@@ -110,6 +115,11 @@ impl Tracker {
                 .device_pose
                 .map(|pose| (pose.position[1] * 100.0).round()),
             trigger_percent: (frame.right_controller.trigger.value * 100.0).round(),
+            pinch_percent: frame
+                .right_hand
+                .aim
+                .map_or(0.0, |aim| (aim.index.strength * 100.0).round()),
+            pointers: [frame.left_pointer, frame.right_pointer],
             frames_per_second: self.frames_per_second,
         };
         if readout.get_non_reactive() != next {
@@ -142,7 +152,7 @@ impl Tracker {
             frame.eyes.gaze.is_some(),
         );
         log::info!(
-            "xr-demo: {} frame effects in {:?}, period {:?}, predicts {:?} ahead of now, head {:?}, head velocity {:?} {:?}, floor {:?}, stage {:?}, interpupillary distance {:?}, left eye at {:?} from the head, field of view {:?}, profiles {:?} {:?}, recenter {:?}",
+            "xr-demo: {} frame effects in {:?}, period {:?}, predicts {:?} ahead of now, head {:?}, head velocity {:?} {:?}, floor {:?}, stage {:?}, interpupillary distance {:?}, left eye at {:?} from the head, field of view {:?}, profiles {:?} {:?}, pointers {:?} {:?}, hand aims {:?} {:?}, recenter {:?}",
             self.frames_per_second,
             elapsed,
             frame.period,
@@ -165,6 +175,10 @@ impl Tracker {
             frame.left_eye.map(|eye| eye.field_of_view),
             frame.left_controller.profile,
             frame.right_controller.profile,
+            frame.left_pointer,
+            frame.right_pointer,
+            frame.left_hand.aim,
+            frame.right_hand.aim,
             frame.recenter,
         );
     }

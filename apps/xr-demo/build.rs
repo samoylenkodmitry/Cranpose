@@ -21,6 +21,13 @@ fn main() {
     if let Ok(place) = std::env::var("XR_DEMO_VOLUME") {
         println!("cargo::rustc-env=XR_DEMO_VOLUME={place}");
     }
+    // `XR_DEMO_SCRIPTED_HAND=right` (or `left`) builds a hand that the backend plays in place of the
+    // cameras': it pinches the counter's button in a cycle. The Android XR emulator's hand
+    // simulation does not reach the runtime, so the build shows the hand pointer there.
+    println!("cargo::rerun-if-env-changed=XR_DEMO_SCRIPTED_HAND");
+    if let Ok(hand) = std::env::var("XR_DEMO_SCRIPTED_HAND") {
+        println!("cargo::rustc-env=XR_DEMO_SCRIPTED_HAND={hand}");
+    }
     println!("cargo::rerun-if-env-changed=XR_DEMO_TRACKING");
     match std::env::var("XR_DEMO_TRACKING").as_deref() {
         Ok("none") => declare(&[]).emit(),

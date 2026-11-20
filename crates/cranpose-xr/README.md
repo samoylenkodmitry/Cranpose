@@ -395,6 +395,40 @@ session starts, because the system takes an immersive app off the headset to sho
 ends a session that runs. The app waits for the answer. The backend makes a tracker only when every
 permission is granted, and it does not ask again after a refusal.
 
+## Hands as pointers
+
+A tracked hand points at the panels, the curved panels and the volumes, and a pinch presses. The app
+asks for it with `Use::hand_tracking()`, as above. Its buttons, sliders and handles take the hand
+as they take a controller, because one pointer serves both.
+
+- A controller that the runtime tracks points first. A hand points only on a side with no
+  controller in use, so a user can hold a controller in one hand and point with the other.
+- The hand's aim pose casts the ray, and the pinch strength of its index finger is the trigger. The
+  controller's rules apply to it: a press starts above 0.6 and ends below 0.4, a press holds its
+  point while the hand shakes, and it drags once the ray turns. The beam shows from the aim pose.
+- On a Meta Quest the aim comes from `XR_FB_hand_tracking_aim` (`HandAim`). A runtime that tracks
+  the joints and lacks that extension gives the hand's pointer through the hand interaction profile
+  of `XR_EXT_hand_interaction`, whose aim pose and pinch value come as a controller's actions do.
+  That profile points only while the cameras track the hand, because a Quest keeps its aim valid
+  with no hand in view.
+- A hand that makes the system's menu gesture, the palm turned up with a pinch, points at nothing.
+  A pinch that is closed when a hand appears does not press either. Both press after the fingers
+  open and close again.
+- When a controller takes over from a hand, or a hand from a controller, in the middle of a press, the
+  press ends with a release. The new input presses after its trigger went up.
+- A hand holds no motor, so a vibration that the app asks for on that side is dropped.
+
+`XrFrame::pointer(Hand)` gives the app the `InputSource` that points for a side, `Controller` or
+`Hands`, or `None`. `InputSource` is Jetpack XR's `InputEvent.Source`. Jetpack XR tags each input event
+with its source. Cranpose tags the frame instead, and the pointer's events reach the composition as
+plain pointer events. An app that did not declare hand tracking has no hand pointer.
+
+A build that turns on the `scripted-hand` feature can play a hand in place of the cameras', for a
+check where no hand can be tracked, such as an emulator. `script_hand(ScriptedHand::pointing(hand,
+from, at, PinchCycle::default()))` installs a hand whose aim pose points at a place in the room and
+whose index finger pinches in a cycle. The frame holds it as a tracked hand, so the pointer treats
+it as the cameras' hand. The feature is off by default.
+
 ## Streamed scenes
 
 `StreamedScene` shows frames that another machine rendered for both eyes. The app decodes the
