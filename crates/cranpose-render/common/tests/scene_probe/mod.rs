@@ -7,7 +7,9 @@ use cranpose_render_common::{
     graph_scene::Scene,
     scene_store::{ItemRef, LayerRef},
 };
-use cranpose_ui::{LayoutEngine, Size, TestComposition};
+use cranpose_ui::{
+    LayoutEngine, MeasureLayoutOptions, Size, TestComposition, measure_layout_with_options,
+};
 use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, Rect};
 
 // Every string `layer` and the records beneath it paint, in draw order.
@@ -58,6 +60,9 @@ pub(crate) fn with_applier<R>(
     result
 }
 
+// Lays out as the app shell does, building neither the semantics tree nor
+// the layout tree: the layout tree publishes every window origin itself, so
+// a test of what the scene publishes needs it gone.
 pub(crate) fn update_scene(
     composition: &mut TestComposition,
     root: NodeId,
@@ -66,7 +71,11 @@ pub(crate) fn update_scene(
 ) -> Vec<NodeId> {
     while composition.process_invalid_scopes().expect("recompose") {}
     with_applier(composition, |applier| {
-        applier.compute_layout(root, viewport).expect("relayout");
+        let options = MeasureLayoutOptions {
+            collect_semantics: false,
+            build_layout_tree: false,
+        };
+        measure_layout_with_options(applier, root, viewport, options).expect("relayout");
         let geometry = cranpose_ui::take_geometry_scene_nodes();
         let mut content = geometry.reshaped;
         for &node in &geometry.unplaced {
