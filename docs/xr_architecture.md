@@ -275,6 +275,33 @@ A frame that animates a material with more than one primitive allocates the list
 surfaces, because `MeshSurfaces::new` takes a `Vec`. A material with one primitive allocates
 nothing.
 
+### glTF models on a Quest 3
+
+Measured on a Quest 3 (Horizon OS, runtime "Oculus" 210.137.0) from the compositor's screenshots
+(`adb exec-out screencap -p`) and `scripts/dev/xr_model_check.py`. The crate's texture has magenta
+and lime tiles in a white frame, and nothing else in the demo has those hues.
+
+| Build | Left eye | Right eye |
+| --- | --- | --- |
+| `XR_DEMO_VOLUME=model`: the crate alone, standing still, magenta pixels | 103,340 | 102,475 |
+| the same, lime pixels | 99,682 | 99,116 |
+
+Three screenshots of one run differ by 0.1 percent. The two eyes see the crate from their own places,
+so their counts differ by about 1 percent. The picture shows three faces in each eye with the
+tiles upright. The full demo shows the crate beside the torus at 120 frames a second. At the
+demo's first head pose the right eye sees the crate at its lower right, and the left eye's view ends
+before it. In the crate's region, 33,000 magenta and 32,000 lime pixels show in the right eye, and
+63,000 pixels change their class between two screenshots a second apart, so the animation runs in
+the headset's frame loop. The crate adds no layer: the demo asks for 18 layers as before, the runtime takes 16, and
+two panels leave the frame (see "The layer limit"). The log has no `glTF model:` failure and no
+`the 3D content ends`.
+
+The `gltf` feature adds 770 KB to the stripped arm64 library of the demo, which is 11,835 KB without
+the feature and 12,605 KB with it. Both come from a local `release-fast` build. The build without
+the feature leaves out the demo's crate too. Of the 770 KB, the `zune_jpeg`, `image` and `png`
+crates take 209 KB, `serde_json` 181 KB, `gltf` and `gltf_json` 58 KB, and `cranpose_xr` 49 KB. The
+shipping `release` profile has other absolute sizes. An app without the feature has none of it.
+
 ### What it costs
 
 A frame with volumes updates the composition and renders the window root twice. The scene's draw
