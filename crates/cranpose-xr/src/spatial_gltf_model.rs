@@ -3,7 +3,8 @@
 use std::{rc::Rc, sync::Arc};
 
 use cranpose::{
-    Alignment, Box, BoxSpec, Color, ContentScale, Image, Modifier, Size, composable,
+    Alignment, Box, BoxSpec, Color, ContentScale, Image, LaunchedEffect, Modifier, Size,
+    composable,
     space::{Light, Mat4, Material, MeshSurface, MeshSurfaces, Vec3},
 };
 use cranpose_core::key;
@@ -140,7 +141,7 @@ fn ModelAnimations(loaded: Rc<LoadedModel>) {
         .iter()
         .any(|animation| animation.animation_state() == GltfAnimationState::Playing);
     let requests = loaded.requests.get();
-    cranpose::LaunchedEffect(
+    LaunchedEffect(
         (playing, requests, Rc::clone(&loaded)),
         async move |scope| {
             // A change of what plays poses the nodes once, which covers a stop and the end of a run
