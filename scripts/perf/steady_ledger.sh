@@ -45,8 +45,10 @@
 # `realloc` of an over-aligned block, an allocation and a memcpy, from DHAT's
 # copies under it. DHAT in heap mode places the start's calls in their
 # groups. The dashboard row runs the `framebuffer_frame` bench, the pixel
-# path of the ESP32 boards, under DHAT alone: a run minus a run of no
-# frames. Needs valgrind 3.15 or newer and python3.
+# path of the ESP32 boards, in their 16-bit pixels under DHAT alone: a run
+# minus a run of no frames. An A/B also counts its instructions in RGBA
+# bytes, the pixels watchOS draws, as the row dashboard-rgba. Needs valgrind
+# 3.15 or newer and python3.
 set -euo pipefail
 
 # The measured window of every row: the frames after the start that run
@@ -88,7 +90,7 @@ readonly PHASED_ROWS=" patchwork-t17 gauntlet-t16 gauntlet-t12 feed ticker "
 # of its own. FORMAT names the rows that this script writes; a new one
 # measures a kept base again.
 readonly SHARED="${STEADY_LEDGER_SHARED:-$HOME/hotpath}"
-readonly FORMAT=1
+readonly FORMAT=2
 
 self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
@@ -127,6 +129,10 @@ job() {
         SCREEN=dashboard PIXELS=rgb565 FRAMES="$COUNTED_FRAMES" "${callgrind[@]}" \
             --zero-before='framebuffer_frame::steady_frames*' "$fb" > "$out.$kind" 2>&1
         ;;
+    fb-instr-rgba)
+        SCREEN=dashboard FRAMES="$COUNTED_FRAMES" "${callgrind[@]}" \
+            --zero-before='framebuffer_frame::steady_frames*' "$fb" > "$out.$kind" 2>&1
+        ;;
     fb-*)
         SCREEN=dashboard PIXELS=rgb565 FRAMES="${kind#fb-}" "${dhat[@]}" --mode=copy --trace-malloc=yes "$fb" 2>&1 |
             ledger trace > "$out.$kind"
@@ -157,7 +163,7 @@ jobs_of() {
         done
     done
     echo dashboard >> "$dir/runs/$run/order"
-    [ -z "$instructions" ] || echo "$run $side fb-instr dashboard"
+    [ -z "$instructions" ] || printf '%s\n' "$run $side fb-instr dashboard" "$run $side fb-instr-rgba dashboard"
     echo "$run $side fb-0 dashboard"
     echo "$run $side fb-$COUNTED_FRAMES dashboard"
 }
