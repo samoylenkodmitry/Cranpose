@@ -44,3 +44,23 @@ fn a_vibration_keeps_to_what_a_controller_takes() {
     assert_eq!(buzz(0.5).with_frequency(-1.0).frequency(), None);
     assert_eq!(buzz(0.5).with_frequency(f32::NAN).frequency(), None);
 }
+
+#[test]
+fn a_side_that_a_tracked_hand_points_for_takes_no_vibration() {
+    let asks = [
+        Some(HapticCommand::Vibrate(buzz(0.5))),
+        Some(HapticCommand::Stop),
+    ];
+    assert_eq!(controller_asks(asks, [None, None]), asks);
+    let controller = Some(InputSource::Controller);
+    let hands = Some(InputSource::Hands);
+    assert_eq!(
+        controller_asks(asks, [controller, hands]),
+        [Some(HapticCommand::Vibrate(buzz(0.5))), None]
+    );
+    assert_eq!(
+        controller_asks(asks, [hands, controller]),
+        [None, Some(HapticCommand::Stop)]
+    );
+    assert_eq!(controller_asks(asks, [hands, hands]), [None, None]);
+}

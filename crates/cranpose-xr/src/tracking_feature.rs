@@ -11,7 +11,8 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum TrackingFeature {
-    /// The joints of both hands, and where a hand points. `XR_EXT_hand_tracking` and
+    /// The joints of both hands, and where a hand points. A hand with no controller in it
+    /// points at the panels and presses with a pinch. `XR_EXT_hand_tracking` and
     /// `XR_FB_hand_tracking_aim`.
     Hands,
     /// The joints of the body. `XR_FB_body_tracking` and `XR_META_body_tracking_full_body`.

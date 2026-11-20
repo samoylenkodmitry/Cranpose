@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use crate::{
-    BodyState, Controller, Eyes, FaceState, Hand, HandState, MetaFaceState, Pose, Recenter,
-    RenderViewpoint, TrackingCapabilities,
+    BodyState, Controller, Eyes, FaceState, Hand, HandState, InputSource, MetaFaceState, Pose,
+    Recenter, RenderViewpoint, TrackingCapabilities,
 };
 
 /// The headset's state for one frame: where the head and the eyes are, what the controllers
@@ -66,6 +66,11 @@ pub struct XrFrame {
     pub left_controller: Controller,
     /// The right hand's controller.
     pub right_controller: Controller,
+    /// The input that drives the pointer of the left hand, or `None` while nothing points for it.
+    /// See [`pointer`](Self::pointer).
+    pub left_pointer: Option<InputSource>,
+    /// The input that drives the pointer of the right hand, or `None` while nothing points for it.
+    pub right_pointer: Option<InputSource>,
     /// The runtime's change of the room's origin that it announced since the last frame.
     pub recenter: Option<Recenter>,
     /// The joints of the left hand, which cameras track.
@@ -124,6 +129,22 @@ impl XrFrame {
         match hand {
             Hand::Left => &self.left_controller,
             Hand::Right => &self.right_controller,
+        }
+    }
+
+    /// The input that drives the pointer of `hand` in this frame, or `None` while nothing points
+    /// for it. The pointer is what presses the panels' buttons.
+    ///
+    /// A controller that the runtime tracks points with its aim pose and presses with its trigger:
+    /// [`InputSource::Controller`]. A tracked hand with no controller in it points with its
+    /// [`HandAim`](crate::HandAim) and presses with the pinch of its index finger:
+    /// [`InputSource::Hands`]. That needs `Use::hand_tracking()` in the app's build. A hand that makes
+    /// the system's menu gesture points at nothing. Jetpack XR tags each input event with its
+    /// source. Cranpose gives it here.
+    pub const fn pointer(&self, hand: Hand) -> Option<InputSource> {
+        match hand {
+            Hand::Left => self.left_pointer,
+            Hand::Right => self.right_pointer,
         }
     }
 }

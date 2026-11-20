@@ -35,6 +35,11 @@ openxr = [
     "dep:windows-sys",
 ]
 
+# Plays a scripted hand in place of the cameras' hand, so a build can show the hand pointer where no
+# hand can be tracked, such as in an emulator. The app installs the script with `script_hand`. Off,
+# the backend has no such code.
+scripted-hand = ["openxr"]
+
 # Times the streamed scenes' passes on the CPU and the GPU, and logs the cost once a second. Off, the
 # passes run with no timing.
 stream-costs = ["openxr"]
