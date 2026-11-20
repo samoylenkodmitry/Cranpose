@@ -1160,8 +1160,8 @@ extensions. The backend uses the first. The demo built with `XR_DEMO_ROOM=script
 `pm clear` and a grant of `SCENE_UNDERSTANDING_COARSE`, with the log of each start kept:
 
 - First start: the runtime read its storage within the first frames and kept 0 anchors. The demo made an
-  anchor at (0.5, -0.1, -1.2) in the room, and the runtime kept it 61 ms later under the identifier
-  `35ddff3f-2179-4795-84df-b6d601d1aced`. The anchor was tracked at that pose, which is (0.5, 1.5, -1.2) in
+  anchor at (0.5, -0.1, -1.2) in the room, and the runtime kept it 49 ms later under the identifier
+  `04f2281f-f84b-49a3-b65d-3b420397f3a2`. The anchor was tracked at that pose, which is (0.5, 1.5, -1.2) in
   the stage.
 - Second start, in a new process: the storage listed that identifier, the demo loaded it with
   `Anchors::load`, and the runtime tracked it at (0.5, -0.1, -1.2) in the room and (0.5, 1.5, -1.2) in
