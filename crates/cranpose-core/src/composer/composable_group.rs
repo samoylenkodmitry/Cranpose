@@ -2,7 +2,7 @@ use std::{cell::Cell, hash::Hash, rc::Rc};
 
 use super::{GroupScopeEntry, PendingMovable, SlotHostPassGuard, scope_frame};
 use crate::{
-    BodyRun, Composer, Key, RecomposeOptions, RecomposeScope, RetentionMode, SlotsHost,
+    BodyRun, Composer, Key, NodeId, RecomposeOptions, RecomposeScope, RetentionMode, SlotsHost,
     explicit_group_key_seed, slot::GroupStart,
 };
 
@@ -197,6 +197,41 @@ impl Composer {
         scope
     }
 
+    fn start_group(
+        &self,
+        host: &Rc<SlotsHost>,
+        seed: crate::slot::GroupKeySeed,
+        parent_node: Option<NodeId>,
+        lookup: super::MovableLookup,
+    ) -> (
+        GroupStart<crate::slot::ActiveGroupId>,
+        Option<crate::slot::GroupKey>,
+    ) {
+        if !self.core.shared_state.retains_any() {
+            let started = host.with_write_session(|slots| {
+                let key = slots.reserve_group_key(seed);
+                (!key.is_movable()).then(|| slots.begin_group(key, None, parent_node))
+            });
+            if let Some(started) = started {
+                return (started, None);
+            }
+        }
+        // Retained content is found again by its parent's scope.
+        let parent_scope_id = {
+            let mut stack = self.scope_stack();
+            let top = stack.len().checked_sub(1);
+            top.map(|top| self.frame_scope(&mut stack, top).id())
+        };
+        let super::GroupEntry {
+            key,
+            restored,
+            placeholder_for,
+        } = self.resolve_group_entry(host, seed, parent_scope_id, lookup);
+        let started =
+            host.with_write_session(|slots| slots.begin_group(key, restored, parent_node));
+        (started, placeholder_for)
+    }
+
     // Opens a group; returns its scope, `None` for one whose body makes it
     // when it first needs one, whether its body runs and whether it forces
     // the groups below it to run theirs.
@@ -205,6 +240,7 @@ impl Composer {
         &self,
         host: &Rc<SlotsHost>,
         key: crate::slot::GroupKeySeed,
+        lookup: super::MovableLookup,
     ) -> (Option<RecomposeScope>, bool, bool) {
         let options = self.core.pending_scope_options.take().unwrap_or_default();
         let parent_node = self.current_parent_hint();
@@ -216,7 +252,7 @@ impl Composer {
                 kind,
             },
             placeholder_for,
-        ) = self.start_group(host, key, parent_node);
+        ) = self.start_group(host, key, parent_node, lookup);
         // Movable content keeps its scope, which a move reparents its
         // scopes from.
         if scope.is_none()
@@ -304,6 +340,14 @@ impl Composer {
 
     #[inline(never)]
     fn open_group(&self, key: crate::slot::GroupKeySeed) -> ComposableGroup<'_> {
+        self.open_group_with_lookup(key, super::MovableLookup::AnyHost)
+    }
+
+    fn open_group_with_lookup(
+        &self,
+        key: crate::slot::GroupKeySeed,
+        lookup: super::MovableLookup,
+    ) -> ComposableGroup<'_> {
         let host = self.active_slots_host();
         let (host, pass) = if host.has_active_pass() {
             (host, None)
@@ -311,7 +355,7 @@ impl Composer {
             let pass = self.begin_slot_host_pass(&host, crate::slot::SlotPassMode::Compose);
             (self.active_slots_host(), Some(pass))
         };
-        let (scope, runs_body, forces_content) = self.open_group_in_active_pass(&host, key);
+        let (scope, runs_body, forces_content) = self.open_group_in_active_pass(&host, key, lookup);
         if let Some(scope) = &scope {
             scope.begin_reads();
         }
@@ -361,8 +405,13 @@ impl Composer {
         result
     }
 
-    pub(crate) fn with_movable_group(&self, id: Key, f: impl FnOnce(&Self)) {
-        let group = self.open_group(crate::slot::GroupKeySeed::movable(id));
+    pub(crate) fn with_movable_group(
+        &self,
+        id: Key,
+        lookup: super::MovableLookup,
+        f: impl FnOnce(&Self),
+    ) {
+        let group = self.open_group_with_lookup(crate::slot::GroupKeySeed::movable(id), lookup);
         if group.runs_body {
             f(self);
         }

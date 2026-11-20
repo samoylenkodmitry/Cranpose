@@ -43,7 +43,9 @@ pub use debug::{
 pub(crate) use detach::dispose_detached_node_now;
 use groups::GroupRecord;
 pub(crate) use lifecycle::{DeferredDrop, SlotLifecycleCoordinator};
-pub(crate) use movable::{MOVABLE_PLACEHOLDER_STATIC_KEY, MOVABLE_STATIC_KEY, MovableIndex};
+pub(crate) use movable::{
+    MOVABLE_PLACEHOLDER_STATIC_KEY, MOVABLE_STATIC_KEY, MovableAttachment, MovableIndex,
+};
 pub(in crate::slot) use payload::PayloadInit;
 #[cfg(any(test, debug_assertions))]
 pub(crate) use payload_anchors::PayloadAnchorLifecycle;

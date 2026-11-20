@@ -4,7 +4,7 @@ use std::{
 };
 
 use cranpose_core::{
-    Applier, Composition, DisposableEffect, DisposableEffectResult, LaunchedEffect,
+    Applier, Composition, DisposableEffect, DisposableEffectResult, Key, LaunchedEffect,
     LaunchedEffectScope, MemoryApplier, MovableContent, MutableState, Node, NodeId, RuntimeCell,
     SlotId, SlotTable, SlotsHost, SubcomposeState, location_key, movable, pop_parent, push_parent,
     remember, rememberMovableContentOf, with_current_composer,
@@ -369,25 +369,44 @@ fn nested_remember_movable_content_disposes_completely_with_outer_owner() {
     inner_probe.assert_disposed(&mut composition, inner_node);
 }
 
-#[test]
-fn retained_movable_in_another_host_disposes_when_owner_host_drops_outside_pass() {
-    let mut composition = Composition::new(MemoryApplier::new());
-    let show_in_b = MutableState::with_runtime(true, composition.runtime_handle());
-    let host_a = Rc::new(RefCell::new(Some(Rc::new(
-        SlotsHost::new(SlotTable::new()),
-    ))));
-    let host_b = Rc::new(SlotsHost::new(SlotTable::new()));
-    let shared_movable: Rc<RefCell<Option<MovableContent>>> = Rc::new(RefCell::new(None));
-    let probe = Rc::new(LifecycleProbe::default());
-    let root_key = location_key(file!(), line!(), column!());
+struct TwoHostRig {
+    composition: Composition<MemoryApplier>,
+    show_in_b: MutableState<bool>,
+    host_a: Rc<RefCell<Option<Rc<SlotsHost>>>>,
+    host_b: Rc<SlotsHost>,
+    shared_movable: Rc<RefCell<Option<MovableContent>>>,
+    probe: Rc<LifecycleProbe>,
+    root_key: Key,
+}
 
-    let render = |composition: &mut Composition<MemoryApplier>| {
-        let host_a = Rc::clone(&host_a);
-        let host_b = Rc::clone(&host_b);
-        let shared_movable = Rc::clone(&shared_movable);
-        let probe = Rc::clone(&probe);
-        composition
-            .render(root_key, move || {
+impl TwoHostRig {
+    fn new(root_key: Key) -> Self {
+        let composition = Composition::new(MemoryApplier::new());
+        let show_in_b = MutableState::with_runtime(true, composition.runtime_handle());
+        Self {
+            composition,
+            show_in_b,
+            host_a: Rc::new(RefCell::new(Some(Rc::new(
+                SlotsHost::new(SlotTable::new()),
+            )))),
+            host_b: Rc::new(SlotsHost::new(SlotTable::new())),
+            shared_movable: Rc::new(RefCell::new(None)),
+            probe: Rc::new(LifecycleProbe::default()),
+            root_key,
+        }
+    }
+
+    fn render(
+        &mut self,
+        host_a_body: impl Fn(&Rc<RefCell<Option<MovableContent>>>, &Rc<LifecycleProbe>) + 'static,
+    ) {
+        let host_a = Rc::clone(&self.host_a);
+        let host_b = Rc::clone(&self.host_b);
+        let shared_movable = Rc::clone(&self.shared_movable);
+        let probe = Rc::clone(&self.probe);
+        let show_in_b = self.show_in_b;
+        self.composition
+            .render(self.root_key, move || {
                 let root_a =
                     with_current_composer(|composer| composer.emit_node(TrackedParent::default));
                 let root_b =
@@ -398,11 +417,7 @@ fn retained_movable_in_another_host_disposes_when_owner_host_drops_outside_pass(
                     with_current_composer(|composer| {
                         composer
                             .subcompose_in(&slots_a, Some(root_a), |_| {
-                                let cell = remember(|| RuntimeCell::new(Cell::new(0))).with(|c| *c);
-                                let content = rememberMovableContentOf(move || {
-                                    probe.emit_movable_body(vec![cell], None);
-                                });
-                                *shared_movable.borrow_mut() = Some(content);
+                                host_a_body(&shared_movable, &probe);
                             })
                             .expect("subcompose host_a");
                     });
@@ -421,22 +436,37 @@ fn retained_movable_in_another_host_disposes_when_owner_host_drops_outside_pass(
                 });
             })
             .expect("render composition");
+    }
+}
+
+#[test]
+fn retained_movable_in_another_host_disposes_when_owner_host_drops_outside_pass() {
+    let mut rig = TwoHostRig::new(location_key(file!(), line!(), column!()));
+    let render = |rig: &mut TwoHostRig| {
+        rig.render(|shared_movable, probe| {
+            let probe = Rc::clone(probe);
+            let cell = remember(|| RuntimeCell::new(Cell::new(0))).with(|c| *c);
+            let content = rememberMovableContentOf(move || {
+                probe.emit_movable_body(vec![cell], None);
+            });
+            *shared_movable.borrow_mut() = Some(content);
+        });
     };
 
-    render(&mut composition);
-    let node = probe.node.get().expect("movable composed in host_b");
+    render(&mut rig);
+    let node = rig.probe.node.get().expect("movable composed in host_b");
 
     // Detach from host_b so the movable sits retained in host_b while host_a
     // still owns it.
-    show_in_b.set_value(false);
-    render(&mut composition);
-    assert_eq!(probe.unmounts.get(), 0);
-    assert!(composition.applier_mut().get_mut(node).is_ok());
+    rig.show_in_b.set_value(false);
+    render(&mut rig);
+    assert_eq!(rig.probe.unmounts.get(), 0);
+    assert!(rig.composition.applier_mut().get_mut(node).is_ok());
 
     // Drop host_a outside any compose pass: the movable retained in host_b must
     // unmount before host_a's RuntimeCell is released.
-    host_a.borrow_mut().take();
-    probe.assert_disposed(&mut composition, node);
+    rig.host_a.borrow_mut().take();
+    rig.probe.assert_disposed(&mut rig.composition, node);
 }
 
 struct RetainedHostFixture {
@@ -721,4 +751,87 @@ fn node_disposal_flush_keeps_owner_host_runtime_cell_alive_until_target_host_unm
         .dispose_subcomposed_nodes(disposal)
         .expect("dispose owner slot through NodeDisposalQueue::flush");
     probe.assert_disposed(&mut composition, node);
+}
+
+#[test]
+fn nested_owner_drops_after_composition_drop_without_panic() {
+    let mut rig = TwoHostRig::new(location_key(file!(), line!(), column!()));
+    let render = |rig: &mut TwoHostRig| {
+        rig.render(|shared_movable, probe| {
+            let probe = Rc::clone(probe);
+            let content = rememberMovableContentOf(move || {
+                let probe = Rc::clone(&probe);
+                let inner = rememberMovableContentOf(move || {
+                    probe.emit_movable_body(Vec::new(), None);
+                });
+                emit_wrapper(|| inner.show());
+            });
+            *shared_movable.borrow_mut() = Some(content);
+        });
+    };
+
+    render(&mut rig);
+    rig.show_in_b.set_value(false);
+    render(&mut rig);
+    let TwoHostRig {
+        composition,
+        host_a,
+        host_b: _host_b,
+        probe,
+        ..
+    } = rig;
+    drop(composition);
+    host_a.borrow_mut().take();
+    assert_eq!(probe.payload_drops.get(), 1, "inner payload drops once");
+}
+
+#[test]
+fn fresh_remember_movable_shown_in_two_hosts_in_same_pass_keeps_single_instance() {
+    let mut rig = TwoHostRig::new(location_key(file!(), line!(), column!()));
+    let show_in_a = MutableState::with_runtime(true, rig.composition.runtime_handle());
+    let keep_owner = MutableState::with_runtime(true, rig.composition.runtime_handle());
+    let body_creations = Rc::new(Cell::new(0usize));
+    let render = |rig: &mut TwoHostRig| {
+        let body_creations = Rc::clone(&body_creations);
+        rig.render(move |shared_movable, probe| {
+            if keep_owner.value() {
+                let body_creations = Rc::clone(&body_creations);
+                let probe = Rc::clone(probe);
+                let content = rememberMovableContentOf(move || {
+                    let _ = remember(|| {
+                        body_creations.set(body_creations.get() + 1);
+                    });
+                    probe.emit_movable_body(Vec::new(), None);
+                });
+                *shared_movable.borrow_mut() = Some(content.clone());
+                if show_in_a.value() {
+                    content.show();
+                }
+            }
+        });
+    };
+
+    // Pass 1: fresh movable is shown in host_a AND requested in host_b in the
+    // very same pass. Only one instance may compose; host_b stays a placeholder.
+    render(&mut rig);
+    assert_eq!(body_creations.get(), 1);
+    assert_eq!(rig.probe.unmounts.get(), 0);
+    let node = rig.probe.node.get().expect("movable composed in host_a");
+
+    // Pass 2: host_a releases the movable; host_b takes over the same instance.
+    show_in_a.set_value(false);
+    render(&mut rig);
+    let _ = rig.composition.process_invalid_scopes();
+    assert_eq!(body_creations.get(), 1);
+    assert_eq!(rig.probe.unmounts.get(), 0);
+
+    // Pass 3: owner leaves host_a while host_b still displays the movable, then
+    // host_b hides it. It must dispose instead of staying pinned.
+    keep_owner.set_value(false);
+    render(&mut rig);
+    assert_eq!(rig.probe.unmounts.get(), 0);
+
+    rig.show_in_b.set_value(false);
+    render(&mut rig);
+    rig.probe.assert_disposed(&mut rig.composition, node);
 }

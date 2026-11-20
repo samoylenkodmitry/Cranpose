@@ -1,22 +1,33 @@
 use std::{
+    cell::Cell,
     hash::Hash,
     rc::{Rc, Weak},
 };
 
 use crate::{
-    Composer, Key, composer::ComposerRuntimeState, composer_context, current_runtime_handle,
-    hash_key, with_current_composer,
+    Composer, Key,
+    composer::{ComposerRuntimeState, MovableLookup},
+    composer_context, current_runtime_handle, hash_key,
+    owned::WeakOwned,
+    with_current_composer,
 };
 
 struct RememberedMovable {
     id: Key,
     shared_state: Weak<ComposerRuntimeState>,
+    owner_host_key: usize,
+    ever_shown: Cell<bool>,
+    shown_outside_owner_host: Cell<bool>,
 }
 
 impl Drop for RememberedMovable {
     fn drop(&mut self) {
+        if !self.ever_shown.get() {
+            return;
+        }
         if let Some(state) = self.shared_state.upgrade() {
-            state.on_movable_owner_dropped(self.id);
+            let owner_host = (!self.shown_outside_owner_host.get()).then_some(self.owner_host_key);
+            state.on_movable_owner_dropped(self.id, owner_host);
         }
     }
 }
@@ -42,7 +53,9 @@ impl Drop for RememberedMovable {
 #[track_caller]
 pub fn movable<K: Hash>(key: K, content: impl FnOnce()) {
     let id = hash_key(&key);
-    with_current_composer(|composer| composer.with_movable_group(id, |_| content()));
+    with_current_composer(|composer| {
+        composer.with_movable_group(id, MovableLookup::AnyHost, |_| content());
+    });
 }
 
 /// Content written once that keeps its identity wherever it is shown.
@@ -82,17 +95,21 @@ pub fn movable<K: Hash>(key: K, content: impl FnOnce()) {
 #[track_caller]
 pub fn rememberMovableContentOf(content: impl Fn() + 'static) -> MovableContent {
     let source = crate::caller_location_key();
-    let id = with_current_composer(|composer| {
-        composer
-            .remember_at(source, || RememberedMovable {
-                id: composer.runtime_handle().next_movable_content_id(),
-                shared_state: composer.shared_state_weak(),
-            })
-            .with(|owner| owner.id)
+    let (id, owner) = with_current_composer(|composer| {
+        let owned = composer.remember_at(source, || RememberedMovable {
+            id: composer.runtime_handle().next_movable_content_id(),
+            shared_state: composer.shared_state_weak(),
+            owner_host_key: composer.active_slots_host_storage_key(),
+            ever_shown: Cell::new(false),
+            shown_outside_owner_host: Cell::new(false),
+        });
+        let id = owned.with(|owner| owner.id);
+        (id, owned.downgrade())
     });
     MovableContent {
         id,
         content: Rc::new(content),
+        owner: Some(owner),
     }
 }
 
@@ -108,6 +125,7 @@ pub fn movableContentOf<K: Hash>(key: K, content: impl Fn() + 'static) -> Movabl
     MovableContent {
         id: hash_key(&key),
         content: Rc::new(content),
+        owner: None,
     }
 }
 
@@ -116,6 +134,7 @@ pub fn movableContentOf<K: Hash>(key: K, content: impl Fn() + 'static) -> Movabl
 pub struct MovableContent {
     id: Key,
     content: Rc<dyn Fn()>,
+    owner: Option<WeakOwned<RememberedMovable>>,
 }
 
 impl MovableContent {
@@ -125,7 +144,28 @@ impl MovableContent {
     pub fn show(&self) {
         let content = Rc::clone(&self.content);
         let id = self.id;
-        with_current_composer(|composer| composer.with_movable_group(id, |_| content()));
+        with_current_composer(|composer| {
+            let lookup = self
+                .owner
+                .as_ref()
+                .and_then(|owner| {
+                    owner.with(|owner| {
+                        let first_show = !owner.ever_shown.replace(true);
+                        if composer.active_slots_host_storage_key() != owner.owner_host_key {
+                            owner.shown_outside_owner_host.set(true);
+                        }
+                        if first_show {
+                            MovableLookup::FreshUnshown
+                        } else if owner.shown_outside_owner_host.get() {
+                            MovableLookup::AnyHost
+                        } else {
+                            MovableLookup::OwnerHostOnly
+                        }
+                    })
+                })
+                .unwrap_or(MovableLookup::AnyHost);
+            composer.with_movable_group(id, lookup, |_| content());
+        });
     }
 
     /// Releases the content's state once no parent is showing it, for

@@ -1,6 +1,6 @@
 use std::{
     cell::{Ref, RefCell, RefMut},
-    rc::Rc,
+    rc::{Rc, Weak},
 };
 
 use crate::runtime::StateHandleLease;
@@ -66,5 +66,31 @@ impl<T> Owned<T> {
     /// Replace the stored value entirely.
     pub fn replace(&self, new_value: T) {
         *self.inner.value.borrow_mut() = new_value;
+    }
+
+    pub(crate) fn downgrade(&self) -> WeakOwned<T> {
+        WeakOwned {
+            inner: Rc::downgrade(&self.inner),
+        }
+    }
+}
+
+pub(crate) struct WeakOwned<T> {
+    inner: Weak<OwnedInner<T>>,
+}
+
+impl<T> Clone for WeakOwned<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Weak::clone(&self.inner),
+        }
+    }
+}
+
+impl<T> WeakOwned<T> {
+    pub(crate) fn with<R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
+        let inner = self.inner.upgrade()?;
+        let borrow = inner.value.borrow();
+        Some(f(&*borrow))
     }
 }

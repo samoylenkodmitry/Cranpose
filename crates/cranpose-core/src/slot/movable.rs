@@ -135,16 +135,27 @@ impl SlotTable {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MovableAttachment {
+    AttachedHere,
+    AttachedElsewhereInHost,
+    NotAttachedHere,
+}
+
 impl SlotWriteSession<'_> {
-    pub(crate) fn movable_attached_elsewhere(&mut self, key: GroupKey) -> bool {
+    pub(crate) fn movable_attachment(&mut self, key: GroupKey) -> MovableAttachment {
         let Some(id) = key.movable_id() else {
-            return false;
+            return MovableAttachment::NotAttachedHere;
         };
         // The content may sit among the groups an insert run holds aside.
         self.table.settle_insert_run();
-        self.table
-            .movable_parent_anchor(id)
-            .is_some_and(|parent| parent != self.state.current_parent_anchor())
+        match self.table.movable_parent_anchor(id) {
+            Some(parent) if parent == self.state.current_parent_anchor() => {
+                MovableAttachment::AttachedHere
+            }
+            Some(_) => MovableAttachment::AttachedElsewhereInHost,
+            None => MovableAttachment::NotAttachedHere,
+        }
     }
 }
 

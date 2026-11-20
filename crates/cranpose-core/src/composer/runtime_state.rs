@@ -6,7 +6,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use super::{MovableOwners, PendingMovable, movable_retain_key, slots_storage_key};
+use super::{DroppedMovable, MovableOwners, PendingMovable, movable_retain_key, slots_storage_key};
 use crate::{
     ApplierHost, Key, RecomposeScope, RetentionPolicy, SlotTable, SlotsHost,
     collections::map::HashMap,
@@ -138,6 +138,26 @@ impl ComposerRuntimeState {
         self.take_retained_movable_by_key(movable_retain_key(id))
     }
 
+    pub(crate) fn take_retained_movable_in(
+        &self,
+        id: Key,
+        owner_host: Option<usize>,
+    ) -> Option<(Rc<SlotsHost>, crate::slot::DetachedSubtree)> {
+        let Some(host_key) = owner_host else {
+            return self.take_retained_movable(id);
+        };
+        let key = movable_retain_key(id);
+        let mut retention_by_host = self.retention_by_host.borrow_mut();
+        let manager = retention_by_host.get_mut(&host_key)?;
+        if !manager.contains(key) {
+            return None;
+        }
+        let host = self.host_for_storage_key(host_key)?;
+        let subtree = manager.take(key)?;
+        remove_empty_retention_host(&mut retention_by_host, host_key);
+        Some((host, subtree))
+    }
+
     fn take_retained_movable_by_key(
         &self,
         key: RetainKey,
@@ -170,19 +190,24 @@ impl ComposerRuntimeState {
         Some((host, subtree))
     }
 
-    pub(crate) fn on_movable_owner_dropped(&self, id: Key) {
-        if self.movable_owners.record_dropped_in_pass(id) {
+    pub(crate) fn on_movable_owner_dropped(&self, id: Key, owner_host: Option<usize>) {
+        let dropped = DroppedMovable { id, owner_host };
+        if self.movable_owners.record_dropped_in_pass(dropped) {
             return;
         }
-        self.dispose_dropped_movable_outside_pass(id);
+        self.dispose_dropped_movable_outside_pass(dropped);
     }
 
     #[cold]
     #[inline(never)]
-    fn dispose_dropped_movable_outside_pass(&self, id: Key) {
-        let Some((host, subtree)) = self.take_retained_movable(id) else {
-            if self.host_holding_movable(id).is_some() {
-                self.movable_owners.note_disposed_attached(id);
+    fn dispose_dropped_movable_outside_pass(&self, dropped: DroppedMovable) {
+        let Some((host, subtree)) = self.take_retained_movable_in(dropped.id, dropped.owner_host)
+        else {
+            if self
+                .host_holding_movable_in(dropped.id, dropped.owner_host)
+                .is_some()
+            {
+                self.movable_owners.note_disposed_attached(dropped.id);
             }
             return;
         };
@@ -230,6 +255,18 @@ impl ComposerRuntimeState {
             .values()
             .filter_map(Weak::upgrade)
             .find(|host| host.borrow().movable_is_attached(id))
+    }
+
+    pub(crate) fn host_holding_movable_in(
+        &self,
+        id: Key,
+        owner_host: Option<usize>,
+    ) -> Option<Rc<SlotsHost>> {
+        let Some(host_key) = owner_host else {
+            return self.host_holding_movable(id);
+        };
+        self.host_for_storage_key(host_key)
+            .filter(|host| host.borrow().movable_is_attached(id))
     }
 
     pub(crate) fn record_pending_movable(&self, host: &Rc<SlotsHost>, pending: PendingMovable) {

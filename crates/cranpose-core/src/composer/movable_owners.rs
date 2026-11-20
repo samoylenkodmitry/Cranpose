@@ -20,10 +20,18 @@ impl Drop for PassGuard<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct DroppedMovable {
+    pub(crate) id: Key,
+    // The slot table where this owner was created, when its content has never
+    // been shown in any other table. `None` once shown across tables.
+    pub(crate) owner_host: Option<usize>,
+}
+
 #[derive(Default)]
 pub(crate) struct MovableOwners {
     active_passes: Cell<usize>,
-    dropped: RefCell<Vec<Key>>,
+    dropped: RefCell<Vec<DroppedMovable>>,
     disposed_attached: RefCell<HashSet<Key>>,
 }
 
@@ -38,11 +46,11 @@ impl MovableOwners {
         PassGuard { owners: self }
     }
 
-    pub(crate) fn record_dropped_in_pass(&self, id: Key) -> bool {
+    pub(crate) fn record_dropped_in_pass(&self, dropped: DroppedMovable) -> bool {
         if self.active_passes.get() == 0 {
             return false;
         }
-        self.dropped.borrow_mut().push(id);
+        self.dropped.borrow_mut().push(dropped);
         true
     }
 
@@ -50,7 +58,7 @@ impl MovableOwners {
         !self.dropped.borrow().is_empty()
     }
 
-    pub(crate) fn pop_dropped(&self) -> Option<Key> {
+    pub(crate) fn pop_dropped(&self) -> Option<DroppedMovable> {
         self.dropped.borrow_mut().pop()
     }
 

@@ -500,7 +500,9 @@ impl SlotsHost {
     #[cold]
     #[inline(never)]
     fn flush_pending_drops_slow(&self) {
-        while let Some(item) = self.inner.borrow_mut().lifecycle.pop_pending_drop() {
+        loop {
+            let item = self.inner.borrow_mut().lifecycle.pop_pending_drop();
+            let Some(item) = item else { break };
             item.dispose();
         }
     }

@@ -28,10 +28,25 @@ pub(crate) struct PendingMovable {
     pub(crate) parent_scope: Option<Weak<RecomposeScopeInner>>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MovableLookup {
+    // First `show()` of a freshly created `rememberMovableContentOf` handle:
+    // its private identity cannot be retained or attached in any slot table.
+    FreshUnshown,
+    // `rememberMovableContentOf` handle shown only in its owning slot table.
+    OwnerHostOnly,
+    // Keyed movable content or a handle shown across slot tables.
+    AnyHost,
+}
+
 #[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
 impl Composer {
     pub(crate) fn shared_state_weak(&self) -> Weak<ComposerRuntimeState> {
         Rc::downgrade(&self.core.shared_state)
+    }
+
+    pub(crate) fn active_slots_host_storage_key(&self) -> usize {
+        self.active_slots_host().storage_key()
     }
 
     pub(super) fn wake_sites_whose_movable_arrived(&self) {
@@ -133,15 +148,24 @@ impl Composer {
     #[cold]
     #[inline(never)]
     fn dispose_dropped_movable_owners_slow(&self) -> Result<(), NodeError> {
-        while let Some(id) = self.core.shared_state.movable_owners.pop_dropped() {
-            if let Some((host, subtree)) = self.core.shared_state.take_retained_movable(id) {
+        while let Some(dropped) = self.core.shared_state.movable_owners.pop_dropped() {
+            if let Some((host, subtree)) = self
+                .core
+                .shared_state
+                .take_retained_movable_in(dropped.id, dropped.owner_host)
+            {
                 self.dispose_movable_subtree_in_host(&host, subtree)?;
                 host.flush_pending_drops();
-            } else if self.core.shared_state.host_holding_movable(id).is_some() {
+            } else if self
+                .core
+                .shared_state
+                .host_holding_movable_in(dropped.id, dropped.owner_host)
+                .is_some()
+            {
                 self.core
                     .shared_state
                     .movable_owners
-                    .note_disposed_attached(id);
+                    .note_disposed_attached(dropped.id);
             }
         }
         Ok(())
@@ -152,8 +176,16 @@ impl Composer {
         host: &Rc<SlotsHost>,
         seed: crate::slot::GroupKeySeed,
         parent_scope_id: Option<ScopeId>,
+        lookup: MovableLookup,
     ) -> GroupEntry {
         let key = host.with_write_session(|slots| slots.reserve_group_key(seed));
+        if lookup == MovableLookup::FreshUnshown {
+            return GroupEntry {
+                key,
+                restored: None,
+                placeholder_for: None,
+            };
+        }
         let retain_key = RetainKey::for_group(parent_scope_id, key);
         let restored = self
             .core
@@ -161,7 +193,11 @@ impl Composer {
             .take_retained(host, retain_key, |subtree| {
                 host.with_write_session(|slots| slots.retained_restore_ready(key, subtree))
             })
-            .or_else(|| self.take_movable_from_another_table(host, retain_key, key))
+            .or_else(|| {
+                (lookup == MovableLookup::AnyHost)
+                    .then(|| self.take_movable_from_another_table(host, retain_key, key))
+                    .flatten()
+            })
             .map(Box::new);
         if restored.is_some() || !key.is_movable() {
             return GroupEntry {
@@ -170,7 +206,7 @@ impl Composer {
                 placeholder_for: None,
             };
         }
-        let attached_elsewhere = self.movable_attached_elsewhere(host, key);
+        let attached_elsewhere = self.movable_attached_elsewhere(host, key, lookup);
         if !attached_elsewhere {
             return GroupEntry {
                 key,
@@ -223,16 +259,27 @@ impl Composer {
 
     // Whether the movable's content is attached to some parent that is not the
     // one composing, in this slot table or in another.
-    fn movable_attached_elsewhere(&self, host: &Rc<SlotsHost>, key: crate::slot::GroupKey) -> bool {
-        if host.with_write_session(|slots| slots.movable_attached_elsewhere(key)) {
-            return true;
+    fn movable_attached_elsewhere(
+        &self,
+        host: &Rc<SlotsHost>,
+        key: crate::slot::GroupKey,
+        lookup: MovableLookup,
+    ) -> bool {
+        match host.with_write_session(|slots| slots.movable_attachment(key)) {
+            crate::slot::MovableAttachment::AttachedHere => false,
+            crate::slot::MovableAttachment::AttachedElsewhereInHost => true,
+            crate::slot::MovableAttachment::NotAttachedHere => {
+                if lookup != MovableLookup::AnyHost {
+                    return false;
+                }
+                let Some(id) = key.movable_id() else {
+                    return false;
+                };
+                self.core
+                    .shared_state
+                    .host_holding_movable(id)
+                    .is_some_and(|holder| !Rc::ptr_eq(&holder, host))
+            }
         }
-        let Some(id) = key.movable_id() else {
-            return false;
-        };
-        self.core
-            .shared_state
-            .host_holding_movable(id)
-            .is_some_and(|holder| !Rc::ptr_eq(&holder, host))
     }
 }

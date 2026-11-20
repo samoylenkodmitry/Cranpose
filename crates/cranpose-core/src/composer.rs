@@ -17,7 +17,7 @@ use crate::{
     StaticCompositionLocal, SubcomposeState, composer_context,
     retention::RetainKey,
     runtime,
-    slot::{FinishGroupResult, GroupStart, GroupStartKind, PayloadKind, RootNodeIds, ValueSlotId},
+    slot::{FinishGroupResult, GroupStartKind, PayloadKind, RootNodeIds, ValueSlotId},
 };
 
 mod composable_group;
@@ -29,9 +29,9 @@ mod scope_frame;
 mod subcompose_slot;
 mod subcompose_stack;
 pub use composable_group::{ComposableGroup, ParameterChange};
-pub(crate) use movable::PendingMovable;
 use movable::{GroupEntry, movable_retain_key};
-use movable_owners::MovableOwners;
+pub(crate) use movable::{MovableLookup, PendingMovable};
+use movable_owners::{DroppedMovable, MovableOwners};
 use parent_frame::{InitialParentFrame, push_root_frame};
 pub(crate) use parent_frame::{ParentAttachMode, ParentFrame};
 pub(crate) use runtime_state::{ComposerRuntimeState, HostTableDisposal};
@@ -1099,40 +1099,6 @@ impl Composer {
             return Ok(());
         }
         self.apply_pending_commands()
-    }
-
-    fn start_group(
-        &self,
-        host: &Rc<SlotsHost>,
-        seed: crate::slot::GroupKeySeed,
-        parent_node: Option<NodeId>,
-    ) -> (
-        GroupStart<crate::slot::ActiveGroupId>,
-        Option<crate::slot::GroupKey>,
-    ) {
-        if !self.core.shared_state.retains_any() {
-            let started = host.with_write_session(|slots| {
-                let key = slots.reserve_group_key(seed);
-                (!key.is_movable()).then(|| slots.begin_group(key, None, parent_node))
-            });
-            if let Some(started) = started {
-                return (started, None);
-            }
-        }
-        // Retained content is found again by its parent's scope.
-        let parent_scope_id = {
-            let mut stack = self.scope_stack();
-            let top = stack.len().checked_sub(1);
-            top.map(|top| self.frame_scope(&mut stack, top).id())
-        };
-        let GroupEntry {
-            key,
-            restored,
-            placeholder_for,
-        } = self.resolve_group_entry(host, seed, parent_scope_id);
-        let started =
-            host.with_write_session(|slots| slots.begin_group(key, restored, parent_node));
-        (started, placeholder_for)
     }
 
     #[doc(hidden)]
