@@ -171,7 +171,7 @@ impl ScriptedHand {
 }
 
 // The aim pose at `from` that points at `at`. It points along its -z, and its x axis stays level.
-fn aim_pose(from: [f32; 3], at: [f32; 3]) -> Pose {
+pub(crate) fn aim_pose(from: [f32; 3], at: [f32; 3]) -> Pose {
     let z = normalize(sub(from, at));
     let x = normalize(cross([0.0, 1.0, 0.0], z));
     let y = cross(z, x);

@@ -13,19 +13,20 @@ use cranpose_testing::{
 
 use super::*;
 use crate::{
-    Controller, Hand, InputSource, Pose, Ray, SpatialMoveEventType, SpatialPanel, SubspaceModifier,
-    XrFrame,
+    Controller, Hand, PointerMapping, Pose, Ray, SpatialMoveEventType, SpatialPanel,
+    SubspaceModifier, XrFrame,
+    aim::Aim,
+    atlas_input,
     key_layout::{self, KeyKind, Page},
     keyboard_panel::SoftKeyboardPanel,
-    pointer::{Aim, Pointer},
     pointer_aim::pointer_aim,
+    pointers::Pointers,
     scripted_hand::{PinchCycle, ScriptedHand, play},
     space::{
         PanelMove, Ride,
         field_dock::{below, point_on},
         local_space,
     },
-    surface_input::Gesture,
     volume_pick::PickMeshes,
 };
 
@@ -41,7 +42,7 @@ struct Headset {
     space: Space,
     keyboard: SoftKeyboard,
     text: TextFieldState,
-    pointer: Pointer,
+    pointer: Pointers,
     frames: u64,
 }
 
@@ -84,7 +85,7 @@ fn headset(options: BasicTextFieldOptions, field: SubspaceModifier) -> Headset {
         space,
         keyboard,
         text,
-        pointer: Pointer::default(),
+        pointer: Pointers::default(),
         frames: 0,
     }
 }
@@ -99,17 +100,13 @@ impl Headset {
         self.frames += 1;
         let time = Duration::from_millis(10 * self.frames);
         let panels = self.space.panels();
-        let (events, _) = self
-            .pointer
-            .update([None, aim], time, (&panels, &PickMeshes::default()));
-        for gesture in events {
-            match *gesture {
-                Gesture::Move { x, y } => self.robot.mouse_move(x, y),
-                Gesture::Press => self.robot.mouse_down(),
-                Gesture::Release => self.robot.mouse_up(),
-                Gesture::Leave => self.robot.mouse_move(-100_000.0, -100_000.0),
-            }
-        }
+        self.pointer.update(
+            [None, aim],
+            time,
+            (&panels, &PickMeshes::default()),
+            (PointerMapping::default(), true),
+        );
+        atlas_input::deliver(self.robot.shell_mut(), self.pointer.atlas());
         self.keyboard.pump(self.robot.shell_mut(), &self.space);
         self.robot.wait_for_idle();
     }
@@ -165,16 +162,11 @@ impl Headset {
 // A controller at the origin that points at `target`, with its trigger pulled by `trigger`.
 fn aim_at(target: [f32; 3], trigger: f32) -> Option<Aim> {
     let length = target.iter().map(|v| v * v).sum::<f32>().sqrt();
-    Some(Aim {
-        ray: Ray {
-            origin: [0.0; 3],
-            direction: target.map(|v| v / length),
-        },
-        pose: Pose::IDENTITY,
-        trigger,
-        stick: 0.0,
-        source: InputSource::Controller,
-    })
+    let ray = Ray {
+        origin: [0.0; 3],
+        direction: target.map(|v| v / length),
+    };
+    Some(Aim::pulling(ray, Pose::IDENTITY, trigger))
 }
 
 #[test]

@@ -7,8 +7,7 @@ use cranpose_core::NodeId;
 
 use super::*;
 use crate::{
-    InputAction, InputEvent, InputSource, Ray,
-    pointer::{Aim, Pointer},
+    InputAction, InputEvent, InputSource, PointerMapping, Ray, aim::Aim, pointers::Pointers,
     volume_pick::PickMeshes,
 };
 
@@ -93,7 +92,7 @@ pub(super) struct Pointing {
     pub(super) pass: VolumePass,
     pub(super) eye: Eye,
     picks: PickMeshes,
-    pointer: Pointer,
+    pointer: Pointers,
     frame: u64,
     // Where the volume's callback writes the events that it gets
     events: Rc<RefCell<Vec<InputEvent>>>,
@@ -110,7 +109,7 @@ impl Pointing {
             pass,
             eye,
             picks: PickMeshes::default(),
-            pointer: Pointer::default(),
+            pointer: Pointers::default(),
             frame: 0,
             events,
         }
@@ -145,20 +144,16 @@ impl Pointing {
             &panels,
             |_| true,
         );
-        let aim = Aim {
-            ray: Ray {
-                origin: [x, 0.0, 0.0],
-                direction: [sin, 0.0, -cos],
-            },
-            pose: Pose::at([x, 0.0, 0.0]),
-            trigger,
-            stick: 0.0,
-            source: InputSource::Controller,
+        let ray = Ray {
+            origin: [x, 0.0, 0.0],
+            direction: [sin, 0.0, -cos],
         };
+        let aim = Aim::pulling(ray, Pose::at([x, 0.0, 0.0]), trigger);
         self.pointer.update(
             [None, Some(aim)],
             std::time::Duration::from_millis(10 * self.frame),
             (&panels, &self.picks),
+            (PointerMapping::default(), true),
         );
         for gesture in self.pointer.surface_events() {
             self.headset.space.deliver_to_surface(gesture);
@@ -321,8 +316,8 @@ fn a_press_keeps_the_mesh_it_began_on_and_reports_no_place_where_the_ray_leaves_
         .expect("the press is on a mesh")
         .input_entity;
     assert_eq!(
-        scene.pointing.pointer.pressed_surface(),
-        Some(scene.pointing.headset.space.panels()[0].id)
+        scene.pointing.pointer.pressed_surfaces(),
+        [None, Some(scene.pointing.headset.space.panels()[0].id)]
     );
     // The controller turns by 16 degrees, more than the click angle. The aim's filter follows over
     // a few frames, and then the press drags over the quad

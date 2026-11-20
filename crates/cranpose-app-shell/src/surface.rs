@@ -10,7 +10,7 @@
 //! with the app, which is how a platform delivers a window's events and reads
 //! a window's frame.
 
-use std::{cell::RefCell, fmt::Debug, rc::Rc};
+use std::{fmt::Debug, rc::Rc};
 
 use cranpose_core::{
     MemoryApplier, NodeId, NodeMarks, SceneNodeAttachmentScratch,
@@ -29,8 +29,11 @@ use cranpose_ui_graphics::{Point, PointerIcon, Size};
 use crate::{
     AppShell, FramePacingMode, FrameRatePreference, FrameSchedule, FrameScheduler,
     FrameUpdateResult, PlatformFrameDriver, ShellApp, hit_path_tracker::HitPathTracker,
-    shell_frame::DevOverlay,
+    shell_frame::DevOverlay, shell_input::extra_pointers::IndependentPointers,
 };
+
+mod text_input_routes;
+pub(crate) use text_input_routes::{TextInputRouter, TextInputRoutes};
 
 /// Names a root surface of the app: the primary window, or a window root
 /// declared with [`Modifier::window_root`](cranpose_ui::Modifier::window_root)
@@ -94,6 +97,7 @@ pub struct RootSurface<R: Renderer> {
     pub(crate) pointer_source: PointerSource,
     pub(crate) hit_path_tracker: HitPathTracker,
     pub(crate) hovered_nodes: Vec<NodeId>,
+    pub(crate) independent_pointers: IndependentPointers,
     pub(crate) on_rotary_scroll: Option<Rc<dyn Fn(RotaryScrollEvent) -> bool>>,
     pub(crate) dev_overlay: DevOverlay,
     pub(crate) inspector: crate::inspector::DeveloperInspector,
@@ -142,6 +146,7 @@ impl<R: Renderer> RootSurface<R> {
             pointer_source: PointerSource::Unknown,
             hit_path_tracker: HitPathTracker::new(),
             hovered_nodes: Vec::new(),
+            independent_pointers: IndependentPointers::default(),
             on_rotary_scroll: None,
             dev_overlay: DevOverlay::default(),
             inspector: crate::inspector::DeveloperInspector::default(),
@@ -196,6 +201,7 @@ impl<R: Renderer> RootSurface<R> {
         self.invalidate_scene_root(root);
         self.hit_path_tracker.clear();
         self.hovered_nodes.clear();
+        self.independent_pointers.clear();
         self.buttons_pressed = PointerButtons::NONE;
         self.is_dirty = true;
     }
@@ -367,76 +373,6 @@ impl<R: Renderer> RootSurface<R> {
             }
         }
         self.semantics_tree.as_ref()
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct TextInputRoutes {
-    active: Option<RootId>,
-    shown: Option<RootId>,
-    handlers: Vec<(RootId, Rc<dyn PlatformTextInputHandler>)>,
-}
-
-impl TextInputRoutes {
-    pub(crate) fn active(&self) -> RootId {
-        self.active.unwrap_or(RootId::Primary)
-    }
-
-    pub(crate) fn set_active(&mut self, root: RootId) {
-        self.active = Some(root);
-    }
-
-    pub(crate) fn set_handler(&mut self, root: RootId, handler: Rc<dyn PlatformTextInputHandler>) {
-        self.remove(root);
-        self.handlers.push((root, handler));
-    }
-
-    pub(crate) fn remove(&mut self, root: RootId) {
-        self.handlers.retain(|(id, _)| *id != root);
-        if self.shown == Some(root) {
-            self.shown = None;
-        }
-    }
-
-    fn handler(&self, root: RootId) -> Option<Rc<dyn PlatformTextInputHandler>> {
-        self.handlers
-            .iter()
-            .find(|(id, _)| *id == root)
-            .map(|(_, handler)| Rc::clone(handler))
-    }
-
-    fn take_show_target(&mut self) -> Option<Rc<dyn PlatformTextInputHandler>> {
-        let active = self.active();
-        let handler = self.handler(active);
-        if handler.is_some() {
-            self.shown = Some(active);
-        }
-        handler
-    }
-
-    fn take_hide_target(&mut self) -> Option<Rc<dyn PlatformTextInputHandler>> {
-        let target = self.shown.take().unwrap_or_else(|| self.active());
-        self.handler(target)
-    }
-}
-
-pub(crate) struct TextInputRouter {
-    pub(crate) routes: Rc<RefCell<TextInputRoutes>>,
-}
-
-impl PlatformTextInputHandler for TextInputRouter {
-    fn show_keyboard(&self) {
-        let handler = self.routes.borrow_mut().take_show_target();
-        if let Some(handler) = handler {
-            handler.show_keyboard();
-        }
-    }
-
-    fn hide_keyboard(&self) {
-        let handler = self.routes.borrow_mut().take_hide_target();
-        if let Some(handler) = handler {
-            handler.hide_keyboard();
-        }
     }
 }
 

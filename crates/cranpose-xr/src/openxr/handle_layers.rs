@@ -67,12 +67,12 @@ impl HandleLayers {
 
     // The layers of the handles at `slot`'s panel: the one that moves it if the panel is movable,
     // then the one that resizes it if the panel is resizable. The layers face the head at `head`.
-    // A headset that tracks no head shows them facing the way the panel faces. The handle of
-    // `active` shows larger.
+    // A headset that tracks no head shows them facing the way the panel faces. A handle that a
+    // hand in `active` holds or would grab shows larger.
     pub(crate) fn layers<'a>(
         &'a self,
         slot: &PanelSlot,
-        active: Option<(u64, HandleKind)>,
+        active: [Option<(u64, HandleKind)>; 2],
         head: Option<[f32; 3]>,
     ) -> impl Iterator<Item = QuadLayer<'a>> + use<'a> {
         let slot = *slot;
@@ -88,7 +88,7 @@ impl HandleLayers {
                     },
                     |head| billboard_pose(center, head),
                 );
-                let scale = if active == Some((slot.id, kind)) {
+                let scale = if active.contains(&Some((slot.id, kind))) {
                     ACTIVE_SCALE
                 } else {
                     1.0

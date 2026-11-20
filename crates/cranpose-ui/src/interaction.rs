@@ -12,7 +12,7 @@ use cranpose_core::{
 };
 use cranpose_foundation::{
     DelegatableNode, InvalidationKind, ModifierNode, ModifierNodeContext, ModifierNodeElement,
-    NodeCapabilities, NodeState, PointerInputNode,
+    NodeCapabilities, NodeState, PointerId, PointerInputNode,
 };
 
 use crate::{
@@ -359,17 +359,33 @@ trait InteractionTracker: Copy + PartialEq + std::fmt::Debug + Hash + 'static {
     /// The interaction the node holds while it lasts.
     type Active: Copy + 'static;
 
-    /// Feeds the primary pointer's `event` to `source`, starting or ending
-    /// the interaction `active` holds.
+    /// Feeds a pointer's `event` to `source`, starting or ending the interaction `held` holds.
+    /// `held` lists the pointers in it: a press has the first one down, a hover every one over.
     fn handle(
         self,
         source: MutableInteractionSource,
-        active: &RefCell<Option<Self::Active>>,
+        held: &Held<Self::Active>,
         event: &PointerEvent,
     );
 
     /// Ends `active` early: the node left, or stopped tracking.
     fn end(source: MutableInteractionSource, active: Self::Active);
+}
+
+// What a node holds of its interaction: the interaction that lasts, and the pointers that take
+// part in it.
+struct Held<A> {
+    active: RefCell<Option<A>>,
+    pointers: RefCell<Vec<PointerId>>,
+}
+
+impl<A> Held<A> {
+    fn new() -> Rc<Self> {
+        Rc::new(Self {
+            active: RefCell::new(None),
+            pointers: RefCell::new(Vec::new()),
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -378,14 +394,22 @@ struct PressTracker;
 impl InteractionTracker for PressTracker {
     type Active = PressInteractionPress;
 
+    // The first pointer that goes down holds the press. The others pass by until it lifts, as a
+    // second finger does, and as the other controller of a headset does.
     fn handle(
         self,
         source: MutableInteractionSource,
-        active: &RefCell<Option<PressInteractionPress>>,
+        held: &Held<PressInteractionPress>,
         event: &PointerEvent,
     ) {
+        let (active, pointers) = (&held.active, &held.pointers);
+        let holds = pointers.borrow().first() == Some(&event.id);
+        if !holds && active.borrow().is_some() {
+            return;
+        }
         if event.is_consumed() {
             if let Some(press) = active.borrow_mut().take() {
+                pointers.borrow_mut().clear();
                 source.cancel(press);
             }
             return;
@@ -393,16 +417,19 @@ impl InteractionTracker for PressTracker {
         match event.kind {
             PointerEventKind::Down => {
                 if active.borrow().is_none() {
+                    pointers.borrow_mut().push(event.id);
                     *active.borrow_mut() = Some(source.press(event.position));
                 }
             }
             PointerEventKind::Up => {
                 if let Some(press) = active.borrow_mut().take() {
+                    pointers.borrow_mut().clear();
                     source.release(press);
                 }
             }
             PointerEventKind::Cancel => {
                 if let Some(press) = active.borrow_mut().take() {
+                    pointers.borrow_mut().clear();
                     source.cancel(press);
                 }
             }
@@ -431,20 +458,28 @@ struct HoverTracker {
 impl InteractionTracker for HoverTracker {
     type Active = HoverInteractionEnter;
 
+    // The node stays hovered while any pointer is over it.
     fn handle(
         self,
         source: MutableInteractionSource,
-        active: &RefCell<Option<HoverInteractionEnter>>,
+        held: &Held<HoverInteractionEnter>,
         event: &PointerEvent,
     ) {
+        let (active, pointers) = (&held.active, &held.pointers);
         match event.kind {
-            PointerEventKind::Enter | PointerEventKind::Move
-                if self.enabled && active.borrow().is_none() =>
-            {
-                *active.borrow_mut() = Some(source.enter_hover());
+            PointerEventKind::Enter | PointerEventKind::Move if self.enabled => {
+                if !pointers.borrow().contains(&event.id) {
+                    pointers.borrow_mut().push(event.id);
+                }
+                if active.borrow().is_none() {
+                    *active.borrow_mut() = Some(source.enter_hover());
+                }
             }
             PointerEventKind::Exit => {
-                if let Some(enter) = active.borrow_mut().take() {
+                pointers.borrow_mut().retain(|id| *id != event.id);
+                if pointers.borrow().is_empty()
+                    && let Some(enter) = active.borrow_mut().take()
+                {
                     source.exit_hover(enter);
                 }
             }
@@ -491,16 +526,16 @@ impl<T: InteractionTracker> ModifierNodeElement for InteractionElement<T> {
     type Node = InteractionNode<T>;
 
     fn create(&self) -> Self::Node {
-        let active = Rc::new(RefCell::new(None));
+        let held = Held::new();
         InteractionNode {
             interaction_source: self.interaction_source,
             tracker: self.tracker,
             cached_handler: InteractionNode::handler(
                 self.interaction_source,
                 self.tracker,
-                Rc::clone(&active),
+                Rc::clone(&held),
             ),
-            active,
+            held,
             state: NodeState::new(),
         }
     }
@@ -517,7 +552,7 @@ impl<T: InteractionTracker> ModifierNodeElement for InteractionElement<T> {
 struct InteractionNode<T: InteractionTracker> {
     interaction_source: MutableInteractionSource,
     tracker: T,
-    active: Rc<RefCell<Option<T::Active>>>,
+    held: Rc<Held<T::Active>>,
     cached_handler: Rc<dyn Fn(PointerEvent)>,
     state: NodeState,
 }
@@ -530,11 +565,12 @@ impl<T: InteractionTracker> InteractionNode<T> {
         self.end_active();
         self.interaction_source = interaction_source;
         self.tracker = tracker;
-        self.cached_handler = Self::handler(interaction_source, tracker, Rc::clone(&self.active));
+        self.cached_handler = Self::handler(interaction_source, tracker, Rc::clone(&self.held));
     }
 
     fn end_active(&self) {
-        if let Some(active) = self.active.borrow_mut().take() {
+        self.held.pointers.borrow_mut().clear();
+        if let Some(active) = self.held.active.borrow_mut().take() {
             T::end(self.interaction_source, active);
         }
     }
@@ -542,12 +578,10 @@ impl<T: InteractionTracker> InteractionNode<T> {
     fn handler(
         interaction_source: MutableInteractionSource,
         tracker: T,
-        active: Rc<RefCell<Option<T::Active>>>,
+        held: Rc<Held<T::Active>>,
     ) -> Rc<dyn Fn(PointerEvent)> {
         Rc::new(move |event: PointerEvent| {
-            if event.id.is_primary() {
-                tracker.handle(interaction_source, &active, &event);
-            }
+            tracker.handle(interaction_source, &held, &event);
         })
     }
 }

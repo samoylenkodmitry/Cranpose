@@ -1,8 +1,10 @@
+use cranpose::PointerButton;
+
 use super::*;
 use crate::{
-    Controller, Ray,
-    pointer::Pointer,
+    Controller, PointerMapping, Ray,
     pointer_aim::pointer_aim,
+    pointers::Pointers,
     space::{Mobility, PanelKind, PanelSlot, Ride, Shape},
     surface_input::Gesture,
     volume_pick::PickMeshes,
@@ -140,7 +142,7 @@ fn a_scripted_pinch_moves_to_the_place_presses_once_and_releases_once() {
         [-0.24, 0.17, -1.0],
         PinchCycle::default(),
     );
-    let mut pointer = Pointer::default();
+    let mut pointer = Pointers::default();
     let mut gestures = Vec::new();
     for frame in 0..400_u64 {
         let time = millis(10 * frame);
@@ -150,8 +152,13 @@ fn a_scripted_pinch_moves_to_the_place_presses_once_and_releases_once() {
         };
         play(&script, &mut xr);
         let aim = pointer_aim(&Controller::default(), Some(&xr.right_hand));
-        let (events, _) = pointer.update([None, aim], time, (&[PANEL], &PickMeshes::default()));
-        gestures.extend(events.iter().copied().map(|gesture| (frame, gesture)));
+        pointer.update(
+            [None, aim],
+            time,
+            (&[PANEL], &PickMeshes::default()),
+            (PointerMapping::default(), true),
+        );
+        gestures.extend(pointer.atlas().iter().map(|event| (frame, event.gesture)));
     }
     let moves: Vec<_> = gestures
         .iter()
@@ -167,12 +174,12 @@ fn a_scripted_pinch_moves_to_the_place_presses_once_and_releases_once() {
     );
     let presses: Vec<u64> = gestures
         .iter()
-        .filter(|(_, gesture)| *gesture == Gesture::Press)
+        .filter(|(_, gesture)| *gesture == Gesture::Press(PointerButton::Primary))
         .map(|(frame, _)| *frame)
         .collect();
     let releases: Vec<u64> = gestures
         .iter()
-        .filter(|(_, gesture)| *gesture == Gesture::Release)
+        .filter(|(_, gesture)| *gesture == Gesture::Release(PointerButton::Primary))
         .map(|(frame, _)| *frame)
         .collect();
     // The strength passes 0.6 at 2120 ms and falls below 0.4 at 2920 ms

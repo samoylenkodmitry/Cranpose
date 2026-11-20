@@ -9,7 +9,7 @@ use crate::{
     mesh_ref::MeshRef,
 };
 
-// What the pointer does at one target, in the target's own dp from its top left corner. The
+// What a hand's pointer does at one target, in the target's own dp from its top left corner. The
 // target is the app's composition, which reads the atlas's dp, or one surface.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(
@@ -18,16 +18,32 @@ use crate::{
 )]
 pub(crate) enum Gesture {
     Move { x: f32, y: f32 },
-    Press,
-    Release,
+    // A button of the pointer goes down or up. The primary button is a press, as the trigger
+    // makes it.
+    Press(PointerButton),
+    Release(PointerButton),
+    // The thumbstick scrolls by `x` and `y` dp, in the direction that a wheel gives.
+    Scroll { x: f32, y: f32 },
     // The pointer left the target.
     Leave,
 }
 
-// What the pointer did on a surface. A gesture on a volume carries the ray behind it.
+// What a hand's pointer did on the app's composition.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(
+    not(any(test, headset)),
+    expect(dead_code, reason = "the pointer of the headset backend makes them")
+)]
+pub(crate) struct HandGesture {
+    pub(crate) hand: Hand,
+    pub(crate) gesture: Gesture,
+}
+
+// What a hand's pointer did on a surface. A gesture on a volume carries the ray behind it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SurfaceGesture {
     pub(crate) surface: u64,
+    pub(crate) hand: Hand,
     pub(crate) gesture: Gesture,
     pub(crate) ray: Option<VolumeRay>,
 }
@@ -57,57 +73,75 @@ pub(crate) type PointerSink = Rc<dyn Fn(PointerEvent)>;
 // The callback that the app gave a volume for its input events.
 pub(crate) type InputSink = Rc<dyn Fn(InputEvent)>;
 
-// What a surface knows of its pointer, to tell Compose's events from the pointer's gestures.
+// What a surface knows of one hand's pointer, to tell Compose's events from the pointer's gestures.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct SurfaceInput {
     // Where the pointer is on the surface, or `None` while it is away
     at: Option<(f32, f32)>,
-    pressed: bool,
+    buttons: PointerButtons,
 }
 
 impl SurfaceInput {
-    // The event of Compose that `gesture` makes, with the position in the surface's dp, and the
-    // action that it is for a volume's input event. The first move over the surface enters it, and
-    // a release with no press makes none.
-    pub(crate) fn event(&mut self, gesture: Gesture) -> Option<(PointerEvent, InputAction)> {
+    // The event of Compose that `gesture` of `hand` makes, with the position in the surface's dp,
+    // and the action that it is for a volume's input event. The first move over the surface enters
+    // it, and a release with no press makes none. A volume's input event has no buttons and no
+    // scroll, so only the primary button and the moves make an action.
+    pub(crate) fn event(
+        &mut self,
+        hand: Hand,
+        gesture: Gesture,
+    ) -> Option<(PointerEvent, Option<InputAction>)> {
+        let pressed = self.buttons != PointerButtons::NONE;
+        let primary = self.buttons.contains(PointerButton::Primary);
+        let mut scroll = None;
         let (kind, action, (x, y)) = match gesture {
             Gesture::Move { x, y } => {
-                let (kind, action) = match (self.at.is_some(), self.pressed) {
-                    (_, true) => (PointerEventKind::Move, InputAction::Move),
-                    (true, false) => (PointerEventKind::Move, InputAction::HoverMove),
-                    (false, false) => (PointerEventKind::Enter, InputAction::HoverEnter),
+                let (kind, action) = match (self.at.is_some(), pressed) {
+                    (_, true) => (PointerEventKind::Move, primary.then_some(InputAction::Move)),
+                    (true, false) => (PointerEventKind::Move, Some(InputAction::HoverMove)),
+                    (false, false) => (PointerEventKind::Enter, Some(InputAction::HoverEnter)),
                 };
                 self.at = Some((x, y));
                 (kind, action, (x, y))
             }
-            Gesture::Press => {
-                self.pressed = true;
-                (PointerEventKind::Down, InputAction::Down, self.at?)
+            Gesture::Press(button) => {
+                self.buttons.insert(button);
+                let (kind, action) = match button {
+                    PointerButton::Primary => (PointerEventKind::Down, Some(InputAction::Down)),
+                    other => (PointerEventKind::ButtonDown(other), None),
+                };
+                (kind, action, self.at?)
             }
-            Gesture::Release => {
-                let released = std::mem::take(&mut self.pressed);
+            Gesture::Release(button) => {
+                let released = self.buttons.contains(button);
+                self.buttons.remove(button);
+                let (kind, action) = match button {
+                    PointerButton::Primary => (PointerEventKind::Up, Some(InputAction::Up)),
+                    other => (PointerEventKind::ButtonUp(other), None),
+                };
+                (kind, action, self.at.filter(|_| released)?)
+            }
+            Gesture::Scroll { x, y } => {
+                scroll = Some(Point::new(x, y));
+                (PointerEventKind::Scroll, None, self.at?)
+            }
+            Gesture::Leave => {
+                self.buttons = PointerButtons::NONE;
                 (
-                    PointerEventKind::Up,
-                    InputAction::Up,
-                    self.at.filter(|_| released)?,
+                    PointerEventKind::Exit,
+                    Some(InputAction::HoverExit),
+                    self.at.take()?,
                 )
             }
-            Gesture::Leave => (
-                PointerEventKind::Exit,
-                InputAction::HoverExit,
-                self.at.take()?,
-            ),
         };
         let position = Point::new(x, y);
-        let buttons = if self.pressed {
-            PointerButtons::new().with(PointerButton::Primary)
-        } else {
-            PointerButtons::NONE
-        };
-        Some((
-            PointerEvent::new(kind, position, position).with_buttons(buttons),
-            action,
-        ))
+        let mut event = PointerEvent::new(kind, position, position)
+            .with_buttons(self.buttons)
+            .with_id(hand.pointer_id());
+        if let Some(delta) = scroll {
+            event = event.with_scroll_delta(delta);
+        }
+        Some((event, action))
     }
 }
 
