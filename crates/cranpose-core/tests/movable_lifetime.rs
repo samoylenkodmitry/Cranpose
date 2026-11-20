@@ -1006,9 +1006,11 @@ struct TakeoverRig {
     composition: Composition<MemoryApplier>,
     show_a: MutableState<bool>,
     show_b: MutableState<bool>,
+    show_c: MutableState<bool>,
     shared: TakeoverHandle,
     probe: TakeoverProbe,
     taker_calls: TakeoverCalls,
+    second_taker_calls: TakeoverCalls,
     decline_on_wake: bool,
     root_key: Key,
 }
@@ -1019,10 +1021,12 @@ impl TakeoverRig {
         let runtime = composition.runtime_handle();
         Self {
             show_a: MutableState::with_runtime(true, runtime.clone()),
-            show_b: MutableState::with_runtime(false, runtime),
+            show_b: MutableState::with_runtime(false, runtime.clone()),
+            show_c: MutableState::with_runtime(false, runtime),
             shared: TakeoverHandle(Rc::new(RefCell::new(None))),
             probe: TakeoverProbe(Rc::new(LifecycleProbe::default())),
             taker_calls: TakeoverCalls(Rc::new(Cell::new(0))),
+            second_taker_calls: TakeoverCalls(Rc::new(Cell::new(0))),
             decline_on_wake,
             composition,
             root_key,
@@ -1032,14 +1036,19 @@ impl TakeoverRig {
     fn render(&mut self) {
         let show_a = self.show_a;
         let show_b = self.show_b;
+        let show_c = self.show_c;
         let shared = self.shared.clone();
         let probe = self.probe.clone();
         let calls = self.taker_calls.clone();
+        let second_calls = self.second_taker_calls.clone();
         let decline_on_wake = self.decline_on_wake;
         self.composition
             .render(self.root_key, move || {
                 if show_a.value() {
                     TakeoverOwnerBranch(probe.clone(), shared.clone());
+                }
+                if show_c.value() {
+                    TakeoverTakerBranch(shared.clone(), second_calls.clone(), false);
                 }
                 if show_b.value() {
                     TakeoverTakerBranch(shared.clone(), calls.clone(), decline_on_wake);
@@ -1060,33 +1069,50 @@ impl TakeoverRig {
         self.render();
         node
     }
+
+    fn assert_live_attached(&mut self, node: NodeId, label: &str) {
+        assert_eq!(self.probe.0.node.get(), Some(node), "{label}: node kept");
+        assert_eq!(self.probe.0.unmounts.get(), 0, "{label}: zero unmounts");
+        assert!(
+            self.composition
+                .applier_mut()
+                .get_mut(node)
+                .expect("node stays attached")
+                .parent()
+                .is_some(),
+            "{label}: node attached"
+        );
+    }
 }
 
 #[test]
 fn owner_group_leaves_while_another_group_takes_live_content() {
     let mut rig = TakeoverRig::new(location_key(file!(), line!(), column!()), false);
     let node = rig.start_and_switch();
-    assert_eq!(
-        rig.probe.0.node.get(),
-        Some(node),
-        "the other group takes the live content"
-    );
-    assert_eq!(
-        rig.probe.0.unmounts.get(),
-        0,
-        "the content survives the takeover"
-    );
-    assert!(
-        rig.composition
-            .applier_mut()
-            .get_mut(node)
-            .expect("node stays attached in taker")
-            .parent()
-            .is_some(),
-        "taken-over node is attached in the taker group"
-    );
+    rig.assert_live_attached(node, "takeover into branch B");
 
     rig.show_b.set_value(false);
+    rig.render();
+    rig.probe.0.assert_disposed(&mut rig.composition, node);
+}
+
+#[test]
+fn handed_off_content_survives_second_takeover_after_owner_left() {
+    let mut rig = TakeoverRig::new(location_key(file!(), line!(), column!()), false);
+    let node = rig.start_and_switch();
+    rig.assert_live_attached(node, "initial takeover into branch B");
+
+    // The owner already left in the previous pass so the content is marked
+    // disposed-while-attached in branch B. Now branch C composes before
+    // branch B leaves in the same pass, waiting on a placeholder until branch B
+    // detaches it.
+    rig.show_c.set_value(true);
+    rig.show_b.set_value(false);
+    rig.render();
+    rig.assert_live_attached(node, "second takeover into waiting branch C");
+
+    // Once branch C hides it too, the requeued owner drop disposes it.
+    rig.show_c.set_value(false);
     rig.render();
     rig.probe.0.assert_disposed(&mut rig.composition, node);
 }
@@ -1158,17 +1184,23 @@ fn sole_owned_movables_past_inline_limit_dispose_inline() {
         composition
             .render(root_key, move || {
                 if show.value() {
-                    for index in 0..COUNT {
-                        let drops = Rc::clone(&drops);
-                        with_current_composer(|composer| {
-                            composer.with_key(&index, |_| {
-                                let content = rememberMovableContentOf(move || {
-                                    let _drop = remember(|| DropCounter(Rc::clone(&drops)));
+                    // Wrap all 20 movables in one leaving group so a single
+                    // DetachedSubtree holds all 20 owners (> 16 inline limit)
+                    // and exercises the sorted lookup path in SoleOwnedMovables.
+                    let container_key = location_key(file!(), line!(), column!());
+                    with_current_composer(|composer| {
+                        composer.with_group(container_key, |composer| {
+                            for index in 0..COUNT {
+                                let drops = Rc::clone(&drops);
+                                composer.with_key(&index, |_| {
+                                    let content = rememberMovableContentOf(move || {
+                                        let _drop = remember(|| DropCounter(Rc::clone(&drops)));
+                                    });
+                                    content.show();
                                 });
-                                content.show();
-                            });
+                            }
                         });
-                    }
+                    });
                 }
             })
             .expect("render composition");

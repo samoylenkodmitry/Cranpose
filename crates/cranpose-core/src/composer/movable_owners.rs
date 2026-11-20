@@ -32,16 +32,22 @@ pub(crate) struct MovableOwners {
 impl MovableOwners {
     #[inline]
     pub(crate) fn enter_pass_depth(&self) {
-        let depth = self.active_passes.get();
-        debug_assert!(depth < usize::MAX, "movable compose pass depth overflow");
-        self.active_passes.set(depth.saturating_add(1));
+        let next = self
+            .active_passes
+            .get()
+            .checked_add(1)
+            .expect("movable compose pass depth overflow");
+        self.active_passes.set(next);
     }
 
     #[inline]
     pub(crate) fn leave_pass_depth(&self) {
-        let depth = self.active_passes.get();
-        debug_assert!(depth > 0, "movable compose pass guard unbalanced");
-        self.active_passes.set(depth.saturating_sub(1));
+        let next = self
+            .active_passes
+            .get()
+            .checked_sub(1)
+            .expect("movable compose pass guard unbalanced");
+        self.active_passes.set(next);
     }
 
     pub(crate) fn enter_pass(&self) -> PassGuard<'_> {

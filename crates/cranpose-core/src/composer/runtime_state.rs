@@ -49,17 +49,21 @@ impl Default for ComposerRuntimeState {
 
 impl ComposerRuntimeState {
     fn add_retained_groups(&self, count: usize) {
-        self.retained_groups
-            .set(self.retained_groups.get().saturating_add(count));
+        let next = self
+            .retained_groups
+            .get()
+            .checked_add(count)
+            .expect("retained group count overflow");
+        self.retained_groups.set(next);
     }
 
     fn sub_retained_groups(&self, count: usize) {
-        let current = self.retained_groups.get();
-        debug_assert!(
-            current >= count,
-            "retained group count underflow: {current} < {count}"
-        );
-        self.retained_groups.set(current.saturating_sub(count));
+        let next = self
+            .retained_groups
+            .get()
+            .checked_sub(count)
+            .expect("retained group count underflow");
+        self.retained_groups.set(next);
     }
 
     pub(crate) fn clear_host_storage_key(&self, host_key: usize, table: &mut SlotTable) {

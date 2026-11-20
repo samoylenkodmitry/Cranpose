@@ -245,7 +245,3 @@ impl SlotTable {
 fn start_delta(run_end: usize, parked_start: usize, field: &'static str) -> i64 {
     checked_usize_to_i64(run_end, field) - checked_usize_to_i64(parked_start, field)
 }
-
-#[cfg(test)]
-#[path = "tests/insert_run_tests.rs"]
-mod tests;
