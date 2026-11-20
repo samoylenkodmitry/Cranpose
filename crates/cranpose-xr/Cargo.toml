@@ -35,6 +35,15 @@ openxr = [
     "dep:windows-sys",
 ]
 
+# The entitlement check of the Meta Horizon Store, which an Android headset app runs at its
+# start. A failed check ends the app, as Meta requires of a store app, unless the app chooses
+# `OnNotEntitled::Continue`. The app's Gradle build lists the `meta-entitlement` service, which
+# adds the Meta Platform SDK and takes the app id from `cranposeMetaAppId`. Off, the build
+# links and fetches nothing of the SDK. The SDK is under the Meta Platform Technologies SDK
+# License Agreement (https://developers.meta.com/vr/licenses/oculussdk/), which binds whoever
+# downloads or uses it, so whoever turns this feature on accepts it.
+meta-entitlement = ["openxr", "cranpose/meta-entitlement"]
+
 # Times the streamed scenes' passes on the CPU and the GPU, and logs the cost once a second. Off, the
 # passes run with no timing.
 stream-costs = ["openxr"]
