@@ -19,6 +19,7 @@ use super::{
     recenter_events::RecenterEvents,
     refresh_rate,
     runtime::Runtime,
+    spatial::SpatialEvents,
     tracked_pose::tracked,
 };
 #[cfg(target_os = "android")]
@@ -235,6 +236,8 @@ pub(crate) struct XrSession {
     pub(crate) passthrough: Passthrough,
     // The runtime's recenter events that no frame has reported yet
     pub(crate) recenters: RecenterEvents,
+    // The runtime's events about spatial entities that no frame has read yet
+    pub(crate) spatial_events: SpatialEvents,
     // The room as the app sees it: its origin is where the head was when the app started
     pub(crate) local: xr::Space,
     // The head's own space, which the runtime locates for each frame
@@ -273,6 +276,7 @@ impl XrSession {
             layer_depth,
             depth_test,
             tracking: _,
+            spatial: _,
         } = runtime;
         if !Graphics::TOP_ROW_FIRST && !flips_layers {
             log::warn!("cranpose xr: the runtime cannot flip layers; panels show upside down");
@@ -308,6 +312,7 @@ impl XrSession {
         Ok(Self {
             passthrough,
             recenters: RecenterEvents::default(),
+            spatial_events: SpatialEvents::default(),
             local,
             view,
             stage,
@@ -391,7 +396,9 @@ impl XrSession {
                     log::info!("cranpose xr: the runtime loses the instance");
                     self.status = SessionStatus::Exit;
                 }
-                _ => {}
+                other => {
+                    self.spatial_events.record(&other);
+                }
             }
             if self.status == SessionStatus::Exit {
                 break;

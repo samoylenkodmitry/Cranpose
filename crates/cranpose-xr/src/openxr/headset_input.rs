@@ -83,6 +83,11 @@ impl HeadsetInput {
         self.frame.predicted_display_time
     }
 
+    // The time at which the backend read the clock for the frame sampled last.
+    pub(crate) fn now(&self) -> Duration {
+        self.frame.now
+    }
+
     // The runtime's change of the room's origin that the frame sampled last reports.
     pub(crate) fn recenter(&self) -> Option<Recenter> {
         self.frame.recenter

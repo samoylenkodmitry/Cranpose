@@ -1,6 +1,8 @@
 //! How far a tracking feature has come in a session.
 
-/// How far a [`TrackingFeature`](crate::TrackingFeature) has come in the session.
+/// How far a [`TrackingFeature`](crate::TrackingFeature) has come in the session. The anchors and
+/// the planes of the room report their progress in the same terms
+/// ([`AnchorCapabilities`](crate::AnchorCapabilities), [`Planes::availability`](crate::Planes::availability)).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TrackingAvailability {

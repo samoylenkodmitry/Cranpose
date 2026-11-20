@@ -32,11 +32,13 @@ internal val DECLARED_SERVICES: Map<String, DeclaredService> = mapOf(
     "device-auth" to DeclaredService(javaSource = "java-device-auth"),
     "device-motion" to DeclaredService(javaSource = "java-device-motion"),
     "microphone" to DeclaredService(javaSource = "java-microphone"),
-    // One class asks for the run-time permissions of every tracking service
+    // One class asks for the run-time permissions of every tracking and room service
     "hand-tracking" to DeclaredService(javaSource = "java-permissions"),
     "body-tracking" to DeclaredService(javaSource = "java-permissions"),
     "face-tracking" to DeclaredService(javaSource = "java-permissions"),
     "eye-tracking" to DeclaredService(javaSource = "java-permissions"),
+    "anchors" to DeclaredService(javaSource = "java-permissions"),
+    "plane-tracking" to DeclaredService(javaSource = "java-permissions"),
     "background" to DeclaredService(manifest = "manifests/background.xml"),
     "media" to DeclaredService(manifest = "manifests/media.xml"),
 )

@@ -52,8 +52,9 @@ Cranpose developers too:
   `FollowTarget::View(FollowMode::Snap)` places it when it first composes and again after a
   recenter. `FollowMode::Tight` follows the target in every frame, as Jetpack XR's
   `FollowMode.tight` does. `FollowTarget::Controller(Hand, FollowMode)` follows a controller's
-  grip pose. Jetpack XR has no controller target. Its `FollowMode.soft` and
-  `FollowTarget.anchor` are not there yet.
+  grip pose. Jetpack XR has no controller target. `FollowTarget::Anchor(Anchor, FollowMode)` holds
+  the panels to an anchor, as Jetpack XR's `FollowTarget.anchor` does. Its `FollowMode.soft` is not
+  there yet.
 - `SpatialRow`, `SpatialColumn`, `SpatialBox`, `SpatialCurvedRow`, `SpatialSpacer`: layouts in
   meters.
 - `SpatialExternalSurface(stereo_mode, modifier) { scope }`: hands the app a surface that a
@@ -78,6 +79,10 @@ Cranpose developers too:
 - `local_tracking_capabilities()`: the `TrackingCapabilities` that tell, for each `TrackingFeature`,
   whether the runtime offers it.
 - `local_haptics()`: the `Haptics` handle that vibrates a hand's controller.
+- `local_anchors()` and `local_planes()`: the `Anchors` and `Planes` handles of the room. An anchor holds
+  content on a table or a wall and keeps it there after a restart. See "Anchors and planes".
+- `MovePolicy::anchor(orientations, semantics, on_move)`: a movable panel or volume that snaps to a
+  plane of the room when the user lets it go near one.
 - A keyboard for the text fields of the app, with no composable to write: see "Text entry".
   `use_keyboard(Keyboard)` chooses between the system's keyboard and the one that Cranpose draws.
 - `Orbiter`: content attached to the edge of a panel, such as a handle or a toolbar.
@@ -483,7 +488,7 @@ multiplication of poses per panel of a subspace that moved. It allocates nothing
 state, so a moving target does not compose the panels again. A composition that draws later in the
 frame reads the live origin in the `place` of each panel. It does not move the panel back.
 
-A target and a mode make four cases:
+A target and a mode make six cases:
 
 - `View(Snap)`: the origin is one meter ahead of the head along its heading, at its height,
   facing it. The headset has no head pose at the first composition. The subspace stands at the
@@ -496,8 +501,15 @@ A target and a mode make four cases:
 - `Controller(hand, Tight)`: the origin is the place of the hand's grip pose, with no offset.
 - `Controller(hand, Snap)`: the origin is that place in the first frame that tracks the controller.
   A recenter places it again. The panels do not show before the first place.
+- `Anchor(anchor, Tight)`: the origin is the anchor's pose in every frame, with all six degrees of
+  freedom, because an anchor on a wall holds a panel that lies against it. A frame in which the
+  runtime does not place the anchor keeps the origin of the frame before.
+- `Anchor(anchor, Snap)`: the origin is the anchor's pose in the first frame that has one. A recenter
+  places it again. The panels do not show before the first place. An anchor that the app created has
+  its place at once, and one that the app loaded from storage waits for the runtime to recognize the
+  room. A detached anchor leaves the panels where they were.
 
-Only the target's turn about the vertical axis counts, so the panels stand upright. A ball that
+For a view and a controller only the target's turn about the vertical axis counts, so the panels stand upright. A ball that
 sits 10 cm above a controller stays straight above it when the hand tilts. Jetpack XR's
 `TrackedDimensions.All` would tilt the ball with the hand. The turn is the heading of the pose's
 forward axis seen from above. A pose whose forward axis is within about 6 degrees of vertical has no
@@ -511,6 +523,7 @@ vanish. The aim pose points where the ray points. That direction stays steady. A
 as tracked when the runtime tracks both poses.
 
 A panel that the user carried keeps its pose relative to the origin, so it moves with the origin.
+A panel that another following subspace takes over, as when the app names a new anchor, is placed by its modifier again, because the place that the user carried it to is relative to the old origin.
 
 A following subspace of a controller has no place while the runtime does not track the controller.
 The loop marks each of its panels `Ride::Hidden`. The panel stays registered with its swapchain
@@ -1005,6 +1018,173 @@ cameras:
   second.
 
 The desk shows no hand joints, no aim and no fingertip dots: no hand was in the cameras' view.
+
+## Anchors and planes
+
+An anchor is a place in the room that the runtime holds still while it learns more of the room. A
+plane is a flat surface that the runtime found, such as a wall, the floor, the ceiling or a table.
+An app uses an anchor to keep content on a table or a wall, and to bring it back to the same place
+at its next start. The names follow Jetpack XR's `androidx.xr.arcore` package and its Compose
+package.
+
+| Jetpack XR | Cranpose |
+|---|---|
+| `Anchor.create(session, pose)` | `Anchors::create(pose)` |
+| `Plane.createAnchor(pose)` | `Plane::create_anchor(pose)` |
+| `Anchor.state`: `Anchor.State` with `pose` and `trackingState` | `Anchor::state()`: `AnchorState` with `pose` and `tracking_state` |
+| `Anchor.persist()`, which suspends and returns a `UUID` | `Anchor::persist()`, then `Anchor::persistence()` as an `AnchorPersistence`, and `Anchor::uuid()` |
+| `Anchor.getPersistedAnchorUuids(session)` | `Anchors::persisted_uuids()` |
+| `Anchor.load(session, uuid)` | `Anchors::load(uuid)` |
+| `Anchor.unpersist(session, uuid)` | `Anchors::unpersist(uuid)` |
+| `Anchor.detach()` | `Anchor::detach()` |
+| `AnchorResult`: `AnchorCreateSuccess`, `AnchorCreateResourcesExhausted`, `AnchorCreateTrackingUnavailable`, and exceptions | `AnchorResult`: `Success`, `ResourcesExhausted`, `TrackingUnavailable`, `Unavailable`, `InvalidUuid` |
+| `Plane.subscribe(session)` | `Planes::all()` |
+| `Plane.type`, `Plane.state` (`Plane.State`) | `Plane::plane_type()`, `Plane::state()` (`PlaneState`), `Plane::with_vertices`, `Plane::subsumed_by` |
+| `PlaneType`, `PlaneLabel` | `PlaneType`, `PlaneLabel` with the same values |
+| `FollowTarget.anchor(anchor, mode)` | `FollowTarget::Anchor(anchor, mode)` |
+| `MovePolicy.anchor(orientations, semantics, onMove)`, with `PlaneOrientation` and `PlaneSemantic` | `MovePolicy::anchor(orientations, semantics, on_move)`, with the same two types |
+
+Where Jetpack XR passes a `Session`, the app reads a composition local: `local_anchors()` gives
+`Anchors` and `local_planes()` gives `Planes`. Both are `None` outside a headset. Jetpack XR's
+SceneCore has the same idea as `AnchorPlacement.createForPlanes`, which a `MovableComponent` takes, and
+Compose XR has it as `MovePolicy.anchor`. Cranpose follows the Compose name. Jetpack XR reparents a panel to the plane after the snap. Cranpose keeps the panel in its
+subspace and gives the app the pose, which the app turns into an anchor. `SpatialMoveEvent` has one
+field that Jetpack XR does not have, `room_pose`, which is the pose in the app's room, where
+`Anchors::create` takes its pose. Jetpack XR converts between its spaces with `transformPoseTo`.
+
+### How an app asks
+
+An app declares `Use::anchors()` and `Use::plane_tracking()` in its build script, in the pattern of
+the tracking services. They are Jetpack XR's `Config.anchorPersistence` and `Config.planeTracking`.
+Until the app declares them, the backend enables no extension, makes no call in a frame, adds no
+permission and answers `AnchorResult::Unavailable`. The runtime's extension list decides the rest,
+as it does for tracking: `AnchorCapabilities` (`Anchors::capabilities()`) and
+`Planes::availability()` give a `TrackingAvailability` for each part.
+
+| Service | Meta Quest | Android XR |
+|---|---|---|
+| `Use::anchors()` | `XR_FB_spatial_entity`, `XR_FB_spatial_entity_storage` and `XR_FB_spatial_entity_query`. The manifest holds `USE_ANCHOR_API` as `com.oculus.permission` and `horizonos.permission`, a normal permission | `XR_ANDROID_trackables` and `XR_ANDROID_device_anchor_persistence`. Anchors need no permission. The storage needs `android.permission.SCENE_UNDERSTANDING_COARSE` |
+| `Use::plane_tracking()` | `XR_FB_scene` and the same three. The user allows `USE_SCENE` with the system's prompt | `XR_ANDROID_trackables`. The user allows `SCENE_UNDERSTANDING_COARSE` |
+
+The Horizon OS runtime lists its spatial entity extensions to an app only while the manifest holds
+`USE_ANCHOR_API`, and its scene extension needs the same permission. A Quest log of 16 November names
+the missing string for each hidden extension. A runtime that lists both families gets Android XR's.
+`XR_META_spatial_entity_persistence` is not used: the storage extension of `XR_FB_` keeps and loads
+anchors, and the query extension lists them.
+
+The prompt for `SCENE_UNDERSTANDING_COARSE` and `USE_SCENE` comes before the session, as the tracking
+prompts do, because the system takes an immersive app off the headset to show it. A feature that the
+user has not answered stays `AwaitingPermission`, and the backend looks at it once a second. A
+refusal gives `PermissionRefused`. The backend never starts a scene capture
+(`xrRequestSceneCaptureFB`), which takes over the headset. A room that the user has not set up gives
+no planes.
+
+### Where the state lives
+
+`Anchors`, `Planes`, `Anchor` and `Plane` are handles on one store that the composition makes. The
+backend writes the store in each frame and the app reads it, both on the thread of the composition. An
+`Anchor` holds a shared cell with its pose and tracking state, a `Plane` holds one with its state, and
+both end when the last handle drops, which ends the runtime's space, or when the app detaches the
+anchor. The store keeps one state that counts the changes a composition can observe: the tracking
+state and the persistence of an anchor, the list of persisted identifiers, and the planes that a
+frame adds, removes or relabels. A pose that the runtime refines is not such a change. A frame reads
+each anchor's space and each plane's pose with `xrLocateSpace` or the runtime's plane call, writes
+them into the cells and allocates nothing. A frame effect that wants the live pose reads
+`Anchor::state()`. A following subspace reads the same cell in `Space::track`. The lists of anchors
+and planes and the polygon of a plane allocate when the app creates an anchor or the runtime finds a
+plane, not in a frame.
+
+### Persistence
+
+`Anchor::persist()` sets the persistence to `Persisting` and the backend passes the ask to the runtime
+once. On Android XR, `xrPersistAnchorANDROID` returns the identifier at once, and
+`xrGetAnchorPersistStateANDROID` says when the runtime keeps it. On a Quest every step is a request
+that an event answers: the anchor first enables its storage component, then the runtime saves it into
+the app's local storage, and the save's event carries the identifier. `Persisted(uuid)` follows, and
+the list of identifiers is read again. `Anchors::load(uuid)` makes an anchor from storage. Android XR
+creates the anchor's space from the identifier. A Quest queries the storage by identifier, takes the
+space of the result and enables its location. Until the runtime places the anchor, its state is
+`Paused` and a following subspace hides its panels. The storage query of a Quest leaves out entities
+that have semantic labels, which are the room's scene. The backend lists the storage once the
+permission allows, so `persisted_uuids()` is empty for the first frames of a start.
+
+The room's origin is where the head was at each start, so the pose of one anchor in the room differs
+between two starts. The anchor stays at one place in the world. The demo logs the anchor's pose in the
+stage as well, which the headset's floor defines and a restart does not move.
+
+### Snapping to a plane
+
+`MovePolicy::anchor` makes `Space::carry` ask the store for a resting place at each step of a carry.
+For each plane that the two lists admit and the runtime tracks, the carry measures the distance from
+the content's center, moved by half its depth toward the plane, to the plane. The content snaps when
+that distance is at most 25 cm and its center lies over the plane or within 30 cm of its polygon's
+edge. The nearest plane wins. As in Jetpack XR's `AnchorPlacement`, the content's +Z axis points out
+of the plane, so a panel lies flat along it with its center on the plane. A volume rests with its
+back face on the plane. A wall holds the content upright and facing into the room, on the side where
+the user holds it. A floor, a table or a ceiling holds it with its top edge pointing away from where
+it faced, so a panel that faced the user reads from the user's side. The pose is applied while the
+user carries, so the content follows the controller again when the user moves it beyond the
+distance, and the last pose is the one that the end event reports. The math is `plane_snap.rs`.
+Jetpack XR's two entry points differ for an empty filter: SceneCore's `AnchorPlacement.createForPlanes`
+anchors nothing, and Compose XR's `MovePolicy.anchor` anchors to any plane. Cranpose follows Compose.
+
+The planes' own frame is Jetpack XR's: the +Y axis of `center_pose` is the normal, +X runs along the
+width and +Z along the depth. Android XR gives it so. Meta's scene entity has its rectangle in its
+X-Y plane and its normal along Z, so `plane_frame.rs` turns it by a quarter turn about X. A runtime's
+sign of the normal is a convention. The label corrects it for horizontal planes: a floor and a table
+face up and a ceiling faces down. Meta's labels that Jetpack XR does not name, such as a couch or a
+door frame, give `PlaneLabel::Unknown`.
+
+### The demo
+
+`XR_DEMO_ROOM` builds the demo's room panel, in `apps/xr-demo/src/room_panel.rs`. The build declares
+`Use::anchors()` and `Use::plane_tracking()` only for that variable, because the planes bring the
+user's permission prompt, and the default demo has none. `XR_DEMO_ROOM=with` adds the panel to the demo
+and `only` shows it alone. `script` shows it alone and places it with no user: a start that finds no
+kept anchor makes one at a set place, as if the user had dropped the panel there, and asks the runtime
+to keep it. A device that has no controller to carry the panel shows the persistence that way.
+
+The panel is movable with `MovePolicy::anchor`. When the user lets it go, the demo makes an anchor at
+`SpatialMoveEvent::room_pose`, asks the runtime to keep it and holds the panel to it with
+`FollowTarget::Anchor`. The anchor that held the panel before is unpersisted and detached, so the app
+keeps one. At the next start the demo loads the identifier that the runtime lists, and the panel
+stands there. The panel lists the anchor's state and the planes: label, direction, size and height.
+The demo logs the anchor's identifier and its pose in the room, in the stage and the head's pose
+when the runtime first tracks it.
+
+### Measured on the Android XR emulator
+
+The emulator is the system image android-34 `google-xr` revision 7. Its runtime lists both families,
+`XR_ANDROID_trackables` with `XR_ANDROID_device_anchor_persistence` and the `XR_EXT_spatial_*`
+extensions. The backend uses the first. The demo built with `XR_DEMO_ROOM=script` ran twice after
+`pm clear` and a grant of `SCENE_UNDERSTANDING_COARSE`, with the log of each start kept:
+
+- First start: the runtime read its storage within the first frames and kept 0 anchors. The demo made an
+  anchor at (0.5, -0.1, -1.2) in the room, and the runtime kept it 49 ms later under the identifier
+  `04f2281f-f84b-49a3-b65d-3b420397f3a2`. The anchor was tracked at that pose, which is (0.5, 1.5, -1.2) in
+  the stage.
+- Second start, in a new process: the storage listed that identifier, the demo loaded it with
+  `Anchors::load`, and the runtime tracked it at (0.5, -0.1, -1.2) in the room and (0.5, 1.5, -1.2) in
+  the stage. The panel stood where the first start left it. No anchor was made.
+- The runtime reported 12 planes in both starts: 8 walls, a floor of 8.6 by 7.8 m at a height of -1.59 m
+  and 3 tables at heights of -0.85, -0.99 and -1.11 m. The panel lists them with their labels.
+
+The emulator's head stays at the origin, so the room's origin is the same in both starts. The check
+shows that the identifier survives a restart and that the runtime places the loaded anchor at the stored
+pose. It does not show a room whose origin moved between two starts. A controller's carry of the panel,
+and so the snap to a plane with a real carry, was not run on the emulator: the snap is covered by the
+tests of `plane_snap.rs` and of `Space::carry`.
+
+### What is not measured
+
+No Meta Quest ran this code. The Quest was off adb while the work ran and then too low on charge. The
+Meta backend (`meta_anchors.rs`, `meta_planes.rs`, `meta_calls.rs`) is written from the extensions'
+specifications and checked by the compiler for Android, and its geometry and label handling have unit
+tests. These are open until a Quest runs it: the Horizon OS permission names that make the runtime list the
+extensions (taken from a Quest log of 16 November), the order of the events of a save and a query, the
+axes of a scene entity (`plane_frame.rs` assumes +Z is the normal and corrects the sign by the label),
+whether a query of the local storage returns the room's scene as well (the backend leaves out entities
+with semantic labels), and what the storage holds after the user clears the app's data.
 
 ## Text entry
 

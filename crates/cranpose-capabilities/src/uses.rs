@@ -192,6 +192,27 @@ impl Use {
         }
     }
 
+    /// Places in the room that stay put, and that the application keeps for its next start; see
+    /// `cranpose_xr::Anchors`. Jetpack XR's `Config.anchorPersistence`, which also covers the
+    /// creation of anchors. Declaring it is the only way an application's build asks for the
+    /// permission and for the runtime's extensions.
+    pub const fn anchors() -> Self {
+        Self {
+            service: Service::Anchors,
+            reason: None,
+        }
+    }
+
+    /// The planes of the room, such as its walls, floor and tables; see
+    /// `cranpose_xr::Planes`. Jetpack XR's `Config.planeTracking`. The user allows it with a
+    /// prompt.
+    pub const fn plane_tracking() -> Self {
+        Self {
+            service: Service::PlaneTracking,
+            reason: None,
+        }
+    }
+
     /// Which service this is.
     pub const fn service(self) -> Service {
         self.service

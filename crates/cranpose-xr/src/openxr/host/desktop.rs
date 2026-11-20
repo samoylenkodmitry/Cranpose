@@ -11,6 +11,7 @@ use crate::{
     entitlement_watch::Answer,
     openxr::{entitlement_run::EntitlementRun, runner::run_immersive, runtime::Runtime},
     session_status::SessionStatus,
+    spatial_request::SpatialRequest,
     tracking_permission::PermissionAnswer,
     tracking_request::TrackingRequest,
 };
@@ -113,7 +114,8 @@ pub fn run<Fonts: LauncherFonts>(
 ) -> Result<(), RunError> {
     let host = Host;
     let request = TrackingRequest::of(launcher.capabilities());
-    match Runtime::connect(&host, request) {
+    let spatial_request = SpatialRequest::of(launcher.capabilities());
+    match Runtime::connect(&host, request, spatial_request) {
         Ok(runtime) => {
             let settings = launcher.into_settings();
             let entitlement = EntitlementRun::start(&host);

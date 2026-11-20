@@ -35,6 +35,14 @@ fn main() {
     if let Ok(side) = std::env::var("XR_DEMO_SOUND") {
         println!("cargo::rustc-env=XR_DEMO_SOUND={side}");
     }
+    // `XR_DEMO_ROOM` (`with`, `only` or `script`) shows the room panel, and the build asks for the
+    // anchors and the planes that it needs.
+    println!("cargo::rerun-if-env-changed=XR_DEMO_ROOM");
+    if let Ok(room) = std::env::var("XR_DEMO_ROOM") {
+        println!("cargo::rustc-env=XR_DEMO_ROOM={room}");
+        declare(&[Use::hand_tracking(), Use::anchors(), Use::plane_tracking()]).emit();
+        return;
+    }
     println!("cargo::rerun-if-env-changed=XR_DEMO_TRACKING");
     match std::env::var("XR_DEMO_TRACKING").as_deref() {
         Ok("none") => declare(&[]).emit(),
