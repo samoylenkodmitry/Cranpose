@@ -143,7 +143,7 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
                 match cells[cell] {
                     Some(pixel) => *dst = pixel,
                     None if colors[cell][3] > 0.0 => {
-                        dst.blend_paint(paints[cell], 1.0, diagnostics);
+                        dst.blend_paint(&paints[cell], 1.0, diagnostics);
                     }
                     None => {}
                 }
@@ -244,14 +244,11 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
             opaque,
             diagnostics,
         } = self;
-        let brush = BrushSampler::new(&draw.brush, rect);
-        // A solid brush blends the same color over every pixel.
-        let solid = brush.is_solid().then(|| {
-            P::paint(
-                color_to_rgba(brush.color_at(Point::default())),
-                draw.blend_mode,
-            )
-        });
+        let paint = ShapePaint::<P>::new(
+            BrushSampler::new(&draw.brush, rect),
+            dither_origin,
+            draw.blend_mode,
+        );
         let settles = clip_bounds.within(SETTLED_COORDINATES);
         let mut left = [0.0; MIRROR_SPAN];
         for py in clip_bounds.min_y..clip_bounds.max_y {
@@ -301,22 +298,55 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
                         *dst = pixel;
                         continue;
                     }
-
-                    let paint = solid.unwrap_or_else(|| {
-                        let sample = match P::GRADIENT {
-                            GradientColors::Dithered => {
-                                sample_brush_rgba(&brush, center_x, center_y, dither_origin)
-                            }
-                            GradientColors::Plain => {
-                                color_to_rgba(brush.color_at(Point::new(center_x, center_y)))
-                            }
-                        };
-                        P::paint(sample, draw.blend_mode)
-                    });
-                    dst.blend_paint(paint, coverage, diagnostics);
+                    paint.blend(dst, Point::new(center_x, center_y), coverage, diagnostics);
                 }
             }
         }
+    }
+}
+
+// What the pixels of a shape blend: the one paint of a solid brush, worked
+// out once a shape and lent to each pixel, or the brush sampled at each
+// pixel.
+struct ShapePaint<'a, P: Pixel> {
+    solid: Option<P::Paint>,
+    brush: BrushSampler<'a>,
+    dither_origin: Point,
+    blend_mode: BlendMode,
+}
+
+impl<'a, P: Pixel> ShapePaint<'a, P> {
+    fn new(brush: BrushSampler<'a>, dither_origin: Point, blend_mode: BlendMode) -> Self {
+        let solid = brush
+            .is_solid()
+            .then(|| P::paint(color_to_rgba(brush.color_at(Point::default())), blend_mode));
+        Self {
+            solid,
+            brush,
+            dither_origin,
+            blend_mode,
+        }
+    }
+
+    // Blends the paint at the pixel centred at `center` over `dst`, its
+    // alpha scaled by `coverage`.
+    #[inline]
+    fn blend(&self, dst: &mut P, center: Point, coverage: f32, diagnostics: &RenderDiagnostics) {
+        match &self.solid {
+            Some(paint) => dst.blend_paint(paint, coverage, diagnostics),
+            None => dst.blend_paint(&self.sampled(center), coverage, diagnostics),
+        }
+    }
+
+    // The brush's paint at the pixel centred at `center`.
+    fn sampled(&self, center: Point) -> P::Paint {
+        let sample = match P::GRADIENT {
+            GradientColors::Dithered => {
+                sample_brush_rgba(&self.brush, center.x, center.y, self.dither_origin)
+            }
+            GradientColors::Plain => color_to_rgba(self.brush.color_at(center)),
+        };
+        P::paint(sample, self.blend_mode)
     }
 }
 

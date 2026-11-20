@@ -386,7 +386,7 @@ fn draw_shadow<P: Pixel>(
                 if coverage <= 0.0 {
                     continue;
                 }
-                dst.blend_paint(paint, coverage, diagnostics);
+                dst.blend_paint(&paint, coverage, diagnostics);
             }
         }
     }
@@ -409,7 +409,7 @@ fn blend_row<P: Pixel>(
     if color[3] > 0.0 {
         let paint = P::paint(color, blend_mode);
         for dst in target.row(py, start, end) {
-            dst.blend_paint(paint, 1.0, diagnostics);
+            dst.blend_paint(&paint, 1.0, diagnostics);
         }
     }
 }
