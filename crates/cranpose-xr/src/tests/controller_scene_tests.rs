@@ -87,13 +87,14 @@ fn projected(x: f32, point: [f32; 3]) -> (f32, f32) {
     )
 }
 
-// The pixel of an eye's picture that holds the position `coordinate`, counted in pixels from the
-// picture's edge.
-fn pixel_holding(coordinate: f32) -> u32 {
-    (0..EYE)
-        .rev()
-        .find(|pixel| *pixel as f32 <= coordinate)
-        .expect("the position lies in the picture")
+// The pixel of an eye's picture that `position` lies at, clamped to the picture.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the position is clamped to 0..=EYE - 1, and EYE is 128"
+)]
+fn pixel_holding(position: f32) -> u32 {
+    position.clamp(0.0, (EYE - 1) as f32) as u32
 }
 
 // The columns of the pixels that are mostly blue: the plain controller's tip, which marks its front.
