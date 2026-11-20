@@ -44,9 +44,10 @@ openxr = [
 # downloads or uses it, so whoever turns this feature on accepts it.
 meta-entitlement = ["openxr", "cranpose/meta-entitlement"]
 
-# Plays a scripted hand in place of the cameras' hand, so a build can show the hand pointer where no
-# hand can be tracked, such as in an emulator. The app installs the script with `script_hand`. Off,
-# the backend has no such code.
+# Plays a scripted hand in place of the cameras' hand, and scripted controllers in place of the
+# runtime's, so a build can show the pointers where no hand or controller can be tracked, such as in
+# an emulator. The app installs the scripts with `script_hand` and `script_controller`. Off, the
+# backend has no such code.
 scripted-hand = ["openxr"]
 
 # Taps the mixed output of the audio player and logs the level of each ear once a second, with where

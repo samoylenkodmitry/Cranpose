@@ -1014,6 +1014,14 @@ script for each hand plays at once (the scripted hand has a slot for each hand a
 frame loop of the headset: two hands drag two lists, press one panel, carry a handle while the other
 presses, right click, scroll, remap the buttons, mix a hand with a controller, and hide the beams.
 `crates/cranpose-testing/tests/independent_pointer_test.rs` tests the shell's calls alone.
+`src/tests/scripted_controller_tests.rs` plays two scripted controllers through the pointer: a carry,
+a right click and a scroll at the same time.
+
+Not run: the demo's scripted controllers on a headset or in the Android XR emulator. The emulator's
+system image (`system-images;android-34;google-xr;arm64-v8a`) was not installed on the machine that
+ran the change, and the Quest was off adb. The beams' rule, the buttons of a real controller and the
+feel of two hands at once are untested on a device. The long press and the zoom gesture ignore a
+pointer that is not the primary one.
 
 ### Hands as pointers
 
