@@ -1127,6 +1127,24 @@ sign of the normal is a convention. The label corrects it for horizontal planes:
 face up and a ceiling faces down. Meta's labels that Jetpack XR does not name, such as a couch or a
 door frame, give `PlaneLabel::Unknown`.
 
+### The demo
+
+`XR_DEMO_ROOM` builds the demo's room panel, in `apps/xr-demo/src/room_panel.rs`. The build declares
+`Use::anchors()` and `Use::plane_tracking()` only for that variable, because the planes bring the
+user's permission prompt, and the default demo has none. `XR_DEMO_ROOM=with` adds the panel to the demo
+and `only` shows it alone. `script` shows it alone and places it with no user: a start that finds no
+kept anchor makes one at a set place, as if the user had dropped the panel there, and asks the runtime
+to keep it. A device that has no controller to carry the panel shows the persistence that way.
+
+The panel is movable with `MovePolicy::anchor`. When the user lets it go, the demo makes an anchor at
+`SpatialMoveEvent::room_pose`, asks the runtime to keep it and holds the panel to it with
+`FollowTarget::Anchor`. The anchor that held the panel before is unpersisted and detached, so the app
+keeps one. At the next start the demo loads the identifier that the runtime lists, and the panel
+stands there. The panel lists the anchor's state and the planes: label, direction, size and height.
+The demo logs the anchor's identifier and its pose in the room, in the stage and the head's pose
+when the runtime first tracks it.
+
+@@MEASURED@@
 ## Text entry
 
 A text field that takes focus asks the platform for its software keyboard, through
