@@ -448,8 +448,12 @@ fn CurvedStrip() {
     });
 }
 
+// `XR_DEMO_PASSTHROUGH=off` starts the demo with the room hidden. A screenshot of a device check
+// then holds no picture of the room around the headset.
+const PASSTHROUGH_BUILD: Option<&str> = option_env!("XR_DEMO_PASSTHROUGH");
+
 // A button that shows or hides the room around the panels, or a note where the headset cannot.
-// The room shows from the start.
+// The room shows from the start, unless the build says `XR_DEMO_PASSTHROUGH=off`.
 #[composable]
 fn PassthroughButton() {
     let Some(environment) = local_spatial_environment().current() else {
@@ -467,7 +471,12 @@ fn PassthroughButton() {
         return;
     }
     DisposableEffect(true, move |_| {
-        environment.set_preferred_passthrough_opacity(Some(1.0));
+        let opacity = if PASSTHROUGH_BUILD == Some("off") {
+            0.0
+        } else {
+            1.0
+        };
+        environment.set_preferred_passthrough_opacity(Some(opacity));
         DisposableEffectResult::new(|| {})
     });
     let shown = environment.current_passthrough_opacity() > 0.0;

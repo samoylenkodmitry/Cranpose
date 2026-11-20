@@ -23,6 +23,11 @@ fn main() {
     if let Ok(models) = std::env::var("XR_DEMO_CONTROLLERS") {
         println!("cargo::rustc-env=XR_DEMO_CONTROLLERS={models}");
     }
+    // `XR_DEMO_PASSTHROUGH=off` starts the demo with the room hidden.
+    println!("cargo::rerun-if-env-changed=XR_DEMO_PASSTHROUGH");
+    if let Ok(room) = std::env::var("XR_DEMO_PASSTHROUGH") {
+        println!("cargo::rustc-env=XR_DEMO_PASSTHROUGH={room}");
+    }
     println!("cargo::rerun-if-env-changed=XR_DEMO_VOLUME");
     if let Ok(place) = std::env::var("XR_DEMO_VOLUME") {
         println!("cargo::rustc-env=XR_DEMO_VOLUME={place}");
