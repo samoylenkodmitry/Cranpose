@@ -28,10 +28,12 @@ use crate::{
     depth_order::sort_back_to_front,
     exit_request::{ExitRequest, ExitStep, leave},
     frame_effects::local_frame_effects,
+    keyboard_panel::SoftKeyboardPanel,
     local_haptics, local_headset_properties, local_spatial_capabilities, local_spatial_environment,
     local_tracking_capabilities,
     pointer::Pointer,
     session_status::{SessionStatus, StatusWatch},
+    soft_keyboard::SoftKeyboard,
     space::{PanelSlot, Ride, Space, local_space},
     surface_input::Gesture,
     volume_host::VolumeScene,
@@ -103,6 +105,8 @@ pub(crate) fn run_immersive(
 struct Immersive {
     guest: GuestView,
     space: Space,
+    // The keyboard that a focused text field opens
+    keyboard: SoftKeyboard,
     environment: SpatialEnvironment,
     pointer: Pointer,
     layers: PanelLayers,
@@ -161,6 +165,7 @@ impl Immersive {
                 || {
                     content();
                     VolumeScene(volume_space.clone());
+                    SoftKeyboardPanel(volume_space.clone());
                 },
             );
         })
@@ -172,9 +177,13 @@ impl Immersive {
             .clone()
             .ok_or("the content did not compose")?;
         space.set_curves_shown(xr_session.shows_cylinders());
+        // The first composition made the keyboard, because its panel asks for it
+        let keyboard = space.keyboard();
+        keyboard.install(guest.shell());
         Ok(Self {
             guest,
             space,
+            keyboard,
             environment,
             pointer: Pointer::default(),
             layers,
@@ -220,6 +229,7 @@ impl Immersive {
         self.space.panels_into(&mut self.panels);
         let (events, cursor) = self.pointer.update(aims, time, &self.panels);
         send(&mut self.guest, events);
+        self.keyboard.pump(self.guest.shell(), &self.space);
         for gesture in self.pointer.surface_events() {
             self.space.deliver_to_surface(gesture);
         }

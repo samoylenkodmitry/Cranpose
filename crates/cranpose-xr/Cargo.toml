@@ -47,7 +47,10 @@ stream-costs = ["openxr"]
 [dependencies]
 # `video`: a flat stream draws through `PlayerSurfaceIntake`.
 cranpose = { workspace = true, features = ["video"] }
+# The keyboard that a headset draws sends key events to the app's shell, and runs with any renderer.
+cranpose-app-shell = { workspace = true }
 cranpose-core = { workspace = true }
+cranpose-render-common = { workspace = true }
 log = "0.4"
 
 # The OpenXR backend needs the platform side of Cranpose: the activity on

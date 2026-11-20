@@ -1,6 +1,6 @@
 //! The size, place and turn of a spatial composable.
 
-use crate::{MovePolicy, Pose, ResizeLimits, ResizePolicy, pose::turn_degrees};
+use crate::{MovePolicy, Pose, ResizeLimits, ResizePolicy, dock::Dock, pose::turn_degrees};
 
 /// Meters in one dp. In a subspace one dp is a millimeter, so a panel of 800 by 500 dp is 80 by
 /// 50 centimeters.
@@ -30,6 +30,7 @@ pub struct SubspaceModifier {
     orientation: [f32; 4],
     move_policy: Option<MovePolicy>,
     resize: Option<(ResizeLimits, ResizePolicy)>,
+    dock: Dock,
 }
 
 impl Default for SubspaceModifier {
@@ -48,6 +49,7 @@ impl SubspaceModifier {
             orientation: [0.0, 0.0, 0.0, 1.0],
             move_policy: None,
             resize: None,
+            dock: Dock::Free,
         }
     }
 
@@ -144,6 +146,22 @@ impl SubspaceModifier {
         self.resize
             .as_ref()
             .map(|(limits, policy)| (*limits, policy))
+    }
+
+    #[cfg_attr(
+        not(any(test, headset)),
+        expect(dead_code, reason = "the keyboard of a headset calls it")
+    )]
+    // Makes the content stand below the panel of the focused text field, as the keyboard does. The
+    // modifier's offset and turn do not place it.
+    pub(crate) const fn below_field(mut self) -> Self {
+        self.dock = Dock::BelowField;
+        self
+    }
+
+    // Where the content stands in relation to the panel of the focused text field.
+    pub(crate) const fn dock(&self) -> Dock {
+        self.dock
     }
 
     /// The size in dp, with `fallback` for what the modifier leaves out.

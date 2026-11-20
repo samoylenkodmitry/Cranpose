@@ -45,6 +45,7 @@ mod controller;
 mod controller_bindings;
 #[cfg(any(test, headset))]
 mod depth_order;
+mod dock;
 #[cfg(any(test, headset))]
 mod exit_request;
 #[cfg(any(test, headset))]
@@ -85,6 +86,12 @@ mod interaction_profile;
 #[cfg(any(test, headset))]
 mod joint_flags;
 #[cfg(any(test, headset))]
+mod key_layout;
+#[cfg(any(test, headset))]
+mod keyboard_panel;
+#[cfg(any(test, headset))]
+mod keyboard_state;
+#[cfg(any(test, headset))]
 mod layer_limit;
 mod locals;
 mod meta_face_state;
@@ -113,6 +120,8 @@ mod resize_policy;
 mod scripted_hand;
 #[cfg(any(test, headset))]
 mod session_status;
+#[cfg(any(test, headset))]
+mod soft_keyboard;
 mod space;
 mod spatial_capabilities;
 mod spatial_curved_row;
