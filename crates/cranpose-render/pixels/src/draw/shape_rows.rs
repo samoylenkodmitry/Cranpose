@@ -3,8 +3,8 @@
 
 use super::{
     BlendMode, BrushSampler, COLUMN_BAND, ClipBounds, DitherAxis, DitheredLine, GradientColors,
-    NO_RUN, Pixel, Point, Rect, RenderDiagnostics, RowRuns, Target, color_to_rgba, opaque_bytes,
-    paint_row, sample_brush_rgba, shape_sdf,
+    NO_RUN, Pixel, Point, Rect, RenderDiagnostics, RowRuns, Target, blend_row, color_to_rgba,
+    opaque_bytes, sample_brush_rgba, shape_sdf,
 };
 
 // A placed shape's rows to paint. Each kind of coverage paints them through
@@ -92,6 +92,7 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
         } = self;
         let brush = BrushSampler::new(&draw.brush, rect);
         let columns = DitherAxis::new(dither_origin.x);
+        let over = draw.blend_mode == BlendMode::SrcOver;
         for py in clip_bounds.min_y..clip_bounds.max_y {
             let center_y = py as f32 + 0.5;
             let (start, end) = runs(center_y, clip_bounds.min_x, clip_bounds.max_x);
@@ -101,14 +102,20 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
             let x = start as f32 + 0.5;
             if P::GRADIENT == GradientColors::Plain {
                 let color = color_to_rgba(brush.color_at(Point::new(x, center_y)));
-                paint_row(
-                    target,
-                    py,
-                    (start, end),
-                    color,
-                    draw.blend_mode,
-                    diagnostics,
-                );
+                // A row whose color covers it opaquely takes the color's
+                // pixel, as a row of an opaque solid fill does.
+                if over && color[3] >= 1.0 {
+                    P::fill(target.row(py, start, end), P::opaque(opaque_bytes(color)));
+                } else {
+                    blend_row(
+                        target,
+                        py,
+                        (start, end),
+                        color,
+                        draw.blend_mode,
+                        diagnostics,
+                    );
+                }
                 continue;
             }
             let colors = *DitheredLine::row(&brush, x, center_y, dither_origin).colors();
