@@ -139,11 +139,15 @@ fn a_quest_without_the_query_keeps_no_anchors_and_shows_no_planes() {
 }
 
 #[test]
-fn anchors_need_no_permission_but_planes_and_android_xrs_storage_wait_for_the_user() {
+fn anchors_need_no_permission_but_planes_and_the_storage_of_both_runtimes_wait() {
     let request = asking(&[Use::anchors(), Use::plane_tracking()]);
     let quest = setup(request, quest_list());
     assert_eq!(quest.anchors.anchors, TrackingAvailability::Active);
-    assert_eq!(quest.anchors.persistence, TrackingAvailability::Active);
+    // The Quest's storage lists its anchors some frames after the start
+    assert_eq!(
+        quest.anchors.persistence,
+        TrackingAvailability::AwaitingPermission
+    );
     assert_eq!(quest.planes, TrackingAvailability::AwaitingPermission);
     let android = setup(request, android_list());
     assert_eq!(android.anchors.anchors, TrackingAvailability::Active);
