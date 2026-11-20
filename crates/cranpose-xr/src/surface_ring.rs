@@ -1,10 +1,10 @@
 //! The 3D space that one layer gives its node, built once and moved in place.
 //!
-//! A node's graphics layer holds its space in an `Arc`, and the node keeps the space of the last
+//! A node's graphics layer holds its space in an `Arc`. The node keeps the space of the last
 //! evaluation until the next one replaces it. A closure that builds a fresh space allocates the
-//! `Arc` and the list of the layer's surfaces at each evaluation, so a model that moves allocates
-//! in each frame. This ring keeps a few spaces. An evaluation picks one that no node holds any
-//! more and moves its surfaces in place.
+//! `Arc` and the list of the layer's surfaces at each evaluation, so a model that moves allocates in
+//! each frame. This ring keeps a few spaces. An evaluation picks one that no node holds any more
+//! and moves its surfaces in place.
 
 use std::{cell::RefCell, sync::Arc};
 

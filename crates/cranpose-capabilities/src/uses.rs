@@ -213,12 +213,11 @@ impl Use {
         }
     }
 
-    /// The headset's own 3D models of its controllers; see
-    /// `cranpose_xr::ControllerModels`. A Meta Quest hands them to an app that
-    /// asks for them in its manifest, and `cranpose-xr` then draws them at the
-    /// controllers' grips in place of its plain built-in model. An application
-    /// that declares nothing still shows the built-in model. Asking is free:
-    /// the system grants the permission at install.
+    /// The headset's own 3D models of its controllers; see `cranpose_xr::ControllerModels`. A Meta
+    /// Quest hands them to an application that asks for them in its manifest. `cranpose-xr` then
+    /// draws them at the controllers' grips in place of its plain built-in model. An application
+    /// that declares nothing still shows the built-in model. Asking costs nothing: the system
+    /// grants the permission at install.
     pub const fn controller_models() -> Self {
         Self {
             service: Service::ControllerModels,

@@ -1,9 +1,9 @@
 //! What a hand shows in place of its controller.
 //!
-//! The choice follows from what the app set, what the runtime has to offer, and how far the load of
-//! the model that the hand wants has come. A controller in use never goes without a picture: a
-//! model that cannot be had ends at the plain one. Only a model that is still on its way leaves the
-//! hand with nothing for a moment.
+//! The choice follows from the app's setting and the runtime's offer. The state of the load of the
+//! model that the hand wants also counts. A controller in use never goes without a picture: a model
+//! that cannot be had ends at the plain one. Only a model that is still on its way leaves the hand
+//! with nothing for a moment.
 
 use std::sync::Arc;
 

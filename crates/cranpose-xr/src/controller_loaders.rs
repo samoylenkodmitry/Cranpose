@@ -1,8 +1,9 @@
-//! The loads of the glTF models that the controllers show: the runtime's, and the app's own.
+//! The loads of the glTF models that the controllers show. The runtime's models and the app's own
+//! models load here.
 //!
-//! A load starts when a hand wants a source and stays while the source stays, whether or not a
-//! controller is in use, so a controller that leaves and comes back finds its model loaded. The
-//! work runs on a worker thread, as `rememberSpatialGltfModelState` does it.
+//! A load starts when a hand wants a source. It stays while the source stays, whether or not a
+//! controller is in use. A controller that leaves and comes back therefore finds its model loaded.
+//! The work runs on a worker thread, as `rememberSpatialGltfModelState` runs it.
 
 use cranpose::composable;
 use cranpose_core::{SideEffect, key};

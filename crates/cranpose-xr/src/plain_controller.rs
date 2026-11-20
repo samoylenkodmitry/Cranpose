@@ -30,7 +30,7 @@ enum Solid {
     Sphere,
 }
 
-// One part of the controller in meters: where its middle lies, how large it is, and its color.
+// One part of the controller in meters: its box and its color.
 struct Spec {
     solid: Solid,
     center: [f32; 3],
@@ -139,7 +139,7 @@ fn place(spec: &Spec) -> Mat4 {
 }
 
 // The controller's parts at `map`, the map from the model's meters to the scene. The map is a state
-// that the frame loop moves with the controller, and the draw reads it, so a controller that moves
+// that the frame loop moves with the controller. The draw reads it, so a controller that moves
 // composes nothing.
 #[composable]
 pub(crate) fn PlainController(map: MutableState<Mat4>) {

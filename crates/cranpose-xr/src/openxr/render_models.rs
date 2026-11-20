@@ -1,9 +1,9 @@
 //! The runtime's models of the controllers, through `XR_FB_render_model`.
 //!
 //! The runtime hands out a glTF binary for each controller. The backend asks once for each hand,
-//! before the first frame that the runtime waits for, and again when a hand's controller comes
-//! back after the runtime had no model for it. It copies the bytes out of the runtime and leaves
-//! the decoding to the loader, which runs on a worker thread.
+//! before the first frame that the runtime waits for. It asks again when a hand's controller comes
+//! back after the runtime had no model for it. It copies the bytes out of the runtime. The loader
+//! decodes them on a worker thread.
 
 use std::sync::Arc;
 
@@ -51,8 +51,8 @@ impl RenderModels {
         }
     }
 
-    // Tells the scene what the runtime offers before any question: nothing where the instance lacks
-    // the extension, and an answer to come where it has it.
+    // Tells the scene what the runtime offers before any question. The instance without the
+    // extension offers nothing. The instance with it has an answer to come.
     pub(crate) fn announce(&self, states: ControllerStates) {
         let first = if self.enabled {
             Offer::Pending

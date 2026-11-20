@@ -26,12 +26,12 @@ impl Default for Settings {
 /// controller. An app reads the handle from [`local_controller_models`].
 ///
 /// The models are on by default. A hand shows its model while the runtime tracks a controller in
-/// it. A hand that cameras track, with no controller in it, shows no model, and the hand's own
-/// ray stays as it is. Jetpack XR has no controller models. Its `Entity.setEnabled` and
-/// `isEnabled` name the switch.
+/// it. A hand that cameras track, with no controller in it, shows no model. The hand's own ray
+/// stays as it is. Jetpack XR has no controller models. Its `Entity.setEnabled` and `isEnabled`
+/// name the switch.
 ///
-/// The handle is a state of the composition: a composable that reads it composes again when the
-/// app changes it. Use it on the composition's thread.
+/// The handle is a state of the composition. A composable that reads it composes again when the app
+/// changes it. Use it on the composition's thread.
 #[derive(Clone, Copy, PartialEq)]
 pub struct ControllerModels {
     settings: MutableState<Settings>,
@@ -61,8 +61,8 @@ impl ControllerModels {
         self.settings.read(|settings| settings.enabled)
     }
 
-    /// Turns the models of both hands on or off. Off, no hand shows a model and no frame draws a
-    /// scene for them. The setting persists while the app runs. Jetpack XR's `Entity.setEnabled`.
+    /// Turns the models of both hands on or off. With the models off no frame draws a scene for
+    /// them. The setting lasts while the app runs. Jetpack XR's `Entity.setEnabled`.
     pub fn set_enabled(&self, enabled: bool) {
         self.settings.update(|settings| settings.enabled = enabled);
     }
@@ -74,8 +74,8 @@ impl ControllerModels {
     }
 
     /// Draws `hand`'s controller with `model` in place of the runtime's. A glTF model loads on a
-    /// worker thread, and the hand shows nothing until it has loaded. A model that fails to load
-    /// shows the [`ControllerModel::Plain`] one.
+    /// worker thread. The hand shows nothing until it has loaded. A model that fails to load shows
+    /// the [`ControllerModel::Plain`] one.
     pub fn set_model(&self, hand: Hand, model: ControllerModel) {
         self.settings
             .update(|settings| settings.models[hand.index()] = model);

@@ -1,8 +1,8 @@
 //! The controllers' models in the scene that draws the volumes.
 //!
 //! A hand that shows a model has one node tree in the scene, beside the volumes' content. The
-//! tree's surfaces carry the placement of the controller's grip, so the frame loop moves a model by
-//! writing one state, and the draw reads it. A hand with no controller in use has no tree.
+//! tree's surfaces carry the placement of the controller's grip. The frame loop moves a model by
+//! writing one state, which the draw reads. A hand with no controller in use has no tree.
 
 use cranpose::composable;
 use cranpose_core::key;

@@ -122,7 +122,7 @@ const PLANES: Tracking = Tracking {
 // The runtime's models of the controllers come through `XR_FB_render_model`, which the Horizon OS
 // runtime lists to an app only while the manifest holds the permission and the feature. Both are
 // normal: the system grants the permission at install and asks nobody. Android XR names no such
-// permission, and an app on a runtime that offers no model draws Cranpose's own.
+// permission. An app on a runtime that offers no model draws Cranpose's own.
 const CONTROLLER_MODELS: Tracking = Tracking {
     name: "controller-models",
     permissions: &["com.oculus.permission.RENDER_MODEL"],
