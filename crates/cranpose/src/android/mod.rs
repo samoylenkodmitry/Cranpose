@@ -85,7 +85,14 @@ pub(crate) mod media;
     target_os = "android"
 ))]
 pub(crate) mod meta_entitlement;
-#[cfg(any(test, all(feature = "meta-entitlement", target_os = "android")))]
+#[cfg(any(
+    test,
+    all(
+        feature = "meta-entitlement",
+        feature = "renderer-wgpu",
+        target_os = "android"
+    )
+))]
 pub(crate) mod meta_entitlement_wire;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod microphone;
