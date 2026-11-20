@@ -9,6 +9,8 @@ use cranpose::space::{Camera, Light, Mat4, Multisample};
 use cranpose_core::{MutableState, NodeId, mutableStateOf};
 
 use crate::{Pose, callback_slot::Callback};
+#[cfg(any(test, headset))]
+use crate::{controller_states::ControllerStates, space::Space};
 
 // What the scene needs of one volume.
 #[derive(Clone)]
@@ -36,10 +38,13 @@ impl PartialEq for VolumeContent {
     }
 }
 
-// The volumes of a space and the camera that the scene draws them through.
+// The volumes of a space and the camera that the scene draws them through, with the models of the
+// controllers that the scene draws beside them.
 #[derive(Clone, Copy)]
 pub(crate) struct Volumes {
     contents: MutableState<Vec<VolumeContent>>,
+    #[cfg(any(test, headset))]
+    controllers: ControllerStates,
     #[cfg_attr(
         not(any(test, headset)),
         expect(dead_code, reason = "the headset's scene reads it")
@@ -57,6 +62,8 @@ impl Volumes {
     pub(crate) fn new() -> Self {
         Self {
             contents: mutableStateOf(Vec::new()),
+            #[cfg(any(test, headset))]
+            controllers: ControllerStates::new(),
             camera: mutableStateOf(Camera {
                 view: Mat4::IDENTITY,
                 focal_length: 1.0,
@@ -73,6 +80,12 @@ impl Volumes {
                 None => contents.push(content),
             }
         });
+    }
+
+    #[cfg(any(test, headset))]
+    // The states of the controllers' models, which the scene draws.
+    pub(crate) fn controllers(&self) -> ControllerStates {
+        self.controllers
     }
 
     // The scene forgets the volume `id`.
@@ -121,4 +134,11 @@ impl Volumes {
     pub(crate) fn samples(&self) -> MutableState<Multisample> {
         self.samples
     }
+}
+
+// How many things the scene draws for `space`: its volumes, and the controllers that show a model.
+// A frame with none makes no projection layer.
+#[cfg(any(test, headset))]
+pub(crate) fn scene_count(space: &Space) -> usize {
+    space.volume_count() + space.volumes().controllers().shown_count()
 }

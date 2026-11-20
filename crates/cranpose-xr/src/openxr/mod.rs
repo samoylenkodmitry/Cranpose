@@ -19,6 +19,7 @@ mod passthrough;
 mod ray_layers;
 mod recenter_events;
 mod refresh_rate;
+mod render_models;
 mod runner;
 mod runtime;
 mod session;

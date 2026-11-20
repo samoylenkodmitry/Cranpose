@@ -77,6 +77,9 @@ pub enum Service {
     /// The planes of the room, such as its walls, floor and tables, which a
     /// headset has scanned.
     PlaneTracking,
+    /// The headset's own 3D models of its controllers, which the runtime
+    /// hands to an application.
+    ControllerModels,
 }
 
 impl Service {
@@ -106,7 +109,8 @@ impl Service {
             | Self::FaceTracking
             | Self::EyeTracking
             | Self::Anchors
-            | Self::PlaneTracking => tracking::of(self).name,
+            | Self::PlaneTracking
+            | Self::ControllerModels => tracking::of(self).name,
         }
     }
 
@@ -163,7 +167,8 @@ impl Service {
             | Self::FaceTracking
             | Self::EyeTracking
             | Self::Anchors
-            | Self::PlaneTracking => tracking::of(self).permissions,
+            | Self::PlaneTracking
+            | Self::ControllerModels => tracking::of(self).permissions,
         }
     }
 

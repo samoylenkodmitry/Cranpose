@@ -74,6 +74,22 @@ mod controller;
 #[cfg(any(test, headset))]
 mod controller_bindings;
 #[cfg(any(test, headset))]
+mod controller_grips;
+#[cfg(all(feature = "gltf", any(test, headset)))]
+mod controller_loaders;
+#[cfg(any(test, headset))]
+mod controller_look;
+mod controller_model;
+mod controller_models;
+#[cfg(any(test, headset))]
+mod controller_placement;
+#[cfg(any(test, headset))]
+mod controller_scene;
+#[cfg(any(test, headset))]
+mod controller_states;
+#[cfg(any(feature = "gltf", test, headset))]
+mod default_light;
+#[cfg(any(test, headset))]
 mod depth_order;
 mod dock;
 mod entitlement;
@@ -119,13 +135,13 @@ mod gltf_fit;
 #[cfg(feature = "gltf")]
 mod gltf_import;
 #[cfg(feature = "gltf")]
-mod gltf_layer_spaces;
-#[cfg(feature = "gltf")]
 mod gltf_material;
 #[cfg(feature = "gltf")]
 mod gltf_model;
 #[cfg(feature = "gltf")]
 mod gltf_model_node;
+#[cfg(feature = "gltf")]
+mod gltf_placement;
 mod hand;
 mod hand_aim;
 mod hand_joint;
@@ -154,9 +170,13 @@ mod layer_limit;
 mod locals;
 mod mesh_ref;
 mod meta_face_state;
+#[cfg(any(test, headset))]
+mod model_path;
 mod move_policy;
 mod on_not_entitled;
 mod pinch;
+#[cfg(any(test, headset))]
+mod plain_controller;
 mod plane;
 #[cfg(any(test, headset))]
 mod plane_classify;
@@ -237,6 +257,8 @@ mod streamed_view;
 mod subspace;
 mod subspace_modifier;
 mod surface_input;
+#[cfg(any(feature = "gltf", test, headset))]
+mod surface_ring;
 #[cfg(any(test, headset))]
 mod system_support;
 mod tracking_availability;
@@ -285,6 +307,8 @@ pub use body_joint::BodyJoint;
 pub use body_joint_type::BodyJointType;
 pub use body_state::BodyState;
 pub use controller::{Button, Controller, Thumbstick, TrackedPose, Trigger};
+pub use controller_model::ControllerModel;
+pub use controller_models::{ControllerModels, local_controller_models};
 #[doc(hidden)]
 pub use cranpose as __cranpose;
 pub use cranpose::{DistanceAttenuation, ExternalSurface};

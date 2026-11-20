@@ -19,6 +19,7 @@ use super::{
     host::{Host, SystemKeyboard},
     panel_layers::{DENSITY, PanelLayers},
     ray_layers::RayLayers,
+    render_models::RenderModels,
     runtime::Runtime,
     session::{ProjectionLayer, QuadLayer, XrSession},
     spatial::{Frame as RoomFrame, Room, SpatialEvent},
@@ -27,13 +28,14 @@ use super::{
     volume_layers::VolumeLayers,
 };
 use crate::{
-    Anchors, EntitlementCheck, Planes, SpatialCapabilities, SpatialEnvironment,
+    Anchors, EntitlementCheck, Hand, Planes, SpatialCapabilities, SpatialEnvironment,
     depth_order::sort_back_to_front,
     exit_request::{ExitRequest, ExitStep, leave},
     frame_effects::local_frame_effects,
     keyboard_panel::SoftKeyboardPanel,
-    local_anchors, local_entitlement_check, local_haptics, local_headset_properties, local_planes,
-    local_spatial_capabilities, local_spatial_environment, local_tracking_capabilities,
+    local_anchors, local_controller_models, local_entitlement_check, local_haptics,
+    local_headset_properties, local_planes, local_spatial_capabilities, local_spatial_environment,
+    local_tracking_capabilities,
     pointer::Pointer,
     session_status::{SessionStatus, StatusWatch},
     soft_keyboard::SoftKeyboard,
@@ -147,6 +149,8 @@ struct Immersive {
     surfaces: SurfaceLayers,
     rays: RayLayers,
     handles: HandleLayers,
+    // What the runtime offers for the controllers' models, and which questions it has answered
+    render_models: RenderModels,
     // The sound of the app, or `None` while its audio player has no spatial sound
     sounds: Option<SoundStage>,
     headset: HeadsetInput,
@@ -168,6 +172,7 @@ impl Immersive {
         let (graphics, gpu) = Graphics::open(&runtime.instance, runtime.system)?;
         let tracking = runtime.tracking;
         let spatial = runtime.spatial;
+        let render_models = RenderModels::new(runtime.render_models);
         let xr_session = XrSession::new(runtime, &graphics)?;
         let room = Room::new(spatial, &xr_session);
         let headset = HeadsetInput::new(&xr_session, tracking)?;
@@ -205,6 +210,8 @@ impl Immersive {
                     local_spatial_environment().provides(Some(environment)),
                     local_frame_effects().provides(Some(effects.clone())),
                     local_haptics().provides(Some(haptics.clone())),
+                    local_controller_models()
+                        .provides(Some(volume_space.volumes().controllers().handle())),
                     local_headset_properties().provides(Some(properties.clone())),
                     local_tracking_capabilities().provides(tracking.capabilities),
                     local_entitlement_check().provides(check),
@@ -226,13 +233,8 @@ impl Immersive {
             .clone()
             .ok_or("the content did not compose")?;
         space.set_curves_shown(xr_session.shows_cylinders());
-        // The first composition made the keyboard, because its panel asks for it
-        let keyboard = space.keyboard();
-        let system_keyboard = host.system_keyboard();
-        match &system_keyboard {
-            Some(system) => system.install(&mut guest),
-            None => keyboard.install(guest.shell()),
-        }
+        render_models.announce(space.volumes().controllers());
+        let (keyboard, system_keyboard) = install_keyboard(host, &space, &mut guest);
         Ok(Self {
             guest,
             space,
@@ -251,6 +253,7 @@ impl Immersive {
             surfaces: SurfaceLayers::new(),
             rays,
             handles,
+            render_models,
             sounds,
             headset,
             xr_session,
@@ -275,6 +278,7 @@ impl Immersive {
     // of the app's layers the app draws none and ends the frame empty. The app's state stays as
     // it was.
     fn frame(&mut self, status: SessionStatus, host: &Host) -> Result<(), String> {
+        self.ask_for_models();
         let frame = self.xr_session.begin_frame()?;
         let aims = status.input(
             self.headset
@@ -299,6 +303,7 @@ impl Immersive {
             self.headset.display_time(),
             self.headset.recenter(),
         );
+        self.show_controllers();
         let shown = status.shows() && frame.should_render;
         let time = Duration::from_nanos(
             frame
@@ -440,12 +445,52 @@ impl Immersive {
         )
     }
 
+    // Asks the runtime for the model of each controller that it has not given one for, before the
+    // frame that the runtime waits for, so that a question that takes a few milliseconds delays no
+    // frame. A frame with no question due makes no call. The profiles are those of the last frame.
+    fn ask_for_models(&mut self) {
+        let profiles = Hand::BOTH.map(|hand| self.headset.controller(hand).profile);
+        let offers = self.render_models.query(&self.xr_session, profiles);
+        let states = self.space.volumes().controllers();
+        for (hand, offer) in Hand::BOTH.into_iter().zip(offers) {
+            if let Some(offer) = offer {
+                states.set_offer(hand, offer);
+            }
+        }
+    }
+
+    // Puts a model at the grip of each controller that is in use, and takes the model of a hand
+    // that holds none out of the scene.
+    fn show_controllers(&self) {
+        self.space
+            .volumes()
+            .controllers()
+            .track(Hand::BOTH.map(|hand| self.headset.controller(hand)));
+    }
+
     // The room follows what the app prefers, and the app learns what the room shows.
     fn follow_environment(&mut self) {
         let passthrough = &mut self.xr_session.passthrough;
         passthrough.set_opacity(self.environment.preference().unwrap_or(0.0));
         self.environment.show(passthrough.opacity());
     }
+}
+
+// Installs the keyboard that a focused text field opens: the system's where the runtime shows it,
+// else the one that Cranpose draws. The first composition made the keyboard, because its panel asks
+// for it.
+fn install_keyboard(
+    host: &Host,
+    space: &Space,
+    guest: &mut GuestView,
+) -> (SoftKeyboard, Option<SystemKeyboard>) {
+    let keyboard = space.keyboard();
+    let system_keyboard = host.system_keyboard();
+    match &system_keyboard {
+        Some(system) => system.install(guest),
+        None => keyboard.install(guest.shell()),
+    }
+    (keyboard, system_keyboard)
 }
 
 fn send(guest: &mut GuestView, events: &[Gesture]) {

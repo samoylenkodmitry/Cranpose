@@ -14,9 +14,9 @@ use super::{
     tracking::{EyeGazeAction, Trackers, TrackingSetup},
 };
 use crate::{
-    Hand, Haptics, HeadsetProperties, Pose, Recenter, RenderViewpoint, TrackingFeature, XrFrame,
-    frame_effects::FrameEffects, haptics::controller_asks, pointer::Aim, pointer_aim::pointer_aim,
-    session_status::SessionStatus,
+    Controller, Hand, Haptics, HeadsetProperties, Pose, Recenter, RenderViewpoint, TrackingFeature,
+    XrFrame, frame_effects::FrameEffects, haptics::controller_asks, pointer::Aim,
+    pointer_aim::pointer_aim, session_status::SessionStatus,
 };
 
 // What the app gets of the headset in a frame, the controllers that it reads, and the callbacks
@@ -109,6 +109,11 @@ impl HeadsetInput {
     pub(crate) fn eye_image_size(&self) -> (u32, u32) {
         let [width, height] = self.properties.eye_image_sizes[0].recommended;
         (width, height)
+    }
+
+    // The controller of `hand` in the frame sampled last.
+    pub(crate) fn controller(&self, hand: Hand) -> &Controller {
+        self.frame.controller(hand)
     }
 
     // Where each controller is in the frame sampled last, left then right: the place of its grip

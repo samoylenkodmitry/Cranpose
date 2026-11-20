@@ -1,15 +1,19 @@
 //! The state of a glTF model that a [`SpatialGltfModel`](crate::SpatialGltfModel) shows.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
-use cranpose::{LaunchedEffect, composable, space::Mat4, withBlocking};
+use cranpose::{
+    LaunchedEffect, composable,
+    space::{Mat4, Mesh},
+    withBlocking,
+};
 use cranpose_core::{MutableState, NodeId, mutableStateOf, rememberKeyed};
 
 use crate::{
     HitInfo, gltf_animation::GltfAnimation, gltf_clip::Trs, gltf_error::GltfError,
-    gltf_import::import, gltf_layer_spaces::LayerSpaces, gltf_model::GltfModel,
-    gltf_model_node::GltfModelNode, spatial_gltf_model_source::SpatialGltfModelSource,
-    spatial_gltf_model_status::SpatialGltfModelStatus,
+    gltf_import::import, gltf_model::GltfModel, gltf_model_node::GltfModelNode,
+    spatial_gltf_model_source::SpatialGltfModelSource,
+    spatial_gltf_model_status::SpatialGltfModelStatus, surface_ring::SurfaceRing,
 };
 
 // The transforms of the nodes as the animations pose them, and the room that working them out
@@ -22,10 +26,12 @@ pub(crate) struct NodePoses {
 
 // The draws of one layer: the first places the layer, and the others show the same picture too.
 pub(crate) struct LayerDraws {
-    pub(crate) owner: usize,
-    pub(crate) more: Vec<usize>,
+    // The node of each draw, the owner first
+    pub(crate) nodes: Vec<usize>,
+    // The mesh of each draw, in the order of `nodes`
+    pub(crate) meshes: Vec<Arc<Mesh>>,
     // The spaces that the layer's node takes, moved in place as the nodes move
-    pub(crate) spaces: LayerSpaces,
+    pub(crate) spaces: SurfaceRing,
 }
 
 // A loaded model with the parts that only the composition can hold.
@@ -63,17 +69,14 @@ impl LoadedModel {
             })
             .collect();
         let mut layers: Vec<Option<LayerDraws>> = model.layers.iter().map(|_| None).collect();
-        for (draw, placed) in model.draws.iter().enumerate() {
-            match &mut layers[placed.layer] {
-                Some(layer) => layer.more.push(draw),
-                none => {
-                    *none = Some(LayerDraws {
-                        owner: draw,
-                        more: Vec::new(),
-                        spaces: LayerSpaces::new(),
-                    });
-                }
-            }
+        for placed in &model.draws {
+            let layer = layers[placed.layer].get_or_insert_with(|| LayerDraws {
+                nodes: Vec::new(),
+                meshes: Vec::new(),
+                spaces: SurfaceRing::new(),
+            });
+            layer.nodes.push(placed.node);
+            layer.meshes.push(Arc::clone(&placed.mesh));
         }
         let layers: Vec<LayerDraws> = layers.into_iter().flatten().collect();
         let loaded = Self {
@@ -121,12 +124,7 @@ impl LoadedModel {
             .borrow()
             .iter()
             .position(|node| *node == Some(entity))?;
-        let draws = &self.layers[layer];
-        let draw = match mesh_index {
-            0 => draws.owner,
-            more => *draws.more.get(more - 1)?,
-        };
-        let index = self.model.draws[draw].node;
+        let index = *self.layers[layer].nodes.get(mesh_index)?;
         Some(GltfModelNode {
             index,
             name: self.model.names[index].clone(),

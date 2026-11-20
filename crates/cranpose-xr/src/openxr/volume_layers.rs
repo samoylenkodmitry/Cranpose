@@ -4,7 +4,7 @@
 //! The composition draws the scene of the volumes into the eye's next image from that eye's own
 //! pose and field of view, once for each eye in each frame. The scene draws against the depth
 //! image, so the compositor receives the depth of what it shows. With no volume in the
-//! composition no swapchain exists and no pass runs.
+//! composition and no controller that shows a model, no swapchain exists and no pass runs.
 
 use cranpose::{GpuContext, GuestView};
 use openxr as xr;
@@ -20,6 +20,7 @@ use crate::{
     volume_pass::{EyeImage, VolumePass},
     volume_plan::{DepthSupport, VolumePlan, plan},
     volume_samples::volume_samples,
+    volumes::scene_count,
 };
 
 // An image of a swapchain that wgpu draws into, with its view.
@@ -134,12 +135,12 @@ impl VolumeLayers {
     ) -> Result<(), String> {
         self.drawn = None;
         // The swapchains stay through a frame that cannot draw, such as one in which the runtime
-        // loses the eyes, and go with the last volume
-        if space.volume_count() == 0 {
+        // loses the eyes, and go with the last volume and the last controller model
+        if scene_count(space) == 0 {
             self.eyes = None;
         }
         let Some(frame_plan) = plan(
-            space.volume_count(),
+            scene_count(space),
             views.map(|view| view.is_some()),
             self.support(),
         ) else {

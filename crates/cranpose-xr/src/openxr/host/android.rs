@@ -17,7 +17,10 @@ use crate::{
     Keyboard,
     entitlement_watch::Answer,
     keyboard::chosen,
-    openxr::{entitlement_run::EntitlementRun, runner::run_immersive, runtime::Runtime},
+    openxr::{
+        entitlement_run::EntitlementRun, render_models::ModelRequest, runner::run_immersive,
+        runtime::Runtime,
+    },
     session_status::SessionStatus,
     spatial_request::SpatialRequest,
     tracking_permission::PermissionAnswer,
@@ -251,10 +254,11 @@ pub fn run<Fonts: LauncherFonts>(
     };
     let request = TrackingRequest::of(&settings.capabilities);
     let spatial_request = SpatialRequest::of(&settings.capabilities);
+    let models = ModelRequest::of(&settings.capabilities);
     // The check starts first: Meta wants it within 10 seconds of the launch. The connection can
     // wait for the user's answer to a permission prompt.
     let entitlement = EntitlementRun::start(&host);
-    let result = Runtime::connect(&host, request, spatial_request)
+    let result = Runtime::connect(&host, request, spatial_request, models)
         .and_then(|runtime| run_immersive(&host, runtime, &settings, entitlement, content));
     if let Err(error) = result {
         log::error!("cranpose xr: {error}");

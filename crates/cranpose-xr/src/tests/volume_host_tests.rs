@@ -39,6 +39,9 @@ mod antialias;
 #[path = "volume_picking_tests.rs"]
 mod picking;
 
+#[path = "controller_scene_tests.rs"]
+mod controllers;
+
 // What the host of a test holds: the GPU, the guest view that runs the content, the space and the
 // counts of what composed.
 struct Headset {
@@ -281,6 +284,26 @@ fn shows_something(gpu: &GpuContext, color: &wgpu::Texture) -> bool {
         .0
         .iter()
         .any(|texel| texel[3] != 0)
+}
+
+// The box of the pixels that the scene drew, as the first and last column and row.
+fn drawn_box(pixels: &[u8]) -> Option<[u32; 4]> {
+    let mut found: Option<[u32; 4]> = None;
+    for (at, texel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+        if texel[3] == 0 {
+            continue;
+        }
+        let at = u32::try_from(at).expect("a pixel of the eye");
+        let (x, y) = (at % EYE, at / EYE);
+        let [left, top, right, bottom] = found.get_or_insert([x, y, x, y]);
+        (*left, *top, *right, *bottom) = (
+            (*left).min(x),
+            (*top).min(y),
+            (*right).max(x),
+            (*bottom).max(y),
+        );
+    }
+    found
 }
 
 // The first column, counted from the left, in which the middle row of `color` is red.
