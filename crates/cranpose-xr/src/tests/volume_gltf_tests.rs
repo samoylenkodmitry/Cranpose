@@ -49,7 +49,8 @@ fn drawn_box(pixels: &[u8]) -> Option<[u32; 4]> {
         if texel[3] == 0 {
             continue;
         }
-        let (x, y) = (at as u32 % EYE, at as u32 / EYE);
+        let at = u32::try_from(at).expect("a pixel of the eye");
+        let (x, y) = (at % EYE, at / EYE);
         let [left, top, right, bottom] = found.get_or_insert([x, y, x, y]);
         (*left, *top, *right, *bottom) = (
             (*left).min(x),
@@ -61,12 +62,12 @@ fn drawn_box(pixels: &[u8]) -> Option<[u32; 4]> {
     found
 }
 
-// The pixel at the quadrant of `bounds` whose middle is `across` and `down` of the box's width and
-// height from its top left corner.
-fn at_quarter(pixels: &[u8], bounds: [u32; 4], across: f32, down: f32) -> [u8; 3] {
-    let x = bounds[0] as f32 + (bounds[2] - bounds[0] + 1) as f32 * across;
-    let y = bounds[1] as f32 + (bounds[3] - bounds[1] + 1) as f32 * down;
-    let at = ((y as u32 * EYE + x as u32) * 4) as usize;
+// The pixel `across` and `down` quarters of the way from the top left corner of `bounds`, which is
+// a box of the first and last column and row.
+fn at_quarter(pixels: &[u8], bounds: [u32; 4], across: u32, down: u32) -> [u8; 3] {
+    let x = bounds[0] + (bounds[2] - bounds[0] + 1) * across / 4;
+    let y = bounds[1] + (bounds[3] - bounds[1] + 1) * down / 4;
+    let at = usize::try_from((y * EYE + x) * 4).expect("an offset");
     [pixels[at], pixels[at + 1], pixels[at + 2]]
 }
 
@@ -98,18 +99,10 @@ fn each_eye_shows_the_models_texture_upright_from_its_own_place() {
             "the model is {width} pixels wide"
         );
         for ((across, down), strong, name) in [
-            ((0.25, 0.25), [true, false, false], "red at the top left"),
-            ((0.75, 0.25), [false, true, false], "green at the top right"),
-            (
-                (0.25, 0.75),
-                [false, false, true],
-                "blue at the bottom left",
-            ),
-            (
-                (0.75, 0.75),
-                [true, true, false],
-                "yellow at the bottom right",
-            ),
+            ((1, 1), [true, false, false], "red at the top left"),
+            ((3, 1), [false, true, false], "green at the top right"),
+            ((1, 3), [false, false, true], "blue at the bottom left"),
+            ((3, 3), [true, true, false], "yellow at the bottom right"),
         ] {
             let pixel = at_quarter(&pixels, bounds, across, down);
             assert!(is_color(pixel, strong), "{name}: the pixel is {pixel:?}");

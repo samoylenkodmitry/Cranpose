@@ -57,7 +57,7 @@ fn encode(linear: f32) -> f32 {
     let linear = linear.clamp(0.0, 1.0);
     if linear <= 0.003_130_8 {
         linear * 12.92
-    } else if linear == 1.0 {
+    } else if linear >= 1.0 {
         // The curve's value at one is one, which the power function misses by a rounding step
         1.0
     } else {
@@ -99,7 +99,9 @@ pub(crate) fn bake(
 
 // Multiplies the texture by the factor, and applies the alpha mode.
 fn tint(texture: &mut Texture, factor: [f32; 4], alpha: Alpha) {
-    let colored = factor[..3].iter().any(|&channel| channel != 1.0);
+    let colored = factor[..3]
+        .iter()
+        .any(|&channel| (channel - 1.0).abs() > f32::EPSILON);
     // The decode of each byte, worked out once
     let linear: [f32; 256] = std::array::from_fn(|byte| decode(byte as f32 / 255.0));
     for pixel in texture.rgba.as_chunks_mut::<4>().0 {
@@ -112,6 +114,11 @@ fn tint(texture: &mut Texture, factor: [f32; 4], alpha: Alpha) {
     }
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the channel is clamped to 0..=1 and scaled to 0..=255, which a byte holds"
+)]
 fn to_byte(channel: f32) -> u8 {
     (channel.clamp(0.0, 1.0) * 255.0).round() as u8
 }
@@ -132,7 +139,8 @@ fn halved(texture: &Texture) -> Texture {
                     *sum += u32::from(byte);
                 }
             }
-            rgba.extend(sums.map(|sum| ((sum + 2) / 4) as u8));
+            // Four bytes sum to at most 1020, so a quarter of it fits a byte
+            rgba.extend(sums.map(|sum| u8::try_from((sum + 2) / 4).unwrap_or(u8::MAX)));
         }
     }
     Texture {

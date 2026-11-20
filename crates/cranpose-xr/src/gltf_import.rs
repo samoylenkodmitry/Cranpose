@@ -186,7 +186,7 @@ fn primitive_mesh(
     ) {
         return Ok(None);
     }
-    let reader = primitive.reader(|buffer| buffers.data(buffer));
+    let reader = primitive.reader(|buffer| buffers.data(&buffer));
     let positions: Vec<[f32; 3]> = reader
         .read_positions()
         .ok_or("it has no positions, or they lie outside their buffer")?
@@ -198,7 +198,11 @@ fn primitive_mesh(
     };
     let listed: Vec<u32> = match reader.read_indices() {
         Some(indices) => indices.into_u32().collect(),
-        None => (0..positions.len() as u32).collect(),
+        None => {
+            let count = u32::try_from(positions.len())
+                .map_err(|_| "it has more vertices than a mesh can index")?;
+            (0..count).collect()
+        }
     };
     let indices = match mode {
         Mode::TriangleStrip => strip_triangles(&listed),
@@ -312,7 +316,7 @@ fn clips(document: &gltf::Document, buffers: &Buffers) -> Result<Vec<Clip>, Gltf
             let failed = |reason: String| GltfError::Animation { index, reason };
             let mut channels = Vec::new();
             for channel in animation.channels() {
-                let reader = channel.reader(|buffer| buffers.data(buffer));
+                let reader = channel.reader(|buffer| buffers.data(&buffer));
                 let times: Vec<f32> = reader
                     .read_inputs()
                     .ok_or_else(|| failed("a sampler's times lie outside their buffer".into()))?

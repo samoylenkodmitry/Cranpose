@@ -25,6 +25,11 @@ fn bytes_of(name: &str) -> Vec<u8> {
     std::fs::read(path(name)).expect("a model file")
 }
 
+// Whether a normal is +z, the way that the quad and the triangle face.
+fn is_up(normal: [f32; 3]) -> bool {
+    (Vec3::from_array(normal) - Vec3::new(0.0, 0.0, 1.0)).length() < 1e-6
+}
+
 fn near(a: Vec3, b: Vec3) {
     assert!((a - b).length() < 1e-4, "{a:?} is not {b:?}");
 }
@@ -35,11 +40,7 @@ fn a_gltf_with_embedded_buffer_and_texture_gives_a_mesh_with_normals_and_a_bitma
     assert_eq!(model.draws.len(), 1);
     let mesh = &model.draws[0].mesh;
     assert_eq!(mesh.positions().len(), 4);
-    assert!(
-        mesh.normals()
-            .iter()
-            .all(|&normal| normal == [0.0, 0.0, 1.0])
-    );
+    assert!(mesh.normals().iter().all(|&normal| is_up(normal)));
     // The texture's top left corner is the vertex at the quad's top left
     assert_eq!(mesh.uvs()[0], [0.0, 0.0]);
     assert_eq!(mesh.positions()[0], [-0.5, 0.5, 0.0]);
@@ -89,7 +90,7 @@ fn a_material_with_no_texture_is_one_color_in_srgb() {
             "{channel} is not {expected}"
         );
     }
-    assert_eq!(alpha, 1.0);
+    assert!((alpha - 1.0).abs() < 1e-6, "{alpha}");
 }
 
 #[test]
@@ -98,11 +99,7 @@ fn a_primitive_with_no_material_and_no_normals_loads_with_the_default_material()
     assert_eq!(model.draws.len(), 1);
     let mesh = &model.draws[0].mesh;
     // The file has no normals, so the vertices take the triangle's own
-    assert!(
-        mesh.normals()
-            .iter()
-            .all(|&normal| normal == [0.0, 0.0, 1.0])
-    );
+    assert!(mesh.normals().iter().all(|&normal| is_up(normal)));
     // The default material is white
     let LayerContent::Color(color) = model.layers[model.draws[0].layer].content else {
         panic!("the default material has no texture");
@@ -253,13 +250,13 @@ fn a_jpeg_texture_decodes() {
         .expect("a jpeg");
     // The quad's png becomes the jpeg
     let text = text_of("checker_quad.gltf");
-    let start = text.find("data:image/png;base64,").expect("the png");
-    let end = start + text[start..].find('"').expect("the end of the uri");
-    let swapped = format!(
-        "{}data:image/jpeg;base64,{}{}",
-        &text[..start],
-        STANDARD.encode(&jpeg),
-        &text[end..]
+    let png_uri = text
+        .split('"')
+        .find(|part| part.starts_with("data:image/png;base64,"))
+        .expect("the png");
+    let swapped = text.replace(
+        png_uri,
+        &format!("data:image/jpeg;base64,{}", STANDARD.encode(&jpeg)),
     );
     let model =
         import(&SpatialGltfModelSource::from_bytes(swapped.into_bytes())).expect("the quad loads");

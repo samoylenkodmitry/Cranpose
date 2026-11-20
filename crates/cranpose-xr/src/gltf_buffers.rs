@@ -42,7 +42,7 @@ impl Buffers {
     }
 
     // The data of `buffer`, for the readers of accessors.
-    pub(crate) fn data(&self, buffer: gltf::Buffer<'_>) -> Option<&[u8]> {
+    pub(crate) fn data(&self, buffer: &gltf::Buffer<'_>) -> Option<&[u8]> {
         self.0.get(buffer.index()).map(Vec::as_slice)
     }
 
@@ -59,7 +59,7 @@ impl Buffers {
         match image.source() {
             gltf::image::Source::View { view, .. } => {
                 let data = self
-                    .data(view.buffer())
+                    .data(&view.buffer())
                     .ok_or_else(|| failed("its buffer is missing".into()))?;
                 let end = view.offset().saturating_add(view.length());
                 data.get(view.offset()..end)
