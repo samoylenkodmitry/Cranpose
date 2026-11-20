@@ -182,8 +182,9 @@ def cube(model, half, textured):
     }
 
 
-def textured_quad(name, texture, material):
-    """A quad of a meter, facing +z, with a texture and no node transform."""
+def textured_quad(name, texture, material, textures=None, images=None, **extras):
+    """A quad of a meter, facing +z, with a texture and no node transform. The PNG `texture` is the
+    image of the only texture, unless `textures` and `images` say otherwise."""
     model = Model()
     half = 0.5
     corners = [(-half, half, 0), (half, half, 0), (-half, -half, 0), (half, -half, 0)]
@@ -205,8 +206,9 @@ def textured_quad(name, texture, material):
         nodes=[{"name": "quad", "mesh": 0}],
         meshes=[{"primitives": [primitive]}],
         materials=[material],
-        textures=[{"source": 0}],
-        images=[{"uri": data_uri("image/png", texture), "mimeType": "image/png"}],
+        textures=textures or [{"source": 0}],
+        images=images or [{"uri": data_uri("image/png", texture), "mimeType": "image/png"}],
+        **extras,
     )
     (TESTS / name).write_text(json.dumps(document, indent=1))
 
@@ -230,6 +232,58 @@ def masked_quad():
             "alphaMode": "MASK",
             "alphaCutoff": 0.5,
         },
+    )
+
+
+def ktx2_solid(color):
+    """A KTX2 file with one UASTC block: four by four pixels of the RGBA `color`, in the block's
+    solid color mode. The mode's 5 bit code comes first, then the four channels of 8 bits each, from
+    the lowest bit up."""
+    block = 0x17 | sum(channel << (5 + 8 * index) for index, channel in enumerate(color))
+    # The data format descriptor of a UASTC texture: color model 166, primaries BT.709, the sRGB
+    # transfer function, blocks of 4 by 4 texels and 16 bytes, and one sample of 128 bits
+    descriptor = (
+        struct.pack("<IIHH", 44, 0, 2, 40)
+        + bytes([166, 1, 2, 0, 3, 3, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0])
+        + struct.pack("<HBBBBBBII", 0, 127, 0, 0, 0, 0, 0, 0, 0xFFFFFFFF)
+    )
+    identifier = b"\xabKTX 20\xbb\r\n\x1a\n"
+    # No supercompression, one level, one face. The descriptor starts after the 24 bytes of the
+    # level index, and the level starts at the next multiple of 16.
+    header = struct.pack("<9I", 0, 1, 4, 4, 0, 0, 1, 1, 0)
+    index = struct.pack("<4I2Q", 104, len(descriptor), 0, 0, 0, 0)
+    level = struct.pack("<3Q", 160, 16, 16)
+    head = identifier + header + index + level + descriptor
+    return head + bytes(160 - len(head)) + block.to_bytes(16, "little")
+
+
+def basisu_quad():
+    """A quad whose only texture names a KTX2 image through KHR_texture_basisu and has no source of
+    its own, as the controller models of a Meta Quest do."""
+    textured_quad(
+        "basisu_quad.gltf",
+        None,
+        {"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}, "baseColorFactor": [1, 1, 1, 1]}},
+        textures=[{"extensions": {"KHR_texture_basisu": {"source": 0}}}],
+        images=[{"uri": data_uri("image/ktx2", ktx2_solid((200, 100, 50, 255))), "mimeType": "image/ktx2"}],
+        extensionsUsed=["KHR_texture_basisu"],
+        extensionsRequired=["KHR_texture_basisu"],
+    )
+
+
+def basisu_fallback_quad():
+    """The same quad, whose texture also has a PNG as its source, which a reader that lacks the
+    extension shows. The PNG is the four colors of checker_quad.gltf."""
+    textured_quad(
+        "basisu_fallback_quad.gltf",
+        None,
+        {"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}, "baseColorFactor": [1, 1, 1, 1]}},
+        textures=[{"source": 1, "extensions": {"KHR_texture_basisu": {"source": 0}}}],
+        images=[
+            {"uri": data_uri("image/ktx2", ktx2_solid((200, 100, 50, 255))), "mimeType": "image/ktx2"},
+            {"uri": data_uri("image/png", quadrants(64)), "mimeType": "image/png"},
+        ],
+        extensionsUsed=["KHR_texture_basisu"],
     )
 
 
@@ -338,6 +392,8 @@ if __name__ == "__main__":
     TESTS.mkdir(parents=True, exist_ok=True)
     checker_quad()
     masked_quad()
+    basisu_quad()
+    basisu_fallback_quad()
     tower()
     triangle_external()
     crate()

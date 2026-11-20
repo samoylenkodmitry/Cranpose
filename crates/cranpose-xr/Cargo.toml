@@ -62,6 +62,7 @@ stream-costs = ["openxr"]
 # `SpatialGltfModel`: glTF 2.0 models (`.gltf` and `.glb`) in a `SpatialVolume`. Off, the crate has
 # no glTF code and none of its dependencies.
 gltf = [
+    "dep:basisu",
     "dep:gltf",
     "dep:image",
     "dep:base64",
@@ -71,13 +72,16 @@ gltf = [
 
 [dependencies]
 base64 = { version = "0.23.1", optional = true }
+basisu = { version = "0.1.0", optional = true }
 # `video`: a flat stream draws through `PlayerSurfaceIntake`.
 cranpose = { workspace = true, features = ["video"] }
 # The keyboard that a headset draws sends key events to the app's shell, and runs with any renderer.
 cranpose-app-shell = { workspace = true }
 cranpose-core = { workspace = true }
 cranpose-render-common = { workspace = true }
-gltf = { version = "1.4.1", default-features = false, features = ["utils", "names"], optional = true }
+# `allow_empty_texture` and `extensions` let a texture name its image in `KHR_texture_basisu`, as the
+# controller models of a Meta Quest do.
+gltf = { version = "1.4.1", default-features = false, features = ["utils", "names", "allow_empty_texture", "extensions"], optional = true }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"], optional = true }
 log = "0.4"
 percent-encoding = { version = "2.3.2", optional = true }

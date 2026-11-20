@@ -272,6 +272,68 @@ fn a_jpeg_texture_decodes() {
 }
 
 #[test]
+fn a_texture_that_names_a_ktx2_image_through_basisu_decodes() {
+    let model = load("basisu_quad.gltf").expect("the quad loads");
+    let LayerContent::Bitmap(bitmap) = &model.layers[0].content else {
+        panic!("the material has a texture");
+    };
+    assert_eq!((bitmap.width(), bitmap.height()), (4, 4));
+    assert_eq!(bitmap.rgba8_pixel(0), [200, 100, 50, 255]);
+    assert_eq!(bitmap.rgba8_pixel(15), [200, 100, 50, 255]);
+}
+
+#[test]
+fn a_basisu_texture_prefers_its_ktx2_image_to_the_source_beside_it() {
+    let model = load("basisu_fallback_quad.gltf").expect("the quad loads");
+    let LayerContent::Bitmap(bitmap) = &model.layers[0].content else {
+        panic!("the material has a texture");
+    };
+    // The png beside it is 64 pixels wide and has red in its top left corner
+    assert_eq!((bitmap.width(), bitmap.height()), (4, 4));
+    assert_eq!(bitmap.rgba8_pixel(0), [200, 100, 50, 255]);
+}
+
+#[test]
+fn a_basisu_texture_that_names_a_missing_image_fails_with_its_index() {
+    let text = text_of("basisu_quad.gltf").replace(r#""source": 0"#, r#""source": 7"#);
+    let result = parse(text.as_bytes(), None);
+    assert!(
+        matches!(&result, Err(GltfError::Invalid(reason)) if reason.contains("texture 0")),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn a_texture_with_no_source_and_no_extension_fails() {
+    let text = text_of("basisu_quad.gltf").replace(
+        r#""extensions": {
+    "KHR_texture_basisu": {
+     "source": 0
+    }
+   }"#,
+        r#""name": "bare""#,
+    );
+    let result = parse(text.as_bytes(), None);
+    assert!(
+        matches!(&result, Err(GltfError::Invalid(reason)) if reason.contains("texture 0")),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn a_damaged_ktx2_image_fails_as_an_image() {
+    let text = text_of("basisu_quad.gltf");
+    let uri = text
+        .split('"')
+        .find(|part| part.starts_with("data:image/ktx2;base64,"))
+        .expect("the ktx2 file");
+    // The file keeps its identifier and loses the rest
+    let cut = &uri[..uri.len() - 40];
+    let result = parse(text.replace(uri, cut).as_bytes(), None);
+    assert!(matches!(result, Err(GltfError::Image { .. })), "{result:?}");
+}
+
+#[test]
 fn strips_and_fans_become_triangles_that_keep_their_winding() {
     // A strip of five corners holds three triangles, and every other one turns its first two
     // corners over
