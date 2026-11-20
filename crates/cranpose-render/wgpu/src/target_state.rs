@@ -599,27 +599,6 @@ impl TargetState {
                 self.add(area);
             }
         }
-        self.write_damage(setting, root, damage);
-    }
-
-    // Writes into `damage` the frame's damage again for `root`, a later walk
-    // of the frame. That walk takes in every record an earlier walk took.
-    // The areas and the damage stay as the frame's end worked them out. The
-    // captures of `root`'s backdrops widen the damage.
-    pub(crate) fn end_again(&mut self, root: &LayerScene, damage: &mut Damage) {
-        if let (true, false, Some(setting)) = (self.recording, self.unknown_before, self.setting) {
-            self.write_damage(setting, Some(root), damage);
-        }
-    }
-
-    // Writes into `damage` the damage the frame's end worked out, widened by
-    // the captures of the backdrops of `root`, a walk of the frame.
-    fn write_damage(
-        &mut self,
-        setting: TargetSetting,
-        root: Option<&LayerScene>,
-        damage: &mut Damage,
-    ) {
         if self.whole {
             *damage = Damage::Full;
             return;

@@ -377,10 +377,9 @@ impl RendererFrontend {
                     self.root_shown = std::mem::take(&mut root.shown);
                 }
             } else if root.contains_backdrop() {
-                // A later walk takes every backdrop of the first walk. The
-                // captures of its backdrops widen the frame's damage again.
-                self.target.end_again(&root, &mut damage.damage);
-                damage.damage.add(overlay_damage, viewport);
+                // The end widened the damage by the captures of the first
+                // walk's backdrops alone.
+                damage.damage = Damage::Full;
             }
             let Some(region) = cull.as_mut() else {
                 break root;
