@@ -31,16 +31,20 @@ mod clip_player;
 mod decoder_limits;
 mod foveated_player;
 mod headset_readout;
+mod hum;
 mod pattern_writer;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod scripted_hand;
+mod sound_probe;
 mod torus_volume;
 mod tracking_panel;
 
 use clip_player::{ClipPlayer, target_display_time};
 use foveated_player::FoveatedPlayer;
 use headset_readout::{HeadsetClock, HeadsetReadout, Readout, StreamLogs};
+use hum::rememberHum;
 use pattern_writer::PatternWriter;
+use sound_probe::{SoundProbe, probe_build};
 use torus_volume::TorusVolume;
 use tracking_panel::{TrackedHands, TrackingSection, TrackingView};
 
@@ -68,6 +72,7 @@ pub fn XrDemo() {
     let logs = remember(StreamLogs::default).with(Clone::clone);
     remember(decoder_limits::log_in_background);
     let tracking = TrackedHands();
+    let hum = rememberHum();
     EntitlementChoice();
     Subspace(move || {
         HeadsetReadout(presses, readout, clock.clone(), logs.clone());
@@ -98,13 +103,19 @@ pub fn XrDemo() {
         );
         // A volume takes two of the compositor's layers, one for the 3D content and one for its
         // handle. A Quest takes 16. With both rays and the ball the demo has 18, so the frame
-        // leaves out the two panels that stand farthest from the head.
+        // leaves out the two panels that stand farthest from the head. The torus hums: the sound
+        // comes from the torus and follows it when a controller carries it. A build that plays the
+        // hum from the head's side leaves the torus silent.
         TorusVolume(
             SubspaceModifier::new()
                 .offset(600.0, -330.0, 100.0)
                 .rotate(0.0, -30.0, 0.0),
             true,
+            hum.filter(|_| !probe_build()).map(hum::source),
         );
+        if let Some(sound) = hum.filter(|_| probe_build()) {
+            SoundProbe(sound);
+        }
         CounterPanel(presses, tracking);
         if strip_shown.get() {
             CurvedStrip();
@@ -164,7 +175,7 @@ fn DepthTest() {
                 );
             });
         }
-        TorusVolume(SubspaceModifier::new().rotate(0.0, 45.0, 0.0), false);
+        TorusVolume(SubspaceModifier::new().rotate(0.0, 45.0, 0.0), false, None);
     });
 }
 

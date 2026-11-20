@@ -22,6 +22,12 @@
 //! commands for it. Decoding happens in [`AudioPlayer::load`], never during
 //! playback, so a cue that fires every few frames costs one queue push.
 
+mod audio_listener;
+mod distance_attenuation;
+mod emitter;
+mod output_tap;
+mod seq_cell;
+mod spatial_scene;
 mod wav;
 
 use std::{
@@ -31,9 +37,14 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
+pub use audio_listener::AudioListener;
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOfWithPolicy};
 use cranpose_macros::composable;
+pub use distance_attenuation::DistanceAttenuation;
+pub use emitter::{Emitter, EmitterId};
+pub use output_tap::{OutputLevels, OutputTap};
 use parking_lot::Mutex;
+pub use spatial_scene::{EmitterReading, MAX_EMITTERS, SpatialScene};
 
 use crate::registry::ServiceRegistry;
 
@@ -133,6 +144,11 @@ pub struct PlaybackParams {
     pub pan: f32,
     /// The mix bus this voice belongs to.
     pub bus: AudioBus,
+    /// The emitter that the voice plays from, or `None` for a voice that plays in the mix as
+    /// it is. A voice with an emitter sounds from the emitter's place: the player takes the
+    /// level of each ear, and the delay between the ears, from where the emitter is relative to
+    /// the listener, and ignores [`pan`](Self::pan).
+    pub emitter: Option<EmitterId>,
 }
 
 impl PlaybackParams {
@@ -142,6 +158,7 @@ impl PlaybackParams {
         rate: 1.0,
         pan: 0.0,
         bus: AudioBus::Effects,
+        emitter: None,
     };
 
     /// The slowest rate a backend honours.
@@ -180,6 +197,12 @@ impl PlaybackParams {
         self
     }
 
+    /// Makes the voice play from `emitter`.
+    pub fn emitter(mut self, emitter: EmitterId) -> Self {
+        self.emitter = Some(emitter);
+        self
+    }
+
     /// Sets the rate from a pitch offset in equal-tempered semitones.
     ///
     /// A rising combo counter reads better as `pitch_semitones(combo as f32)`
@@ -206,6 +229,7 @@ impl PlaybackParams {
             rate: finite(self.rate, 1.0).clamp(Self::MIN_RATE, Self::MAX_RATE),
             pan: finite(self.pan, 0.0).clamp(-1.0, 1.0),
             bus: self.bus,
+            emitter: self.emitter,
         }
     }
 
@@ -439,6 +463,14 @@ pub trait AudioPlayer: Send + Sync {
     fn is_available(&self) -> bool {
         false
     }
+
+    /// The state that a frame loop shares with the audio thread for spatial sound, or `None`
+    /// where the player has no spatial sound. An app that places sound in space makes an
+    /// [`Emitter`] there, plays voices with [`PlaybackParams::emitter`] and sets the listener's
+    /// pose in each frame.
+    fn spatial_scene(&self) -> Option<Arc<SpatialScene>> {
+        None
+    }
 }
 
 /// Shared handle to the installed [`AudioPlayer`].
@@ -606,6 +638,10 @@ impl AudioPlayer for PlatformAudioPlayer {
 
     fn is_available(&self) -> bool {
         registered_audio().is_available()
+    }
+
+    fn spatial_scene(&self) -> Option<Arc<SpatialScene>> {
+        registered_audio().spatial_scene()
     }
 }
 
@@ -858,6 +894,7 @@ impl SoundBankEntry {
             rate: params.rate,
             pan: params.pan,
             bus: self.bus,
+            emitter: params.emitter,
         }
     }
 }

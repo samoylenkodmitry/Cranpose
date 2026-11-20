@@ -101,6 +101,8 @@ mod meta_face_state;
 mod move_policy;
 mod on_not_entitled;
 mod pinch;
+mod point_source;
+mod point_source_params;
 #[cfg(any(test, headset))]
 mod pointer;
 #[cfg(any(test, headset))]
@@ -124,6 +126,9 @@ mod resize_policy;
 mod scripted_hand;
 #[cfg(any(test, headset))]
 mod session_status;
+mod sound_sources;
+#[cfg(any(test, headset))]
+mod sound_stage;
 mod space;
 mod spatial_capabilities;
 mod spatial_curved_row;
@@ -132,6 +137,7 @@ mod spatial_external_surface;
 mod spatial_frame_effect;
 mod spatial_move_event;
 mod spatial_panel;
+mod spatial_point_source;
 mod spatial_resize_event;
 mod spatial_volume;
 mod stereo_mode;
@@ -181,7 +187,7 @@ pub use body_state::BodyState;
 pub use controller::{Button, Controller, Thumbstick, TrackedPose, Trigger};
 #[doc(hidden)]
 pub use cranpose as __cranpose;
-pub use cranpose::ExternalSurface;
+pub use cranpose::{DistanceAttenuation, ExternalSurface};
 pub use entitlement::Entitlement;
 pub use entitlement_check::{EntitlementCheck, local_entitlement_check};
 pub use eye_state::EyeState;
@@ -216,6 +222,8 @@ pub use openxr::run;
 #[cfg(all(headset, not(target_os = "android")))]
 pub use openxr::run;
 pub use pinch::Pinch;
+pub use point_source::PointSource;
+pub use point_source_params::PointSourceParams;
 pub use pose::Pose;
 pub use ray::{PanelHit, Ray};
 pub use recenter::Recenter;
@@ -233,6 +241,7 @@ pub use spatial_external_surface::{SpatialExternalSurface, SpatialExternalSurfac
 pub use spatial_frame_effect::SpatialFrameEffect;
 pub use spatial_move_event::{SpatialMoveEvent, SpatialMoveEventType};
 pub use spatial_panel::SpatialPanel;
+pub use spatial_point_source::SpatialPointSource;
 pub use spatial_resize_event::{SpatialResizeEvent, SpatialResizeEventType};
 pub use spatial_volume::{SpatialVolume, SpatialVolumeScope};
 pub use stereo_mode::StereoMode;

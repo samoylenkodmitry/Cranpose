@@ -9,7 +9,7 @@ use cranpose::{
     prelude::*,
     space::{Light, Mat4, Material, Mesh, MeshSurface, Vec3},
 };
-use cranpose_xr::{SpatialVolume, SubspaceModifier};
+use cranpose_xr::{PointSource, SpatialVolume, SubspaceModifier};
 
 // The OBJ file of the torus: radius 1 about the y axis, tube radius 0.4.
 static TORUS_OBJ: &str = include_str!("../../desktop-demo/assets/torus.obj");
@@ -31,9 +31,9 @@ const LEAN: f32 = FRAC_PI_2 - 0.45;
 const LONGEST_STEP: f32 = 0.1;
 
 // The torus in a volume at `modifier`'s place. A movable torus has a handle under its box that the
-// user carries it by.
+// user carries it by. A torus with a `sound` is the source of that sound, wherever it stands.
 #[composable]
-pub(crate) fn TorusVolume(modifier: SubspaceModifier, movable: bool) {
+pub(crate) fn TorusVolume(modifier: SubspaceModifier, movable: bool, sound: Option<PointSource>) {
     let torus = remember(|| {
         Mesh::from_obj(TORUS_OBJ)
             .map_err(|error| log::error!("xr demo: no torus: {error}"))
@@ -59,6 +59,10 @@ pub(crate) fn TorusVolume(modifier: SubspaceModifier, movable: bool) {
         modifier.movable()
     } else {
         modifier
+    };
+    let modifier = match sound {
+        Some(sound) => modifier.point_source(sound),
+        None => modifier,
     };
     SpatialVolume(modifier, move |scope| {
         // The light shines from the upper left, over the viewer's shoulder

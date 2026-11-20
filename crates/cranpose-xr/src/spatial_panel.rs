@@ -60,6 +60,7 @@ fn PlacedPanel(
     space.place(panel, size, origin, pose);
     let id = panel.id;
     space.set_move_policy(id, modifier.move_policy());
+    space.set_point_source(id, modifier.attached_point_source());
     space.set_resizable(id, modifier.resize());
     space.set_shape(id, shape);
     DisposableEffect(id, move |_| {

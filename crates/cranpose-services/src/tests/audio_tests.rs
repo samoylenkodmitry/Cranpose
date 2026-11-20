@@ -73,6 +73,7 @@ fn playback_params_sanitizes_out_of_range_and_nan() {
         rate: 1_000.0,
         pan: -9.0,
         bus: AudioBus::Music,
+        emitter: None,
     }
     .sanitized();
     assert_eq!(wild.volume, 1.0);

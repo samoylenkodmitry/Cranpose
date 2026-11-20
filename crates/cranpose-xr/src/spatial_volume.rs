@@ -130,6 +130,7 @@ fn PlacedVolume(
     space.place_volume(panel, size, origin, origin.then(&modifier.pose()));
     let id = panel.id;
     space.set_move_policy(id, modifier.move_policy());
+    space.set_point_source(id, modifier.attached_point_source());
     space.set_resizable(id, modifier.resize());
     let parts = rememberScopeParts();
     // The sink stays for the volume's life. A volume with no callback takes no events.

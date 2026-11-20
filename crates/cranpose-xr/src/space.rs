@@ -18,11 +18,12 @@ use cranpose::{ExternalSurface, MutableState, mutableStateOf};
 use cranpose_core::CompositionLocal;
 
 use crate::{
-    FollowTarget, Hand, METERS_PER_DP, MovePolicy, PanelHit, Pose, Ray, Recenter, ResizeLimits,
-    ResizePolicy, SpatialMoveEvent, SpatialMoveEventType, SpatialResizeEvent,
+    FollowTarget, Hand, METERS_PER_DP, MovePolicy, PanelHit, PointSource, Pose, Ray, Recenter,
+    ResizeLimits, ResizePolicy, SpatialMoveEvent, SpatialMoveEventType, SpatialResizeEvent,
     SpatialResizeEventType, StereoMode,
     follow_origin::{FollowOrigins, Standing},
     locals::with_locals,
+    sound_sources::{SoundPlace, SoundSources},
     stream_source::StreamSource,
     surface_input::{PointerSink, SurfaceGesture, SurfaceInput},
     volumes::{VolumeContent, Volumes},
@@ -67,6 +68,11 @@ impl Origin {
     // The pose `child`, given in this origin's frame.
     pub(crate) fn then(&self, child: &Pose) -> Pose {
         self.pose.then(child)
+    }
+
+    // The following subspace that this origin belongs to, if it is one.
+    pub(crate) const fn follower(&self) -> Option<u64> {
+        self.follower
     }
 }
 
@@ -260,6 +266,8 @@ struct Inner {
     streams: RefCell<Vec<(u64, Rc<StreamSource>)>>,
     // Where following subspaces stand
     follow_origins: RefCell<FollowOrigins>,
+    // The point sources of sound
+    sounds: RefCell<SoundSources>,
     next_id: Cell<u64>,
     // Whether the headset shows curved panels. If not, they show and answer rays as flat ones.
     curves: Cell<bool>,
@@ -355,6 +363,7 @@ impl Space {
                 entries: RefCell::new(Vec::new()),
                 streams: RefCell::new(Vec::new()),
                 follow_origins: RefCell::new(FollowOrigins::default()),
+                sounds: RefCell::new(SoundSources::default()),
                 next_id: Cell::new(1),
                 curves: Cell::new(true),
                 volumes: OnceCell::new(),
@@ -790,6 +799,55 @@ impl Space {
         if let Some(volumes) = self.inner.volumes.get() {
             volumes.remove(id);
         }
+        self.inner.sounds.borrow_mut().remove(id);
+    }
+
+    // A new id for a point source of sound.
+    pub(crate) fn new_sound_id(&self) -> u64 {
+        let id = self.inner.next_id.get();
+        self.inner.next_id.set(id + 1);
+        id
+    }
+
+    // Registers the source `id` at `pose` of the subspace with `origin`, or moves it there.
+    pub(crate) fn place_point_source(
+        &self,
+        id: u64,
+        source: PointSource,
+        origin: Origin,
+        pose: Pose,
+    ) {
+        let sounds = &mut *self.inner.sounds.borrow_mut();
+        sounds.place(id, source, origin, pose);
+    }
+
+    // Forgets the source `id`.
+    pub(crate) fn remove_point_source(&self, id: u64) {
+        self.inner.sounds.borrow_mut().remove(id);
+    }
+
+    // Makes the panel `id` a source of `source`, or stops it from being one. The source stands at
+    // the panel's pose, wherever a carry or a following subspace puts it.
+    pub(crate) fn set_point_source(&self, id: u64, source: Option<PointSource>) {
+        self.inner.sounds.borrow_mut().attach(id, source);
+    }
+
+    #[cfg_attr(
+        not(any(test, headset)),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    // Puts the sources and where they stand now into `places`. See `SoundSources::places_into`.
+    pub(crate) fn sounds_into(&self, places: &mut Vec<SoundPlace>) {
+        let entries = self.inner.entries.borrow();
+        let panel_pose = |panel| {
+            let entry = entries.iter().find(|entry| entry.slot.id == panel);
+            entry.map(|entry| entry.slot.pose)
+        };
+        let follow = self.inner.follow_origins.borrow();
+        self.inner
+            .sounds
+            .borrow()
+            .places_into(places, panel_pose, &follow);
     }
 
     // The scene of the volumes takes the content of the volume `content.id`, or replaces what it

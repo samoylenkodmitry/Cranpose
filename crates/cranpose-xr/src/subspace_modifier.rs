@@ -1,6 +1,6 @@
 //! The size, place and turn of a spatial composable.
 
-use crate::{MovePolicy, Pose, ResizeLimits, ResizePolicy, pose::turn_degrees};
+use crate::{MovePolicy, PointSource, Pose, ResizeLimits, ResizePolicy, pose::turn_degrees};
 
 /// Meters in one dp. In a subspace one dp is a millimeter, so a panel of 800 by 500 dp is 80 by
 /// 50 centimeters.
@@ -30,6 +30,7 @@ pub struct SubspaceModifier {
     orientation: [f32; 4],
     move_policy: Option<MovePolicy>,
     resize: Option<(ResizeLimits, ResizePolicy)>,
+    point_source: Option<PointSource>,
 }
 
 impl Default for SubspaceModifier {
@@ -48,6 +49,7 @@ impl SubspaceModifier {
             orientation: [0.0, 0.0, 0.0, 1.0],
             move_policy: None,
             resize: None,
+            point_source: None,
         }
     }
 
@@ -144,6 +146,22 @@ impl SubspaceModifier {
         self.resize
             .as_ref()
             .map(|(limits, policy)| (*limits, policy))
+    }
+
+    /// Makes the content a source of `source`. The sound comes from the content's pose, a panel's
+    /// or a volume's center, and follows the content when the user carries it. A sound that stands
+    /// at no content is a [`SpatialPointSource`](crate::SpatialPointSource).
+    ///
+    /// Jetpack XR plays a sound at an entity: `SpatialSoundPool.play` takes the entity that it
+    /// comes from. It has no modifier for it.
+    pub const fn point_source(mut self, source: PointSource) -> Self {
+        self.point_source = Some(source);
+        self
+    }
+
+    // The sound that the content is a source of, if the modifier made it one.
+    pub(crate) const fn attached_point_source(&self) -> Option<PointSource> {
+        self.point_source
     }
 
     /// The size in dp, with `fallback` for what the modifier leaves out.

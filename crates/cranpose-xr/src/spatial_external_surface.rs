@@ -127,6 +127,7 @@ fn PlacedSurface(
     );
     let id = panel.id;
     space.set_move_policy(id, modifier.move_policy());
+    space.set_point_source(id, modifier.attached_point_source());
     space.set_resizable(id, modifier.resize());
     let callbacks = remember(Callbacks::default).with(Clone::clone);
     let mut content = content;
