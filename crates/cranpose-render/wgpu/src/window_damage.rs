@@ -19,7 +19,7 @@ mod cleared_images;
 pub(crate) use cleared_images::{ClearedImages, keeps_copy, whole_when_lighter};
 #[path = "window_damage/damage_rects.rs"]
 mod damage_rects;
-pub(crate) use damage_rects::{DamageRects, MAX_DAMAGE_RECTS};
+pub(crate) use damage_rects::{DamageBuilder, DamageRects, MAX_DAMAGE_RECTS};
 #[path = "window_damage/swapchain_history.rs"]
 mod swapchain_history;
 pub(crate) use swapchain_history::SwapchainHistory;

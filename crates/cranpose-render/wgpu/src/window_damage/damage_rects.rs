@@ -4,8 +4,12 @@ use super::DeviceRect;
 
 // The most rects a frame's damage keeps apart: changes far apart, such as
 // a clock at the top, counters over a dashboard and a caret at the bottom,
-// each draw their own part of the window, not a part spanning them.
+// each draw their own part of the window, not a part spanning them. The
+// patchwork at tier 17 holds up to 21 rects while its frame adds them; the
+// ticker's 72 changing rows hold 32, and a bound of 16 takes the
+// patchwork's pixels up by 39%.
 pub(crate) const MAX_DAMAGE_RECTS: usize = 32;
+const _: () = assert!(MAX_DAMAGE_RECTS < 256, "a u8 counts the rects");
 // The pixels two rects of a frame's damage may add to theirs to draw as
 // one. One more rect costs its scissor, the batches that break at it and a
 // test of each of its pass's draws. Measured on an Apple M3 with the
@@ -21,7 +25,7 @@ const RECT_COST: f32 = 1024.0;
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DamageRects {
     rects: [DeviceRect; MAX_DAMAGE_RECTS],
-    len: usize,
+    len: u8,
 }
 
 impl Default for DamageRects {
@@ -48,7 +52,7 @@ impl DamageRects {
     };
 
     pub(crate) fn as_slice(&self) -> &[DeviceRect] {
-        &self.rects[..self.len]
+        &self.rects[..usize::from(self.len)]
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -95,96 +99,51 @@ impl DamageRects {
         })
     }
 
-    // Adds `rect`, grown out to whole pixels. It merges with every rect it
-    // shares a pixel with, and with the rect whose bounds with it add the
-    // fewest pixels while they cost less than one more rect; past
-    // MAX_DAMAGE_RECTS, the two rects whose bounds add the fewest pixels
-    // merge.
+    // Adds `rect`, grown out to whole pixels, as `Merge::add` merges it.
     pub(crate) fn add(&mut self, rect: DeviceRect) {
-        let mut rect = rect.snap_out();
-        loop {
-            while let Some(at) = self
-                .as_slice()
-                .iter()
-                .position(|part| part.intersect(rect).is_some())
-            {
-                rect = rect.union(self.remove(at));
-            }
-            if let Some((at, _)) = self.nearest(rect).filter(|&(_, added)| added < RECT_COST) {
-                rect = rect.union(self.remove(at));
-                continue;
-            }
-            if self.len < MAX_DAMAGE_RECTS {
-                self.rects[self.len] = rect;
-                self.len += 1;
-                return;
-            }
-            let (first, second) = self.cheapest_pair(rect);
-            if second == self.len {
-                rect = rect.union(self.remove(first));
-            } else {
-                let merged = self.rects[first].union(self.rects[second]);
-                self.remove(second);
-                self.remove(first);
-                self.rects[self.len] = rect;
-                self.len += 1;
-                rect = merged;
-            }
+        Merge {
+            held: self,
+            partners: &mut None,
         }
+        .add(rect);
     }
 
-    // The rect whose bounds with `rect` add the fewest pixels to theirs, and
-    // those pixels.
-    fn nearest(&self, rect: DeviceRect) -> Option<(usize, f32)> {
-        self.as_slice()
-            .iter()
-            .map(|part| added_pixels(*part, rect))
-            .enumerate()
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-    }
-
-    /// The two of the rects and `rect`, at index `len`, whose bounds add the
-    /// fewest pixels to theirs.
-    fn cheapest_pair(&self, rect: DeviceRect) -> (usize, usize) {
-        let candidate = |index: usize| {
-            if index < self.len {
-                self.rects[index]
-            } else {
-                rect
-            }
+    // Adds every rect of `rects`. A list that holds none takes them as they
+    // are: they share no pixel already.
+    pub(crate) fn add_all(&mut self, rects: &Self) {
+        if self.is_empty() {
+            self.assign(rects);
+            return;
+        }
+        let mut merge = Merge {
+            held: self,
+            partners: &mut None,
         };
-        let mut best = (0, 1, f32::INFINITY);
-        for first in 0..=self.len {
-            for second in first + 1..=self.len {
-                let added = added_pixels(candidate(first), candidate(second));
-                if added < best.2 {
-                    best = (first, second, added);
-                }
-            }
+        for rect in rects.as_slice() {
+            merge.add(*rect);
         }
-        (best.0, best.1)
     }
 
-    fn remove(&mut self, at: usize) -> DeviceRect {
+    // Takes out the rect at `at`; the last rect moves into its place.
+    fn swap_remove(&mut self, at: u8) -> DeviceRect {
+        let at = usize::from(at);
         let rect = self.rects[at];
-        self.rects.copy_within(at + 1..self.len, at);
         self.len -= 1;
+        self.rects[at] = self.rects[usize::from(self.len)];
         rect
     }
 
-    // Adds every rect of `rects`.
-    pub(crate) fn add_all(&mut self, rects: &Self) {
-        for rect in rects.as_slice() {
-            self.add(*rect);
-        }
+    fn push(&mut self, rect: DeviceRect) {
+        self.rects[usize::from(self.len)] = rect;
+        self.len += 1;
     }
 
     // Keeps of each rect the part inside `window`.
     pub(super) fn keep_within(&mut self, window: DeviceRect) {
         let mut kept = 0;
-        for at in 0..self.len {
+        for at in 0..usize::from(self.len) {
             if let Some(part) = self.rects[at].intersect(window) {
-                self.rects[kept] = part;
+                self.rects[usize::from(kept)] = part;
                 kept += 1;
             }
         }
@@ -193,13 +152,215 @@ impl DamageRects {
 
     // Takes the rects of `other` in place of its own.
     pub(crate) fn assign(&mut self, other: &Self) {
-        self.rects[..other.len].copy_from_slice(other.as_slice());
+        self.rects[..usize::from(other.len)].copy_from_slice(other.as_slice());
         self.len = other.len;
     }
 
     // Holds no rect.
     pub(crate) fn clear(&mut self) {
         self.len = 0;
+    }
+}
+
+// A frame's damage that takes rects one at a time: it keeps between its
+// adds what their merges need, so a full damage finds its cheapest pair
+// without testing every pair again.
+#[derive(Default)]
+pub(crate) struct DamageBuilder {
+    rects: DamageRects,
+    partners: Option<Partners>,
+}
+
+impl DamageBuilder {
+    pub(crate) fn as_rects(&self) -> &DamageRects {
+        &self.rects
+    }
+
+    // The rects, for a change outside the merges: the partners go.
+    pub(crate) fn rects_mut(&mut self) -> &mut DamageRects {
+        self.partners = None;
+        &mut self.rects
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.rects_mut().clear();
+    }
+
+    pub(crate) fn assign(&mut self, rects: &DamageRects) {
+        self.rects_mut().assign(rects);
+    }
+
+    // Adds `rect`, grown out to whole pixels, as `Merge::add` merges it.
+    pub(crate) fn add(&mut self, rect: DeviceRect) {
+        Merge {
+            held: &mut self.rects,
+            partners: &mut self.partners,
+        }
+        .add(rect);
+    }
+}
+
+// A held rect's cheapest partner: the partner's index and the pixels the
+// bounds of the two add to theirs.
+#[derive(Clone, Copy)]
+struct Partner {
+    at: u8,
+    added: f32,
+}
+
+// Each held rect's cheapest partner; `None` for a rect whose partner left,
+// which searches again when a pair must merge.
+#[derive(Clone, Copy)]
+struct Partners([Option<Partner>; MAX_DAMAGE_RECTS]);
+
+impl Partners {
+    // Every held rect's cheapest partner, each pair tested once.
+    fn of(held: &DamageRects) -> Self {
+        let mut partners = Self([None; MAX_DAMAGE_RECTS]);
+        let rects = held.as_slice();
+        for (first, a) in (0u8..).zip(rects) {
+            for (second, b) in (0u8..).zip(rects).skip(usize::from(first) + 1) {
+                let added = added_pixels(*a, *b);
+                partners.offer(first, second, added);
+                partners.offer(second, first, added);
+            }
+        }
+        partners
+    }
+
+    // Takes `partner` as the partner of the rect at `at` when the two add
+    // fewer pixels than the rect and its partner do.
+    fn offer(&mut self, at: u8, partner: u8, added: f32) {
+        let slot = &mut self.0[usize::from(at)];
+        if slot.is_none_or(|held| added < held.added) {
+            *slot = Some(Partner { at: partner, added });
+        }
+    }
+}
+
+// A run of adds into `held`. An add tests each held rect once a merge step,
+// and once the rects reach their bound, it searches again only for the rects
+// whose partner left.
+struct Merge<'a> {
+    held: &'a mut DamageRects,
+    // Kept from the first add that finds the rects full.
+    partners: &'a mut Option<Partners>,
+}
+
+impl Merge<'_> {
+    // Adds `rect`, grown out to whole pixels. A rect that one held rect
+    // holds changes nothing. Else it merges with every rect it shares a
+    // pixel with, and with the rect whose bounds with it add the fewest
+    // pixels while they cost less than one more rect. Past
+    // MAX_DAMAGE_RECTS, the pair that adds the fewest pixels merges: the
+    // new rect and its nearest, or two held rects.
+    fn add(&mut self, rect: DeviceRect) {
+        let mut rect = rect.snap_out();
+        if self.held.holds(rect) {
+            return;
+        }
+        // The pixels `rect` adds to the bounds of each held rect, by index.
+        let mut added = [0.0; MAX_DAMAGE_RECTS];
+        loop {
+            let mut nearest: Option<(u8, f32)> = None;
+            let mut shared = None;
+            for (at, part) in (0u8..).zip(self.held.as_slice()) {
+                if part.intersect(rect).is_some() {
+                    shared = Some(at);
+                    break;
+                }
+                let more = added_pixels(*part, rect);
+                added[usize::from(at)] = more;
+                if nearest.is_none_or(|(_, least)| more < least) {
+                    nearest = Some((at, more));
+                }
+            }
+            if let Some(at) = shared {
+                rect = rect.union(self.take(at, &mut added));
+                continue;
+            }
+            let Some((near, near_added)) = nearest else {
+                self.push(rect, &added);
+                return;
+            };
+            if near_added < RECT_COST {
+                rect = rect.union(self.take(near, &mut added));
+                continue;
+            }
+            if usize::from(self.held.len) < MAX_DAMAGE_RECTS {
+                self.push(rect, &added);
+                return;
+            }
+            let (first, second, pair_added) = self.cheapest_pair();
+            if near_added <= pair_added {
+                rect = rect.union(self.take(near, &mut added));
+                continue;
+            }
+            let merged =
+                self.held.rects[usize::from(first)].union(self.held.rects[usize::from(second)]);
+            self.take(first.max(second), &mut added);
+            self.take(first.min(second), &mut added);
+            self.push(rect, &added);
+            rect = merged;
+        }
+    }
+
+    // The two held rects whose bounds add the fewest pixels to theirs, and
+    // those pixels.
+    fn cheapest_pair(&mut self) -> (u8, u8, f32) {
+        let held = &*self.held;
+        let partners = self.partners.get_or_insert_with(|| Partners::of(held));
+        let mut cheapest = (0, 0, f32::INFINITY);
+        for at in 0..held.len {
+            if partners.0[usize::from(at)].is_none() {
+                for other in (0..held.len).filter(|&other| other != at) {
+                    let added =
+                        added_pixels(held.rects[usize::from(at)], held.rects[usize::from(other)]);
+                    partners.offer(at, other, added);
+                }
+            }
+            if let Some(partner) = partners.0[usize::from(at)]
+                && partner.added < cheapest.2
+            {
+                cheapest = (at, partner.at, partner.added);
+            }
+        }
+        cheapest
+    }
+
+    // Takes out the held rect at `at`, which the last one replaces, with the
+    // pixels `added` by it.
+    fn take(&mut self, at: u8, added: &mut [f32; MAX_DAMAGE_RECTS]) -> DeviceRect {
+        let last = self.held.len - 1;
+        let rect = self.held.swap_remove(at);
+        added[usize::from(at)] = added[usize::from(last)];
+        if let Some(partners) = self.partners {
+            partners.0[usize::from(at)] = partners.0[usize::from(last)];
+            for slot in &mut partners.0[..usize::from(last)] {
+                *slot = slot.and_then(|partner| match partner.at {
+                    gone if gone == at => None,
+                    moved if moved == last => Some(Partner { at, ..partner }),
+                    _ => Some(partner),
+                });
+            }
+        }
+        rect
+    }
+
+    // Holds `rect`, whose bounds with each held rect add `added` pixels.
+    fn push(&mut self, rect: DeviceRect, added: &[f32; MAX_DAMAGE_RECTS]) {
+        let at = self.held.len;
+        self.held.push(rect);
+        if let Some(partners) = self.partners {
+            partners.0[usize::from(at)] = None;
+            for (other, &more) in (0u8..).zip(&added[..usize::from(at)]) {
+                partners.offer(at, other, more);
+                // A rect that searches again finds `rect` in its search.
+                if partners.0[usize::from(other)].is_some() {
+                    partners.offer(other, at, more);
+                }
+            }
+        }
     }
 }
 

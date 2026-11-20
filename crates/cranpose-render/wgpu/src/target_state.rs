@@ -16,7 +16,9 @@ use cranpose_ui_graphics::{Point, Rect};
 
 use crate::{
     collect::{LayerScene, ShownArea},
-    frame::{Capture, Damage, DamageRects, DeviceRect, OwnSake, collect_captures, widen},
+    frame::{
+        Capture, Damage, DamageBuilder, DamageRects, DeviceRect, OwnSake, collect_captures, widen,
+    },
 };
 
 // The pixels a record's area takes in a target, whole pixels from the
@@ -265,7 +267,7 @@ pub(crate) struct TargetState {
     // By record row, how the target last drew the record.
     shown: Vec<Shown>,
     setting: Option<TargetSetting>,
-    damage: DamageRects,
+    damage: DamageBuilder,
     // Whether the frame changes the whole window: an area it changes is not
     // known.
     whole: bool,
@@ -349,7 +351,7 @@ impl TargetState {
                 }
             }
         }
-        self.begun.0.assign(&self.damage);
+        self.begun.0.assign(self.damage.as_rects());
         self.begun.1 = self.whole;
     }
 
@@ -602,7 +604,8 @@ impl TargetState {
             *damage = Damage::Full;
             return;
         }
-        if let Some(root) = root.filter(|root| !self.damage.is_empty() && root.contains_backdrop())
+        if let Some(root) =
+            root.filter(|root| !self.damage.as_rects().is_empty() && root.contains_backdrop())
         {
             self.captures.clear();
             let place = (setting.root_scale, setting.viewport);
@@ -610,9 +613,9 @@ impl TargetState {
                 *damage = Damage::Full;
                 return;
             }
-            widen(&self.captures, &mut self.damage);
+            widen(&self.captures, self.damage.rects_mut());
         }
-        damage.assign_part(&self.damage);
+        damage.assign_part(self.damage.as_rects());
         damage.settle(setting.viewport);
     }
 

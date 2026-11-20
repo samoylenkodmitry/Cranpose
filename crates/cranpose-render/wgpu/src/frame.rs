@@ -5406,9 +5406,9 @@ mod scene_surfaces;
 mod window_damage;
 
 pub(crate) use window_damage::{
-    Capture, ClearedImages, Damage, DamageRects, FrameDamages, FrameWindow, Held, ImageContent,
-    MAX_DAMAGE_RECTS, OwnSake, PacketDamage, PresentedImage, Repaint, Since, StandInPixels,
-    SwapchainHistory, collect_captures, keeps_copy, whole_when_lighter, widen,
+    Capture, ClearedImages, Damage, DamageBuilder, DamageRects, FrameDamages, FrameWindow, Held,
+    ImageContent, MAX_DAMAGE_RECTS, OwnSake, PacketDamage, PresentedImage, Repaint, Since,
+    StandInPixels, SwapchainHistory, collect_captures, keeps_copy, whole_when_lighter, widen,
 };
 
 #[cfg(test)]
