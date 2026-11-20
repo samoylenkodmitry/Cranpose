@@ -46,6 +46,8 @@ mod gpu_loss;
 #[cfg(feature = "renderer-wgpu")]
 mod guest_view;
 #[cfg(feature = "renderer-wgpu")]
+pub use cranpose_render_common::space::MeshVisit;
+#[cfg(feature = "renderer-wgpu")]
 pub use cranpose_render_wgpu::SCENE_DEPTH_FORMAT;
 #[cfg(feature = "renderer-wgpu")]
 pub use guest_view::{GuestView, GuestViewError};

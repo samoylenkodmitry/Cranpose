@@ -45,6 +45,8 @@ pub(crate) struct GltfModel {
     pub(crate) rest: Vec<Trs>,
     // Each node's parent, indexed like `rest`
     pub(crate) parents: Vec<Option<usize>>,
+    // Each node's name, indexed like `rest`
+    pub(crate) names: Vec<Option<Arc<str>>>,
     // The nodes of the scene, each after its parent
     pub(crate) order: Vec<usize>,
     pub(crate) draws: Vec<Draw>,

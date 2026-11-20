@@ -8,6 +8,8 @@ use cranpose_xr::{
     rememberSpatialGltfModelState,
 };
 
+use crate::ray_target::RayTarget;
+
 static CRATE: &[u8] = include_bytes!("../assets/spinning_crate.glb");
 
 // The box of the volume in dp, which are millimeters. The crate is 40 cm wide, so it scales down
@@ -15,9 +17,10 @@ static CRATE: &[u8] = include_bytes!("../assets/spinning_crate.glb");
 const BOX: f32 = 300.0;
 
 // The crate in a volume at `modifier`'s place. A crate that `spinning` turns with the file's
-// animation, looped; one that does not stands as the file has it.
+// animation, looped; one that does not stands as the file has it. `target` hears the glTF node
+// that a ray hits.
 #[composable]
-pub(crate) fn CrateModel(modifier: SubspaceModifier, spinning: bool) {
+pub(crate) fn CrateModel(modifier: SubspaceModifier, spinning: bool, target: RayTarget) {
     // A source made from bytes is a new source each time, which would load the model again
     let source = remember(|| SpatialGltfModelSource::from_bytes(CRATE)).with(Clone::clone);
     let state = rememberSpatialGltfModelState(source);
@@ -31,5 +34,14 @@ pub(crate) fn CrateModel(modifier: SubspaceModifier, spinning: bool) {
             }
         }
     });
-    SpatialGltfModel(state, modifier.size(BOX, BOX).depth(BOX), |_| {});
+    let named = state.clone();
+    SpatialGltfModel(state, modifier.size(BOX, BOX).depth(BOX), move |scope| {
+        let named = named.clone();
+        scope.on_input_event(move |event| {
+            target.report(&event, |hit| match named.node_of(hit) {
+                Some(node) => format!("crate, glTF node {}", node.name.as_deref().unwrap_or("")),
+                None => "crate".to_owned(),
+            });
+        });
+    });
 }

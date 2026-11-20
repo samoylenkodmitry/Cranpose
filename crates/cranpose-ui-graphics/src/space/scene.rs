@@ -662,6 +662,12 @@ impl MeshSurfaces {
     pub fn iter(&self) -> impl Iterator<Item = &MeshSurface> {
         std::iter::once(&self.owner).chain(&self.more)
     }
+
+    /// The meshes, the owner first, for a caller that moves them in a value it owns, such as one
+    /// that animates a model and keeps its surfaces from one frame to the next.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut MeshSurface> {
+        std::iter::once(&mut self.owner).chain(&mut self.more)
+    }
 }
 
 impl From<MeshSurface> for MeshSurfaces {

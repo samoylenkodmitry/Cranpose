@@ -10,7 +10,7 @@ use std::{
 use cranpose::{
     AppLauncher, AppSettings, GpuContext, GuestView, SCENE_DEPTH_FORMAT, gpu_context,
     prelude::*,
-    space::{Light, Mat4, Material, Mesh, MeshSurface, Vec3},
+    space::{Light, Mat4, Material, Mesh, MeshSurface, Multisample, Vec3},
 };
 use cranpose_core::{CompositionLocalProvider, LaunchedEffect, rememberMutableStateOf};
 
@@ -32,6 +32,12 @@ const COLOR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 #[cfg(feature = "gltf")]
 #[path = "volume_gltf_tests.rs"]
 mod gltf;
+
+#[path = "volume_antialias_tests.rs"]
+mod antialias;
+
+#[path = "volume_picking_tests.rs"]
+mod picking;
 
 // What the host of a test holds: the GPU, the guest view that runs the content, the space and the
 // counts of what composed.

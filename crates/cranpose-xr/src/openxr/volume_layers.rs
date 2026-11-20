@@ -19,6 +19,7 @@ use crate::{
     space::Space,
     volume_pass::{EyeImage, VolumePass},
     volume_plan::{DepthSupport, VolumePlan, plan},
+    volume_samples::volume_samples,
 };
 
 // An image of a swapchain that wgpu draws into, with its view.
@@ -54,6 +55,8 @@ pub(crate) struct VolumeLayers {
     extensions: (bool, bool),
     eyes: Option<[EyeSwapchains; 2]>,
     drawn: Option<Drawn>,
+    // Whether the scene's samples are set: the first frame with a volume sets them
+    sampled: bool,
     // The plan that the log named last, so that it names each change once
     logged: Option<VolumePlan>,
     // Whether the 3D content failed. A failure ends the 3D content and leaves the session, with
@@ -71,6 +74,7 @@ impl VolumeLayers {
             extensions: xr_session.depth_extensions(),
             eyes: None,
             drawn: None,
+            sampled: false,
             logged: None,
             failed: false,
         }
@@ -82,6 +86,11 @@ impl VolumeLayers {
             submits: self.extensions.0 && self.depth_format.is_some(),
             tests: self.extensions.1,
         }
+    }
+
+    // The window root that holds the scene of the volumes, once a draw found it.
+    pub(crate) fn scene_root(&self) -> Option<cranpose_core::NodeId> {
+        self.pass.root()
     }
 
     // What the last draw did, which tells how the frame's other layers stand to the depth of this
@@ -151,6 +160,23 @@ impl VolumeLayers {
             return Ok(());
         };
         let cameras = [left_camera, right_camera];
+        if !self.sampled {
+            let samples = volume_samples(
+                |format| {
+                    gpu.adapter
+                        .get_texture_format_features(format)
+                        .flags
+                        .sample_count_supported(4)
+                },
+                self.color_format.wgpu,
+            );
+            log::info!(
+                "cranpose xr: the volumes' scene takes {} samples",
+                samples.samples()
+            );
+            space.volumes().samples().set(samples);
+            self.sampled = true;
+        }
         if self.eyes.is_none() {
             self.eyes = Some(self.make_swapchains(gpu, xr_session, size)?);
         }

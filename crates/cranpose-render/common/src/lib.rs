@@ -225,6 +225,17 @@ pub trait RenderScene {
         Vec::new()
     }
 
+    /// Visits each mesh of the surface layers under the node `under`, in the
+    /// node's own frame, with no allocation: where a pointer along a ray
+    /// meets them. A scene under the node opens a space of its own, which
+    /// the visit leaves out.
+    fn visit_meshes(
+        &self,
+        _under: cranpose_core::NodeId,
+        _visit: &mut dyn FnMut(&space::MeshVisit<'_>),
+    ) {
+    }
+
     /// Visits each mesh surface the eyes of the window's scenes see, by its
     /// node, with the map from its content to the window as the eye shows
     /// it, through the doorways it lies behind: where the nodes on it show.

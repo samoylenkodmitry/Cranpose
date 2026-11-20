@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use cranpose::{
     Box, BoxSpec, Modifier, composable,
-    space::{Light, Multisample, Scene3d},
+    space::{Light, Scene3d},
 };
 use cranpose_core::{key, remember};
 
@@ -58,17 +58,19 @@ pub(crate) fn VolumeScene(space: Space) {
 fn VolumeNode(content: VolumeContent) {
     let pose = content.pose;
     let compose = content.compose;
-    Box(
+    let node = Box(
         Modifier::empty().transform3d(move || scene_from_volume(&pose.get())),
         BoxSpec::default(),
         move || invoke(&compose, ()),
     );
+    content.node.set(Some(node));
 }
 
 // The scene as it draws now: the eye's camera and the first light that a volume sets, turned from
 // the volume's axes into the scene's. A scene has one light, so volumes share it. A draw reads the
-// states, so a camera or a pose that changes draws again without composing. The scene's samples
-// stay at one: the depth that the layer carries is the depth of a single sample.
+// states, so a camera or a pose that changes draws again without composing. The samples are the
+// ones that the headset's device takes: the renderer stores the layer's depth from a second pass
+// of one sample.
 fn scene_of(volumes: &Volumes) -> Scene3d {
     let light = volumes.contents().read(|contents| {
         contents.iter().find_map(|content| {
@@ -84,7 +86,7 @@ fn scene_of(volumes: &Volumes) -> Scene3d {
         camera: volumes.camera().get(),
         light,
         eye: None,
-        multisample: Multisample::Off,
+        multisample: volumes.samples().get(),
     }
 }
 

@@ -24,7 +24,7 @@ use crate::{
     follow_origin::{FollowOrigins, Standing},
     locals::with_locals,
     stream_source::StreamSource,
-    surface_input::{PointerSink, SurfaceGesture, SurfaceInput},
+    surface_input::{InputSink, PointerSink, SurfaceGesture, SurfaceInput, input_event},
     volumes::{VolumeContent, Volumes},
 };
 
@@ -299,6 +299,8 @@ struct Entry {
     // For a surface: where the app takes the pointer's events, and what the surface knows of
     // the pointer
     sink: Option<PointerSink>,
+    // For a volume: where the app takes the ray's input events
+    input_sink: Option<InputSink>,
     input: SurfaceInput,
 }
 
@@ -588,6 +590,7 @@ impl Space {
                     resize_policy: None,
                     resizing: false,
                     sink: None,
+                    input_sink: None,
                     input: SurfaceInput::default(),
                 });
                 (entries.len() - 1, true)
@@ -647,6 +650,15 @@ impl Space {
         let mut entries = self.inner.entries.borrow_mut();
         if let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == id) {
             entry.sink = sink;
+        }
+    }
+
+    // Sets where the volume `id` sends the input events of a ray, or `None` for a volume that takes
+    // none.
+    pub(crate) fn set_input_sink(&self, id: u64, sink: Option<InputSink>) {
+        let mut entries = self.inner.entries.borrow_mut();
+        if let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == id) {
+            entry.input_sink = sink;
         }
     }
 
@@ -752,7 +764,8 @@ impl Space {
         expect(dead_code, reason = "the headset backend calls it")
     )]
     // Tells the surface that `gesture` names what the pointer did on it, as Compose's pointer
-    // event. A surface that takes no pointer events sees nothing.
+    // event, and a volume as the input event of a ray. A surface that takes no pointer events sees
+    // nothing.
     pub(crate) fn deliver_to_surface(&self, gesture: &SurfaceGesture) {
         let heard = {
             let mut entries = self.inner.entries.borrow_mut();
@@ -760,13 +773,23 @@ impl Space {
                 .iter_mut()
                 .find(|entry| entry.slot.id == gesture.surface)
                 .and_then(|entry| {
-                    let sink = entry.sink.clone()?;
-                    Some((sink, entry.input.event(gesture.gesture)?))
+                    let (event, action) = entry.input.event(gesture.gesture)?;
+                    let input = entry
+                        .input_sink
+                        .clone()
+                        .zip(gesture.ray)
+                        .map(|(sink, ray)| (sink, input_event(&ray, action, &entry.slot.pose)));
+                    Some((entry.sink.clone(), event, input))
                 })
         };
-        // The callback runs with no borrow held, so that it may call the space
-        if let Some((sink, event)) = heard {
-            sink(event);
+        // The callbacks run with no borrow held, so that they may call the space
+        if let Some((sink, event, input)) = heard {
+            if let Some(sink) = sink {
+                sink(event);
+            }
+            if let Some((sink, event)) = input {
+                sink(event);
+            }
         }
     }
 

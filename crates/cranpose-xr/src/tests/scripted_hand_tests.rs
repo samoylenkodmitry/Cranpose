@@ -5,6 +5,7 @@ use crate::{
     pointer_aim::pointer_aim,
     space::{Mobility, PanelKind, PanelSlot, Ride, Shape},
     surface_input::Gesture,
+    volume_pick::PickMeshes,
 };
 
 fn millis(millis: u64) -> Duration {
@@ -146,7 +147,7 @@ fn a_scripted_pinch_moves_to_the_place_presses_once_and_releases_once() {
         };
         play(&script, &mut xr);
         let aim = pointer_aim(&Controller::default(), Some(&xr.right_hand));
-        let (events, _) = pointer.update([None, aim], time, &[PANEL]);
+        let (events, _) = pointer.update([None, aim], time, (&[PANEL], &PickMeshes::default()));
         gestures.extend(events.iter().copied().map(|gesture| (frame, gesture)));
     }
     let moves: Vec<_> = gestures
