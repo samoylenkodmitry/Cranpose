@@ -540,14 +540,19 @@ fn draw_shape<P: Pixel>(
                 });
             }
         }
-        ShapeCoverage::Fill {
-            rect,
-            radii: Some(radii),
-        } => {
-            let fill = RoundedFill::new(*rect, radii);
-            paint.fill(FillRows::Rounded(&fill));
+        ShapeCoverage::Fill { rect, radii } => {
+            // One call of the fill, which the item loop then holds inline:
+            // the loop is the code a board keeps in fast memory.
+            let rounded;
+            let rows = match radii {
+                Some(radii) => {
+                    rounded = RoundedFill::new(*rect, radii);
+                    FillRows::Rounded(&rounded)
+                }
+                None => FillRows::Rect,
+            };
+            paint.fill(rows);
         }
-        ShapeCoverage::Fill { radii: None, .. } => paint.fill(FillRows::Rect),
     }
 }
 
