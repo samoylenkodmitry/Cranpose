@@ -157,24 +157,21 @@ impl Shown {
     }
 
     // The part of the record's own area that `within`, in the record's
-    // space, covers; it passes that part when `within` reaches past the own
+    // space, covers, and where `within` lands when it reaches past the own
     // area, as a record whose own draws grow does.
-    fn own_part(self, within: Reach, grid: PixelGrid) -> Taken {
-        let held = |area| Taken {
-            area,
-            passes: false,
-        };
+    fn own_part(self, within: Reach, grid: PixelGrid) -> OwnPart {
+        let held = |area| OwnPart { area, past: None };
         match (self.landing(within, grid), self.own) {
             (None, own) => held(own),
-            (Some(Area::Drawn(_)), Area::Hidden) => Taken {
+            (Some(Area::Drawn(part)), Area::Hidden) => OwnPart {
                 area: Area::Hidden,
-                passes: true,
+                past: Some(part),
             },
             (Some(Area::Drawn(part)), Area::Drawn(own)) => {
                 let kept = part.intersect(own);
-                Taken {
+                OwnPart {
                     area: kept.map_or(Area::Hidden, Area::Drawn),
-                    passes: kept != Some(part),
+                    past: (kept != Some(part)).then_some(part),
                 }
             }
             (Some(Area::Drawn(part)), Area::Unknown) => held(Area::Drawn(part)),
@@ -184,13 +181,13 @@ impl Shown {
     }
 }
 
-// What a change of a record takes of the target's areas, and whether the
-// record's new area may pass it: the prediction of the frame's damage
-// places such a change anew.
+// What a record's own change takes of the target's areas: the part of the
+// record's own area it covers, and where it lands when it reaches past
+// that area, which the prediction of the frame's damage places anew.
 #[derive(Clone, Copy)]
-struct Taken {
+struct OwnPart {
     area: Area,
-    passes: bool,
+    past: Option<PixelBox>,
 }
 
 // Which areas `TargetState::own_area` reads for a changed record.
@@ -200,19 +197,10 @@ enum Moment {
     // as it ends.
     Kept,
     // Before the frame's walk, where the change lands at the origins the
-    // frame before kept: a record's own change at the record's origin, a
-    // moved, new or changed record's reach at its parent's. A change whose
-    // landing is not known takes its kept area.
+    // frame before kept, when it may land past the area the begin took for
+    // it: a record's own change at the record's origin, a moved, new or
+    // changed record's reach at its parent's.
     Predicted,
-}
-
-// A record a frame's changes leave, what of it they reach, and whether its
-// new area may pass the area the frame before drew it in.
-#[derive(Clone, Copy)]
-struct Change {
-    record: RecordRef,
-    scope: Scope,
-    passes: bool,
 }
 
 // How a culled walk takes a record.
@@ -333,7 +321,7 @@ pub(crate) struct TargetState {
     unknown_before: bool,
     // The records the frame's changes leave and what of each they reach,
     // whose new areas the frame adds after its collect.
-    changed: Vec<Change>,
+    changed: Vec<(RecordRef, Scope)>,
     // By row, the frame that marked the record and how a culled walk of
     // that frame takes it.
     marks: Vec<(u32, Visit)>,
@@ -427,14 +415,11 @@ impl TargetState {
 
     // Writes into `damage` the damage the frame takes when each change whose
     // record may draw past its old area lands as the store and the frame
-    // before's origins tell, as `own_area` predicts it. The begin read the
-    // ancestors of each record it took an old area for, and a change under
-    // an ancestor whose area holds it does not pass; a new record under a
-    // parent that holds no kept area lies in that parent's. The whole window
+    // before's origins tell, as `own_area` predicts it. The whole window
     // when the old areas take most of it, or when a changed record's reach
-    // is not known: the walk finds that record's area unknown too. `false`
-    // when the frame works out no damage or an old area is not known: the
-    // walk then works the areas out.
+    // is not known and no ancestor holds its area: the walk finds that
+    // record's area unknown too. `false` when the frame works out no damage
+    // or an old area is not known: the walk then works the areas out.
     pub(crate) fn predict_damage(&self, store: &SceneStore, damage: &mut Damage) -> bool {
         let (Some(setting), Some(begun)) = (self.setting, self.begun()) else {
             return false;
@@ -445,14 +430,8 @@ impl TargetState {
         if let Damage::Part(rects) = damage {
             // One run: at the bound of rects, a lone add searches every pair.
             let mut run = rects.run();
-            for change in self.changed.iter().filter(|change| change.passes) {
-                let taken = self.own_area(
-                    store,
-                    (change.record, change.scope),
-                    Moment::Predicted,
-                    setting,
-                );
-                match taken.area {
+            for &change in &self.changed {
+                match self.own_area(store, change, Moment::Predicted, setting) {
                     Area::Drawn(pixels) | Area::Composite(pixels) => run.add(pixels.rect()),
                     Area::Hidden => {}
                     Area::Unknown => {
@@ -475,7 +454,7 @@ impl TargetState {
     pub(crate) fn cull<'a>(&'a mut self, store: &SceneStore, region: &'a DamageRects) -> Cull<'a> {
         self.stamp = self.stamp.wrapping_add(1).max(1);
         for at in 0..self.changed.len() {
-            let Change { record, scope, .. } = self.changed[at];
+            let (record, scope) = self.changed[at];
             let Some(id) = store.resolve(record) else {
                 continue;
             };
@@ -512,18 +491,12 @@ impl TargetState {
     // damage, and keeps the record to add its area after the collect.
     fn note(&mut self, store: &SceneStore, entry: &JournalEntry) {
         let scope = Scope::of(entry.event);
-        let mut passes = true;
         if !matches!(entry.event, RecordEvent::Inserted | RecordEvent::Claimed) {
-            let taken = self.area_of(store, (entry.record, scope), entry.parent);
-            self.add(taken.area);
-            passes = taken.passes;
+            let area = self.area_of(store, (entry.record, scope), entry.parent);
+            self.add(area);
         }
         if entry.event != RecordEvent::Removed {
-            self.changed.push(Change {
-                record: entry.record,
-                scope,
-                passes,
-            });
+            self.changed.push((entry.record, scope));
         }
     }
 
@@ -651,10 +624,10 @@ impl TargetState {
             if self.whole {
                 break;
             }
-            let Change { record, scope, .. } = self.changed[at];
+            let (record, scope) = self.changed[at];
             if store.resolve(record).is_some() {
-                let taken = self.area_of(store, (record, scope), None);
-                self.add(taken.area);
+                let area = self.area_of(store, (record, scope), None);
+                self.add(area);
             }
         }
         if self.whole {
@@ -712,56 +685,47 @@ impl TargetState {
         store: &SceneStore,
         (record, scope): (RecordRef, Scope),
         parent: Option<RecordRef>,
-    ) -> Taken {
-        let ruled = self.ancestor_area(store, record, parent);
-        match (ruled, self.setting) {
-            (Some(area), _) => Taken {
-                area,
-                passes: false,
-            },
-            (None, None) => Taken {
-                area: Area::Unknown,
-                passes: false,
-            },
+    ) -> Area {
+        match (self.ancestor_area(store, record, parent), self.setting) {
+            (Some(area), _) => area,
+            (None, None) => Area::Unknown,
             (None, Some(setting)) => self.own_area(store, (record, scope), Moment::Kept, setting),
         }
     }
 
     // The area a change of `record` of `scope` takes beside what its
-    // ancestors hold, as `moment` reads it in a frame of `setting`, and
-    // whether the record's new area may pass it.
+    // ancestors hold, as `moment` reads it in a frame of `setting`.
     fn own_area(
         &self,
         store: &SceneStore,
         (record, scope): (RecordRef, Scope),
         moment: Moment,
         setting: TargetSetting,
-    ) -> Taken {
+    ) -> Area {
         let kept = self.shown(record);
         let grid = PixelGrid::of(setting);
-        let landed = match (moment, scope) {
-            (Moment::Kept, _) => None,
-            (Moment::Predicted, Scope::Own(within)) => {
-                kept.and_then(|shown| shown.landing(within, grid))
+        match (moment, scope) {
+            (_, Scope::Own(within)) => kept.map_or(Area::Hidden, |shown| {
+                let part = shown.own_part(within, grid);
+                match moment {
+                    Moment::Kept => part.area,
+                    Moment::Predicted => part.past.map_or(Area::Hidden, Area::Drawn),
+                }
+            }),
+            (Moment::Kept, Scope::Subtree | Scope::Placed) => {
+                kept.map_or(Area::Hidden, |shown| shown.area)
             }
+            // A moved, new or changed record may land anywhere; one whose
+            // reach is not known lies in the area of an ancestor that holds
+            // it, which the begin took.
             (Moment::Predicted, Scope::Subtree | Scope::Placed) => {
-                self.landed_reach(store, record, grid)
+                match self.landed_reach(store, record, grid) {
+                    Some(Area::Unknown) if self.ancestor_area(store, record, None).is_some() => {
+                        Area::Hidden
+                    }
+                    landed => landed.unwrap_or(Area::Hidden),
+                }
             }
-        };
-        if let Some(area) = landed {
-            return Taken { area, passes: true };
-        }
-        match (kept, scope) {
-            (Some(shown), Scope::Own(within)) => shown.own_part(within, grid),
-            (None, Scope::Own(_)) => Taken {
-                area: Area::Hidden,
-                passes: false,
-            },
-            // A moved, new or changed record may land anywhere.
-            (shown, Scope::Subtree | Scope::Placed) => Taken {
-                area: shown.map_or(Area::Hidden, |shown| shown.area),
-                passes: true,
-            },
         }
     }
 

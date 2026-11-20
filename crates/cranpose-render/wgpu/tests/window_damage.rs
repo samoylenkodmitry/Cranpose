@@ -2095,7 +2095,7 @@ fn a_swapchain_image_handed_out_without_its_frame() {
     let FrameDamage::Part(pane) = &after[0].damage else {
         panic!(
             "the frame with glass changes a part of the window: {:?}",
-            after[0].damage
+            after[0]
         );
     };
     assert_eq!(
