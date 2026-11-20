@@ -15,8 +15,9 @@ use openxr as xr;
 
 use crate::{
     Keyboard,
+    entitlement_watch::Answer,
     keyboard::chosen,
-    openxr::{runner::run_immersive, runtime::Runtime},
+    openxr::{entitlement_run::EntitlementRun, runner::run_immersive, runtime::Runtime},
     session_status::SessionStatus,
     tracking_permission::PermissionAnswer,
     tracking_request::TrackingRequest,
@@ -150,6 +151,53 @@ impl Host {
         false
     }
 
+    // Starts the entitlement check of the Meta Horizon Store and returns whether one runs: only a
+    // build with the `meta-entitlement` feature has it. A build whose Gradle service is missing
+    // still runs it. The answer is a failure then, so that an app never goes unchecked.
+    #[cfg(feature = "meta-entitlement")]
+    pub(crate) fn begin_entitlement(&self) -> bool {
+        cranpose::begin_meta_entitlement(&self.app);
+        true
+    }
+
+    #[cfg(not(feature = "meta-entitlement"))]
+    pub(crate) fn begin_entitlement(&self) -> bool {
+        false
+    }
+
+    // What the platform says about the check that `begin_entitlement` started.
+    #[cfg(feature = "meta-entitlement")]
+    pub(crate) fn entitlement_answer(&self) -> Answer {
+        match cranpose::meta_entitlement(&self.app) {
+            cranpose::MetaEntitlement::Entitled => Answer::Entitled,
+            cranpose::MetaEntitlement::NotStarted | cranpose::MetaEntitlement::Checking => {
+                Answer::Checking
+            }
+            cranpose::MetaEntitlement::NotEntitled | cranpose::MetaEntitlement::Unavailable => {
+                Answer::NotEntitled
+            }
+        }
+    }
+
+    #[cfg(not(feature = "meta-entitlement"))]
+    pub(crate) fn entitlement_answer(&self) -> Answer {
+        Answer::Checking
+    }
+
+    // Why the check ended as it did, for the log.
+    #[cfg(feature = "meta-entitlement")]
+    pub(crate) fn entitlement_detail(&self) -> String {
+        match cranpose::meta_entitlement_detail(&self.app) {
+            detail if detail.is_empty() => "the build carries no entitlement service".to_owned(),
+            detail => detail,
+        }
+    }
+
+    #[cfg(not(feature = "meta-entitlement"))]
+    pub(crate) fn entitlement_detail(&self) -> String {
+        String::new()
+    }
+
     // Handles the activity's events and returns whether the activity ended. While the headset
     // shows something else, it waits for them.
     pub(crate) fn ended(&self, status: SessionStatus) -> bool {
@@ -201,8 +249,11 @@ pub fn run<Fonts: LauncherFonts>(
         android_xr: Cell::new(false),
     };
     let request = TrackingRequest::of(&settings.capabilities);
+    // The check starts first: Meta wants it within 10 seconds of the launch. The connection can
+    // wait for the user's answer to a permission prompt.
+    let entitlement = EntitlementRun::start(&host);
     let result = Runtime::connect(&host, request)
-        .and_then(|runtime| run_immersive(&host, runtime, &settings, content));
+        .and_then(|runtime| run_immersive(&host, runtime, &settings, entitlement, content));
     if let Err(error) = result {
         log::error!("cranpose xr: {error}");
     }

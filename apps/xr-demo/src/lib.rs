@@ -1,7 +1,8 @@
 // A Cranpose app for headsets. In a Meta Quest its panels stand in the room, and a controller's
 // trigger or a hand's pinch presses the buttons: one counts, the other shows or hides the room
 // around the panels.
-// A lit torus stands beside them in 3D, and a handle under it lets a controller carry it.
+// A lit torus stands beside them in 3D, and a handle under it lets a controller carry it. A glTF
+// crate with a texture turns beside the torus.
 // A strip above them is bent around the viewer. A ball above the left controller shows or hides
 // the strip when the right controller's ray presses it. The counter panel and the video surface
 // have a handle at their bottom right corner that resizes them, and the counter panel one under it
@@ -20,16 +21,17 @@ use cranpose::{CropRect, DecodedFrames, prelude::*};
 use cranpose_ui::text::FontWeight;
 use cranpose_xr::{
     DEFAULT_PANEL_SIZE, FieldOfView, FollowMode, FollowTarget, FollowingSubspace, Hand,
-    InputSource, Pose, ResizeLimits, ResizePolicy, SpatialCurvedRow, SpatialExternalSurface,
-    SpatialPanel, StereoMode, StreamStats, StreamedScene, StreamedView, StreamedViews, Subspace,
-    SubspaceModifier, local_headset_properties, local_spatial_capabilities,
-    local_spatial_environment,
+    InputSource, OnNotEntitled, Pose, ResizeLimits, ResizePolicy, SpatialCurvedRow,
+    SpatialExternalSurface, SpatialPanel, StereoMode, StreamStats, StreamedScene, StreamedView,
+    StreamedViews, Subspace, SubspaceModifier, local_entitlement_check, local_headset_properties,
+    local_spatial_capabilities, local_spatial_environment,
 };
 #[cfg(not(target_os = "android"))]
 use player_demo::Clips;
 use player_demo::sized;
 
 mod clip_player;
+mod crate_model;
 mod decoder_limits;
 mod foveated_player;
 mod headset_readout;
@@ -41,6 +43,7 @@ mod tracking_panel;
 mod type_panel;
 
 use clip_player::{ClipPlayer, target_display_time};
+use crate_model::CrateModel;
 use foveated_player::FoveatedPlayer;
 use headset_readout::{HeadsetClock, HeadsetReadout, Readout, StreamLogs};
 use pattern_writer::PatternWriter;
@@ -72,6 +75,7 @@ pub fn XrDemo() {
     let logs = remember(StreamLogs::default).with(Clone::clone);
     remember(decoder_limits::log_in_background);
     let tracking = TrackedHands();
+    EntitlementChoice();
     Subspace(move || {
         HeadsetReadout(presses, readout, clock.clone(), logs.clone());
         // A flat window shows the panels side by side, so the clips come first
@@ -109,6 +113,14 @@ pub fn XrDemo() {
                 .rotate(0.0, -30.0, 0.0),
             true,
         );
+        // The crate's volume has no handle, so it adds no layer to the frame: the torus's volume
+        // already brings the projection layer, which all volumes share
+        CrateModel(
+            SubspaceModifier::new()
+                .offset(950.0, -330.0, 100.0)
+                .rotate(0.0, -30.0, 0.0),
+            true,
+        );
         CounterPanel(presses, tracking);
         TypePanel();
         if strip_shown.get() {
@@ -119,13 +131,29 @@ pub fn XrDemo() {
     ControllerBall(strip_shown);
 }
 
+// A build with the `meta-entitlement` feature quits when the store's check fails. A build made with
+// `XR_DEMO_ENTITLEMENT=continue` goes on instead. Its readout shows what the check found.
+const ENTITLEMENT_BUILD: Option<&str> = option_env!("XR_DEMO_ENTITLEMENT");
+
+#[composable]
+fn EntitlementChoice() {
+    if ENTITLEMENT_BUILD == Some("continue")
+        && let Some(check) = local_entitlement_check().current()
+    {
+        // The choice is made once, before the check can answer
+        remember(move || check.set_on_not_entitled(OnNotEntitled::Continue));
+    }
+}
+
 // The depth test builds are `XR_DEMO_VOLUME=through`, which shows the panel and the torus, and
 // `XR_DEMO_VOLUME=alone`, which shows the torus only. A screenshot of the second build tells how
-// many pixels the whole torus covers.
+// many pixels the whole torus covers. `XR_DEMO_VOLUME=model` shows the glTF crate only, standing
+// still and turned to show three faces, so that a screenshot tells how many pixels its texture
+// covers in each eye.
 const VOLUME_BUILD: Option<&str> = option_env!("XR_DEMO_VOLUME");
 
 fn depth_test_build() -> bool {
-    matches!(VOLUME_BUILD, Some("through" | "alone"))
+    matches!(VOLUME_BUILD, Some("through" | "alone" | "model"))
 }
 
 // A test of the compositor's depth test: a panel and a torus that pierces it, a meter ahead of the
@@ -135,6 +163,12 @@ fn depth_test_build() -> bool {
 // screenshot holds only the panel and the ring.
 #[composable]
 fn DepthTest() {
+    if VOLUME_BUILD == Some("model") {
+        FollowingSubspace(FollowTarget::View(FollowMode::Snap), || {
+            CrateModel(SubspaceModifier::new().rotate(20.0, 30.0, 0.0), false);
+        });
+        return;
+    }
     FollowingSubspace(FollowTarget::View(FollowMode::Snap), || {
         if VOLUME_BUILD != Some("alone") {
             SpatialPanel(SubspaceModifier::new().size(600.0, 600.0), || {
@@ -371,7 +405,7 @@ fn CurvedStrip() {
 fn PressesPanel(presses: MutableState<u32>, readout: MutableState<Readout>) {
     SpatialPanel(
         SubspaceModifier::new()
-            .size(320.0, 350.0)
+            .size(320.0, 380.0)
             .offset(600.0, 0.0, 100.0)
             .rotate(0.0, -30.0, 0.0),
         move || {
@@ -438,6 +472,13 @@ fn ReadoutLines(readout: MutableState<Readout>) {
         format!("Lifecycle {:?}", local_lifecycle_state().current()),
     ] {
         Text(line, Modifier::empty(), sized(18.0, None));
+    }
+    if let Some(check) = local_entitlement_check().current() {
+        Text(
+            format!("Entitlement {:?}", check.entitlement()),
+            Modifier::empty(),
+            sized(18.0, None),
+        );
     }
 }
 

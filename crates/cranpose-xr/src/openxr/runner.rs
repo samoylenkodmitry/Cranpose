@@ -9,6 +9,7 @@ use cranpose_core::CompositionLocalProvider;
 use openxr as xr;
 
 use super::{
+    entitlement_run::EntitlementRun,
     frame_layers::{Layer, Stages},
     frame_rate::FrameRate,
     graphics::Graphics,
@@ -24,13 +25,13 @@ use super::{
     volume_layers::VolumeLayers,
 };
 use crate::{
-    SpatialCapabilities, SpatialEnvironment,
+    EntitlementCheck, SpatialCapabilities, SpatialEnvironment,
     depth_order::sort_back_to_front,
     exit_request::{ExitRequest, ExitStep, leave},
     frame_effects::local_frame_effects,
     keyboard_panel::SoftKeyboardPanel,
-    local_haptics, local_headset_properties, local_spatial_capabilities, local_spatial_environment,
-    local_tracking_capabilities,
+    local_entitlement_check, local_haptics, local_headset_properties, local_spatial_capabilities,
+    local_spatial_environment, local_tracking_capabilities,
     pointer::Pointer,
     session_status::{SessionStatus, StatusWatch},
     soft_keyboard::SoftKeyboard,
@@ -48,11 +49,12 @@ pub(crate) fn run_immersive(
     host: &Host,
     runtime: Runtime,
     settings: &AppSettings,
+    mut entitlement: Option<EntitlementRun>,
     content: impl FnMut() + 'static,
 ) -> Result<(), String> {
     // A run that follows another in the same process starts as the first did
     dispatch_lifecycle_state(LifecycleState::Created);
-    let mut immersive = Immersive::new(host, runtime, settings, content)?;
+    let mut immersive = Immersive::new(host, runtime, settings, entitlement.is_some(), content)?;
     let mut status = SessionStatus::Idle;
     let mut rate = FrameRate::new();
     let mut watch = StatusWatch::default();
@@ -70,6 +72,9 @@ pub(crate) fn run_immersive(
                 change.lifecycle
             );
             dispatch_lifecycle_state(change.lifecycle);
+        }
+        if let (Some(run), Some(check)) = (&mut entitlement, &immersive.entitlement) {
+            run.poll(host, check);
         }
         match exit.poll(status.runs()) {
             ExitStep::Wait => {}
@@ -110,6 +115,8 @@ struct Immersive {
     keyboard: SoftKeyboard,
     system_keyboard: Option<SystemKeyboard>,
     environment: SpatialEnvironment,
+    // The app's handle on the entitlement check, when one runs
+    entitlement: Option<EntitlementCheck>,
     pointer: Pointer,
     layers: PanelLayers,
     volumes: VolumeLayers,
@@ -130,6 +137,7 @@ impl Immersive {
         host: &Host,
         runtime: Runtime,
         settings: &AppSettings,
+        entitled: bool,
         mut content: impl FnMut() + 'static,
     ) -> Result<Self, String> {
         let (graphics, gpu) = Graphics::open(&runtime.instance, runtime.system)?;
@@ -148,12 +156,16 @@ impl Immersive {
             SpatialCapabilities::in_headset(xr_session.passthrough.is_controllable());
         let (effects, haptics, properties) =
             (headset.effects(), headset.haptics(), headset.properties());
-        let composed = Rc::new(RefCell::new(None::<(Space, SpatialEnvironment)>));
+        let composed = Rc::new(RefCell::new(
+            None::<(Space, SpatialEnvironment, Option<EntitlementCheck>)>,
+        ));
         let held = Rc::clone(&composed);
         let mut guest = GuestView::new(settings, &gpu, format.wgpu, 16, 16, DENSITY, move || {
             let space = remember(move || Space::with_scene_size(scene_size)).with(Clone::clone);
             let environment = remember(SpatialEnvironment::new).with(|environment| *environment);
-            held.replace(Some((space.clone(), environment)));
+            // The handle lives in the composition, as the state of a composition does
+            let check = entitled.then(|| remember(EntitlementCheck::new).with(|check| *check));
+            held.replace(Some((space.clone(), environment, check)));
             let volume_space = space.clone();
             CompositionLocalProvider(
                 [
@@ -164,6 +176,7 @@ impl Immersive {
                     local_haptics().provides(Some(haptics.clone())),
                     local_headset_properties().provides(Some(properties.clone())),
                     local_tracking_capabilities().provides(tracking.capabilities),
+                    local_entitlement_check().provides(check),
                 ],
                 || {
                     content();
@@ -175,7 +188,7 @@ impl Immersive {
         .map_err(|error| format!("composition: {error}"))?;
         guest.shell().renderer().set_transparent_background(true);
         // The view composes its content when it is made, and the space stays for the view's life
-        let (space, environment) = composed
+        let (space, environment, entitlement) = composed
             .borrow()
             .clone()
             .ok_or("the content did not compose")?;
@@ -193,6 +206,7 @@ impl Immersive {
             keyboard,
             system_keyboard,
             environment,
+            entitlement,
             pointer: Pointer::default(),
             layers,
             volumes,

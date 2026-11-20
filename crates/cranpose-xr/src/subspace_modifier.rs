@@ -178,6 +178,13 @@ impl SubspaceModifier {
         [width, height, self.depth.unwrap_or(fallback[2])]
     }
 
+    // The width, height and depth that the modifier sets, in dp, and `None` for a side it leaves
+    // out.
+    #[cfg(feature = "gltf")]
+    pub(crate) fn size_limits(&self) -> [Option<f32>; 3] {
+        [self.size[0], self.size[1], self.depth]
+    }
+
     /// The pose this modifier gives in its parent's frame, in meters.
     pub fn pose(&self) -> Pose {
         Pose {

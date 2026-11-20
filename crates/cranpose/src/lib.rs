@@ -62,6 +62,15 @@ pub use android::file_picker::open_content_uri;
 pub use android::finish::finish_activity;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 pub use android::host_text_input::AndroidInputMethod;
+#[cfg(all(
+    feature = "android",
+    feature = "meta-entitlement",
+    feature = "renderer-wgpu",
+    target_os = "android"
+))]
+pub use android::meta_entitlement::{
+    MetaEntitlement, begin_meta_entitlement, meta_entitlement, meta_entitlement_detail,
+};
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 pub use android::permission_prompt::{
     AndroidPermission, android_permission, request_android_permissions,
