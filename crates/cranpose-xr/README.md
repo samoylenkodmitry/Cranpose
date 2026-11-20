@@ -379,6 +379,63 @@ from, at, PinchCycle::default()))` installs a hand whose aim pose points at a pl
 whose index finger pinches in a cycle. The frame holds it as a tracked hand, so the pointer treats
 it as the cameras' hand. The feature is off by default.
 
+## Text entry
+
+A text field asks for the platform's software keyboard when it takes focus, as it does on a phone.
+The options of `BasicTextField` hold the request (`show_keyboard_on_focus`), and a tap on a focused
+field repeats it. A headset answers with one of two keyboards. An app needs no code for it.
+
+The keyboard that Cranpose draws is a `SpatialPanel` of keys. It opens below the panel that holds
+the focused field, in the plane of that panel, and it closes when focus leaves the field. It follows
+the panel: a panel that the user carries, or that follows a controller, takes the keyboard along.
+A controller's ray and a hand's pinch press the keys, because the keys are ordinary buttons.
+A key does not take the focus from the field.
+
+- The keys are the digits, the 26 letters in the QWERTY order, shift, backspace, enter, space, the
+  comma and the period, a key that shows a page of symbols (`?123`) and back (`abc`), and a key that
+  hides the keyboard. The symbols page holds `@ # $ % & * ( ) - + ! " ' : ; / ? = _ [ ] { } < > \ |`.
+- Each key sends the key event that a hardware keyboard sends for it (`KeyEvent`, with the `Key`
+  and the text that the US layout gives), and the backend hands it to the shell after the pointer's
+  events of the frame. The text reaches the field through the path of a hardware keyboard, so the
+  `on_key_event` modifiers of the app see it too. A letter in a capital carries the shift modifier.
+- One press of shift makes the next letter a capital. A second press locks shift, and a third
+  unlocks it.
+- Enter runs the keyboard action of a single-line field (`on_keyboard_action`). Without one the
+  action is Done, which hides the keyboard. In a multi-line field enter starts a new line.
+- The hide key closes the keyboard and leaves the focus in the field. A tap on the field opens the
+  keyboard again.
+- The keyboard has the Latin alphabet only. It has no other layout, no suggestions, no composing
+  text and no repeat of a held key.
+- The open keyboard is one more layer of the frame. A runtime takes 16 layers at least, so an app
+  that stands near the limit loses the panel that stands farthest from the head, as with any other
+  panel.
+
+On Android XR the system shows its own input method over an immersive app. A text field then opens
+that keyboard in place of the drawn one, through the same request. The keyboard is a panel of the
+system. The system gives it the input focus, so the app's lifecycle is `Paused` while it shows, and
+the app's pointer gets no aim. The back action hides the keyboard, and the app resumes. What the
+keyboard types reaches the field as the text of an input connection, so the field takes
+suggestions, other languages and voice input from the keyboard. Android XR shows the keyboard only
+for an app whose activity has an editor view, which the backend adds.
+
+`use_keyboard(Keyboard::Drawn)` draws the keyboard of Cranpose on every runtime, also where the
+system shows its own. `Keyboard::System`, the default, uses the system's keyboard where the runtime
+shows it and draws the keyboard elsewhere. The choice counts if it comes before the app starts,
+in the launcher's setup. Jetpack XR Compose has no such choice. There the system's input method
+types, and Compose opens it as it does on a phone.
+
+```rust,ignore
+cranpose_xr::use_keyboard(cranpose_xr::Keyboard::Drawn);
+```
+
+A build that turns on the `scripted-hand` feature can type on the keyboard of Cranpose with
+`ScriptedHand::typing`. The hand presses a field, and then the keys that type a text, one press in
+each cycle. It shows the keyboard in an emulator, where no hand can be tracked.
+
+Meta's own keyboard for Quest apps, `XR_META_virtual_keyboard`, is not used. It needs the app to
+draw the keyboard's model, which the runtime hands over as glTF through `XR_FB_render_model`.
+`docs/xr_architecture.md` lists what it needs.
+
 ## Streamed scenes
 
 `StreamedScene` shows frames that another machine rendered for both eyes. The app decodes the

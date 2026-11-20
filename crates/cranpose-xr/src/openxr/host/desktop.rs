@@ -3,7 +3,7 @@
 
 use std::{thread, time::Duration};
 
-use cranpose::{AppLauncher, LauncherFonts};
+use cranpose::{AppLauncher, GuestView, LauncherFonts};
 use openxr as xr;
 
 use crate::{
@@ -19,6 +19,19 @@ const IDLE_WAIT: Duration = Duration::from_millis(100);
 
 // The desktop process. A desktop session has no activity that could end.
 pub(crate) struct Host;
+
+// A desktop runtime shows no keyboard of the system over the app, so no value of this type exists.
+pub(crate) enum SystemKeyboard {}
+
+impl SystemKeyboard {
+    pub(crate) fn install(&self, _view: &mut GuestView) {
+        match *self {}
+    }
+
+    pub(crate) fn pump(&self, _view: &mut GuestView) {
+        match *self {}
+    }
+}
 
 impl Host {
     // What the loader and the instance need of the platform: nothing.
@@ -44,6 +57,12 @@ impl Host {
     // its instance.
     pub(crate) fn await_activity(&self, _available: &xr::ExtensionSet) -> bool {
         true
+    }
+
+    // A desktop runtime has no keyboard of the system for the app's text fields: the app draws its
+    // own.
+    pub(crate) fn system_keyboard(&self) -> Option<SystemKeyboard> {
+        None
     }
 
     // Ends the process, as the app asked. Its run returns when the session ended, so there is

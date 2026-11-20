@@ -14,7 +14,7 @@ use super::{
     graphics::Graphics,
     handle_layers::HandleLayers,
     headset_input::HeadsetInput,
-    host::Host,
+    host::{Host, SystemKeyboard},
     panel_layers::{DENSITY, PanelLayers},
     ray_layers::RayLayers,
     runtime::Runtime,
@@ -52,7 +52,7 @@ pub(crate) fn run_immersive(
 ) -> Result<(), String> {
     // A run that follows another in the same process starts as the first did
     dispatch_lifecycle_state(LifecycleState::Created);
-    let mut immersive = Immersive::new(runtime, settings, content)?;
+    let mut immersive = Immersive::new(host, runtime, settings, content)?;
     let mut status = SessionStatus::Idle;
     let mut rate = FrameRate::new();
     let mut watch = StatusWatch::default();
@@ -105,8 +105,10 @@ pub(crate) fn run_immersive(
 struct Immersive {
     guest: GuestView,
     space: Space,
-    // The keyboard that a focused text field opens
+    // The keyboard that a focused text field opens: the system's where the runtime shows it, else
+    // the one that Cranpose draws
     keyboard: SoftKeyboard,
+    system_keyboard: Option<SystemKeyboard>,
     environment: SpatialEnvironment,
     pointer: Pointer,
     layers: PanelLayers,
@@ -125,6 +127,7 @@ struct Immersive {
 
 impl Immersive {
     fn new(
+        host: &Host,
         runtime: Runtime,
         settings: &AppSettings,
         mut content: impl FnMut() + 'static,
@@ -179,11 +182,16 @@ impl Immersive {
         space.set_curves_shown(xr_session.shows_cylinders());
         // The first composition made the keyboard, because its panel asks for it
         let keyboard = space.keyboard();
-        keyboard.install(guest.shell());
+        let system_keyboard = host.system_keyboard();
+        match &system_keyboard {
+            Some(system) => system.install(&mut guest),
+            None => keyboard.install(guest.shell()),
+        }
         Ok(Self {
             guest,
             space,
             keyboard,
+            system_keyboard,
             environment,
             pointer: Pointer::default(),
             layers,
@@ -229,7 +237,10 @@ impl Immersive {
         self.space.panels_into(&mut self.panels);
         let (events, cursor) = self.pointer.update(aims, time, &self.panels);
         send(&mut self.guest, events);
-        self.keyboard.pump(self.guest.shell(), &self.space);
+        match &self.system_keyboard {
+            Some(system) => system.pump(&mut self.guest),
+            None => self.keyboard.pump(self.guest.shell(), &self.space),
+        }
         for gesture in self.pointer.surface_events() {
             self.space.deliver_to_surface(gesture);
         }

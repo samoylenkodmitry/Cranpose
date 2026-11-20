@@ -68,6 +68,8 @@ pub(crate) mod heart_rate;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod host;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+pub(crate) mod host_text_input;
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod host_window_requests;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod input;

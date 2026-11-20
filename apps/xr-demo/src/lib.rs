@@ -5,8 +5,10 @@
 // A strip above them is bent around the viewer. A ball above the left controller shows or hides
 // the strip when the right controller's ray presses it. The counter panel and the video surface
 // have a handle at their bottom right corner that resizes them, and the counter panel one under it
-// that carries it. On the desktop the panels draw flat, and a panel plays two clips through the
-// platform's decoder and a player surface.
+// that carries it. A text field in a small panel over the counter panel opens a keyboard when it
+// takes focus: the system's on Android XR, and the one that Cranpose draws below the panel elsewhere.
+// On the desktop the panels draw flat, and a panel plays two clips through the platform's decoder
+// and a player surface.
 
 use std::{
     cell::{OnceCell, RefCell},
@@ -36,6 +38,7 @@ mod pattern_writer;
 mod scripted_hand;
 mod torus_volume;
 mod tracking_panel;
+mod type_panel;
 
 use clip_player::{ClipPlayer, target_display_time};
 use foveated_player::FoveatedPlayer;
@@ -43,6 +46,7 @@ use headset_readout::{HeadsetClock, HeadsetReadout, Readout, StreamLogs};
 use pattern_writer::PatternWriter;
 use torus_volume::TorusVolume;
 use tracking_panel::{TrackedHands, TrackingSection, TrackingView};
+use type_panel::TypePanel;
 
 cranpose::app_capabilities!();
 
@@ -96,8 +100,9 @@ pub fn XrDemo() {
                 .rotate(0.0, -30.0, 0.0),
         );
         // A volume takes two of the compositor's layers, one for the 3D content and one for its
-        // handle. A Quest takes 16. With both rays and the ball the demo has 18, so the frame
-        // leaves out the two panels that stand farthest from the head.
+        // handle. A Quest takes 16. With both rays, the ball and the text panel the demo has more,
+        // and the open keyboard is one more, so the frame leaves out the panels that stand
+        // farthest from the head.
         TorusVolume(
             SubspaceModifier::new()
                 .offset(600.0, -330.0, 100.0)
@@ -105,6 +110,7 @@ pub fn XrDemo() {
             true,
         );
         CounterPanel(presses, tracking);
+        TypePanel();
         if strip_shown.get() {
             CurvedStrip();
         }
@@ -595,8 +601,15 @@ fn clip_views(index: u64, base: Duration) -> StreamedViews {
 
 #[cfg(all(feature = "android", target_os = "android"))]
 fn launcher() -> AppLauncher {
-    if let Some(hand) = scripted_hand::from_build(option_env!("XR_DEMO_SCRIPTED_HAND")) {
+    if let Some(hand) = scripted_hand::from_build(
+        option_env!("XR_DEMO_SCRIPTED_HAND"),
+        option_env!("XR_DEMO_SCRIPTED_TEXT"),
+    ) {
         cranpose_xr::script_hand(hand);
+    }
+    // `XR_DEMO_KEYBOARD=drawn` draws the keyboard on Android XR too, where the system shows its own
+    if option_env!("XR_DEMO_KEYBOARD") == Some("drawn") {
+        cranpose_xr::use_keyboard(cranpose_xr::Keyboard::Drawn);
     }
     AppLauncher::new().with_capabilities(&CAPABILITIES)
 }
