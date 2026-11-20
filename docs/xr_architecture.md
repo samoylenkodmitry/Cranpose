@@ -78,6 +78,8 @@ Cranpose developers too:
 - `local_tracking_capabilities()`: the `TrackingCapabilities` that tell, for each `TrackingFeature`,
   whether the runtime offers it.
 - `local_haptics()`: the `Haptics` handle that vibrates a hand's controller.
+- A keyboard for the text fields of the app, with no composable to write: see "Text entry".
+  `use_keyboard(Keyboard)` chooses between the system's keyboard and the one that Cranpose draws.
 - `Orbiter`: content attached to the edge of a panel, such as a handle or a toolbar.
 - `SubspaceModifier`: `width`, `height`, `depth`, `size`, `offset`, `rotate`, `with_pose`,
   `movable`, `movable_with`, `resizable`, `resizable_with`, `fill_max_size`, `padding`.
@@ -912,6 +914,121 @@ cameras:
   second.
 
 The desk shows no hand joints, no aim and no fingertip dots: no hand was in the cameras' view.
+
+## Text entry
+
+A text field that takes focus asks the platform for its software keyboard, through
+`PlatformTextInputHandler` of `cranpose-ui` (`show_keyboard` on focus and on each tap on the
+field, `hide_keyboard` when focus leaves). Android and iOS install a handler that opens the
+system's keyboard. The headset backend installs one of two handlers on its shell.
+
+### The keyboard that Cranpose draws
+
+Its handler sets the state `open` of the keyboard. A composable that the backend adds after the
+app's content (as `VolumeScene` is) composes a `SpatialPanel` of keys while `open` is true. The
+panel's modifier marks it as standing below the panel of the focused field. The pose is no state of
+the panel's composition: the space derives it each time it reads the panels. It puts the keyboard
+24 dp below the field's panel, in the same plane, and takes the field panel's `Ride`. So a panel that
+the user carries, or that follows a controller, takes its keyboard along with no composition. The
+keyboard shows nowhere while no panel is known to hold the field.
+
+The frame loop runs three steps for the keyboard after it sent the pointer's events to the shell.
+It asks the shell for the focused field's bounds, and the space names the panel of content whose
+part of the atlas holds the bounds' center. Then it hands the keys that were typed to
+`AppShell::on_key_event`. A key's click runs inside the shell's own pointer dispatch, so a key
+cannot call the shell. It pushes the key down and the key up of a hardware keyboard into a queue
+instead. The text reaches the field through the path of a hardware keyboard: the key handlers of
+the app, the focus keys and then the field.
+
+A key is a `Button`. The integration tests press keys with a controller's ray and with a scripted
+hand, and the field keeps its focus through every press. The keys follow the US
+layout, so a symbol that a US keyboard reaches with shift carries shift and the key of its digit or
+punctuation. Backspace, enter and the hide key carry no text, because the field matches a key event
+with text before it matches the key.
+
+The keyboard is one more layer in a frame. `LayerLimit` already drops the panels that stand
+farthest from the head when a frame holds more layers than the runtime takes, and the keyboard
+stands near the head.
+
+### The system's keyboard on Android XR
+
+Android XR shows the Android input method over an immersive OpenXR app. The evidence comes from the
+Android XR emulator (system image android-34 `google-xr` revision 7, Gboard as the input method):
+
+- An activity that has no editor view cannot show it. `InputMethodManager` logs "Ignoring
+  showSoftInput() as view=DecorView ... is not served".
+- With the editor view of `cranpose/android/java` (`CranposeTextInput`), which the Android backend
+  of Cranpose uses on a phone, the input method shows: `dumpsys input_method` reports
+  `mInputShown=true` and `mWindowVisible=true`, and the keyboard is a panel in the compositor's
+  picture below the app's panels.
+- The panel takes the input focus. The session goes from `FOCUSED` to `VISIBLE`, so the app's
+  lifecycle is `Paused` and its pointer gets no aim. The back action hides the keyboard, and the
+  session returns to `FOCUSED`. The next tap on the field shows the keyboard again.
+- What the keyboard types arrives as input connection events. `adb shell input text hello` produced
+  five `commitText` events, and the field of the demo showed the text.
+
+So on a runtime with `XR_ANDROID_` extensions the backend installs `AndroidInputMethod` of `cranpose`
+on the shell: the handler of the Android backend, with the editor view and the event queue,
+without the window insets and without the placement of the editor view. The loop calls its `pump` in
+each frame, which hands the queue's events to the shell and the focused field's text to the editor
+view. The drawn keyboard never opens then. `use_keyboard(Keyboard::Drawn)` keeps the drawn keyboard.
+
+Not run: a real Android XR headset, and tapping the keys of the system keyboard with a hand or a
+controller (the emulator's hand simulation does not reach the guest, and `adb shell input text` types
+through the same input connection without the keys). Whether the Quest's runtime shows the Android
+input method over an immersive app is not run either. The Quest was not on adb for this change.
+
+### Meta's virtual keyboard
+
+`XR_META_virtual_keyboard` gives a Quest app the keyboard that the Meta system draws in its own
+apps, with its suggestions and its animation. The runtime owns the layout and the typing logic, and
+the app draws the keyboard. The app is not built for it yet. A Quest 3 runtime lists
+`XR_META_virtual_keyboard` (the extension list that an app logged on 16 November). It lists
+`XR_FB_render_model` only for an app whose manifest declares `com.oculus.feature.RENDER_MODEL`.
+
+What an app needs, from Meta's integration guide for the extension:
+
+1. The manifest declares `com.oculus.feature.VIRTUAL_KEYBOARD` (not required),
+   `com.oculus.feature.RENDER_MODEL` (required) and the permission `com.oculus.permission.RENDER_MODEL`.
+   The guide names Quest 2 and Quest Pro and Horizon OS v54 or later.
+2. The instance enables `XR_META_virtual_keyboard` and `XR_FB_render_model`. The system properties
+   (`XrSystemVirtualKeyboardPropertiesMETA`) say whether the runtime supports it.
+3. The app creates the keyboard (`xrCreateVirtualKeyboardMETA`) and its space
+   (`xrCreateVirtualKeyboardSpaceMETA`), and suggests a pose and a scale
+   (`xrSuggestVirtualKeyboardLocationMETA`). The runtime has the final say, so the app reads the pose
+   (`xrLocateSpace`) and the scale (`xrGetVirtualKeyboardScaleMETA`) back.
+4. The app loads the keyboard's model through `XR_FB_render_model`: the path
+   `/model_meta/keyboard/virtual`, with `XR_RENDER_MODEL_SUPPORTS_GLTF_2_0_SUBSET_2_BIT_FB`,
+   because the model has several meshes and transparent textures. `xrLoadRenderModelFB` returns a
+   binary glTF (`.glb`).
+5. The app needs a glTF 2.0 loader for what the model holds: meshes, UVs, normals, tangents, vertex
+   colors, materials, transparent textures, translation-rotation-scale and weight animations, and
+   morph targets (16 for each key). The animation channels carry an `additiveWeightIndex` extra,
+   and an index of -1 means every weight.
+6. The model's glyph textures have a custom URI,
+   `metaVirtualKeyboard://texture/{textureID}?w={width}&h={height}&fmt=RGBA32`. The loader needs a
+   handler that makes a writable texture for each URI and keeps it by its id. Each frame the app
+   asks for the dirty textures (`xrGetVirtualKeyboardDirtyTexturesMETA`) and writes their pixels
+   (`xrGetVirtualKeyboardTextureDataMETA`).
+7. Each frame the app applies the animation states (`xrGetVirtualKeyboardModelAnimationStatesMETA`:
+   an animation index and a fraction), marks the morphed nodes dirty and rebuilds their meshes once,
+   after the textures and all animations.
+8. The app sends the input of each controller ray or hand (`xrSendVirtualKeyboardInputMETA`): the
+   input source, its pose, whether it presses, and the interactor's root pose, which the runtime may
+   change to limit the touch. The app draws its input model at the pose that comes back.
+9. The app tells the runtime which text field has focus (`xrChangeVirtualKeyboardTextContextMETA`),
+   shows the model (`xrSetVirtualKeyboardModelVisibilityMETA`) and waits for the shown event
+   before it accepts input. The model's node named "collision" holds the geometry for the app's own
+   collision.
+10. The runtime sends the typing as events: `XrEventDataVirtualKeyboardCommitTextMETA`,
+    `XrEventDataVirtualKeyboardBackspaceMETA` (repeated while the key is held),
+    `XrEventDataVirtualKeyboardEnterMETA`, and the shown and hidden events. The app turns them
+    into the key events of `AppShell::on_key_event`, as the drawn keyboard does.
+
+Items 4 to 7 need a glTF loader and a renderer for skinned, morphed meshes with textures that
+change. The app's glTF models (`SpatialVolume` with a loader) bring both, so this keyboard can
+follow them. Its handler then replaces the drawn keyboard's on a runtime that lists the extension,
+and the keyboard of Cranpose stays for the others.
 
 ## Flat video
 

@@ -10,11 +10,13 @@ use std::{
 };
 
 use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
-use cranpose::{AppLauncher, LauncherFonts};
+use cranpose::{AndroidInputMethod, AppLauncher, GuestView, LauncherFonts};
 use openxr as xr;
 
 use crate::{
+    Keyboard,
     entitlement_watch::Answer,
+    keyboard::chosen,
     openxr::{entitlement_run::EntitlementRun, runner::run_immersive, runtime::Runtime},
     session_status::SessionStatus,
     tracking_permission::PermissionAnswer,
@@ -38,6 +40,24 @@ pub(crate) struct Host {
     // Whether the activity is resumed, from the lifecycle events that any look at the activity took.
     // The permission prompt pauses the activity and resumes it, and its wait takes those events.
     resumed: Cell<bool>,
+    // Whether the runtime is Android XR's
+    android_xr: Cell<bool>,
+}
+
+// The system's input method as the keyboard of a text field. Android XR shows it over an immersive
+// app as a panel of its own.
+pub(crate) struct SystemKeyboard(AndroidInputMethod);
+
+impl SystemKeyboard {
+    // Makes the app's text fields ask the system for their keyboard.
+    pub(crate) fn install(&self, view: &mut GuestView) {
+        self.0.install(view.shell());
+    }
+
+    // Hands the keyboard's typing to the app in each turn of the loop.
+    pub(crate) fn pump(&self, view: &mut GuestView) {
+        self.0.pump(view.shell());
+    }
 }
 
 impl Host {
@@ -85,7 +105,15 @@ impl Host {
             .names()
             .iter()
             .any(|name| name.starts_with(ANDROID_XR_EXTENSION));
+        self.android_xr.set(android_xr);
         !android_xr || self.wait_until_resumed()
+    }
+
+    // The keyboard of the system, on a runtime that shows it over the app, unless the app chose the
+    // keyboard that Cranpose draws. Every other runtime has none, so the app draws its own.
+    pub(crate) fn system_keyboard(&self) -> Option<SystemKeyboard> {
+        (self.android_xr.get() && chosen() == Keyboard::System)
+            .then(|| SystemKeyboard(AndroidInputMethod::new(&self.app)))
     }
 
     // Takes the activity's events until it is resumed and has a window, and returns whether it
@@ -218,6 +246,7 @@ pub fn run<Fonts: LauncherFonts>(
     let host = Host {
         app,
         resumed: Cell::new(false),
+        android_xr: Cell::new(false),
     };
     let request = TrackingRequest::of(&settings.capabilities);
     // The check starts first: Meta wants it within 10 seconds of the launch. The connection can

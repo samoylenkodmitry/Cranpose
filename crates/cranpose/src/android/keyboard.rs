@@ -10,13 +10,17 @@ use android_activity::{
     input::{KeyAction, KeyCharacterMap, KeyMapChar, Keycode, MetaState},
 };
 use cranpose_app_shell::{
-    ImeEditorState, Key, KeyEvent, KeyEventType, Modifiers, PlatformTextInputHandler,
+    AppShell, ImeEditorState, Key, KeyEvent, KeyEventType, Modifiers, PlatformTextInputHandler,
 };
 use cranpose_core::collections::map::HashMap;
+use cranpose_render_wgpu::WgpuRenderer;
 
-use super::text_input::{
-    AndroidImeEventQueue, hide_android_text_input, place_android_text_input,
-    show_android_text_input, update_android_text_input_state,
+use super::{
+    event_loop::set_android_ime_bottom_px,
+    text_input::{
+        AndroidImeEvent, AndroidImeEventQueue, hide_android_text_input, ime_action_from_android,
+        place_android_text_input, show_android_text_input, update_android_text_input_state,
+    },
 };
 
 const ANDROID_KEY_ACTION_DOWN: i32 = 0;
@@ -427,4 +431,54 @@ fn map_keycode(keycode: Keycode) -> Key {
         .iter()
         .find(|(code, _)| *code == keycode)
         .map_or(Key::Unknown, |(_, key)| *key)
+}
+
+pub(super) fn dispatch_android_ime_event(
+    shell: &mut AppShell<WgpuRenderer>,
+    event: AndroidImeEvent,
+) {
+    match event {
+        AndroidImeEvent::CommitText { text, .. } => {
+            let _ = shell.on_ime_preedit("", None);
+            let _ = shell.on_paste(&text);
+        }
+        AndroidImeEvent::SetComposingText { text, cursor_bytes } => {
+            let _ = shell.on_ime_preedit(&text, Some((cursor_bytes, cursor_bytes)));
+        }
+        AndroidImeEvent::SetComposingRegion {
+            start_bytes,
+            end_bytes,
+        } => {
+            let _ = shell.on_ime_set_composing_region(start_bytes, end_bytes);
+        }
+        AndroidImeEvent::SetSelection {
+            start_bytes,
+            end_bytes,
+        } => {
+            let _ = shell.on_ime_set_selection(start_bytes, end_bytes);
+        }
+        AndroidImeEvent::FinishComposing => {
+            let _ = shell.on_ime_finish_composing();
+        }
+        AndroidImeEvent::DeleteSurrounding {
+            before_bytes,
+            after_bytes,
+        } => {
+            let _ = shell.on_ime_delete_surrounding(before_bytes, after_bytes);
+        }
+        AndroidImeEvent::Key {
+            action,
+            key_code,
+            meta_state,
+            unicode_char,
+        } => {
+            if let Some(event) = ime_key_event(action, key_code, meta_state, unicode_char) {
+                let _ = shell.on_key_event(&event);
+            }
+        }
+        AndroidImeEvent::EditorAction { action } => {
+            let _ = shell.on_ime_action(ime_action_from_android(action));
+        }
+        AndroidImeEvent::ImeInsetsChanged { bottom_px } => set_android_ime_bottom_px(bottom_px),
+    }
 }

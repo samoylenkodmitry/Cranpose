@@ -60,6 +60,8 @@ mod scoped_weak_stack;
 pub use android::file_picker::open_content_uri;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 pub use android::finish::finish_activity;
+#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+pub use android::host_text_input::AndroidInputMethod;
 #[cfg(all(
     feature = "android",
     feature = "meta-entitlement",

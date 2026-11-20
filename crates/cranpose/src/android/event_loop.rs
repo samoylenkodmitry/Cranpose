@@ -25,12 +25,12 @@ use super::{
     },
     input::{AndroidInput, PendingInput, dispatch_pending_inputs},
     jni::{clear_pending_android_jni_exception, with_android_activity_env},
-    keyboard::{self, AndroidSoftKeyboard},
+    keyboard::{self, AndroidSoftKeyboard, dispatch_android_ime_event},
     overlay_window,
     pipeline_cache::{keep_pipeline_cache, name_pipeline_cache_file, seed_pipeline_cache},
     shell_creation::share_gpu_context,
     surface::{AndroidSurfaceError, create_android_wgpu_surface},
-    text_input::{self, AndroidImeEvent},
+    text_input,
 };
 use crate::{
     android_host_window,
@@ -85,7 +85,7 @@ fn set_android_ime_density(density: f32) {
     crate::thread_state::with(|state| state.android_ime_density.set(density.max(f32::EPSILON)));
 }
 
-fn set_android_ime_bottom_px(bottom_px: i32) {
+pub(super) fn set_android_ime_bottom_px(bottom_px: i32) {
     let density = crate::thread_state::with(|state| state.android_ime_density.get());
     let bottom = (bottom_px.max(0) as f32) / density;
     let insets = cranpose_ui::EdgeInsets {
@@ -250,54 +250,6 @@ fn drain_accessibility_jumps(
         crate::accessibility::run_reader_action(shell, |root| {
             crate::accessibility::scroll_to_index(root, node_id, index)
         });
-    }
-}
-
-fn dispatch_android_ime_event(shell: &mut AppShell<WgpuRenderer>, event: AndroidImeEvent) {
-    match event {
-        AndroidImeEvent::CommitText { text, .. } => {
-            let _ = shell.on_ime_preedit("", None);
-            let _ = shell.on_paste(&text);
-        }
-        AndroidImeEvent::SetComposingText { text, cursor_bytes } => {
-            let _ = shell.on_ime_preedit(&text, Some((cursor_bytes, cursor_bytes)));
-        }
-        AndroidImeEvent::SetComposingRegion {
-            start_bytes,
-            end_bytes,
-        } => {
-            let _ = shell.on_ime_set_composing_region(start_bytes, end_bytes);
-        }
-        AndroidImeEvent::SetSelection {
-            start_bytes,
-            end_bytes,
-        } => {
-            let _ = shell.on_ime_set_selection(start_bytes, end_bytes);
-        }
-        AndroidImeEvent::FinishComposing => {
-            let _ = shell.on_ime_finish_composing();
-        }
-        AndroidImeEvent::DeleteSurrounding {
-            before_bytes,
-            after_bytes,
-        } => {
-            let _ = shell.on_ime_delete_surrounding(before_bytes, after_bytes);
-        }
-        AndroidImeEvent::Key {
-            action,
-            key_code,
-            meta_state,
-            unicode_char,
-        } => {
-            if let Some(event) = keyboard::ime_key_event(action, key_code, meta_state, unicode_char)
-            {
-                let _ = shell.on_key_event(&event);
-            }
-        }
-        AndroidImeEvent::EditorAction { action } => {
-            let _ = shell.on_ime_action(text_input::ime_action_from_android(action));
-        }
-        AndroidImeEvent::ImeInsetsChanged { bottom_px } => set_android_ime_bottom_px(bottom_px),
     }
 }
 

@@ -23,6 +23,10 @@
 //! with no controller in it points at the panels and presses with a pinch, as a controller does. [`Haptics`] plays
 //! vibrations on the controllers. A pure Cranpose app can stream a headset to a host with them.
 //!
+//! A text field in a panel opens a keyboard when it takes focus, with no code in the app. A headset
+//! draws one below the field's panel, or shows the system's where the runtime does, as Android XR
+//! does. [`use_keyboard`] chooses.
+//!
 //! The `openxr` feature adds the backend for headsets. On Android, as on a Meta Quest, its
 //! [`android_main!`] starts the app as an immersive app. On Linux and Windows its `run` starts
 //! the app in the headset of the machine's OpenXR runtime (SteamVR, Monado, Meta Link) and opens
@@ -52,6 +56,7 @@ mod controller;
 mod controller_bindings;
 #[cfg(any(test, headset))]
 mod depth_order;
+mod dock;
 mod entitlement;
 mod entitlement_check;
 #[cfg(any(test, headset))]
@@ -112,6 +117,13 @@ mod interaction_profile;
 #[cfg(any(test, headset))]
 mod joint_flags;
 #[cfg(any(test, headset))]
+mod key_layout;
+mod keyboard;
+#[cfg(any(test, headset))]
+mod keyboard_panel;
+#[cfg(any(test, headset))]
+mod keyboard_state;
+#[cfg(any(test, headset))]
 mod layer_limit;
 mod locals;
 mod meta_face_state;
@@ -141,6 +153,8 @@ mod resize_policy;
 mod scripted_hand;
 #[cfg(any(test, headset))]
 mod session_status;
+#[cfg(any(test, headset))]
+mod soft_keyboard;
 mod space;
 mod spatial_capabilities;
 mod spatial_curved_row;
@@ -236,6 +250,7 @@ pub use haptics::{Haptics, Vibration, local_haptics};
 pub use headset_properties::{EyeImageSize, HeadsetProperties, local_headset_properties};
 pub use input_source::InputSource;
 pub use interaction_profile::InteractionProfile;
+pub use keyboard::{Keyboard, use_keyboard};
 pub use meta_face_state::MetaFaceState;
 pub use move_policy::MovePolicy;
 pub use on_not_entitled::OnNotEntitled;
