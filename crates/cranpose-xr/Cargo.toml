@@ -35,15 +35,53 @@ openxr = [
     "dep:windows-sys",
 ]
 
+# The entitlement check of the Meta Horizon Store, which an Android headset app runs at its
+# start. A failed check ends the app, as Meta requires of a store app, unless the app chooses
+# `OnNotEntitled::Continue`. The app's Gradle build lists the `meta-entitlement` service, which
+# adds the Meta Platform SDK and takes the app id from `cranposeMetaAppId`. Off, the build
+# links and fetches nothing of the SDK. The SDK is under the Meta Platform Technologies SDK
+# License Agreement (https://developers.meta.com/vr/licenses/oculussdk/), which binds whoever
+# downloads or uses it, so whoever turns this feature on accepts it.
+meta-entitlement = ["openxr", "cranpose/meta-entitlement"]
+
+# Plays a scripted hand in place of the cameras' hand, and scripted controllers in place of the
+# runtime's, so a build can show the pointers where no hand or controller can be tracked, such as in
+# an emulator. The app installs the scripts with `script_hand` and `script_controller`. Off, the
+# backend has no such code.
+scripted-hand = ["openxr"]
+
+# Taps the mixed output of the audio player and logs the level of each ear once a second, with where
+# the first point source stands relative to the head. A check that a source at the left sounds in the
+# left ear reads the log. Off, the mixer does no work for the tap.
+audio-tap = ["openxr"]
+
 # Times the streamed scenes' passes on the CPU and the GPU, and logs the cost once a second. Off, the
 # passes run with no timing.
 stream-costs = ["openxr"]
 
+# `SpatialGltfModel`: glTF 2.0 models (`.gltf` and `.glb`) in a `SpatialVolume`. Off, the crate has
+# no glTF code and none of its dependencies.
+gltf = [
+    "dep:gltf",
+    "dep:image",
+    "dep:base64",
+    "dep:percent-encoding",
+    "dep:thiserror",
+]
+
 [dependencies]
+base64 = { version = "0.23.1", optional = true }
 # `video`: a flat stream draws through `PlayerSurfaceIntake`.
 cranpose = { workspace = true, features = ["video"] }
+# The keyboard that a headset draws sends key events to the app's shell, and runs with any renderer.
+cranpose-app-shell = { workspace = true }
 cranpose-core = { workspace = true }
+cranpose-render-common = { workspace = true }
+gltf = { version = "1.4.1", default-features = false, features = ["utils", "names"], optional = true }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"], optional = true }
 log = "0.4"
+percent-encoding = { version = "2.3.2", optional = true }
+thiserror = { version = "2.0.21", optional = true }
 
 # The OpenXR backend needs the platform side of Cranpose: the activity on
 # Android, and on a desktop the flat window that `run` opens when the machine
@@ -61,7 +99,6 @@ glow = { version = "0.18", optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))'.dependencies]
 cranpose = { workspace = true, features = ["desktop"] }
-thiserror = { version = "2.0.21", optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 openxr = { version = "0.22", optional = true }

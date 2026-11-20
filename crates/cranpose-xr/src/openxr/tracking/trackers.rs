@@ -11,11 +11,8 @@ use super::{
 };
 use crate::{
     TrackingAvailability, TrackingCapabilities, TrackingFeature, XrFrame,
-    openxr::{
-        graphics::Api,
-        host::Host,
-        session::{SessionStatus, XrSession},
-    },
+    openxr::{graphics::Api, host::Host, session::XrSession},
+    session_status::SessionStatus,
     tracking_permission::PermissionStep,
 };
 
@@ -80,6 +77,8 @@ impl Trackers {
         frame.tracking = self.capabilities;
         if status.listens() {
             self.locate(xr_session, time, frame);
+            #[cfg(feature = "scripted-hand")]
+            crate::scripted_hand::apply(frame);
         } else {
             Self::rest(frame);
         }

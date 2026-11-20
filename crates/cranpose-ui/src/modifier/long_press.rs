@@ -7,7 +7,7 @@ use std::{
 use cranpose_core::{NodeId, current_runtime_handle, internal::FrameCallbackRegistration};
 use cranpose_foundation::{
     DRAG_THRESHOLD, DelegatableNode, ModifierNode, ModifierNodeContext, ModifierNodeElement,
-    NodeCapabilities, NodeState, PointerEvent, PointerEventKind, PointerInputNode,
+    NodeCapabilities, NodeState, PointerEvent, PointerEventKind, PointerId, PointerInputNode,
     gesture_constants::LONG_PRESS_TIMEOUT_NANOS, impl_pointer_input_node,
 };
 use cranpose_ui_graphics::Point;
@@ -97,6 +97,9 @@ struct Press {
     /// keep different clocks.
     started_nanos: Cell<Option<u64>>,
     fired: Cell<bool>,
+    // The pointer that holds the press: the first one that went down. The others pass by until
+    // it lifts.
+    holder: Cell<Option<PointerId>>,
     context: RefCell<Weak<AppContext>>,
     timer: RefCell<Option<FrameCallbackRegistration>>,
 }
@@ -109,13 +112,14 @@ impl Press {
             origin: Cell::new(None),
             started_nanos: Cell::new(None),
             fired: Cell::new(false),
+            holder: Cell::new(None),
             context: RefCell::new(Weak::new()),
             timer: RefCell::new(None),
         }
     }
 
     fn on_event(press: &Rc<Self>, event: &PointerEvent) {
-        if !event.id.is_primary() {
+        if press.holder.get().is_some_and(|held| held != event.id) {
             return;
         }
         match event.kind {
@@ -147,6 +151,7 @@ impl Press {
             return;
         };
         press.origin.set(Some(event.global_position));
+        press.holder.set(Some(event.id));
         *press.context.borrow_mut() = current_app_context()
             .as_ref()
             .map_or_else(Weak::new, Rc::downgrade);
@@ -172,10 +177,12 @@ impl Press {
                 return;
             }
             press.fired.set(true);
-            if let (Some(context), Some(node)) =
-                (press.context.borrow().upgrade(), press.node.get())
-            {
-                context.claim_pointer(node);
+            if let (Some(context), Some(node), Some(holder)) = (
+                press.context.borrow().upgrade(),
+                press.node.get(),
+                press.holder.get(),
+            ) {
+                context.claim_pointer(node, holder);
             }
             let action = Rc::clone(&press.action.borrow());
             action();
@@ -188,6 +195,7 @@ impl Press {
         self.origin.set(None);
         self.started_nanos.set(None);
         self.fired.set(false);
+        self.holder.set(None);
     }
 }
 

@@ -3,10 +3,12 @@ use cranpose_ui::FocusDirection;
 use super::*;
 
 mod dispatch_stop;
+pub(crate) mod extra_pointers;
 pub(crate) mod key_activation;
 mod key_navigation;
 
 use dispatch_stop::Stop;
+use extra_pointers::Hover;
 
 impl<R> SurfaceMut<'_, R>
 where
@@ -195,28 +197,16 @@ where
 
         let pos = Point { x, y };
         let previously_hovered = self.surface().hovered_nodes.clone();
-        for old_id in previously_hovered {
-            if !new_ids.contains(&old_id)
-                && let Some(target) = self.surface().renderer.scene().find_target(old_id)
-            {
-                let exit_event = self
-                    .pointer_event(PointerEventKind::Exit, pos, pos, event_time)
-                    .with_buttons(self.surface().buttons_pressed)
-                    .with_source(self.surface().pointer_source);
-                self.dispatch_targets(std::iter::once(target), exit_event, Stop::Never);
-            }
-        }
-
-        for hit in &hits {
-            if !self.surface().hovered_nodes.contains(&hit.node_id()) {
-                let enter_event = self
-                    .pointer_event(PointerEventKind::Enter, pos, pos, event_time)
-                    .with_buttons(self.surface().buttons_pressed)
-                    .with_source(self.surface().pointer_source);
-                self.dispatch_targets(std::iter::once(hit.clone()), enter_event, Stop::Never);
-            }
-        }
-
+        self.send_hover_changes(
+            Hover {
+                pointer: PointerId::PRIMARY,
+                hovered: &previously_hovered,
+                at: pos,
+                buttons: self.surface().buttons_pressed,
+                time: event_time,
+            },
+            &hits,
+        );
         self.surface_mut().hovered_nodes = new_ids;
         self.apply_hovered_pointer_icon(&hits);
 
@@ -573,152 +563,6 @@ where
         }
     }
 
-    /// Dispatches an event for a secondary pointer (`pointer_id != 0`).
-    ///
-    /// Multi-touch gestures act on the element the first finger grabbed, so
-    /// secondary pointers are routed to the hit path captured by the primary
-    /// pointer's Down. They carry no hover/click semantics and are ignored
-    /// when no primary gesture is in progress.
-    ///
-    /// Returns `true` when the event was dispatched to at least one target.
-    pub fn secondary_pointer_pressed(
-        &mut self,
-        pointer_id: PointerId,
-        x: f32,
-        y: f32,
-        time_ms: Option<i64>,
-    ) -> bool {
-        let event_time = self.shell.app.realtime_pointer_event_time(time_ms);
-        self.dispatch_secondary_pointer(PointerEventKind::Down, pointer_id, x, y, event_time)
-    }
-
-    /// Move counterpart of [`secondary_pointer_pressed`](Self::secondary_pointer_pressed).
-    pub fn secondary_pointer_moved(
-        &mut self,
-        pointer_id: PointerId,
-        x: f32,
-        y: f32,
-        time_ms: Option<i64>,
-    ) -> bool {
-        let event_time = self.shell.app.realtime_pointer_event_time(time_ms);
-        self.dispatch_secondary_pointer(PointerEventKind::Move, pointer_id, x, y, event_time)
-    }
-
-    /// Release counterpart of [`secondary_pointer_pressed`](Self::secondary_pointer_pressed).
-    pub fn secondary_pointer_released(
-        &mut self,
-        pointer_id: PointerId,
-        x: f32,
-        y: f32,
-        time_ms: Option<i64>,
-    ) -> bool {
-        let event_time = self.shell.app.realtime_pointer_event_time(time_ms);
-        self.dispatch_secondary_pointer(PointerEventKind::Up, pointer_id, x, y, event_time)
-    }
-
-    fn dispatch_secondary_pointer(
-        &mut self,
-        kind: PointerEventKind,
-        pointer_id: PointerId,
-        x: f32,
-        y: f32,
-        event_time: PointerEventTime,
-    ) -> bool {
-        if pointer_id.is_primary() {
-            log::warn!(
-                target: "cranpose::input",
-                "secondary pointer dispatch called with the primary pointer id"
-            );
-            return false;
-        }
-
-        let _event_handler = enter_event_handler_scope();
-        let result = {
-            let _app_context = self.shell.app.app_context.enter_scope();
-            run_in_mutable_snapshot(|| {
-                if !self.surface().hit_path_tracker.has_path(PointerId::PRIMARY) {
-                    return false;
-                }
-                let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
-                if targets.is_empty() {
-                    return false;
-                }
-                let pos = Point { x, y };
-                let event = self
-                    .pointer_event(kind, pos, pos, event_time)
-                    .with_buttons(self.surface().buttons_pressed)
-                    .with_id(pointer_id)
-                    .with_source(self.surface().pointer_source);
-                self.dispatch_targets(targets, event, Stop::Never);
-                true
-            })
-            .unwrap_or(false)
-        };
-        if result {
-            self.mark_dirty();
-        }
-        log::trace!(
-            target: "cranpose::input",
-            "secondary_pointer {kind:?} id={pointer_id} ({x:.2},{y:.2}) time_ms={:?} animation_time_nanos={} -> {result}",
-            event_time.platform_time_ms,
-            event_time.animation_time_nanos,
-        );
-        result
-    }
-
-    /// Points pointer `pointer_id` along `ray` in the 3D scene the node
-    /// `scene` shows: a controller, a hand or a gaze, in the coordinates of
-    /// the space the scene's eye stands in. A `Down` reaches the content of
-    /// the mesh surface the ray meets first and keeps its targets as the
-    /// pointer's gesture, which the pointer's `Move`s and its `Up` or
-    /// `Cancel` reach wherever the ray points then. `pointer_id`, not 0,
-    /// tells the pointer from the window's others. Returns `true` when a
-    /// target received the event.
-    pub fn ray_pointer(
-        &mut self,
-        (pointer_id, scene): (PointerId, NodeId),
-        ray: cranpose_ui_graphics::space::Ray,
-        kind: PointerEventKind,
-    ) -> bool {
-        if pointer_id.is_primary() {
-            log::warn!(
-                target: "cranpose::input",
-                "ray pointer dispatch called with the primary pointer id"
-            );
-            return false;
-        }
-        let event_time = self.shell.app.realtime_pointer_event_time(None);
-        let _event_handler = enter_event_handler_scope();
-        let result = {
-            let _app_context = self.shell.app.app_context.enter_scope();
-            run_in_mutable_snapshot(|| {
-                let pointer = pointer_id;
-                let event = self
-                    .pointer_event(kind, Point::default(), Point::default(), event_time)
-                    .with_id(pointer)
-                    .with_ray(ray);
-                if kind == PointerEventKind::Down {
-                    let hits = self.surface().renderer.scene().hit_test_ray(scene, ray);
-                    return self.press_hits(hits, event, pointer);
-                }
-                let targets = self.resolve_gesture_targets(pointer);
-                if matches!(kind, PointerEventKind::Up | PointerEventKind::Cancel) {
-                    self.surface_mut().hit_path_tracker.remove_path(pointer);
-                }
-                if targets.is_empty() {
-                    return false;
-                }
-                self.dispatch_targets(targets, event, Stop::Never);
-                true
-            })
-            .unwrap_or(false)
-        };
-        if result {
-            self.mark_dirty();
-        }
-        result
-    }
-
     /// Dispatches a discrete zoom step (desktop ctrl+wheel, browser pinch)
     /// to the pointer handlers under the cursor.
     ///
@@ -1054,32 +898,30 @@ where
         self.route_drag_and_drop();
     }
 
-    /// Gives the held press to `node` alone, as a long press does once it
+    /// Gives the press that `pointer` holds to `node` alone, as a long press does once it
     /// fires: every handler under the press sees it cancelled, the other
     /// handlers on `node` too, so a button does not click when the press
     /// ends, and the rest of the press reaches `node` alone. Does nothing on
     /// a surface whose press does not reach `node`.
-    pub(crate) fn give_press_to(&mut self, node: NodeId) {
+    pub(crate) fn give_press_to(&mut self, node: NodeId, pointer: PointerId) {
         let holds = self
             .surface()
             .hit_path_tracker
-            .get_path(PointerId::PRIMARY)
+            .get_path(pointer)
             .is_some_and(|paths| paths.iter().any(|path| path.contains(&node)));
         if !holds {
             return;
         }
         let event_time = self.shell.app.realtime_pointer_event_time(None);
-        let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
+        let targets = self.resolve_gesture_targets(pointer);
         self.surface_mut()
             .hit_path_tracker
-            .add_hit_path(PointerId::PRIMARY, vec![vec![node]]);
-        let cursor = Point {
-            x: self.surface().cursor.0,
-            y: self.surface().cursor.1,
-        };
+            .add_hit_path(pointer, vec![vec![node]]);
+        let cursor = self.pointer_position(pointer);
         let event = self
             .pointer_event(PointerEventKind::Cancel, cursor, cursor, event_time)
-            .with_source(self.surface().pointer_source);
+            .with_source(self.surface().pointer_source)
+            .with_id(pointer);
         let _event_handler = enter_event_handler_scope();
         let _ = run_in_mutable_snapshot(|| self.dispatch_targets(targets, event, Stop::Never));
     }
@@ -1851,52 +1693,6 @@ where
     /// Primary-surface form of [`SurfaceMut::pointer_released_at_event_time`].
     pub fn pointer_released_at_event_time(&mut self, event_time: PointerEventTime) -> bool {
         self.primary().pointer_released_at_event_time(event_time)
-    }
-
-    /// Primary-surface form of [`SurfaceMut::secondary_pointer_pressed`].
-    pub fn secondary_pointer_pressed(
-        &mut self,
-        pointer_id: PointerId,
-        x: f32,
-        y: f32,
-        time_ms: Option<i64>,
-    ) -> bool {
-        self.primary()
-            .secondary_pointer_pressed(pointer_id, x, y, time_ms)
-    }
-
-    /// Primary-surface form of [`SurfaceMut::ray_pointer`].
-    pub fn ray_pointer(
-        &mut self,
-        (pointer_id, scene): (PointerId, NodeId),
-        ray: cranpose_ui_graphics::space::Ray,
-        kind: PointerEventKind,
-    ) -> bool {
-        self.primary().ray_pointer((pointer_id, scene), ray, kind)
-    }
-
-    /// Primary-surface form of [`SurfaceMut::secondary_pointer_moved`].
-    pub fn secondary_pointer_moved(
-        &mut self,
-        pointer_id: PointerId,
-        x: f32,
-        y: f32,
-        time_ms: Option<i64>,
-    ) -> bool {
-        self.primary()
-            .secondary_pointer_moved(pointer_id, x, y, time_ms)
-    }
-
-    /// Primary-surface form of [`SurfaceMut::secondary_pointer_released`].
-    pub fn secondary_pointer_released(
-        &mut self,
-        pointer_id: PointerId,
-        x: f32,
-        y: f32,
-        time_ms: Option<i64>,
-    ) -> bool {
-        self.primary()
-            .secondary_pointer_released(pointer_id, x, y, time_ms)
     }
 
     /// Primary-surface form of [`SurfaceMut::pointer_zoomed`].

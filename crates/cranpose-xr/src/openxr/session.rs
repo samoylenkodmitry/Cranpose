@@ -19,51 +19,23 @@ use super::{
     recenter_events::RecenterEvents,
     refresh_rate,
     runtime::Runtime,
+    spatial::SpatialEvents,
     tracked_pose::tracked,
 };
 #[cfg(target_os = "android")]
 use crate::stereo_mode::{Eye, EyeView};
-use crate::{FieldOfView, Pose, TrackedPose, layer_limit::LayerLimit, volume_plan::VolumePlan};
+use crate::{
+    FieldOfView, Pose, TrackedPose,
+    layer_limit::LayerLimit,
+    session_status::{SessionState, SessionStatus},
+    volume_plan::VolumePlan,
+};
 
 const VIEW_CONFIGURATION: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
 // How long the app waits for the runtime to stop a running session as the app ends, and how
 // often it asks. An activity that is destroyed has few seconds before Android stops it.
 const STOP_WAIT: Duration = Duration::from_millis(1000);
 const STOP_POLL: Duration = Duration::from_millis(10);
-
-// Where the session stands after its events.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SessionStatus {
-    // The session has not begun or has ended: the app waits.
-    Idle,
-    // The session runs and the runtime shows none of its layers: the app ends frames with no
-    // layers.
-    Hidden,
-    // The runtime shows the app's layers, with something over them such as the system menu. The
-    // app gets no input.
-    Visible,
-    // The runtime shows the app's layers and sends the headset's input to the app.
-    Focused,
-    // The runtime ends the session: the app ends.
-    Exit,
-}
-
-impl SessionStatus {
-    // Whether the session runs: the app begins and ends frames.
-    pub(crate) fn runs(self) -> bool {
-        matches!(self, Self::Hidden | Self::Visible | Self::Focused)
-    }
-
-    // Whether the runtime shows the app's layers.
-    pub(crate) fn shows(self) -> bool {
-        matches!(self, Self::Visible | Self::Focused)
-    }
-
-    // Whether the app gets the controllers' input.
-    pub(crate) fn listens(self) -> bool {
-        self == Self::Focused
-    }
-}
 
 // What a layer shows of its swapchain.
 #[derive(Clone, Copy)]
@@ -264,6 +236,8 @@ pub(crate) struct XrSession {
     pub(crate) passthrough: Passthrough,
     // The runtime's recenter events that no frame has reported yet
     pub(crate) recenters: RecenterEvents,
+    // The runtime's events about spatial entities that no frame has read yet
+    pub(crate) spatial_events: SpatialEvents,
     // The room as the app sees it: its origin is where the head was when the app started
     pub(crate) local: xr::Space,
     // The head's own space, which the runtime locates for each frame
@@ -302,6 +276,8 @@ impl XrSession {
             layer_depth,
             depth_test,
             tracking: _,
+            spatial: _,
+            render_models: _,
         } = runtime;
         if !Graphics::TOP_ROW_FIRST && !flips_layers {
             log::warn!("cranpose xr: the runtime cannot flip layers; panels show upside down");
@@ -337,6 +313,7 @@ impl XrSession {
         Ok(Self {
             passthrough,
             recenters: RecenterEvents::default(),
+            spatial_events: SpatialEvents::default(),
             local,
             view,
             stage,
@@ -420,7 +397,9 @@ impl XrSession {
                     log::info!("cranpose xr: the runtime loses the instance");
                     self.status = SessionStatus::Exit;
                 }
-                _ => {}
+                other => {
+                    self.spatial_events.record(&other);
+                }
             }
             if self.status == SessionStatus::Exit {
                 break;
@@ -430,30 +409,27 @@ impl XrSession {
     }
 
     // Follows the session into `state`. The runtime moves it from READY through SYNCHRONIZED and
-    // VISIBLE to FOCUSED, and back down when something else takes the headset.
+    // VISIBLE to FOCUSED, and back down when something else takes the headset. A state that
+    // this backend does not know leaves the status as it was.
     fn on_state(&mut self, state: xr::SessionState) -> Result<(), String> {
         log::info!("cranpose xr: session {state:?}");
-        self.status = match state {
+        match state {
             xr::SessionState::READY => {
                 self.session
                     .begin(VIEW_CONFIGURATION)
                     .map_err(|error| format!("OpenXR begin: {error}"))?;
                 refresh_rate::request_highest(&self.instance, &self.session);
-                SessionStatus::Hidden
             }
-            xr::SessionState::SYNCHRONIZED => SessionStatus::Hidden,
-            xr::SessionState::VISIBLE => SessionStatus::Visible,
-            xr::SessionState::FOCUSED => SessionStatus::Focused,
             xr::SessionState::STOPPING => {
                 self.session
                     .end()
                     .map_err(|error| format!("OpenXR end: {error}"))?;
-                SessionStatus::Idle
             }
-            xr::SessionState::IDLE => SessionStatus::Idle,
-            xr::SessionState::EXITING | xr::SessionState::LOSS_PENDING => SessionStatus::Exit,
-            _ => self.status,
-        };
+            _ => {}
+        }
+        if let Some(known) = known_state(state) {
+            self.status = SessionStatus::of(known);
+        }
         Ok(())
     }
 
@@ -603,6 +579,21 @@ impl Drop for XrSession {
         }
         log::info!("cranpose xr: session ends in {:?}", self.status);
     }
+}
+
+// The runtime's state as the backend tells it, or `None` for a state that it does not know.
+fn known_state(state: xr::SessionState) -> Option<SessionState> {
+    Some(match state {
+        xr::SessionState::IDLE => SessionState::Idle,
+        xr::SessionState::READY => SessionState::Ready,
+        xr::SessionState::SYNCHRONIZED => SessionState::Synchronized,
+        xr::SessionState::VISIBLE => SessionState::Visible,
+        xr::SessionState::FOCUSED => SessionState::Focused,
+        xr::SessionState::STOPPING => SessionState::Stopping,
+        xr::SessionState::LOSS_PENDING => SessionState::LossPending,
+        xr::SessionState::EXITING => SessionState::Exiting,
+        _ => return None,
+    })
 }
 
 #[cfg(target_os = "android")]

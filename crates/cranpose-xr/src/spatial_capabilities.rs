@@ -12,6 +12,7 @@ use crate::locals::with_locals;
 pub struct SpatialCapabilities {
     spatial_ui: bool,
     passthrough_control: bool,
+    spatial_audio: bool,
 }
 
 impl SpatialCapabilities {
@@ -24,7 +25,19 @@ impl SpatialCapabilities {
         Self {
             spatial_ui: true,
             passthrough_control,
+            spatial_audio: false,
         }
+    }
+
+    // The capabilities with spatial audio on or off. A headset has it while the app's audio player
+    // has a spatial scene.
+    #[cfg_attr(
+        not(any(test, headset)),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    pub(crate) const fn with_spatial_audio(mut self, enabled: bool) -> Self {
+        self.spatial_audio = enabled;
+        self
     }
 
     /// Whether the app may create spatial panels. Jetpack XR's `isSpatialUiEnabled`.
@@ -42,6 +55,18 @@ impl SpatialCapabilities {
     pub const fn is_passthrough_control_enabled(&self) -> bool {
         self.passthrough_control
     }
+
+    /// Whether the app may place sound in its subspace with
+    /// [`SpatialPointSource`](crate::SpatialPointSource) and
+    /// [`SubspaceModifier::point_source`](crate::SubspaceModifier::point_source). Jetpack XR's
+    /// `isSpatialAudioEnabled`.
+    ///
+    /// It is on in a headset when the app installed an audio player that has a spatial scene,
+    /// which is Cranpose's own engine: `cranpose::install_audio`, or the `audio` feature of an
+    /// Android app. Every runtime has the sound then, because Cranpose's panner mixes it.
+    pub const fn is_spatial_audio_enabled(&self) -> bool {
+        self.spatial_audio
+    }
 }
 
 /// The composition local that holds the current [`SpatialCapabilities`]. Jetpack XR's
@@ -55,3 +80,7 @@ impl SpatialCapabilities {
 pub fn local_spatial_capabilities() -> CompositionLocal<SpatialCapabilities> {
     with_locals(|locals| locals.capabilities.clone())
 }
+
+#[cfg(test)]
+#[path = "tests/spatial_capabilities_tests.rs"]
+mod tests;

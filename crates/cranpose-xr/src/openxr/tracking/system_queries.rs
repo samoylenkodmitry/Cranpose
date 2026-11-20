@@ -118,7 +118,7 @@ pub(crate) fn query(
 //
 // `next` is null, or the head of a chain of structs that are initialized with their types, outlive
 // the call and belong to extensions that the instance enabled.
-unsafe fn fetch(
+pub(in crate::openxr) unsafe fn fetch(
     instance: &xr::Instance,
     system: xr::SystemId,
     next: *mut c_void,

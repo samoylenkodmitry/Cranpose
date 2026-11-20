@@ -1,11 +1,15 @@
 // A Cranpose app for headsets. In a Meta Quest its panels stand in the room, and a controller's
-// trigger presses the buttons: one counts, the other shows or hides the room around the panels.
-// A lit torus stands beside them in 3D, and a handle under it lets a controller carry it.
+// trigger or a hand's pinch presses the buttons: one counts, the other shows or hides the room
+// around the panels.
+// A lit torus stands beside them in 3D, and a handle under it lets a controller carry it. A glTF
+// crate with a texture turns beside the torus.
 // A strip above them is bent around the viewer. A ball above the left controller shows or hides
 // the strip when the right controller's ray presses it. The counter panel and the video surface
 // have a handle at their bottom right corner that resizes them, and the counter panel one under it
-// that carries it. On the desktop the panels draw flat, and a panel plays two clips through the
-// platform's decoder and a player surface.
+// that carries it. A text field in a small panel over the counter panel opens a keyboard when it
+// takes focus: the system's on Android XR, and the one that Cranpose draws below the panel elsewhere.
+// On the desktop the panels draw flat, and a panel plays two clips through the platform's decoder
+// and a player surface.
 
 use std::{
     cell::{OnceCell, RefCell},
@@ -16,29 +20,48 @@ use std::{
 use cranpose::{CropRect, DecodedFrames, prelude::*};
 use cranpose_ui::text::FontWeight;
 use cranpose_xr::{
-    DEFAULT_PANEL_SIZE, FieldOfView, FollowMode, FollowTarget, FollowingSubspace, Hand, Pose,
-    ResizeLimits, ResizePolicy, SpatialCurvedRow, SpatialExternalSurface, SpatialPanel, StereoMode,
-    StreamStats, StreamedScene, StreamedView, StreamedViews, Subspace, SubspaceModifier,
-    local_headset_properties, local_spatial_capabilities, local_spatial_environment,
+    DEFAULT_PANEL_SIZE, FieldOfView, FollowMode, FollowTarget, FollowingSubspace, Hand,
+    OnNotEntitled, Pose, ResizeLimits, ResizePolicy, SpatialCurvedRow, SpatialExternalSurface,
+    SpatialPanel, StereoMode, StreamStats, StreamedScene, StreamedView, StreamedViews, Subspace,
+    SubspaceModifier, local_entitlement_check, local_spatial_capabilities,
+    local_spatial_environment,
 };
 #[cfg(not(target_os = "android"))]
 use player_demo::Clips;
 use player_demo::sized;
 
 mod clip_player;
+mod controller_models;
+mod crate_model;
 mod decoder_limits;
 mod foveated_player;
 mod headset_readout;
+mod hum;
 mod pattern_writer;
+mod presses_panel;
+mod ray_target;
+mod room_panel;
+#[cfg(all(feature = "android", target_os = "android"))]
+mod scripted_hand;
+mod sound_probe;
 mod torus_volume;
 mod tracking_panel;
+mod type_panel;
 
 use clip_player::{ClipPlayer, target_display_time};
+use controller_models::{ControllerModelsButton, ModelsOnly, StartingChoice, models_only};
+use crate_model::CrateModel;
 use foveated_player::FoveatedPlayer;
 use headset_readout::{HeadsetClock, HeadsetReadout, Readout, StreamLogs};
+use hum::rememberHum;
 use pattern_writer::PatternWriter;
+use presses_panel::PressesPanel;
+use ray_target::rememberRayTarget;
+use room_panel::RoomDemo;
+use sound_probe::{SoundProbe, probe_build};
 use torus_volume::TorusVolume;
 use tracking_panel::{TrackedHands, TrackingSection, TrackingView};
+use type_panel::TypePanel;
 
 cranpose::app_capabilities!();
 
@@ -57,6 +80,15 @@ pub fn XrDemo() {
         DepthTest();
         return;
     }
+    if matches!(ROOM_BUILD, Some("only" | "script")) {
+        RoomDemo(room_panel::scripted(ROOM_BUILD));
+        return;
+    }
+    if models_only() {
+        ModelsOnly();
+        return;
+    }
+    StartingChoice();
     let presses = rememberMutableStateOf(|| 0_u32);
     let strip_shown = rememberMutableStateOf(|| true);
     let readout = rememberMutableStateOf(Readout::default);
@@ -64,6 +96,9 @@ pub fn XrDemo() {
     let logs = remember(StreamLogs::default).with(Clone::clone);
     remember(decoder_limits::log_in_background);
     let tracking = TrackedHands();
+    let hum = rememberHum();
+    let target = rememberRayTarget();
+    EntitlementChoice();
     Subspace(move || {
         HeadsetReadout(presses, readout, clock.clone(), logs.clone());
         // A flat window shows the panels side by side, so the clips come first
@@ -92,30 +127,72 @@ pub fn XrDemo() {
                 .rotate(0.0, -30.0, 0.0),
         );
         // A volume takes two of the compositor's layers, one for the 3D content and one for its
-        // handle. A Quest takes 16. With both rays and the ball the demo has 18, so the frame
-        // leaves out the two panels that stand farthest from the head.
+        // handle. A Quest takes 16. With both rays, the ball and the text panel the demo has more,
+        // and the open keyboard is one more, so the frame leaves out the panels that stand
+        // farthest from the head. The torus hums: the sound comes from the torus and follows it
+        // when a controller carries it. A build that plays the hum from the head's side leaves
+        // the torus silent.
         TorusVolume(
             SubspaceModifier::new()
                 .offset(600.0, -330.0, 100.0)
                 .rotate(0.0, -30.0, 0.0),
             true,
+            target,
+            hum.filter(|_| !probe_build()).map(hum::source),
+        );
+        if let Some(sound) = hum.filter(|_| probe_build()) {
+            SoundProbe(sound);
+        }
+        // The crate's volume has no handle, so it adds no layer to the frame: the torus's volume
+        // already brings the projection layer, which all volumes share
+        CrateModel(
+            SubspaceModifier::new()
+                .offset(950.0, -330.0, 100.0)
+                .rotate(0.0, -30.0, 0.0),
+            true,
+            target,
         );
         CounterPanel(presses, tracking);
+        TypePanel();
         if strip_shown.get() {
             CurvedStrip();
         }
-        PressesPanel(presses, readout);
+        PressesPanel(presses, readout, target);
     });
     ControllerBall(strip_shown);
+    if ROOM_BUILD == Some("with") {
+        RoomDemo(false);
+    }
+}
+
+// A build with the `meta-entitlement` feature quits when the store's check fails. A build made with
+// `XR_DEMO_ENTITLEMENT=continue` goes on instead. Its readout shows what the check found.
+const ENTITLEMENT_BUILD: Option<&str> = option_env!("XR_DEMO_ENTITLEMENT");
+
+#[composable]
+fn EntitlementChoice() {
+    if ENTITLEMENT_BUILD == Some("continue")
+        && let Some(check) = local_entitlement_check().current()
+    {
+        // The choice is made once, before the check can answer
+        remember(move || check.set_on_not_entitled(OnNotEntitled::Continue));
+    }
 }
 
 // The depth test builds are `XR_DEMO_VOLUME=through`, which shows the panel and the torus, and
 // `XR_DEMO_VOLUME=alone`, which shows the torus only. A screenshot of the second build tells how
-// many pixels the whole torus covers.
+// many pixels the whole torus covers. `XR_DEMO_VOLUME=model` shows the glTF crate only, standing
+// still and turned to show three faces, so that a screenshot tells how many pixels its texture
+// covers in each eye.
 const VOLUME_BUILD: Option<&str> = option_env!("XR_DEMO_VOLUME");
 
+// The room builds ask for the anchors and the planes, which the user's permission gates, so the
+// default build leaves them out. `XR_DEMO_ROOM=with` adds the room panel to the demo, `only` shows it
+// alone and `script` shows it alone and places it with no user. See `room_panel`.
+const ROOM_BUILD: Option<&str> = option_env!("XR_DEMO_ROOM");
+
 fn depth_test_build() -> bool {
-    matches!(VOLUME_BUILD, Some("through" | "alone"))
+    matches!(VOLUME_BUILD, Some("through" | "alone" | "model"))
 }
 
 // A test of the compositor's depth test: a panel and a torus that pierces it, a meter ahead of the
@@ -125,6 +202,16 @@ fn depth_test_build() -> bool {
 // screenshot holds only the panel and the ring.
 #[composable]
 fn DepthTest() {
+    if VOLUME_BUILD == Some("model") {
+        FollowingSubspace(FollowTarget::View(FollowMode::Snap), || {
+            CrateModel(
+                SubspaceModifier::new().rotate(20.0, 30.0, 0.0),
+                false,
+                rememberRayTarget(),
+            );
+        });
+        return;
+    }
     FollowingSubspace(FollowTarget::View(FollowMode::Snap), || {
         if VOLUME_BUILD != Some("alone") {
             SpatialPanel(SubspaceModifier::new().size(600.0, 600.0), || {
@@ -145,7 +232,12 @@ fn DepthTest() {
                 );
             });
         }
-        TorusVolume(SubspaceModifier::new().rotate(0.0, 45.0, 0.0), false);
+        TorusVolume(
+            SubspaceModifier::new().rotate(0.0, 45.0, 0.0),
+            false,
+            rememberRayTarget(),
+            None,
+        );
     });
 }
 
@@ -314,6 +406,7 @@ fn CounterPanel(presses: MutableState<u32>, tracking: TrackingView) {
                         },
                     );
                     PassthroughButton();
+                    ControllerModelsButton();
                     TrackingSection(tracking);
                 },
             );
@@ -353,71 +446,6 @@ fn CurvedStrip() {
             },
         );
     });
-}
-
-// A smaller panel to the right, turned toward the viewer, that counts the presses too and shows
-// what the frame effect reads of the headset.
-#[composable]
-fn PressesPanel(presses: MutableState<u32>, readout: MutableState<Readout>) {
-    SpatialPanel(
-        SubspaceModifier::new()
-            .size(320.0, 260.0)
-            .offset(600.0, 0.0, 100.0)
-            .rotate(0.0, -30.0, 0.0),
-        move || {
-            Box(
-                Modifier::empty()
-                    .fill_max_size()
-                    .background(Color(0.16, 0.13, 0.1, 0.94))
-                    .rounded_corners(20.0)
-                    .padding(24.0),
-                BoxSpec::default(),
-                move || {
-                    Column(
-                        Modifier::empty(),
-                        ColumnSpec::default()
-                            .vertical_arrangement(LinearArrangement::spaced_by(6.0)),
-                        move || {
-                            Text(
-                                format!("{} presses", presses.get()),
-                                Modifier::empty(),
-                                sized(28.0, Some(FontWeight::BOLD)),
-                            );
-                            ReadoutLines(readout);
-                        },
-                    );
-                },
-            );
-        },
-    );
-}
-
-// The lines of the headset's readout. Outside a headset the frame effect never runs, and they
-// stay at their start.
-#[composable]
-fn ReadoutLines(readout: MutableState<Readout>) {
-    let Readout {
-        head_cm,
-        trigger_percent,
-        frames_per_second,
-    } = readout.get();
-    let head = head_cm.map_or_else(|| "not tracked".to_owned(), |cm| format!("{cm} cm"));
-    let (system, eye) = local_headset_properties().current().map_or_else(
-        || (String::new(), String::new()),
-        |headset| {
-            let [width, height] = headset.eye_image_sizes[0].recommended;
-            (headset.system_name, format!("Eye image {width}x{height}"))
-        },
-    );
-    for line in [
-        system,
-        eye,
-        format!("Head y {head}"),
-        format!("Right trigger {trigger_percent}%"),
-        format!("Frame effect {frames_per_second} Hz"),
-    ] {
-        Text(line, Modifier::empty(), sized(18.0, None));
-    }
 }
 
 // A button that shows or hides the room around the panels, or a note where the headset cannot.
@@ -580,6 +608,21 @@ fn clip_views(index: u64, base: Duration) -> StreamedViews {
 
 #[cfg(all(feature = "android", target_os = "android"))]
 fn launcher() -> AppLauncher {
+    if let Some(hand) = scripted_hand::from_build(
+        option_env!("XR_DEMO_SCRIPTED_HAND"),
+        option_env!("XR_DEMO_SCRIPTED_TEXT"),
+    ) {
+        cranpose_xr::script_hand(hand);
+    }
+    for controller in
+        scripted_hand::controllers_from_build(option_env!("XR_DEMO_SCRIPTED_CONTROLLERS"))
+    {
+        cranpose_xr::script_controller(controller);
+    }
+    // `XR_DEMO_KEYBOARD=drawn` draws the keyboard on Android XR too, where the system shows its own
+    if option_env!("XR_DEMO_KEYBOARD") == Some("drawn") {
+        cranpose_xr::use_keyboard(cranpose_xr::Keyboard::Drawn);
+    }
     AppLauncher::new().with_capabilities(&CAPABILITIES)
 }
 

@@ -46,6 +46,8 @@ mod gpu_loss;
 #[cfg(feature = "renderer-wgpu")]
 mod guest_view;
 #[cfg(feature = "renderer-wgpu")]
+pub use cranpose_render_common::space::MeshVisit;
+#[cfg(feature = "renderer-wgpu")]
 pub use cranpose_render_wgpu::SCENE_DEPTH_FORMAT;
 #[cfg(feature = "renderer-wgpu")]
 pub use guest_view::{GuestView, GuestViewError};
@@ -60,6 +62,17 @@ mod scoped_weak_stack;
 pub use android::file_picker::open_content_uri;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 pub use android::finish::finish_activity;
+#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+pub use android::host_text_input::AndroidInputMethod;
+#[cfg(all(
+    feature = "android",
+    feature = "meta-entitlement",
+    feature = "renderer-wgpu",
+    target_os = "android"
+))]
+pub use android::meta_entitlement::{
+    MetaEntitlement, begin_meta_entitlement, meta_entitlement, meta_entitlement_detail,
+};
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 pub use android::permission_prompt::{
     AndroidPermission, android_permission, request_android_permissions,

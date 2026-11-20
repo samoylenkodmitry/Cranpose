@@ -17,20 +17,55 @@ use cranpose_capabilities::{Use, declare};
 // `XR_DEMO_VOLUME=alone` builds the same scene without the panel, as the reference for
 // `scripts/dev/xr_depth_check.py`.
 fn main() {
+    // `XR_DEMO_CONTROLLERS` (`plain`, `off`, `only` or `panel`) builds the controller model
+    // measurements. See `src/controller_models.rs`.
+    println!("cargo::rerun-if-env-changed=XR_DEMO_CONTROLLERS");
+    if let Ok(models) = std::env::var("XR_DEMO_CONTROLLERS") {
+        println!("cargo::rustc-env=XR_DEMO_CONTROLLERS={models}");
+    }
     println!("cargo::rerun-if-env-changed=XR_DEMO_VOLUME");
     if let Ok(place) = std::env::var("XR_DEMO_VOLUME") {
         println!("cargo::rustc-env=XR_DEMO_VOLUME={place}");
+    }
+    // `XR_DEMO_SCRIPTED_HAND=right` (or `left`) builds a hand that the backend plays in place of the
+    // cameras': it pinches the counter's button in a cycle. The Android XR emulator's hand
+    // simulation does not reach the runtime, so the build shows the hand pointer there.
+    println!("cargo::rerun-if-env-changed=XR_DEMO_SCRIPTED_HAND");
+    if let Ok(hand) = std::env::var("XR_DEMO_SCRIPTED_HAND") {
+        println!("cargo::rustc-env=XR_DEMO_SCRIPTED_HAND={hand}");
+    }
+    // `XR_DEMO_SOUND=left`, `right` or `swing` plays the demo's hum from a place that stays at the
+    // head's side. The head does not move on a desk, so the build shows that the sound follows the
+    // head's pose, through the audio tap's log.
+    println!("cargo::rerun-if-env-changed=XR_DEMO_SOUND");
+    if let Ok(side) = std::env::var("XR_DEMO_SOUND") {
+        println!("cargo::rustc-env=XR_DEMO_SOUND={side}");
+    }
+    // `XR_DEMO_ROOM` (`with`, `only` or `script`) shows the room panel, and the build asks for the
+    // anchors and the planes that it needs.
+    println!("cargo::rerun-if-env-changed=XR_DEMO_ROOM");
+    if let Ok(room) = std::env::var("XR_DEMO_ROOM") {
+        println!("cargo::rustc-env=XR_DEMO_ROOM={room}");
+        declare(&[
+            Use::hand_tracking(),
+            Use::controller_models(),
+            Use::anchors(),
+            Use::plane_tracking(),
+        ])
+        .emit();
+        return;
     }
     println!("cargo::rerun-if-env-changed=XR_DEMO_TRACKING");
     match std::env::var("XR_DEMO_TRACKING").as_deref() {
         Ok("none") => declare(&[]).emit(),
         Ok("all") => declare(&[
             Use::hand_tracking(),
+            Use::controller_models(),
             Use::body_tracking(),
             Use::face_tracking(),
             Use::eye_tracking(),
         ])
         .emit(),
-        _ => declare(&[Use::hand_tracking()]).emit(),
+        _ => declare(&[Use::hand_tracking(), Use::controller_models()]).emit(),
     }
 }

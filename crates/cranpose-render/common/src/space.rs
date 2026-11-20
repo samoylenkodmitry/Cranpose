@@ -148,6 +148,135 @@ pub struct SeenSurface<'a> {
     pub seen: usize,
 }
 
+// What a walk of a scene's layers keeps. The walk finds the 3D layers in order and the frame that
+// each takes; the walker keeps what it needs of them.
+trait Walker<'a> {
+    // The scene layer `layer` opens a space, at `place` in the space it lies in: that space's
+    // number, the layer's frame there and the surface whose content holds it. `None` for the
+    // window's own scene. Returns the number of the new space, or `None` to leave it unwalked.
+    fn open(
+        &mut self,
+        layer: LayerRef<'a>,
+        scene: &'a Scene3d,
+        place: Option<(usize, Mat4, Option<Host>)>,
+    ) -> Option<usize>;
+
+    // The mesh surfaces of `layer`, at `frame` in space `cell`. Returns the number of the first of
+    // its meshes among those the walker keeps, and the map from its content to the space.
+    fn surface(
+        &mut self,
+        layer: LayerRef<'a>,
+        surfaces: &MeshSurfaces,
+        frame: &Mat4,
+        cell: usize,
+    ) -> (usize, Option<Mat4>);
+}
+
+// Walks the children of `layer`, which lies at `frame` in space `cell`.
+fn walk<'a>(
+    walker: &mut impl Walker<'a>,
+    layer: LayerRef<'a>,
+    frame: &Mat4,
+    (cell, host): (usize, Option<Host>),
+) {
+    for child in layer.children() {
+        if !child.has_space() {
+            continue;
+        }
+        let to_parent = child.transform_to_parent();
+        let child_frame = embed(to_parent).then(frame);
+        let child_host = host.map(|(surface, to_content)| (surface, to_parent.then(to_content)));
+        match child.graphics_layer().space.as_deref() {
+            Some(LayerSpace::Scene(scene)) => {
+                let place = Some((cell, child_frame, child_host));
+                if let Some(inner) = walker.open(child, scene, place) {
+                    walk(walker, child, &Mat4::IDENTITY, (inner, None));
+                }
+            }
+            Some(LayerSpace::Surface(surfaces)) => {
+                let content = child.local_bounds();
+                let (index, to_scene) = walker.surface(child, surfaces, &child_frame, cell);
+                if let Some(to_scene) = to_scene {
+                    // The children lie in the layer, whose content starts at the corner of its
+                    // bounds.
+                    let to_content = ProjectiveTransform::translation(-content.x, -content.y);
+                    walk(
+                        walker,
+                        child,
+                        &embed(to_content).then(&to_scene),
+                        (cell, Some((index, to_content))),
+                    );
+                }
+            }
+            Some(LayerSpace::Transform(transform)) => {
+                walk(walker, child, &transform.then(&child_frame), (cell, None));
+            }
+            None => walk(walker, child, &child_frame, (cell, child_host)),
+        }
+    }
+}
+
+impl<'a> Walker<'a> for SpaceTree<'a> {
+    fn open(
+        &mut self,
+        layer: LayerRef<'a>,
+        scene: &'a Scene3d,
+        place: Option<(usize, Mat4, Option<Host>)>,
+    ) -> Option<usize> {
+        let index = self.cells.len();
+        let cell = match place {
+            None => Cell {
+                layer,
+                scene,
+                parent: None,
+                hole: None,
+                doorway: Mat4::IDENTITY,
+                to_parent: Mat4::IDENTITY,
+            },
+            Some((parent, frame, host)) => {
+                let rect = layer.local_bounds();
+                Cell {
+                    layer,
+                    scene,
+                    parent: Some(parent),
+                    hole: host
+                        .map(|(surface, to_content)| (surface, to_content.bounds_for_rect(rect))),
+                    doorway: Mat4::scaling(Vec3::new(rect.width, rect.height, 1.0))
+                        .then(&Mat4::translation(Vec3::new(rect.x, rect.y, 0.0)))
+                        .then(&frame),
+                    to_parent: scene.camera.doorway(rect).then(&frame),
+                }
+            }
+        };
+        self.cells.push(cell);
+        Some(index)
+    }
+
+    fn surface(
+        &mut self,
+        layer: LayerRef<'a>,
+        surfaces: &MeshSurfaces,
+        frame: &Mat4,
+        cell: usize,
+    ) -> (usize, Option<Mat4>) {
+        let content = layer.local_bounds();
+        let index = self.surfaces.len();
+        for (mesh, surface) in surfaces.iter().enumerate() {
+            self.surfaces.push(Placed {
+                layer,
+                surface: surface.placed_by(frame),
+                mesh,
+                cell,
+                content,
+            });
+        }
+        let to_scene = self.surfaces[index]
+            .surface
+            .content_to_scene(content.size());
+        (index, to_scene)
+    }
+}
+
 impl<'a> SpaceTree<'a> {
     /// The spaces and surfaces of the scene `scene_layer` shows; `None`
     /// when it shows none.
@@ -157,7 +286,8 @@ impl<'a> SpaceTree<'a> {
             cells: Vec::new(),
             surfaces: Vec::new(),
         };
-        tree.open(scene_layer, scene, None);
+        let index = tree.open(scene_layer, scene, None)?;
+        walk(&mut tree, scene_layer, &Mat4::IDENTITY, (index, None));
         Some(tree)
     }
 
@@ -197,92 +327,74 @@ impl<'a> SpaceTree<'a> {
         }
         transform
     }
+}
 
+/// A mesh of a surface layer that [`visit_meshes`] found.
+pub struct MeshVisit<'v> {
+    /// The node whose layer carries the surface.
+    pub node: Option<NodeId>,
+    /// Which of the layer's meshes it is: 0 for the owner.
+    pub mesh: usize,
+    /// The surface as the layer's modifier gave it, with its own transform.
+    pub surface: &'v MeshSurface,
+    /// Maps the mesh's own space to the frame of the layer that the walk started from, through
+    /// the surface's own transform.
+    pub to_frame: Mat4,
+}
+
+// Reports each surface of the walk's own space, and leaves the scenes inside it alone.
+struct Meshes<'f> {
+    visit: &'f mut dyn FnMut(&MeshVisit<'_>),
+}
+
+impl<'a> Walker<'a> for Meshes<'_> {
     fn open(
         &mut self,
+        _layer: LayerRef<'a>,
+        _scene: &'a Scene3d,
+        _place: Option<(usize, Mat4, Option<Host>)>,
+    ) -> Option<usize> {
+        None
+    }
+
+    fn surface(
+        &mut self,
         layer: LayerRef<'a>,
-        scene: &'a Scene3d,
-        place: Option<(usize, Mat4, Option<Host>)>,
-    ) {
-        let index = self.cells.len();
-        let cell = match place {
-            None => Cell {
-                layer,
-                scene,
-                parent: None,
-                hole: None,
-                doorway: Mat4::IDENTITY,
-                to_parent: Mat4::IDENTITY,
-            },
-            Some((parent, frame, host)) => {
-                let rect = layer.local_bounds();
-                Cell {
-                    layer,
-                    scene,
-                    parent: Some(parent),
-                    hole: host
-                        .map(|(surface, to_content)| (surface, to_content.bounds_for_rect(rect))),
-                    doorway: Mat4::scaling(Vec3::new(rect.width, rect.height, 1.0))
-                        .then(&Mat4::translation(Vec3::new(rect.x, rect.y, 0.0)))
-                        .then(&frame),
-                    to_parent: scene.camera.doorway(rect).then(&frame),
-                }
-            }
-        };
-        self.cells.push(cell);
-        self.children(layer, &Mat4::IDENTITY, (index, None));
-    }
-
-    fn children(&mut self, layer: LayerRef<'a>, frame: &Mat4, (cell, host): (usize, Option<Host>)) {
-        for child in layer.children() {
-            if !child.has_space() {
-                continue;
-            }
-            let to_parent = child.transform_to_parent();
-            let child_frame = embed(to_parent).then(frame);
-            let child_host =
-                host.map(|(surface, to_content)| (surface, to_parent.then(to_content)));
-            match child.graphics_layer().space.as_deref() {
-                Some(LayerSpace::Scene(scene)) => {
-                    self.open(child, scene, Some((cell, child_frame, child_host)));
-                }
-                Some(LayerSpace::Surface(surfaces)) => {
-                    self.surface(child, surfaces, &child_frame, cell);
-                }
-                Some(LayerSpace::Transform(transform)) => {
-                    self.children(child, &transform.then(&child_frame), (cell, None));
-                }
-                None => self.children(child, &child_frame, (cell, child_host)),
-            }
-        }
-    }
-
-    fn surface(&mut self, layer: LayerRef<'a>, surfaces: &MeshSurfaces, frame: &Mat4, cell: usize) {
-        let content = layer.local_bounds();
-        let index = self.surfaces.len();
+        surfaces: &MeshSurfaces,
+        frame: &Mat4,
+        _cell: usize,
+    ) -> (usize, Option<Mat4>) {
         for (mesh, surface) in surfaces.iter().enumerate() {
-            self.surfaces.push(Placed {
-                layer,
-                surface: surface.placed_by(frame),
+            (self.visit)(&MeshVisit {
+                node: layer.node_id(),
                 mesh,
-                cell,
-                content,
+                surface,
+                to_frame: surface.transform.then(frame),
             });
         }
-        if let Some(to_scene) = self.surfaces[index]
-            .surface
-            .content_to_scene(content.size())
-        {
-            // The children lie in the layer, whose content starts at the
-            // corner of its bounds.
-            let to_content = ProjectiveTransform::translation(-content.x, -content.y);
-            self.children(
-                layer,
-                &embed(to_content).then(&to_scene),
-                (cell, Some((index, to_content))),
-            );
-        }
+        let to_scene = surfaces
+            .owner()
+            .placed_by(frame)
+            .content_to_scene(layer.local_bounds().size());
+        (0, to_scene)
     }
+}
+
+/// Visits each mesh of the surface layers under `layer`, in `layer`'s own frame, with no
+/// allocation: the pick of a pointer that points along a ray reads them each frame. A scene
+/// under `layer` opens a space of its own, which the visit leaves out.
+pub fn visit_meshes(layer: LayerRef<'_>, visit: &mut dyn FnMut(&MeshVisit<'_>)) {
+    walk(&mut Meshes { visit }, layer, &Mat4::IDENTITY, (0, None));
+}
+
+/// The layer of the node `node` at or under `layer`.
+pub fn layer_of_node(layer: LayerRef<'_>, node: NodeId) -> Option<LayerRef<'_>> {
+    if layer.node_id() == Some(node) {
+        return Some(layer);
+    }
+    layer
+        .children()
+        .find_map(|child| layer_of_node(child, node))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

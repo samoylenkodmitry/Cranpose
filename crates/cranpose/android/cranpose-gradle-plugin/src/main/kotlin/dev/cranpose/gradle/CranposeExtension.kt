@@ -112,10 +112,16 @@ abstract class CranposeExtension @Inject constructor(objects: ObjectFactory) {
      * permissions and components that service needs and nothing else, so an
      * application that does not record video never asks for the camera.
      *
-     * Valid names: `billing`, `camera`, `haptics`, `microphone-standby`,
-     * `network`, `notifications`, `overlay`, `television`, `wearable`, `xr`.
+     * Valid names: `billing`, `camera`, `haptics`, `meta-entitlement`,
+     * `microphone-standby`, `network`, `notifications`, `overlay`,
+     * `television`, `wearable`, `xr`.
      * The `xr` service makes an immersive app for headsets: Meta Quest, Pico,
      * HTC Vive, Android XR and Steam Frame (see `xrStore`).
+     * The `meta-entitlement` service adds the Meta Platform SDK and the
+     * check of Meta's store (see `metaAppId`). An application that lists it
+     * accepts the Meta Platform Technologies SDK License Agreement
+     * (https://developers.meta.com/vr/licenses/oculussdk/), which binds
+     * whoever downloads or uses the SDK.
      */
     val services: SetProperty<String> = objects.setProperty(String::class.java)
 
@@ -134,6 +140,16 @@ abstract class CranposeExtension @Inject constructor(objects: ObjectFactory) {
      * application builds for each store from the command line.
      */
     val xrStore: Property<String> = objects.property(String::class.java)
+
+    /**
+     * The id that the Meta Horizon developer dashboard gives the app, for the
+     * `meta-entitlement` service. The merged manifest carries it as
+     * `com.meta.horizon.platform.ovr.OCULUS_APP_ID`. The check reads it
+     * from there. The Gradle property `cranposeMetaAppId` sets the default, so
+     * the id comes from the command line or a file that the repository does not
+     * hold. The build fails without it.
+     */
+    val metaAppId: Property<String> = objects.property(String::class.java)
 
     /**
      * The hardware features this application demands of a device.

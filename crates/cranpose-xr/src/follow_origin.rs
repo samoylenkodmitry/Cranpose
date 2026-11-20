@@ -9,7 +9,7 @@ use crate::{
 };
 
 // The origin of one following subspace.
-struct Anchor {
+struct Follower {
     id: u64,
     target: FollowTarget,
     // Where the subspace's origin stands in the room. `None` while nothing has placed a subspace
@@ -24,14 +24,15 @@ struct Anchor {
     moved: bool,
 }
 
-impl Anchor {
+impl Follower {
     fn new(id: u64, target: FollowTarget) -> Self {
+        // Until the headset has tracked the head, a view-following subspace stands where a
+        // `Subspace` does
+        let at = matches!(target, FollowTarget::View(_)).then_some(SUBSPACE_ORIGIN);
         Self {
             id,
             target,
-            // Until the headset has tracked the head, a view-following subspace stands where a
-            // `Subspace` does
-            at: matches!(target, FollowTarget::View(_)).then_some(SUBSPACE_ORIGIN),
+            at,
             owes: true,
             heading: 0.0,
             moved: false,
@@ -39,19 +40,25 @@ impl Anchor {
     }
 
     fn mode(&self) -> FollowMode {
-        match self.target {
-            FollowTarget::View(mode) | FollowTarget::Controller(_, mode) => mode,
+        match &self.target {
+            FollowTarget::View(mode)
+            | FollowTarget::Controller(_, mode)
+            | FollowTarget::Anchor(_, mode) => *mode,
         }
     }
 
-    // Where the origin stands when the target is at `head` or at the pose that `controllers`
-    // holds for its hand, or `None` while the runtime does not track the target. The origin has the target's
-    // place and its turn about the vertical axis, so the content stands upright.
+    // Where the origin stands when the target is at `head`, at the pose that `controllers` holds
+    // for its hand or at its anchor's pose, or `None` while the runtime does not track the target.
+    // The origin of a view or a controller has the target's place and its turn about the vertical
+    // axis, so the content stands upright. The origin of an anchor is the anchor's pose.
     fn aligned(&mut self, head: Option<&Pose>, controllers: &[Option<Pose>; 2]) -> Option<Pose> {
-        let (pose, offset) = match self.target {
+        let (pose, offset) = match &self.target {
             FollowTarget::View(_) => (head?, SUBSPACE_ORIGIN),
             FollowTarget::Controller(hand, _) => {
                 (controllers[hand.index()].as_ref()?, Pose::IDENTITY)
+            }
+            FollowTarget::Anchor(anchor, _) => {
+                return anchor.is_located().then(|| anchor.pose());
             }
         };
         if let Some(heading) = heading_degrees(pose) {
@@ -70,9 +77,10 @@ impl Anchor {
     // frame. A `Snap` subspace takes a place once, then again after each recenter.
     fn follow(&mut self, head: Option<&Pose>, controllers: &[Option<Pose>; 2]) {
         let at = match self.mode() {
-            FollowMode::Tight => match (self.aligned(head, controllers), self.target) {
-                // A head that the headset lost leaves the content where it was
-                (None, FollowTarget::View(_)) => self.at,
+            FollowMode::Tight => match (self.aligned(head, controllers), &self.target) {
+                // A head that the headset lost, and an anchor that the runtime does not place now,
+                // leave the content where it was
+                (None, FollowTarget::View(_) | FollowTarget::Anchor(..)) => self.at,
                 (aligned, _) => aligned,
             },
             FollowMode::Snap if self.owes => {
@@ -87,9 +95,9 @@ impl Anchor {
     }
 
     fn standing(&self) -> Standing {
-        let hand = match self.target {
-            FollowTarget::View(_) => None,
-            FollowTarget::Controller(hand, _) => Some(hand),
+        let hand = match &self.target {
+            FollowTarget::View(_) | FollowTarget::Anchor(..) => None,
+            FollowTarget::Controller(hand, _) => Some(*hand),
         };
         Standing { at: self.at, hand }
     }
@@ -107,7 +115,7 @@ pub(crate) struct Standing {
 // The following subspaces of an app, and what places them.
 #[derive(Default)]
 pub(crate) struct FollowOrigins {
-    anchors: Vec<Anchor>,
+    followers: Vec<Follower>,
     head: Option<Pose>,
     controllers: [Option<Pose>; 2],
     // The time at which the runtime's recenter takes effect, until a frame at or after it came
@@ -118,29 +126,29 @@ impl FollowOrigins {
     // Adds the following subspace `id`. A target that the headset has tracked already places it
     // at once. Otherwise the first frame that tracks it does.
     pub(crate) fn add(&mut self, id: u64, target: FollowTarget) {
-        let mut anchor = Anchor::new(id, target);
-        anchor.follow(self.head.as_ref(), &self.controllers);
-        self.anchors.push(anchor);
+        let mut follower = Follower::new(id, target);
+        follower.follow(self.head.as_ref(), &self.controllers);
+        self.followers.push(follower);
     }
 
     pub(crate) fn remove(&mut self, id: u64) {
-        self.anchors.retain(|anchor| anchor.id != id);
+        self.followers.retain(|follower| follower.id != id);
     }
 
     // Where the subspace `id` stands, or `None` for a subspace that is gone.
     pub(crate) fn standing(&self, id: u64) -> Option<Standing> {
-        self.anchors
+        self.followers
             .iter()
-            .find(|anchor| anchor.id == id)
-            .map(Anchor::standing)
+            .find(|follower| follower.id == id)
+            .map(Follower::standing)
     }
 
     // Where the subspace `id` stands now, if it moved in the last frame tracked.
     pub(crate) fn moved(&self, id: u64) -> Option<Standing> {
-        self.anchors
+        self.followers
             .iter()
-            .find(|anchor| anchor.id == id && anchor.moved)
-            .map(Anchor::standing)
+            .find(|follower| follower.id == id && follower.moved)
+            .map(Follower::standing)
     }
 
     // Takes the poses of the head and of the controllers in the frame at `time`. A `Tight`
@@ -164,10 +172,10 @@ impl FollowOrigins {
         if recentered {
             self.recentering = None;
         }
-        for anchor in &mut self.anchors {
-            anchor.owes |= recentered;
-            anchor.follow(self.head.as_ref(), &self.controllers);
+        for follower in &mut self.followers {
+            follower.owes |= recentered;
+            follower.follow(self.head.as_ref(), &self.controllers);
         }
-        self.anchors.iter().any(|anchor| anchor.moved)
+        self.followers.iter().any(|follower| follower.moved)
     }
 }

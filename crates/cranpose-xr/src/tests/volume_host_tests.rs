@@ -10,7 +10,7 @@ use std::{
 use cranpose::{
     AppLauncher, AppSettings, GpuContext, GuestView, SCENE_DEPTH_FORMAT, gpu_context,
     prelude::*,
-    space::{Light, Mat4, Material, Mesh, MeshSurface, Vec3},
+    space::{Light, Mat4, Material, Mesh, MeshSurface, Multisample, Vec3},
 };
 use cranpose_core::{CompositionLocalProvider, LaunchedEffect, rememberMutableStateOf};
 
@@ -28,6 +28,19 @@ const QUAD: f32 = 600.0;
 // The size of the content that the quad shows, in pixels
 const CONTENT: f32 = 32.0;
 const COLOR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+
+#[cfg(feature = "gltf")]
+#[path = "volume_gltf_tests.rs"]
+mod gltf;
+
+#[path = "volume_antialias_tests.rs"]
+mod antialias;
+
+#[path = "volume_picking_tests.rs"]
+mod picking;
+
+#[path = "controller_scene_tests.rs"]
+mod controllers;
 
 // What the host of a test holds: the GPU, the guest view that runs the content, the space and the
 // counts of what composed.
@@ -53,17 +66,41 @@ fn gpu() -> GpuContext {
     found.take().expect("a GPU context")
 }
 
+// What the volume of a test reports to the test.
+#[derive(Clone)]
+struct Probes {
+    compositions: Rc<Cell<u32>>,
+    // The value of an animated state at each evaluation of the scene's mesh
+    seen: Rc<RefCell<Vec<u32>>>,
+}
+
+// What a test composes in the subspace of a headset: it gets the probes and a state that advances
+// once for each frame of the host.
+type VolumeComposer = Rc<dyn Fn(&Probes, MutableState<u32>)>;
+
 // A headset with one volume: a red quad of `QUAD` dp a meter ahead, in the plane of the volume's
 // center, which stands in a subspace of the app's content.
 fn headset() -> Headset {
+    let plane = Arc::new(Mesh::plane());
+    headset_of(Rc::new(move |probes, ticks| {
+        quad_volume(
+            Rc::clone(&probes.compositions),
+            Arc::clone(&plane),
+            (ticks, Rc::clone(&probes.seen)),
+        );
+    }))
+}
+
+// A headset whose subspace holds what `volume` composes.
+fn headset_of(volume: VolumeComposer) -> Headset {
     let gpu = gpu();
-    let compositions = Rc::new(Cell::new(0));
-    let counted = Rc::clone(&compositions);
-    let seen = Rc::new(RefCell::new(Vec::new()));
-    let observed = Rc::clone(&seen);
+    let probes = Probes {
+        compositions: Rc::new(Cell::new(0)),
+        seen: Rc::new(RefCell::new(Vec::new())),
+    };
+    let reported = probes.clone();
     let held = Rc::new(RefCell::new(None));
     let keep = Rc::clone(&held);
-    let plane = Arc::new(Mesh::plane());
     let guest = GuestView::new(
         &AppSettings::default(),
         &gpu,
@@ -75,7 +112,6 @@ fn headset() -> Headset {
             let space = remember(|| Space::with_scene_size([EYE as f32; 2])).with(Clone::clone);
             let shown = rememberMutableStateOf(|| true);
             keep.replace(Some((space.clone(), shown)));
-            // An animation that advances once for each frame of the host
             let ticks = rememberMutableStateOf(|| 0_u32);
             LaunchedEffect((), async move |scope| {
                 loop {
@@ -83,18 +119,12 @@ fn headset() -> Headset {
                     ticks.update(|ticks| *ticks += 1);
                 }
             });
-            let (counted, plane, host) = (Rc::clone(&counted), Arc::clone(&plane), space.clone());
-            let observed = Rc::clone(&observed);
+            let (probes, volume, host) = (probes.clone(), Rc::clone(&volume), space.clone());
             CompositionLocalProvider([local_space().provides(Some(space))], move || {
-                let (counted, plane) = (Rc::clone(&counted), Arc::clone(&plane));
-                let observed = Rc::clone(&observed);
+                let (probes, volume) = (probes.clone(), Rc::clone(&volume));
                 Subspace(move || {
                     if shown.get() {
-                        quad_volume(
-                            Rc::clone(&counted),
-                            Arc::clone(&plane),
-                            (ticks, Rc::clone(&observed)),
-                        );
+                        volume(&probes, ticks);
                     }
                 });
                 VolumeScene(host);
@@ -108,8 +138,8 @@ fn headset() -> Headset {
         guest,
         space,
         shown,
-        compositions,
-        seen,
+        compositions: reported.compositions,
+        seen: reported.seen,
     }
 }
 
@@ -254,6 +284,26 @@ fn shows_something(gpu: &GpuContext, color: &wgpu::Texture) -> bool {
         .0
         .iter()
         .any(|texel| texel[3] != 0)
+}
+
+// The box of the pixels that the scene drew, as the first and last column and row.
+fn drawn_box(pixels: &[u8]) -> Option<[u32; 4]> {
+    let mut found: Option<[u32; 4]> = None;
+    for (at, texel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+        if texel[3] == 0 {
+            continue;
+        }
+        let at = u32::try_from(at).expect("a pixel of the eye");
+        let (x, y) = (at % EYE, at / EYE);
+        let [left, top, right, bottom] = found.get_or_insert([x, y, x, y]);
+        (*left, *top, *right, *bottom) = (
+            (*left).min(x),
+            (*top).min(y),
+            (*right).max(x),
+            (*bottom).max(y),
+        );
+    }
+    found
 }
 
 // The first column, counted from the left, in which the middle row of `color` is red.

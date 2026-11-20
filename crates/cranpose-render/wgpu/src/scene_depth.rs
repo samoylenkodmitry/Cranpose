@@ -15,11 +15,18 @@ impl WgpuRenderer {
     /// the distance of what they draw as `1 - near / z`, where `z` is the depth along the camera's
     /// axis and `near` is
     /// [`Camera::near`](cranpose_ui_graphics::space::Camera::near): 0 at the near plane, 1 at
-    /// infinity, and 1 where no scene drew. Only a scene with
-    /// [`Multisample::Off`](cranpose_ui_graphics::space::Multisample::Off) draws against it, and
-    /// each scene pass clears it again, so a frame that draws several scenes leaves the depth of
-    /// the last one. A scene drawn into an intermediate layer, such as one under a blur, uses depth
-    /// of the renderer's own.
+    /// infinity, and 1 where no scene drew. Each scene pass clears it again, so a frame that draws
+    /// several scenes leaves the depth of the last one. A scene drawn into an intermediate layer,
+    /// such as one under a blur, uses depth of the renderer's own.
+    ///
+    /// A scene with [`Multisample::Off`](cranpose_ui_graphics::space::Multisample::Off) stores its
+    /// depth in its own pass. A scene with four samples cannot, because a render pass holds one
+    /// sample count and wgpu has no depth resolve. Such a scene that covers a page holding only
+    /// its transparent clear averages its colour straight into the page, then a second pass with
+    /// one sample draws its opaque surfaces and volumes again with the depth pipelines. Each pixel
+    /// holds the depth of its centre, so a pixel that an edge covers in part carries the depth of
+    /// the surface at its centre, or the far plane where none covers the centre. Any other scene
+    /// of four samples leaves the far plane.
     pub fn render_with_scene_depth(
         &mut self,
         texture: &wgpu::Texture,

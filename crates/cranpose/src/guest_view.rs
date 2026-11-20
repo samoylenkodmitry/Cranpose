@@ -1,6 +1,6 @@
 use cranpose_app_shell::{AppShell, FrameSchedule, RootId, default_root_key};
 use cranpose_core::NodeId;
-use cranpose_render_common::Renderer;
+use cranpose_render_common::{RenderScene, Renderer, space::MeshVisit};
 use cranpose_render_wgpu::{GpuTarget, WgpuRenderer, WgpuTextSystem};
 
 use crate::{AppSettings, GpuContext};
@@ -208,6 +208,23 @@ impl GuestView {
             (width as f32 / density, height as f32 / density),
         );
         Ok(())
+    }
+
+    /// Visits each mesh of the `mesh_surface` nodes under the node `under` of the window root
+    /// `root`, in the frame of `under`, as the root's last draw left them. A node's mesh comes with
+    /// the map from its own space to `under`'s frame, so a caller picks along a ray or finds what a
+    /// point touches. The visit allocates nothing. A scene under `under` opens a space of its
+    /// own, which the visit leaves out. Returns whether the window root has a view.
+    pub fn visit_window_meshes(
+        &mut self,
+        (root, under): (NodeId, NodeId),
+        visit: &mut dyn FnMut(&MeshVisit<'_>),
+    ) -> bool {
+        let Some(mut surface) = self.shell.surface(RootId::Window(root)) else {
+            return false;
+        };
+        surface.renderer().scene().visit_meshes(under, visit);
+        true
     }
 
     /// Takes the view of the window root `root` away.

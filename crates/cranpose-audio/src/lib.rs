@@ -4,7 +4,10 @@
 pub mod backend;
 mod engine;
 mod mixer;
+mod panner;
 pub mod ring;
+mod spatial_voice;
+mod tap_window;
 
 use std::sync::{Arc, OnceLock};
 

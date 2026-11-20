@@ -1,5 +1,7 @@
 //! What a hand's controller reports in a frame.
 
+#[cfg(any(test, headset))]
+use crate::press_threshold::pressed;
 use crate::{InteractionProfile, Pose};
 
 /// Where a space is and how it moves.
@@ -27,8 +29,21 @@ pub struct Button {
 pub struct Trigger {
     /// How far the trigger is pulled, from 0 to 1.
     pub value: f32,
+    /// Whether the trigger is down: from a pull of 0.6 until it falls below 0.4. A profile whose
+    /// trigger is a click gives a value of 0 or 1, and `pressed` follows the click.
+    pub pressed: bool,
     /// Whether a finger rests on the trigger. A controller that cannot tell leaves it `false`.
     pub touched: bool,
+}
+
+/// The grip button under the other fingers.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Squeeze {
+    /// How far the grip is squeezed, from 0 to 1.
+    pub value: f32,
+    /// Whether the grip is down: from a squeeze of 0.6 until it falls below 0.4. A profile whose
+    /// grip is a click gives a value of 0 or 1, and `pressed` follows the click.
+    pub pressed: bool,
 }
 
 /// The thumbstick, or the trackpad of a controller that has one.
@@ -44,8 +59,10 @@ pub struct Thumbstick {
     pub touched: bool,
 }
 
-/// The state of one hand's controller in a frame. An input that the active profile lacks stays at
-/// rest: no press, no touch and a value of 0.
+/// The state of one hand's controller in a frame: its trigger and grip with their values and
+/// presses, the two face buttons, the thumbstick's lean and click, the menu button, and the touch
+/// of each where the runtime reports it. An input that the active profile lacks stays at rest: no
+/// press, no touch and a value of 0.
 ///
 /// Jetpack XR has no controller type in its ARCore classes. The names of the buttons follow the
 /// Meta Touch controllers: `primary` is A on the right hand and X on the left, and `secondary` is B
@@ -63,8 +80,8 @@ pub struct Controller {
     pub grip: Option<TrackedPose>,
     /// The trigger under the index finger.
     pub trigger: Trigger,
-    /// How far the grip button under the other fingers is squeezed, from 0 to 1.
-    pub squeeze: f32,
+    /// The grip button under the other fingers.
+    pub squeeze: Squeeze,
     /// The thumbstick or trackpad.
     pub thumbstick: Thumbstick,
     /// The first face button: A on the right hand, X on the left.
@@ -76,3 +93,17 @@ pub struct Controller {
     /// Whether the thumb rests on the thumbrest, which a controller has beside its thumbstick.
     pub thumbrest_touched: bool,
 }
+
+#[cfg(any(test, headset))]
+impl Controller {
+    // Sets which of the trigger and the grip count as pressed, from their values in this frame and
+    // their presses in `before`, the frame before.
+    pub(crate) fn settle_presses(&mut self, before: &Self) {
+        self.trigger.pressed = pressed(self.trigger.value, before.trigger.pressed.into());
+        self.squeeze.pressed = pressed(self.squeeze.value, before.squeeze.pressed.into());
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/controller_tests.rs"]
+mod tests;

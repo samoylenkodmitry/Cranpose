@@ -10,11 +10,19 @@ use std::{
 };
 
 use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
-use cranpose::{AppLauncher, LauncherFonts};
+use cranpose::{AndroidInputMethod, AppLauncher, GuestView, LauncherFonts};
 use openxr as xr;
 
 use crate::{
-    openxr::{runner::run_immersive, runtime::Runtime, session::SessionStatus},
+    Keyboard,
+    entitlement_watch::Answer,
+    keyboard::chosen,
+    openxr::{
+        entitlement_run::EntitlementRun, render_models::ModelRequest, runner::run_immersive,
+        runtime::Runtime,
+    },
+    session_status::SessionStatus,
+    spatial_request::SpatialRequest,
     tracking_permission::PermissionAnswer,
     tracking_request::TrackingRequest,
 };
@@ -36,6 +44,24 @@ pub(crate) struct Host {
     // Whether the activity is resumed, from the lifecycle events that any look at the activity took.
     // The permission prompt pauses the activity and resumes it, and its wait takes those events.
     resumed: Cell<bool>,
+    // Whether the runtime is Android XR's
+    android_xr: Cell<bool>,
+}
+
+// The system's input method as the keyboard of a text field. Android XR shows it over an immersive
+// app as a panel of its own.
+pub(crate) struct SystemKeyboard(AndroidInputMethod);
+
+impl SystemKeyboard {
+    // Makes the app's text fields ask the system for their keyboard.
+    pub(crate) fn install(&self, view: &mut GuestView) {
+        self.0.install(view.shell());
+    }
+
+    // Hands the keyboard's typing to the app in each turn of the loop.
+    pub(crate) fn pump(&self, view: &mut GuestView) {
+        self.0.pump(view.shell());
+    }
 }
 
 impl Host {
@@ -83,7 +109,15 @@ impl Host {
             .names()
             .iter()
             .any(|name| name.starts_with(ANDROID_XR_EXTENSION));
+        self.android_xr.set(android_xr);
         !android_xr || self.wait_until_resumed()
+    }
+
+    // The keyboard of the system, on a runtime that shows it over the app, unless the app chose the
+    // keyboard that Cranpose draws. Every other runtime has none, so the app draws its own.
+    pub(crate) fn system_keyboard(&self) -> Option<SystemKeyboard> {
+        (self.android_xr.get() && chosen() == Keyboard::System)
+            .then(|| SystemKeyboard(AndroidInputMethod::new(&self.app)))
     }
 
     // Takes the activity's events until it is resumed and has a window, and returns whether it
@@ -119,6 +153,53 @@ impl Host {
             _ => {}
         }
         false
+    }
+
+    // Starts the entitlement check of the Meta Horizon Store and returns whether one runs: only a
+    // build with the `meta-entitlement` feature has it. A build whose Gradle service is missing
+    // still runs it. The answer is a failure then, so that an app never goes unchecked.
+    #[cfg(feature = "meta-entitlement")]
+    pub(crate) fn begin_entitlement(&self) -> bool {
+        cranpose::begin_meta_entitlement(&self.app);
+        true
+    }
+
+    #[cfg(not(feature = "meta-entitlement"))]
+    pub(crate) fn begin_entitlement(&self) -> bool {
+        false
+    }
+
+    // What the platform says about the check that `begin_entitlement` started.
+    #[cfg(feature = "meta-entitlement")]
+    pub(crate) fn entitlement_answer(&self) -> Answer {
+        match cranpose::meta_entitlement(&self.app) {
+            cranpose::MetaEntitlement::Entitled => Answer::Entitled,
+            cranpose::MetaEntitlement::NotStarted | cranpose::MetaEntitlement::Checking => {
+                Answer::Checking
+            }
+            cranpose::MetaEntitlement::NotEntitled | cranpose::MetaEntitlement::Unavailable => {
+                Answer::NotEntitled
+            }
+        }
+    }
+
+    #[cfg(not(feature = "meta-entitlement"))]
+    pub(crate) fn entitlement_answer(&self) -> Answer {
+        Answer::Checking
+    }
+
+    // Why the check ended as it did, for the log.
+    #[cfg(feature = "meta-entitlement")]
+    pub(crate) fn entitlement_detail(&self) -> String {
+        match cranpose::meta_entitlement_detail(&self.app) {
+            detail if detail.is_empty() => "the build carries no entitlement service".to_owned(),
+            detail => detail,
+        }
+    }
+
+    #[cfg(not(feature = "meta-entitlement"))]
+    pub(crate) fn entitlement_detail(&self) -> String {
+        String::new()
     }
 
     // Handles the activity's events and returns whether the activity ended. While the headset
@@ -169,10 +250,16 @@ pub fn run<Fonts: LauncherFonts>(
     let host = Host {
         app,
         resumed: Cell::new(false),
+        android_xr: Cell::new(false),
     };
     let request = TrackingRequest::of(&settings.capabilities);
-    let result = Runtime::connect(&host, request)
-        .and_then(|runtime| run_immersive(&host, runtime, &settings, content));
+    let spatial_request = SpatialRequest::of(&settings.capabilities);
+    let models = ModelRequest::of(&settings.capabilities);
+    // The check starts first: Meta wants it within 10 seconds of the launch. The connection can
+    // wait for the user's answer to a permission prompt.
+    let entitlement = EntitlementRun::start(&host);
+    let result = Runtime::connect(&host, request, spatial_request, models)
+        .and_then(|runtime| run_immersive(&host, runtime, &settings, entitlement, content));
     if let Err(error) = result {
         log::error!("cranpose xr: {error}");
     }

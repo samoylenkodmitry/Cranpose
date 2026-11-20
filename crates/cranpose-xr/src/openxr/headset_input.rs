@@ -9,14 +9,24 @@ use super::{
     controllers::Controllers,
     eye_views,
     host::Host,
-    session::{SessionStatus, XrSession},
+    session::XrSession,
     system_properties,
     tracking::{EyeGazeAction, Trackers, TrackingSetup},
 };
 use crate::{
-    Controller, Haptics, HeadsetProperties, Pose, Ray, Recenter, RenderViewpoint, XrFrame,
-    frame_effects::FrameEffects, pointer::Aim,
+    Controller, Hand, Haptics, HeadsetProperties, PointerMapping, PointerSettings, Pose, Recenter,
+    RenderViewpoint, TrackingFeature, XrFrame, aim::Aim, frame_effects::FrameEffects,
+    haptics::controller_asks, pointer_aim::pointer_aim, session_status::SessionStatus,
 };
+
+// The handles on the headset that the app's content reads: the registry of its frame effects, its
+// vibrations, the headset's facts and the pointer's settings.
+pub(crate) struct Handles {
+    pub(crate) effects: FrameEffects,
+    pub(crate) haptics: Haptics,
+    pub(crate) properties: HeadsetProperties,
+    pub(crate) pointer_settings: PointerSettings,
+}
 
 // What the app gets of the headset in a frame, the controllers that it reads, and the callbacks
 // and the vibrations that it set.
@@ -27,7 +37,10 @@ pub(crate) struct HeadsetInput {
     trackers: Trackers,
     effects: FrameEffects,
     haptics: Haptics,
+    pointer_settings: PointerSettings,
     properties: HeadsetProperties,
+    // Whether tracked hands point: the app asked for hand tracking
+    hands_point: bool,
 }
 
 impl HeadsetInput {
@@ -48,34 +61,46 @@ impl HeadsetInput {
             tracking: tracking.capabilities,
             ..XrFrame::default()
         };
+        let hands_point = tracking.request.asks(TrackingFeature::Hands);
         Ok(Self {
             frame,
             controllers,
             trackers: Trackers::new(tracking, gaze),
             effects: FrameEffects::default(),
             haptics: Haptics::new(),
+            pointer_settings: PointerSettings::new(),
             properties,
+            hands_point,
         })
     }
 
-    // The registry of the app's frame effects, which the content reads as a composition local.
-    pub(crate) fn effects(&self) -> FrameEffects {
-        self.effects.clone()
+    // The handles that the content reads as composition locals.
+    pub(crate) fn handles(&self) -> Handles {
+        Handles {
+            effects: self.effects.clone(),
+            haptics: self.haptics.clone(),
+            properties: self.properties.clone(),
+            pointer_settings: self.pointer_settings.clone(),
+        }
     }
 
-    // The handle of the app's vibrations, which the content reads as a composition local.
-    pub(crate) fn haptics(&self) -> Haptics {
-        self.haptics.clone()
-    }
-
-    // The headset's facts, which the content reads as a composition local.
-    pub(crate) fn properties(&self) -> HeadsetProperties {
-        self.properties.clone()
+    // The app's choices that the pointer reads each frame: the button mapping, and whether the
+    // beams show.
+    pub(crate) fn pointer_choice(&self) -> (PointerMapping, bool) {
+        (
+            self.pointer_settings.mapping(),
+            self.pointer_settings.beams_visible(),
+        )
     }
 
     // The time at which the frame sampled last reaches the display, on the monotonic clock.
     pub(crate) fn display_time(&self) -> Duration {
         self.frame.predicted_display_time
+    }
+
+    // The time at which the backend read the clock for the frame sampled last.
+    pub(crate) fn now(&self) -> Duration {
+        self.frame.now
     }
 
     // The runtime's change of the room's origin that the frame sampled last reports.
@@ -101,6 +126,11 @@ impl HeadsetInput {
         (width, height)
     }
 
+    // The controller of `hand` in the frame sampled last.
+    pub(crate) fn controller(&self, hand: Hand) -> &Controller {
+        self.frame.controller(hand)
+    }
+
     // Where each controller is in the frame sampled last, left then right: the place of its grip
     // with the turn of its aim, or `None` for a controller that the runtime does not track. The
     // grip's own forward axis runs along the handle, which points steeply upward when the hand
@@ -116,8 +146,8 @@ impl HeadsetInput {
     }
 
     // Samples the headset for the frame that `state` describes, runs the app's frame effects and
-    // plays the vibrations that they or the app's handlers asked for. Returns where each
-    // controller points, for the pointer.
+    // plays the vibrations that they or the app's handlers asked for. Returns where each hand
+    // points, for the pointer: its controller, or its tracked hand while it holds no controller.
     pub(crate) fn sample(
         &mut self,
         xr_session: &mut XrSession,
@@ -147,22 +177,22 @@ impl HeadsetInput {
         frame.recenter = xr_session.recenters.take();
         self.controllers
             .sample(xr_session, time, status, self.trackers.gaze_set(), frame);
+        #[cfg(feature = "scripted-hand")]
+        if frame.focused {
+            crate::scripted_controller::apply(frame);
+        }
         self.trackers
             .sample(xr_session, host, frame.now, time, status, frame);
+        let hands = self.hands_point;
+        let aims = Hand::BOTH
+            .map(|side| pointer_aim(frame.controller(side), hands.then_some(frame.hand(side))));
+        [frame.left_pointer, frame.right_pointer] = aims.map(|aim| aim.map(|aim| aim.source));
         self.effects.run(&self.frame);
-        self.controllers.vibrate(xr_session, self.haptics.take());
-        [&self.frame.left_controller, &self.frame.right_controller].map(aim_of)
+        let asks = controller_asks(
+            self.haptics.take(),
+            [self.frame.left_pointer, self.frame.right_pointer],
+        );
+        self.controllers.vibrate(xr_session, asks);
+        aims
     }
-}
-
-// Where the controller points and how its trigger and stick lean, for the pointer. A controller
-// that the runtime does not track points nowhere.
-fn aim_of(controller: &Controller) -> Option<Aim> {
-    let aim = controller.aim?;
-    Some(Aim {
-        ray: Ray::of_aim(&aim.pose),
-        pose: aim.pose,
-        trigger: controller.trigger.value,
-        stick: controller.thumbstick.y,
-    })
 }

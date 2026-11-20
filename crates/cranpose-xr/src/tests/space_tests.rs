@@ -168,25 +168,56 @@ fn the_cursor_shows_on_its_panel_only() {
             y: 20.0,
             pressed,
         };
-        space.set_cursor(Some(on(first, 10.0, false)));
+        space.set_cursor(Hand::Right, Some(on(first, 10.0, false)));
         let dot = Dot {
             x: 10.0,
             y: 20.0,
             pressed: false,
         };
-        assert_eq!(first.dot.get_non_reactive(), Some(dot));
-        assert_eq!(second.dot.get_non_reactive(), None);
-        space.set_cursor(Some(on(second, 10.0, true)));
-        assert_eq!(first.dot.get_non_reactive(), None);
+        assert_eq!(first.dots.get_non_reactive()[1], Some(dot));
+        assert_eq!(second.dots.get_non_reactive()[1], None);
+        space.set_cursor(Hand::Right, Some(on(second, 10.0, true)));
+        assert_eq!(first.dots.get_non_reactive()[1], None);
         assert_eq!(
-            second.dot.get_non_reactive(),
+            second.dots.get_non_reactive()[1],
             Some(Dot {
                 pressed: true,
                 ..dot
             })
         );
-        space.set_cursor(None);
-        assert_eq!(second.dot.get_non_reactive(), None);
+        space.set_cursor(Hand::Right, None);
+        assert_eq!(second.dots.get_non_reactive()[1], None);
+    });
+}
+
+#[test]
+fn each_hand_has_a_dot_of_its_own_on_a_panel() {
+    with_space(|space| {
+        let panel = space.new_panel();
+        space.place(panel, [400.0, 300.0], Pose::IDENTITY, Pose::IDENTITY);
+        let at = |x: f32, pressed: bool| {
+            Some(Cursor {
+                panel: panel.id,
+                x,
+                y: 20.0,
+                pressed,
+            })
+        };
+        let dot = |x: f32, pressed: bool| {
+            Some(Dot {
+                x,
+                y: 20.0,
+                pressed,
+            })
+        };
+        space.set_cursor(Hand::Left, at(10.0, false));
+        space.set_cursor(Hand::Right, at(300.0, true));
+        assert_eq!(
+            panel.dots.get_non_reactive(),
+            [dot(10.0, false), dot(300.0, true)]
+        );
+        space.set_cursor(Hand::Left, None);
+        assert_eq!(panel.dots.get_non_reactive(), [None, dot(300.0, true)]);
     });
 }
 
@@ -210,12 +241,12 @@ fn the_cursor_moves_in_steps_of_half_a_dp() {
                 pressed: false,
             })
         };
-        space.set_cursor(at(10.1, 20.2));
-        assert_eq!(panel.dot.get_non_reactive(), dot(10.0, 20.0));
-        space.set_cursor(at(9.9, 20.24));
-        assert_eq!(panel.dot.get_non_reactive(), dot(10.0, 20.0));
-        space.set_cursor(at(10.3, 20.3));
-        assert_eq!(panel.dot.get_non_reactive(), dot(10.5, 20.5));
+        space.set_cursor(Hand::Right, at(10.1, 20.2));
+        assert_eq!(panel.dots.get_non_reactive()[1], dot(10.0, 20.0));
+        space.set_cursor(Hand::Right, at(9.9, 20.24));
+        assert_eq!(panel.dots.get_non_reactive()[1], dot(10.0, 20.0));
+        space.set_cursor(Hand::Right, at(10.3, 20.3));
+        assert_eq!(panel.dots.get_non_reactive()[1], dot(10.5, 20.5));
     });
 }
 
@@ -332,19 +363,21 @@ fn a_moving_cursor_does_not_compose_the_content_again() {
     };
     let before = headset.robot.get_all_rects().len();
 
-    headset.space.set_cursor(on(second, 10.0, false));
+    headset
+        .space
+        .set_cursor(Hand::Right, on(second, 10.0, false));
     headset.robot.wait_for_idle();
     assert_eq!(headset.robot.get_all_rects().len(), before + 1, "the dot");
     for step in 0..40 {
         let x = 10.0 + step as f32 * 0.1;
-        headset.space.set_cursor(on(second, x, false));
+        headset.space.set_cursor(Hand::Right, on(second, x, false));
         headset
             .space
-            .set_cursor(on(second, x + 20.0, step % 2 == 0));
-        headset.space.set_cursor(on(first, x, false));
+            .set_cursor(Hand::Right, on(second, x + 20.0, step % 2 == 0));
+        headset.space.set_cursor(Hand::Right, on(first, x, false));
         headset.robot.wait_for_idle();
     }
-    headset.space.set_cursor(None);
+    headset.space.set_cursor(Hand::Right, None);
     headset.robot.wait_for_idle();
     assert_eq!(headset.robot.get_all_rects().len(), before, "no dot");
     assert_eq!(headset.compositions.get(), compositions);
@@ -364,19 +397,19 @@ fn a_panel_can_leave_in_the_frame_its_cursor_moves() {
                 pressed: x > 100.0,
             })
         };
-        headset.space.set_cursor(on(10.0));
+        headset.space.set_cursor(Hand::Right, on(10.0));
         headset.robot.wait_for_idle();
         if cursor_first {
-            headset.space.set_cursor(on(120.0));
+            headset.space.set_cursor(Hand::Right, on(120.0));
             headset.first.set(None);
         } else {
             headset.first.set(None);
-            headset.space.set_cursor(on(120.0));
+            headset.space.set_cursor(Hand::Right, on(120.0));
         }
         headset.robot.wait_for_idle();
-        headset.space.set_cursor(on(130.0));
+        headset.space.set_cursor(Hand::Right, on(130.0));
         headset.robot.wait_for_idle();
-        headset.space.set_cursor(None);
+        headset.space.set_cursor(Hand::Right, None);
         headset.robot.wait_for_idle();
         assert_eq!(headset.space.panels().len(), 1);
     }
@@ -627,6 +660,7 @@ fn a_volume_that_leaves_leaves_the_scene_too() {
                 pose: panel.volume_pose,
                 light: mutableStateOf(None),
                 compose: Rc::default(),
+                node: Rc::default(),
             });
         }
         assert_eq!(space.volumes().contents().get().len(), 2);

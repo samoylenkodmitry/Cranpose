@@ -6,9 +6,14 @@ use openxr as xr;
 use super::{
     graphics::Graphics,
     host::Host,
+    render_models::ModelRequest,
+    spatial,
     tracking::{self, TrackingSetup},
 };
-use crate::{TrackingCapabilities, tracking_request::TrackingRequest};
+use crate::{
+    TrackingCapabilities, spatial_request::SpatialRequest, spatial_setup::SpatialSetup,
+    spatial_support::SpatialSupport, tracking_request::TrackingRequest,
+};
 
 // An OpenXR instance on a system with a headset.
 pub(crate) struct Runtime {
@@ -26,13 +31,24 @@ pub(crate) struct Runtime {
     pub(crate) depth_test: bool,
     // The tracking that the app asked for, and what the runtime offers of it
     pub(crate) tracking: TrackingSetup,
+    // The anchors and planes that the app asked for, and what the runtime offers of them
+    pub(crate) spatial: SpatialSetup,
+    // Whether the instance has the extension that gives the runtime's models of the controllers
+    // (`XR_FB_render_model`)
+    pub(crate) render_models: bool,
 }
 
 impl Runtime {
     // Loads the OpenXR loader, makes an instance and finds the headset. A machine with no
     // loader, no runtime or no headset gets an error that says which. The instance enables the
-    // extensions of the tracking that `request` asks for, and no others.
-    pub(crate) fn connect(host: &Host, request: TrackingRequest) -> Result<Self, String> {
+    // extensions of the tracking, the anchors, the planes and the controllers' models that the requests
+    // ask for, and no others.
+    pub(crate) fn connect(
+        host: &Host,
+        request: TrackingRequest,
+        spatial_request: SpatialRequest,
+        models: ModelRequest,
+    ) -> Result<Self, String> {
         // SAFETY: the library is the Khronos OpenXR loader: the `xr` service of the Gradle plugin
         // packs it into an APK, and a desktop has it installed with its runtime.
         let entry = unsafe { xr::Entry::load(&host.platform()) }
@@ -44,8 +60,14 @@ impl Runtime {
         let listed = tracking::listed(&available);
         let enabled = listed.enabled_for(request);
         tracking::enable(&mut extensions, enabled);
-        // The prompt comes before the session, and the instance is made after it
-        tracking::ask_before_session(host, enabled);
+        let spatial_listed = spatial::listed(&available);
+        spatial::enable(&mut extensions, spatial_listed.enabled_for(spatial_request));
+        // The prompt comes before the session, and the instance is made after it. The system has not
+        // answered for the anchors yet, so the prompt takes what the list says.
+        let provisional =
+            SpatialSetup::from_runtime(spatial_request, spatial_listed, SpatialSupport::default());
+        tracking::ask_before_session(host, enabled, &provisional);
+        extensions.fb_render_model = models.enables() && available.fb_render_model;
         Graphics::require(&available, &mut extensions)?;
         host.require(&available, &mut extensions);
         if !host.await_activity(&available) {
@@ -58,6 +80,14 @@ impl Runtime {
             extensions.khr_composition_layer_depth,
             extensions.fb_composition_layer_depth_test,
             extensions.fb_composition_layer_image_layout,
+        );
+        log::info!(
+            "cranpose xr: controller models: asked {}, XR_FB_render_model listed {} and enabled {}, XR_EXT_render_model listed {}, XR_EXT_interaction_render_model listed {}",
+            models.enables(),
+            available.fb_render_model,
+            extensions.fb_render_model,
+            available.ext_render_model,
+            available.ext_interaction_render_model,
         );
         let instance = entry
             .create_instance(
@@ -82,6 +112,15 @@ impl Runtime {
         log::info!(
             "cranpose xr: the runtime lists {listed:?}; asked for {request:?}; tracking {capabilities:?}"
         );
+        let spatial_support = spatial::query(
+            &instance,
+            system,
+            spatial_listed.enabled_for(spatial_request),
+        );
+        let spatial = SpatialSetup::from_runtime(spatial_request, spatial_listed, spatial_support);
+        log::info!(
+            "cranpose xr: the runtime lists {spatial_listed:?}; asked for {spatial_request:?}; anchors and planes {spatial:?}"
+        );
         Ok(Self {
             instance,
             system,
@@ -94,6 +133,8 @@ impl Runtime {
                 enabled,
                 capabilities,
             },
+            spatial,
+            render_models: extensions.fb_render_model,
         })
     }
 }

@@ -86,6 +86,7 @@ The Gradle `services` set also supports manually maintained app manifests:
 | `billing` | Play Billing client | `com.android.vending.BILLING` |
 | `camera` | Camera backend | `CAMERA` |
 | `haptics` | Vibrator backend | `VIBRATE` |
+| `meta-entitlement` | The entitlement check of the Meta Horizon Store (`cranpose_xr::EntitlementCheck`, which needs the `meta-entitlement` feature of `cranpose-xr`). It adds the Meta Platform SDK from Maven Central, which is under the [Meta Platform Technologies SDK License Agreement](https://developers.meta.com/vr/licenses/oculussdk/). Downloading or using the SDK is acceptance of that agreement by whoever does it. `cranposeMetaAppId` (or `cranpose { metaAppId }`) sets the app's id from the Meta Horizon developer dashboard. The build fails without it. The manifest carries the id as `com.meta.horizon.platform.ovr.OCULUS_APP_ID` | none |
 | `microphone-standby` | Foreground service of type microphone that keeps recording possible from the background (`cranpose_services::hold_microphone_standby`) | `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MICROPHONE`, `RECORD_AUDIO` |
 | `network` | HTTP and connectivity state | `INTERNET`, `ACCESS_NETWORK_STATE` |
 | `notifications` | Notification backend | `POST_NOTIFICATIONS` |
@@ -121,6 +122,19 @@ by the other. `Use::face_tracking()` adds
 Oculus feature (`oculus.software.handtracking`, `com.oculus.software.body_tracking`,
 `oculus.software.face_tracking` and `oculus.software.eye_tracking`) as not required. They are the
 declarations `cranpose-xr` reads to enable the OpenXR extension of the same name.
+
+`Use::anchors()` and `Use::plane_tracking()` also select `CranposePermissions`. They write
+`com.oculus.permission.USE_ANCHOR_API` and `horizonos.permission.USE_ANCHOR_API` into the manifest, which a
+Meta Quest needs to list its spatial entity extensions to the app, and `android.permission.SCENE_UNDERSTANDING_COARSE`
+for Android XR's anchor storage and planes. `Use::plane_tracking()` adds `USE_SCENE` of both Quest
+names, which the user allows with the system's prompt. `cranpose-xr` reads the declaration to enable the
+extensions.
+
+`Use::controller_models()` writes `com.oculus.permission.RENDER_MODEL` and the optional feature
+`com.oculus.feature.RENDER_MODEL`, which make the Horizon OS runtime list `XR_FB_render_model` to the
+app. `cranpose-xr` reads the declaration to enable the extension and draws the runtime's model of
+each controller. The system grants the permission at install and asks nobody. An app that declares
+nothing still shows `cranpose-xr`'s plain controller model.
 
 `Use::update()` also selects the package installer, its receiver and
 `REQUEST_INSTALL_PACKAGES`. The launcher registers the updater when the declared

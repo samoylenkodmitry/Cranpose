@@ -8,7 +8,7 @@ use std::{
 
 use cranpose_core::CompositionLocal;
 
-use crate::{Hand, locals::with_locals};
+use crate::{Hand, InputSource, locals::with_locals};
 
 /// A vibration of a controller: how strong, how fast and for how long.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -66,13 +66,32 @@ pub(crate) enum HapticCommand {
     Stop,
 }
 
+// The asks of `asks` without those for a side that a tracked hand points for. That hand holds no
+// motor, so its ask has nothing to reach.
+#[cfg_attr(
+    not(any(test, headset)),
+    expect(dead_code, reason = "the headset backend calls it")
+)]
+pub(crate) fn controller_asks(
+    mut asks: [Option<HapticCommand>; 2],
+    pointers: [Option<InputSource>; 2],
+) -> [Option<HapticCommand>; 2] {
+    for (ask, pointer) in asks.iter_mut().zip(pointers) {
+        if pointer == Some(InputSource::Hands) {
+            *ask = None;
+        }
+    }
+    asks
+}
+
 /// The controllers' vibration motors. An app reads the handle from [`local_haptics`], and uses it
 /// from the composition, from an event handler or from any other thread: a streaming app plays
 /// the vibrations that its host sends as they arrive.
 ///
 /// A vibration reaches the controller in the next frame. A newer one replaces the one that still
 /// runs on the same hand, as in OpenXR's `xrApplyHapticFeedback`. The runtime drops a request that
-/// it rejects, such as one made while the session has no input focus.
+/// it rejects, such as one made while the session has no input focus. A side that a tracked hand
+/// points for, with no controller in it, has no motor: the backend drops the ask.
 #[derive(Clone)]
 pub struct Haptics {
     pending: Arc<Mutex<[Option<HapticCommand>; 2]>>,

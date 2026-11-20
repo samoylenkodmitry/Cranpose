@@ -17,14 +17,23 @@ use std::{
 use cranpose::{ExternalSurface, MutableState, mutableStateOf};
 use cranpose_core::CompositionLocal;
 
+mod carry_snap;
+#[cfg(any(test, headset))]
+pub(crate) mod field_dock;
+mod surface_delivery;
+
+#[cfg(any(test, headset))]
+use crate::spatial_store::SpatialStore;
 use crate::{
     FollowTarget, Hand, METERS_PER_DP, MovePolicy, PanelHit, Pose, Ray, Recenter, ResizeLimits,
     ResizePolicy, SpatialMoveEvent, SpatialMoveEventType, SpatialResizeEvent,
     SpatialResizeEventType, StereoMode,
+    dock::Dock,
     follow_origin::{FollowOrigins, Standing},
     locals::with_locals,
+    sound_sources::SoundSources,
     stream_source::StreamSource,
-    surface_input::{PointerSink, SurfaceGesture, SurfaceInput},
+    surface_input::{InputSink, PointerSink, SurfaceInput},
     volumes::{VolumeContent, Volumes},
 };
 
@@ -67,6 +76,11 @@ impl Origin {
     // The pose `child`, given in this origin's frame.
     pub(crate) fn then(&self, child: &Pose) -> Pose {
         self.pose.then(child)
+    }
+
+    // The following subspace that this origin belongs to, if it is one.
+    pub(crate) const fn follower(&self) -> Option<u64> {
+        self.follower
     }
 }
 
@@ -238,8 +252,9 @@ pub(crate) struct Panel {
     pub(crate) id: u64,
     // Where the panel's part of the atlas starts in dp, from the atlas's top left corner.
     pub(crate) origin: MutableState<[f32; 2]>,
-    // The dot of the cursor on the panel, or `None` while no controller points at it.
-    pub(crate) dot: MutableState<Option<Dot>>,
+    // The dot of each hand's cursor on the panel, left then right, or `None` while that hand's
+    // controller does not point at it.
+    pub(crate) dots: MutableState<[Option<Dot>; 2]>,
     // The surface of a surface panel once the backend has made it.
     pub(crate) surface: MutableState<Option<ExternalSurface>>,
     // The pose of a volume in the room, which the scene of the volumes reads while it draws.
@@ -260,12 +275,24 @@ struct Inner {
     streams: RefCell<Vec<(u64, Rc<StreamSource>)>>,
     // Where following subspaces stand
     follow_origins: RefCell<FollowOrigins>,
+    // The point sources of sound
+    sounds: RefCell<SoundSources>,
     next_id: Cell<u64>,
     // Whether the headset shows curved panels. If not, they show and answer rays as flat ones.
     curves: Cell<bool>,
     // The content of the volumes and the camera that draws them, made when the first composable
     // that needs them asks, because their states belong to a composition's runtime
     volumes: OnceCell<Volumes>,
+    // The panel that holds the focused text field, which the panels below a field stand under
+    #[cfg(any(test, headset))]
+    field_panel: Cell<Option<u64>>,
+    // The keyboard that the headset draws for a focused text field, made when the headset's
+    // content asks, because its state belongs to a composition's runtime
+    #[cfg(any(test, headset))]
+    keyboard: OnceCell<crate::soft_keyboard::SoftKeyboard>,
+    // The planes that a movable panel snaps to, once the headset's content made the store
+    #[cfg(any(test, headset))]
+    spatial: OnceCell<Rc<SpatialStore>>,
     // The size in pixels of one eye's picture of the volumes, in logical pixels
     #[cfg_attr(
         not(any(test, headset)),
@@ -278,8 +305,8 @@ struct Inner {
 struct Entry {
     slot: PanelSlot,
     panel: Panel,
-    // What the panel's dot state holds, so that a comparison needs no read of the state.
-    dot: Option<Dot>,
+    // What the panel's dots state holds, so that a comparison needs no read of the state.
+    dots: [Option<Dot>; 2],
     // The origin of the panel's subspace. A move reports poses relative to it.
     origin: Pose,
     // Where the user left the panel, relative to `origin`, or `None` while the panel's modifier
@@ -297,9 +324,14 @@ struct Entry {
     // Whether the user resizes the panel now: from the grab to the release
     resizing: bool,
     // For a surface: where the app takes the pointer's events, and what the surface knows of
-    // the pointer
+    // each hand's pointer, left then right
     sink: Option<PointerSink>,
-    input: SurfaceInput,
+    // For a volume: where the app takes the ray's input events
+    input_sink: Option<InputSink>,
+    input: [SurfaceInput; 2],
+    // Whether the panel stands below the panel of the focused text field, as the keyboard does,
+    // wherever that panel stands
+    dock: Dock,
 }
 
 // The place of a panel in a following subspace.
@@ -355,9 +387,16 @@ impl Space {
                 entries: RefCell::new(Vec::new()),
                 streams: RefCell::new(Vec::new()),
                 follow_origins: RefCell::new(FollowOrigins::default()),
+                sounds: RefCell::new(SoundSources::default()),
                 next_id: Cell::new(1),
                 curves: Cell::new(true),
                 volumes: OnceCell::new(),
+                #[cfg(any(test, headset))]
+                field_panel: Cell::new(None),
+                #[cfg(any(test, headset))]
+                keyboard: OnceCell::new(),
+                #[cfg(any(test, headset))]
+                spatial: OnceCell::new(),
                 scene_size,
             }),
         }
@@ -480,7 +519,7 @@ impl Space {
         Panel {
             id,
             origin: mutableStateOf([0.0, 0.0]),
-            dot: mutableStateOf(None),
+            dots: mutableStateOf([None; 2]),
             surface: mutableStateOf(None),
             volume_pose: mutableStateOf(Pose::IDENTITY),
         }
@@ -549,6 +588,12 @@ impl Space {
         let (index, changed) = match entries.iter().position(|entry| entry.slot.id == panel.id) {
             Some(index) => {
                 let entry = &mut entries[index];
+                // Content that another subspace holds is placed by its modifier again: the place that
+                // the user carried it to is relative to the origin of the subspace that held it before
+                if entry.follow.map(|follow| follow.id) != subspace.follower {
+                    entry.carried = None;
+                    entry.moving = None;
+                }
                 entry.origin = origin;
                 entry.slot.pose = entry.carried.map_or(pose, |carried| origin.then(&carried));
                 entry.slot.kind = kind;
@@ -579,7 +624,7 @@ impl Space {
                         ride: Ride::Free,
                     },
                     panel,
-                    dot: None,
+                    dots: [None; 2],
                     origin,
                     carried: None,
                     moving: None,
@@ -588,7 +633,9 @@ impl Space {
                     resize_policy: None,
                     resizing: false,
                     sink: None,
-                    input: SurfaceInput::default(),
+                    input_sink: None,
+                    input: [SurfaceInput::default(); 2],
+                    dock: Dock::Free,
                 });
                 (entries.len() - 1, true)
             }
@@ -641,13 +688,51 @@ impl Space {
         }
     }
 
-    // Sets where the surface `id` sends the pointer's events, or `None` for a surface that takes
-    // none.
-    pub(crate) fn set_surface_sink(&self, id: u64, sink: Option<PointerSink>) {
+    // Sets where the panel `id` stands in relation to the panel of the focused text field.
+    pub(crate) fn set_dock(&self, id: u64, dock: Dock) {
         let mut entries = self.inner.entries.borrow_mut();
         if let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == id) {
-            entry.sink = sink;
+            entry.dock = dock;
         }
+    }
+
+    // Gives the space the store whose planes a movable panel snaps to. The first store stays.
+    #[cfg(any(test, headset))]
+    pub(crate) fn attach_spatial_store(&self, store: &Rc<SpatialStore>) {
+        self.inner.spatial.get_or_init(|| Rc::clone(store));
+    }
+
+    // The keyboard that the headset draws for a focused text field.
+    #[cfg(any(test, headset))]
+    pub(crate) fn keyboard(&self) -> crate::soft_keyboard::SoftKeyboard {
+        self.inner
+            .keyboard
+            .get_or_init(crate::soft_keyboard::SoftKeyboard::new)
+            .clone()
+    }
+
+    // The panel that holds the focused text field, or `None` while no panel does. The panels that
+    // stand below the field's panel stand under it.
+    #[cfg(any(test, headset))]
+    pub(crate) fn set_field_panel(&self, panel: Option<u64>) {
+        self.inner.field_panel.set(panel);
+    }
+
+    // The panel of content that covers the point `at` of the atlas, in dp. The panels that stand
+    // below a field's panel are left out: they hold no field.
+    #[cfg(any(test, headset))]
+    pub(crate) fn panel_at(&self, at: [f32; 2]) -> Option<u64> {
+        let [x, y] = at;
+        self.inner
+            .entries
+            .borrow()
+            .iter()
+            .filter(|entry| entry.slot.kind == PanelKind::Content && entry.dock == Dock::Free)
+            .find(|entry| {
+                let [left, top, width, height] = entry.slot.atlas;
+                (left..left + width).contains(&x) && (top..top + height).contains(&y)
+            })
+            .map(|entry| entry.slot.id)
     }
 
     // Sets the shape of the panel `id`.
@@ -681,7 +766,9 @@ impl Space {
             let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == step.panel) else {
                 return;
             };
-            let pose = entry.origin.inverse().then(&step.pose);
+            // A policy that snaps puts the carried pose on a plane near it, while the user moves
+            let room = carry_snap::snapped(self, entry, step);
+            let pose = entry.origin.inverse().then(&room);
             let previous = entry.moving.unwrap_or(pose);
             let (pose, previous) = match step.event_type {
                 SpatialMoveEventType::Start => (pose, pose),
@@ -692,7 +779,7 @@ impl Space {
             if step.event_type == SpatialMoveEventType::Moving
                 && entry.policy.as_ref().is_some_and(MovePolicy::moves_content)
             {
-                entry.slot.pose = step.pose;
+                entry.slot.pose = room;
                 entry.carried = Some(pose);
                 entry.publish_pose();
             }
@@ -700,6 +787,7 @@ impl Space {
                 event_type: step.event_type,
                 pose,
                 previous_pose: previous,
+                room_pose: entry.origin.then(&pose),
             };
             let listener = entry.policy.as_ref().and_then(MovePolicy::listener);
             listener.map(|listener| (listener, event))
@@ -748,29 +836,6 @@ impl Space {
     }
 
     #[cfg_attr(
-        not(any(test, headset)),
-        expect(dead_code, reason = "the headset backend calls it")
-    )]
-    // Tells the surface that `gesture` names what the pointer did on it, as Compose's pointer
-    // event. A surface that takes no pointer events sees nothing.
-    pub(crate) fn deliver_to_surface(&self, gesture: &SurfaceGesture) {
-        let heard = {
-            let mut entries = self.inner.entries.borrow_mut();
-            entries
-                .iter_mut()
-                .find(|entry| entry.slot.id == gesture.surface)
-                .and_then(|entry| {
-                    let sink = entry.sink.clone()?;
-                    Some((sink, entry.input.event(gesture.gesture)?))
-                })
-        };
-        // The callback runs with no borrow held, so that it may call the space
-        if let Some((sink, event)) = heard {
-            sink(event);
-        }
-    }
-
-    #[cfg_attr(
         not(all(headset, target_os = "android")),
         expect(dead_code, reason = "the Android headset backend calls it")
     )]
@@ -790,6 +855,7 @@ impl Space {
         if let Some(volumes) = self.inner.volumes.get() {
             volumes.remove(id);
         }
+        self.inner.sounds.borrow_mut().remove(id);
     }
 
     // The scene of the volumes takes the content of the volume `content.id`, or replaces what it
@@ -806,8 +872,9 @@ impl Space {
     // at each frame, so the list keeps its storage.
     pub(crate) fn panels_into(&self, panels: &mut Vec<PanelSlot>) {
         let curves = self.inner.curves.get();
+        let entries = self.inner.entries.borrow();
         panels.clear();
-        panels.extend(self.inner.entries.borrow().iter().map(|entry| PanelSlot {
+        panels.extend(entries.iter().map(|entry| PanelSlot {
             shape: if curves {
                 entry.slot.shape
             } else {
@@ -815,6 +882,8 @@ impl Space {
             },
             ..entry.slot
         }));
+        #[cfg(any(test, headset))]
+        field_dock::dock(&entries, self.inner.field_panel.get(), panels);
     }
 
     #[cfg(test)]
@@ -846,16 +915,16 @@ impl Space {
         not(any(test, headset)),
         expect(dead_code, reason = "the headset backend calls it")
     )]
-    // Shows the cursor on its panel and on no other. A panel draws again only when its dot
-    // changes. A move below the dot's step changes nothing.
-    pub(crate) fn set_cursor(&self, cursor: Option<Cursor>) {
+    // Shows the cursor of `hand` on its panel and on no other. A panel draws again only when one
+    // of its dots changes. A move below the dot's step changes nothing.
+    pub(crate) fn set_cursor(&self, hand: Hand, cursor: Option<Cursor>) {
         for entry in self.inner.entries.borrow_mut().iter_mut() {
             let dot = cursor
                 .filter(|cursor| cursor.panel == entry.slot.id)
                 .map(dot_of);
-            if entry.dot != dot {
-                entry.dot = dot;
-                entry.panel.dot.set(dot);
+            if entry.dots[hand.index()] != dot {
+                entry.dots[hand.index()] = dot;
+                entry.panel.dots.set(entry.dots);
             }
         }
     }
@@ -917,6 +986,8 @@ pub(crate) fn local_subspace_origin() -> CompositionLocal<Origin> {
 pub(crate) fn local_space() -> CompositionLocal<Option<Space>> {
     with_locals(|locals| locals.space.clone())
 }
+
+mod sounds;
 
 #[cfg(test)]
 #[path = "tests/space_tests.rs"]

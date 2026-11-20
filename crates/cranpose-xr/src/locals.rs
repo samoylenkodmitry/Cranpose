@@ -6,7 +6,8 @@
 use cranpose_core::{CompositionLocal, compositionLocalOf};
 
 use crate::{
-    Haptics, HeadsetProperties, SpatialCapabilities, SpatialEnvironment, TrackingCapabilities,
+    Anchors, ControllerModels, EntitlementCheck, Haptics, HeadsetProperties, Planes,
+    PointerSettings, SpatialCapabilities, SpatialEnvironment, TrackingCapabilities,
     frame_effects::FrameEffects,
     space::{Origin, SUBSPACE_ORIGIN, Space},
     spatial_curved_row::Curve,
@@ -20,8 +21,13 @@ pub(crate) struct Locals {
     pub(crate) origin: CompositionLocal<Origin>,
     pub(crate) frame_effects: CompositionLocal<Option<FrameEffects>>,
     pub(crate) haptics: CompositionLocal<Option<Haptics>>,
+    pub(crate) controller_models: CompositionLocal<Option<ControllerModels>>,
+    pub(crate) pointer_settings: CompositionLocal<Option<PointerSettings>>,
     pub(crate) headset_properties: CompositionLocal<Option<HeadsetProperties>>,
     pub(crate) tracking_capabilities: CompositionLocal<TrackingCapabilities>,
+    pub(crate) entitlement_check: CompositionLocal<Option<EntitlementCheck>>,
+    pub(crate) anchors: CompositionLocal<Option<Anchors>>,
+    pub(crate) planes: CompositionLocal<Option<Planes>>,
 }
 
 thread_local! {
@@ -33,8 +39,13 @@ thread_local! {
         origin: compositionLocalOf(|| Origin::from(SUBSPACE_ORIGIN)),
         frame_effects: compositionLocalOf(|| None),
         haptics: compositionLocalOf(|| None),
+        controller_models: compositionLocalOf(|| None),
+        pointer_settings: compositionLocalOf(|| None),
         headset_properties: compositionLocalOf(|| None),
         tracking_capabilities: compositionLocalOf(TrackingCapabilities::default),
+        entitlement_check: compositionLocalOf(|| None),
+        anchors: compositionLocalOf(|| None),
+        planes: compositionLocalOf(|| None),
     };
 }
 

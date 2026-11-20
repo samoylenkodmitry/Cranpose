@@ -807,11 +807,11 @@ impl Composer {
 
     pub(crate) fn try_with_slot_host_pass<R>(
         &self,
-        slots: Rc<SlotsHost>,
+        slots: &Rc<SlotsHost>,
         mode: crate::slot::SlotPassMode,
         f: impl FnOnce(&Self) -> R,
     ) -> Result<(R, SlotPassOutcome), NodeError> {
-        let mut guard = self.begin_slot_host_pass(&slots, mode);
+        let mut guard = self.begin_slot_host_pass(slots, mode);
         let result = f(self);
         let outcome = self.finish_slot_host_pass(&guard.host)?;
         guard.close();
@@ -1468,7 +1468,7 @@ impl Composer {
         let composer = Self::from_core(core);
         let (result, commands, side_effects, compact_applier) = composer.install(|composer| {
             let (output, outcome) = composer.try_with_slot_host_pass(
-                Rc::clone(slots),
+                slots,
                 crate::slot::SlotPassMode::Compose,
                 |composer| f(composer),
             )?;

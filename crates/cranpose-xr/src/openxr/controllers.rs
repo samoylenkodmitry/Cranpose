@@ -4,11 +4,11 @@ use openxr as xr;
 
 use super::{
     hand_actions::{HandActions, HandInput, failed},
-    session::{SessionStatus, XrSession},
+    session::XrSession,
 };
 use crate::{
-    Controller, Hand, InteractionProfile, XrFrame, controller_bindings::bindings,
-    haptics::HapticCommand,
+    Hand, InteractionProfile, XrFrame, controller_bindings::bindings, haptics::HapticCommand,
+    session_status::SessionStatus,
 };
 
 // The user path of each hand, left then right.
@@ -76,10 +76,11 @@ impl Controllers {
         let synced = status.listens() && self.sync(xr_session, extra);
         let controllers = [&mut frame.left_controller, &mut frame.right_controller];
         for ((hand, user), controller) in self.hands.iter().zip(self.users).zip(controllers) {
-            *controller = Controller::default();
+            let before = std::mem::take(controller);
             if synced {
                 hand.read(xr_session, time, controller);
                 controller.profile = self.profile_of(xr_session, user);
+                controller.settle_presses(&before);
             }
         }
     }

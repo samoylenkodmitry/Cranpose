@@ -38,7 +38,7 @@ pub(super) fn subcompose_slot_at<R>(
     // `install`, and a queue is 312 bytes.
     let (result, compact_applier) = composer.install(|composer| {
         let (output, outcome) = composer.try_with_slot_host_pass(
-            Rc::clone(slots),
+            slots,
             crate::slot::SlotPassMode::Compose,
             |composer| {
                 let output = composer.with_group(root_group_key, |composer| f(composer));

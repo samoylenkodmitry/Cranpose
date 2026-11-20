@@ -1070,6 +1070,18 @@ android-xr: _disk-guard
       -PcranposeLabel="Cranpose XR" -PcranposeApplicationId=dev.cranpose.xrdemo \
       -PcranposeServices=xr
 
+# Build the XR demo with the entitlement check of the Meta Horizon Store. The recipe sets the
+# `meta-entitlement` feature, lists the Gradle service that downloads the Meta Platform SDK and
+# passes the app's id. The SDK is under the Meta Platform Technologies SDK License Agreement,
+# which binds whoever downloads it.
+android-xr-entitlement app_id: _disk-guard
+    cd apps/android-demo/android && ../../../scripts/ci/with_host_lock.sh --shared \
+      ./gradlew --no-daemon :app:assembleRelease \
+      -PcranposeCargoPackage=xr-demo -PcranposeLibraryName=xr_demo \
+      -PcranposeLabel="Cranpose XR" -PcranposeApplicationId=dev.cranpose.xrdemo \
+      -PcranposeServices=xr,meta-entitlement -PcranposeFeatures=meta-entitlement \
+      -PcranposeMetaAppId={{app_id}}
+
 # Run apps/xr-demo against Monado's simulated headset with its null compositor and print the
 # frames it ran. Needs `monado-service` and the OpenXR loader on the machine.
 xr-smoke seconds="8":

@@ -1,11 +1,16 @@
 //! The volumes of a space: what each one hands to the scene that draws them.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
-use cranpose::space::{Camera, Light, Mat4};
-use cranpose_core::{MutableState, mutableStateOf};
+use cranpose::space::{Camera, Light, Mat4, Multisample};
+use cranpose_core::{MutableState, NodeId, mutableStateOf};
 
 use crate::{Pose, callback_slot::Callback};
+#[cfg(any(test, headset))]
+use crate::{controller_states::ControllerStates, space::Space};
 
 // What the scene needs of one volume.
 #[derive(Clone)]
@@ -22,6 +27,9 @@ pub(crate) struct VolumeContent {
     pub(crate) light: MutableState<Option<Light>>,
     // Composes the volume's content
     pub(crate) compose: Rc<RefCell<Option<Callback<()>>>>,
+    // The node of the scene that holds the volume's content, which the scene's composition sets and
+    // a ray's pick reads
+    pub(crate) node: Rc<Cell<Option<NodeId>>>,
 }
 
 impl PartialEq for VolumeContent {
@@ -30,15 +38,23 @@ impl PartialEq for VolumeContent {
     }
 }
 
-// The volumes of a space and the camera that the scene draws them through.
+// The volumes of a space and the camera that the scene draws them through, with the models of the
+// controllers that the scene draws beside them.
 #[derive(Clone, Copy)]
 pub(crate) struct Volumes {
     contents: MutableState<Vec<VolumeContent>>,
+    #[cfg(any(test, headset))]
+    controllers: ControllerStates,
     #[cfg_attr(
         not(any(test, headset)),
         expect(dead_code, reason = "the headset's scene reads it")
     )]
     camera: MutableState<Camera>,
+    #[cfg_attr(
+        not(any(test, headset)),
+        expect(dead_code, reason = "the headset's scene reads it")
+    )]
+    samples: MutableState<Multisample>,
 }
 
 impl Volumes {
@@ -46,10 +62,13 @@ impl Volumes {
     pub(crate) fn new() -> Self {
         Self {
             contents: mutableStateOf(Vec::new()),
+            #[cfg(any(test, headset))]
+            controllers: ControllerStates::new(),
             camera: mutableStateOf(Camera {
                 view: Mat4::IDENTITY,
                 focal_length: 1.0,
             }),
+            samples: mutableStateOf(Multisample::Off),
         }
     }
 
@@ -61,6 +80,12 @@ impl Volumes {
                 None => contents.push(content),
             }
         });
+    }
+
+    #[cfg(any(test, headset))]
+    // The states of the controllers' models, which the scene draws.
+    pub(crate) fn controllers(&self) -> ControllerStates {
+        self.controllers
     }
 
     // The scene forgets the volume `id`.
@@ -80,10 +105,40 @@ impl Volumes {
 
     #[cfg_attr(
         not(any(test, headset)),
+        expect(dead_code, reason = "the headset's pointer calls it")
+    )]
+    // The node of the scene that holds the content of the volume `id`, once the scene composed it.
+    pub(crate) fn node_of(&self, id: u64) -> Option<NodeId> {
+        self.contents.read(|contents| {
+            contents
+                .iter()
+                .find(|content| content.id == id)
+                .and_then(|content| content.node.get())
+        })
+    }
+
+    #[cfg_attr(
+        not(any(test, headset)),
         expect(dead_code, reason = "the headset's scene calls it")
     )]
     // The camera of the eye that the next draw shows, which a draw reads.
     pub(crate) fn camera(&self) -> MutableState<Camera> {
         self.camera
     }
+
+    #[cfg_attr(
+        not(any(test, headset)),
+        expect(dead_code, reason = "the headset's scene calls it")
+    )]
+    // The samples that the scene takes in each pixel, which a draw reads.
+    pub(crate) fn samples(&self) -> MutableState<Multisample> {
+        self.samples
+    }
+}
+
+// How many things the scene draws for `space`: its volumes, and the controllers that show a model.
+// A frame with none makes no projection layer.
+#[cfg(any(test, headset))]
+pub(crate) fn scene_count(space: &Space) -> usize {
+    space.volume_count() + space.volumes().controllers().shown_count()
 }

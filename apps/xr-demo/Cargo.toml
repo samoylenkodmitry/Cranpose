@@ -27,12 +27,15 @@ required-features = ["desktop"]
 [features]
 default = ["renderer-wgpu", "desktop"]
 renderer-wgpu = ["cranpose/renderer-wgpu", "player-demo/renderer-wgpu"]
-desktop = ["cranpose/desktop", "cranpose-xr/openxr", "dep:env_logger"]
-android = ["renderer-wgpu", "cranpose/android", "cranpose-xr/openxr", "cranpose-xr/stream-costs", "player-demo/android"]
+desktop = ["cranpose/desktop", "cranpose/audio-desktop", "cranpose-xr/openxr", "dep:env_logger"]
+# The entitlement check of the Meta Horizon Store. The Gradle build also lists the
+# `meta-entitlement` service and sets `cranposeMetaAppId`; see `just android-xr-entitlement`.
+meta-entitlement = ["cranpose-xr/meta-entitlement"]
+android = ["renderer-wgpu", "cranpose/android", "cranpose/audio", "cranpose-xr/openxr", "cranpose-xr/stream-costs", "cranpose-xr/audio-tap", "cranpose-xr/scripted-hand", "player-demo/android"]
 
 [dependencies]
 cranpose = { workspace = true, features = ["embedded-default-font"] }
-cranpose-xr = { workspace = true }
+cranpose-xr = { workspace = true, features = ["gltf"] }
 cranpose-ui = { workspace = true }
 env_logger = { version = "0.11", optional = true }
 log = "0.4"

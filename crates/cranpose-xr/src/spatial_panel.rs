@@ -60,8 +60,10 @@ fn PlacedPanel(
     space.place(panel, size, origin, pose);
     let id = panel.id;
     space.set_move_policy(id, modifier.move_policy());
+    space.set_point_source(id, modifier.attached_point_source());
     space.set_resizable(id, modifier.resize());
     space.set_shape(id, shape);
+    space.set_dock(id, modifier.dock());
     DisposableEffect(id, move |_| {
         DisposableEffectResult::new(move || space.remove(id))
     });
@@ -78,17 +80,21 @@ fn PlacedPanel(
         BoxSpec::default(),
         move || {
             content();
-            CursorDot(panel.dot);
+            CursorDots(panel.dots);
         },
     );
 }
 
-// The dot reads the cursor's state, so a cursor that moves composes only the dot.
+// The dots read the cursors' state, so a cursor that moves composes only its dot.
 #[composable]
-fn CursorDot(dot: MutableState<Option<Dot>>) {
-    let Some(dot) = dot.get() else {
-        return;
-    };
+fn CursorDots(dots: MutableState<[Option<Dot>; 2]>) {
+    for dot in dots.get().into_iter().flatten() {
+        CursorDot(dot);
+    }
+}
+
+#[composable]
+fn CursorDot(dot: Dot) {
     let color = if dot.pressed {
         Color(0.55, 0.75, 1.0, 1.0)
     } else {

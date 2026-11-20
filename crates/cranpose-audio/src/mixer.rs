@@ -15,7 +15,14 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
-use crate::ring::{Consumer, Producer};
+use cranpose_services::{AudioListener, EmitterId, EmitterReading, SpatialScene};
+
+use crate::{
+    panner,
+    ring::{Consumer, Producer},
+    spatial_voice::{Pass, SpatialVoice},
+    tap_window::TapWindow,
+};
 
 /// How many clips the engine holds at once. One byte of index, and far more
 /// than the couple of dozen cues a game keeps resident.
@@ -66,7 +73,7 @@ pub struct ClipData {
 }
 
 impl ClipData {
-    fn frames(&self) -> usize {
+    pub(crate) fn frames(&self) -> usize {
         self.samples.len() / usize::from(self.channels)
     }
 }
@@ -98,6 +105,7 @@ pub enum Command {
         rate: f32,
         bus: u8,
         looping: bool,
+        emitter: Option<EmitterId>,
     },
     RetuneVoice {
         voice: u64,
@@ -129,6 +137,7 @@ pub struct MixerSeed {
     pub leaked_clips: Arc<AtomicU32>,
     pub underruns: Arc<AtomicU32>,
     pub streaming: Arc<AtomicBool>,
+    pub scene: Arc<SpatialScene>,
 }
 
 #[derive(Clone, Copy)]
@@ -142,6 +151,9 @@ struct Voice {
     gain_right: f32,
     bus: usize,
     looping: bool,
+    // The emitter that the voice plays from, with the state that its ears keep
+    emitter: Option<EmitterId>,
+    spatial: SpatialVoice,
 }
 
 impl Voice {
@@ -155,6 +167,8 @@ impl Voice {
         gain_right: 0.0,
         bus: 0,
         looping: false,
+        emitter: None,
+        spatial: SpatialVoice::IDLE,
     };
 }
 
@@ -164,6 +178,10 @@ pub(crate) struct Mixer {
     leaked_clips: Arc<AtomicU32>,
     underruns: Arc<AtomicU32>,
     streaming: Arc<AtomicBool>,
+    scene: Arc<SpatialScene>,
+    // The listener's pose of the last read that no write overlapped
+    listener: AudioListener,
+    tap: TapWindow,
     clips: Vec<Option<ClipData>>,
     voices: Vec<Voice>,
     master: f32,
@@ -185,6 +203,9 @@ impl Mixer {
             leaked_clips: seed.leaked_clips,
             underruns: seed.underruns,
             streaming: seed.streaming,
+            scene: seed.scene,
+            listener: AudioListener::AT_ORIGIN,
+            tap: TapWindow::default(),
             clips,
             voices: vec![Voice::IDLE; MAX_VOICES],
             master: 1.0,
@@ -259,6 +280,15 @@ impl Mixer {
         ];
 
         let mut sounding = 0usize;
+        if let Some(listener) = self.scene.listener() {
+            self.listener = listener;
+        }
+        let block = Block {
+            out_frames,
+            channels,
+            device_rate: self.device_sample_rate,
+            paused: self.scene.is_paused(),
+        };
         let clips = &self.clips;
         for voice in &mut self.voices {
             if voice.id == 0 {
@@ -268,72 +298,22 @@ impl Mixer {
                 voice.id = 0;
                 continue;
             };
-            let frames = clip.frames();
-            if frames == 0 {
+            if clip.frames() == 0 {
                 voice.id = 0;
                 continue;
             }
-            let stereo_clip = clip.channels == 2;
             let gain = bus_gain[voice.bus];
-            let gain_left = voice.gain_left * gain;
-            let gain_right = voice.gain_right * gain;
-            let mut position = voice.position;
-            let step = voice.step;
-            let length = frames as f64;
-            let audible = voice.looping || position < length;
-
-            for frame in 0..out_frames {
-                if position >= length {
-                    if voice.looping {
-                        position -= length;
-                        if position < 0.0 || position >= length {
-                            position = 0.0;
-                        }
-                    } else {
-                        voice.id = 0;
-                        break;
-                    }
+            let audible = match voice.emitter {
+                Some(emitter) => {
+                    let heard = EmitterHearing {
+                        scene: &self.scene,
+                        listener: &self.listener,
+                        emitter,
+                    };
+                    mix_emitter_voice(voice, clip, gain, &block, &heard, out)
                 }
-
-                let index = position as usize;
-                let index = if index < frames { index } else { frames - 1 };
-                let fraction = (position - index as f64) as f32;
-                let next = if index + 1 < frames {
-                    index + 1
-                } else if voice.looping {
-                    0
-                } else {
-                    index
-                };
-
-                let (left, right) = if stereo_clip {
-                    let a_left = clip.samples[index * 2];
-                    let a_right = clip.samples[index * 2 + 1];
-                    let b_left = clip.samples[next * 2];
-                    let b_right = clip.samples[next * 2 + 1];
-                    (
-                        a_left + (b_left - a_left) * fraction,
-                        a_right + (b_right - a_right) * fraction,
-                    )
-                } else {
-                    let a = clip.samples[index];
-                    let b = clip.samples[next];
-                    let sample = a + (b - a) * fraction;
-                    (sample, sample)
-                };
-
-                let base = frame * channels;
-                if channels == 1 {
-                    out[base] += (left * gain_left + right * gain_right) * 0.5;
-                } else {
-                    out[base] += left * gain_left;
-                    out[base + 1] += right * gain_right;
-                }
-
-                position += step;
-            }
-
-            voice.position = position;
+                None => mix_plain_voice(voice, clip, gain, &block, out),
+            };
             if audible {
                 sounding += 1;
             }
@@ -341,6 +321,10 @@ impl Mixer {
 
         for sample in out.iter_mut() {
             *sample = sample.clamp(-1.0, 1.0);
+        }
+        if self.scene.tap().is_enabled() {
+            self.tap
+                .record(out, channels, self.device_sample_rate, self.scene.tap());
         }
 
         self.settle(sounding, out_frames)
@@ -403,6 +387,7 @@ impl Mixer {
                 rate,
                 bus,
                 looping,
+                emitter,
             } => {
                 let slot = slot as usize;
                 let bus = usize::from(bus).min(BUS_COUNT - 1);
@@ -421,6 +406,8 @@ impl Mixer {
                     gain_right,
                     bus,
                     looping,
+                    emitter,
+                    spatial: SpatialVoice::IDLE,
                 };
             }
             Command::RetuneVoice {
@@ -503,6 +490,177 @@ impl Mixer {
     }
 }
 
+// Where a position along a clip lies: the frame at or before it, the frame after it and how far
+// between them it is.
+pub(crate) struct Reading {
+    pub(crate) index: usize,
+    pub(crate) next: usize,
+    pub(crate) fraction: f32,
+}
+
+impl Reading {
+    // The reading at `position` of a clip of `frames` frames, which is more than none, where the
+    // frame after the last is the first: a clip that loops.
+    pub(crate) fn looping(position: f64, frames: usize) -> Self {
+        Self::locate(position, frames, 0)
+    }
+
+    // The reading at `position` of a clip of `frames` frames, which is more than none, where the
+    // frame after the last is the last again: a clip that plays once.
+    pub(crate) fn once(position: f64, frames: usize) -> Self {
+        Self::locate(position, frames, frames - 1)
+    }
+
+    fn locate(position: f64, frames: usize, after_last: usize) -> Self {
+        let index = position as usize;
+        let index = if index < frames { index } else { frames - 1 };
+        let fraction = (position - index as f64) as f32;
+        let next = if index + 1 < frames {
+            index + 1
+        } else {
+            after_last
+        };
+        Self {
+            index,
+            next,
+            fraction,
+        }
+    }
+}
+
+// What one render call asks of every voice.
+struct Block {
+    out_frames: usize,
+    channels: usize,
+    device_rate: f32,
+    // Whether the voices of emitters stand still
+    paused: bool,
+}
+
+// The emitter that a voice plays from and the listener that hears it.
+struct EmitterHearing<'a> {
+    scene: &'a SpatialScene,
+    listener: &'a AudioListener,
+    emitter: EmitterId,
+}
+
+// Mixes a voice that plays as it is, at its own gains. Returns whether it sounds.
+fn mix_plain_voice(
+    voice: &mut Voice,
+    clip: &ClipData,
+    gain: f32,
+    block: &Block,
+    out: &mut [f32],
+) -> bool {
+    let frames = clip.frames();
+    let channels = block.channels;
+    let stereo_clip = clip.channels == 2;
+    let gain_left = voice.gain_left * gain;
+    let gain_right = voice.gain_right * gain;
+    let mut position = voice.position;
+    let step = voice.step;
+    let length = frames as f64;
+    let audible = voice.looping || position < length;
+
+    for frame in 0..block.out_frames {
+        if position >= length {
+            if voice.looping {
+                position -= length;
+                if position < 0.0 || position >= length {
+                    position = 0.0;
+                }
+            } else {
+                voice.id = 0;
+                break;
+            }
+        }
+
+        let Reading {
+            index,
+            next,
+            fraction,
+        } = if voice.looping {
+            Reading::looping(position, frames)
+        } else {
+            Reading::once(position, frames)
+        };
+
+        let (left, right) = if stereo_clip {
+            let a_left = clip.samples[index * 2];
+            let a_right = clip.samples[index * 2 + 1];
+            let b_left = clip.samples[next * 2];
+            let b_right = clip.samples[next * 2 + 1];
+            (
+                a_left + (b_left - a_left) * fraction,
+                a_right + (b_right - a_right) * fraction,
+            )
+        } else {
+            let a = clip.samples[index];
+            let b = clip.samples[next];
+            let sample = a + (b - a) * fraction;
+            (sample, sample)
+        };
+
+        let base = frame * channels;
+        if channels == 1 {
+            out[base] += (left * gain_left + right * gain_right) * 0.5;
+        } else {
+            out[base] += left * gain_left;
+            out[base + 1] += right * gain_right;
+        }
+
+        position += step;
+    }
+
+    voice.position = position;
+    audible
+}
+
+// Mixes a voice that plays from an emitter. The place of the emitter and the pose of the listener
+// place the voice. The voice stands still while the scene is paused. Returns whether the voice
+// sounds. A voice whose emitter ended stops.
+fn mix_emitter_voice(
+    voice: &mut Voice,
+    clip: &ClipData,
+    gain: f32,
+    block: &Block,
+    heard: &EmitterHearing<'_>,
+    out: &mut [f32],
+) -> bool {
+    match heard.scene.read_emitter(heard.emitter) {
+        EmitterReading::Gone => {
+            voice.id = 0;
+            return false;
+        }
+        EmitterReading::Overlapped => {}
+        EmitterReading::Placed {
+            position,
+            attenuation,
+        } => voice.spatial.placement = panner::place(heard.listener, position, attenuation),
+    }
+    if block.paused && voice.spatial.is_silent() {
+        // A voice that has faded out waits where it is. The stream stays open for it.
+        return true;
+    }
+    let length = clip.frames() as f64;
+    let audible = voice.looping || voice.position < length;
+    // The command carries the gains of the voice's pan. The pan law keeps their root sum of squares at
+    // the volume, so the volume is recovered from them.
+    let volume = voice.gain_left.hypot(voice.gain_right);
+    let scale = if block.paused { 0.0 } else { volume * gain };
+    let pass = Pass {
+        clip,
+        step: voice.step,
+        looping: voice.looping,
+        device_rate: block.device_rate,
+        channels: block.channels,
+    };
+    if voice.spatial.mix(&pass, &mut voice.position, scale, out) {
+        voice.id = 0;
+    }
+    audible
+}
+
 fn grace_frames(sample_rate: f32) -> u64 {
     (f64::from(sample_rate.max(1.0)) * f64::from(IDLE_GRACE_SECONDS)) as u64
 }
@@ -529,4 +687,4 @@ fn step_for(rate: f32, clip_sample_rate: u32, device_sample_rate: f32) -> f64 {
 
 #[cfg(test)]
 #[path = "tests/mixer_tests.rs"]
-mod tests;
+pub(crate) mod tests;

@@ -228,6 +228,15 @@ impl RendererFrontend {
         }
         self.scene.root_layer()?;
         self.returned_scenes = self.returned_scenes.saturating_sub(1);
+        // The region starts from the areas the targets drew the changed
+        // records in, which their ends add the new areas to.
+        let mut cull = None;
+        if window {
+            let region = cull.insert(DamageRects::default());
+            if !self.cull_region(region) {
+                cull = None;
+            }
+        }
         let mut overlay_damage = Damage::Full;
         let overlay = self.collect_overlays(root_scale, purpose, &mut overlay_damage);
         // Built field by field: a constant of the whole packet damage would
@@ -236,7 +245,6 @@ impl RendererFrontend {
             since: None,
             damage: Damage::Full,
         };
-        let mut cull = None;
         let root = self.collect_scene(
             (width, height, root_scale),
             purpose,
@@ -314,10 +322,11 @@ impl RendererFrontend {
 
     // The scene's root scene for a frame of `viewport` at `root_scale` for
     // `purpose`, over `overlay` that changes `overlay_damage`. Writes into
-    // `damage` what a window frame changes against the packet before, and
-    // into `cull` the region a window walk culled the root to. A culled walk
-    // an image repaints past is taken again over what it repaints once, and
-    // then over every record.
+    // `damage` what a window frame changes against the packet before. A
+    // window walk culls the root to `cull`, which the frame widens by what
+    // the next image repaints, or drops. A culled walk an image repaints
+    // past is taken again over what it repaints once, and then over every
+    // record.
     fn collect_scene(
         &mut self,
         (width, height, root_scale): (u32, u32, f32),
@@ -329,20 +338,22 @@ impl RendererFrontend {
         let viewport = (width, height);
         damage.since = self.since();
         let next = self.frame_sequence.wrapping_add(1);
-        if window {
-            let region = cull.insert(DamageRects::default());
-            if !self.cull_region(region)
-                || !self.widen_by_predicted_repaint(region, next, overlay_damage, viewport, damage)
-            {
-                *cull = None;
-            }
+        if let Some(region) = cull.as_mut()
+            && !self.widen_by_predicted_repaint(region, next, overlay_damage, viewport, damage)
+        {
+            *cull = None;
         }
         let store = self.scene.store();
         let root_layer = store.root_layer().expect("the scene has a root");
         let recycler = &mut self.scene_recyclers[self.returned_scenes];
         let overlay_backdrops = overlay.is_some_and(LayerScene::contains_backdrop);
-        let records = window && self.target.records();
-        let mut widened = false;
+        // Whether the walk records how it draws each record: only the first
+        // walk of a window frame that records does. A later walk takes in
+        // every record the first took. The records it adds did not change
+        // since the target kept their areas.
+        let mut records = window && self.target.records();
+        // Whether a walk of the frame ran before this one.
+        let mut again = false;
         let mut repaint = DamageRects::default();
         let root = loop {
             let culled = cull.as_ref().map(|region| self.target.cull(store, region));
@@ -359,10 +370,16 @@ impl RendererFrontend {
             if !window {
                 break root;
             }
-            self.target.end(store, Some(&root), &mut damage.damage);
-            damage.damage.add(overlay_damage, viewport);
-            if records {
-                self.root_shown = std::mem::take(&mut root.shown);
+            if !again {
+                self.target.end(store, Some(&root), &mut damage.damage);
+                damage.damage.add(overlay_damage, viewport);
+                if records {
+                    self.root_shown = std::mem::take(&mut root.shown);
+                }
+            } else if root.contains_backdrop() {
+                // The end widened the damage by the captures of the first
+                // walk's backdrops alone.
+                damage.damage = Damage::Full;
             }
             let Some(region) = cull.as_mut() else {
                 break root;
@@ -375,12 +392,13 @@ impl RendererFrontend {
                 break root;
             }
             recycler.recycle(root);
-            if repainted && !widened {
+            if repainted && !again {
                 region.add_all(&repaint);
             } else {
                 *cull = None;
             }
-            widened = true;
+            again = true;
+            records = false;
         };
         if cull.is_none() {
             self.root_scene_capacity = root.scene.capacity_hint();

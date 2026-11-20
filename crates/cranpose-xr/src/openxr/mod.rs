@@ -3,6 +3,7 @@
 mod clock;
 mod controllers;
 mod cylinder_layers;
+mod entitlement_run;
 #[cfg(target_os = "android")]
 mod external_texture;
 mod eye_views;
@@ -18,9 +19,12 @@ mod passthrough;
 mod ray_layers;
 mod recenter_events;
 mod refresh_rate;
+mod render_model_calls;
+mod render_models;
 mod runner;
 mod runtime;
 mod session;
+mod spatial;
 mod static_image;
 #[cfg(target_os = "android")]
 mod stream_costs;

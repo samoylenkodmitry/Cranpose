@@ -52,8 +52,9 @@ Cranpose developers too:
   `FollowTarget::View(FollowMode::Snap)` places it when it first composes and again after a
   recenter. `FollowMode::Tight` follows the target in every frame, as Jetpack XR's
   `FollowMode.tight` does. `FollowTarget::Controller(Hand, FollowMode)` follows a controller's
-  grip pose. Jetpack XR has no controller target. Its `FollowMode.soft` and
-  `FollowTarget.anchor` are not there yet.
+  grip pose. Jetpack XR has no controller target. `FollowTarget::Anchor(Anchor, FollowMode)` holds
+  the panels to an anchor, as Jetpack XR's `FollowTarget.anchor` does. Its `FollowMode.soft` is not
+  there yet.
 - `SpatialRow`, `SpatialColumn`, `SpatialBox`, `SpatialCurvedRow`, `SpatialSpacer`: layouts in
   meters.
 - `SpatialExternalSurface(stereo_mode, modifier) { scope }`: hands the app a surface that a
@@ -78,6 +79,12 @@ Cranpose developers too:
 - `local_tracking_capabilities()`: the `TrackingCapabilities` that tell, for each `TrackingFeature`,
   whether the runtime offers it.
 - `local_haptics()`: the `Haptics` handle that vibrates a hand's controller.
+- `local_anchors()` and `local_planes()`: the `Anchors` and `Planes` handles of the room. An anchor holds
+  content on a table or a wall and keeps it there after a restart. See "Anchors and planes".
+- `MovePolicy::anchor(orientations, semantics, on_move)`: a movable panel or volume that snaps to a
+  plane of the room when the user lets it go near one.
+- A keyboard for the text fields of the app, with no composable to write: see "Text entry".
+  `use_keyboard(Keyboard)` chooses between the system's keyboard and the one that Cranpose draws.
 - `Orbiter`: content attached to the edge of a panel, such as a handle or a toolbar.
 - `SubspaceModifier`: `width`, `height`, `depth`, `size`, `offset`, `rotate`, `with_pose`,
   `movable`, `movable_with`, `resizable`, `resizable_with`, `fill_max_size`, `padding`.
@@ -85,6 +92,12 @@ Cranpose developers too:
 
 - `SpatialVolume(modifier, content)`: 3D content in a box, drawn by Cranpose's own scene. See "3D
   content".
+- `SpatialGltfModel(state, modifier, content)`: a glTF 2.0 model in a volume, behind the `gltf`
+  feature. `rememberSpatialGltfModelState(source)` loads it. See "glTF models".
+- `SpatialPointSource(modifier, source)` and `SubspaceModifier::point_source(source)`: sound that
+  comes from a pose in a `Subspace` or from a panel or a volume. It follows the head. See "Spatial
+  audio". `local_spatial_capabilities()` tells with `is_spatial_audio_enabled()` whether the app
+  has the sound.
 
 ## 3D content
 
@@ -92,8 +105,8 @@ Cranpose developers too:
 composables whose nodes carry `mesh_surface` or `mesh_surfaces`. Cranpose's own scene draws them, as
 `scene3d` draws them in a window, so a mesh shows live composable content on its surface. Jetpack
 XR 1.0 has `SpatialGltfModel`, which renders a glTF model, and `SceneCoreEntity`, which attaches any
-SceneCore entity. Cranpose has neither. Its composable keeps its own name, after the box that the
-content stands in.
+SceneCore entity. Cranpose has no SceneCore entities. Its composable keeps its own name, after the
+box that the content stands in. A glTF model has `SpatialGltfModel` (see "glTF models").
 
 The modifier gives the box: `width`, `height` and `depth` in dp, which are millimeters, 500 each by
 default. The modifier's `offset`, `rotate`, `movable` and `resizable` work as on a panel. The
@@ -149,11 +162,11 @@ All volumes draw into one projection layer with a view for each eye. Each view h
 of the eye's recommended size and its own pose and field of view. The layer's flags say that the
 picture's alpha blends over what lies under it (`BLEND_TEXTURE_SOURCE_ALPHA`), so the room and the
 panels' layers show through where no mesh draws. The picture is premultiplied, as the panels' are.
-The scene draws with one sample for each pixel, because the depth that the layer carries is the
-depth of a single sample. The renderer draws the scene into a target of its own and converts it
-into the swapchain's image, as it does for the panels' atlas. It draws straight into an image only
-when the image also takes copies. An sRGB image would then need a view of another format, and a
-swapchain's image has none.
+The renderer draws the scene into a target of its own, the page, and converts the page into the
+swapchain's image, as it does for the panels' atlas. It draws straight into an image only when the
+image also takes copies. An sRGB image would then need a view of another format, and a swapchain's
+image has none. The scene takes four samples in each pixel where the device takes four in its
+colour and depth formats (see "Anti-aliasing").
 
 With `XR_KHR_composition_layer_depth` the layer carries the depth of each picture. The renderer's
 scene pass can leave its depth in a view that the host gives it
@@ -167,6 +180,52 @@ infinity to mishandle.
 Wgpu maps `Depth24PlusStencil8` to one of two Vulkan formats by the driver and offers no query that
 says which, so a Vulkan headset has no depth swapchain and submits none. A runtime that offers no
 depth swapchain format submits none either. The picture still shows.
+
+### Anti-aliasing
+
+The scene takes four samples in each pixel (`Multisample::X4`) where the device takes four in the
+format that the renderer draws the scene in (`Rgba8Unorm`, the non-sRGB form of the swapchain's
+format) and in `Depth24PlusStencil8` (`volume_samples`). A device that takes fewer draws with one.
+The headset asks the adapter once, at the first frame with a volume, and the log names the answer.
+
+**The path.** The pass draws into colour and depth attachments of four samples that are transient
+(`TextureUsages::TRANSIENT_ATTACHMENT`), cleared at the start and discarded at the end. Its colour
+attachment has the page as its resolve target. A tiled GPU keeps the four samples in tile memory,
+averages them as it writes the page, and never writes them out. On GLES, which is the Quest's
+graphics API in this backend, the wgpu fork's GL backend binds the page with
+`glFramebufferTexture2DMultisampleEXT` when the device has `GL_EXT_multisampled_render_to_texture`,
+the resolve target is a plain texture, the colour is discarded and the attachment is the first. That
+extension is multisampled render-to-texture: no multisampled buffer exists, and the driver averages
+in tile memory. Without it the backend resolves with a blit after the pass. On Vulkan, which Linux
+and Windows headsets use, the same pass is a subpass with a resolve attachment.
+
+Before this change a scene of four samples drew into the samples, averaged them into a texture of its
+own and then laid that texture over a cleared page with a composite pass. A scene that covers a page
+which still holds only its transparent clear now averages straight into the page. The pass replaces
+the page's clear and the composite, so a frame of volumes has one pass for the colour where it had
+three (clear, scene, composite). The path needs the page to be blank under the scene, and the scene
+to cover it. A scene with glass, with other content beneath it or that does not cover the page takes
+the earlier path.
+
+**The depth.** One wgpu pass holds one sample count, and wgpu has no depth resolve. Storing a depth
+of four samples to resolve it in a later pass costs four times the bandwidth of the depth that the
+layer carries. A second pass with one sample draws the opaque surfaces and the volumes again with the
+depth pipelines (`ScenePipeline::Depth`, which discards the texels that the colour pass discards) into
+the view of the depth swapchain. It runs after the colour pass and draws only the steps that the
+colour pass drew, so the depth never shows what the picture does not. Its colour attachment is a
+transient placeholder that it clears and drops. Each pixel then holds the depth of its centre. A
+pixel that an edge covers in part carries the surface's depth where the centre is covered and the
+far plane where it is not, which the panels over the layer see as a fringe of one pixel at most. A
+scene of four samples that cannot average into the page leaves the far plane in the depth. The
+doorways of a scene write no depth in this pass.
+
+**What was measured.** A test on the GPU of the development machine draws a red quad of 38 pixels,
+turned by half a radian so that its edges slant, in a picture of 128 by 128 pixels, with one sample
+and with four. The mesh has seams for edges: a `Mesh::plane` smooths its outline on its own, and a
+solid's edge does not. With one sample no pixel is in between (alpha neither 0 nor 255). With four
+samples 84 pixels are, and at least nine in ten of the rows that an edge crosses hold one. With four samples
+every opaque pixel carries the quad's depth, every empty pixel the far plane, and an edge pixel one of
+the two.
 
 ### Layer order and the depth test
 
@@ -200,13 +259,49 @@ volume makes the swapchains. The frame after the last volume leaves frees them.
 
 ### Pointer
 
-A controller's ray stops at a volume's box. The slab test of `Ray::hit_box` gives the entry point,
-and the pointer sends the app `Enter`, `Move`, `Down`, `Up` and `Exit` events through
-`SpatialVolumeScope::on_pointer_event`, the path that a surface takes. The position is in dp from the
-top left corner of the box's front face, from the entry point's x and y. The depth is not reported.
-The ray does not pick the meshes, so a button on a mesh does not receive the ray. Sending the ray
-into the scene's own picking needs the pixel of the ray's hit in the scene's camera, which a scene
-has per eye, and is a larger change than the pointer's design takes now. A window shows the volume
+A controller's or a hand's ray meets a volume in two steps. The slab test of `Ray::hit_box` finds
+whether the ray crosses the volume's box. For a volume whose content has meshes, the pointer then
+finds the nearest triangle of those meshes, and the ray stops there. A ray that crosses the box and
+meets no triangle passes through, to the panels behind. A volume with no mesh stops the ray at its
+box, as before.
+
+**Where the meshes come from.** The scene's layer tree holds each `mesh_surface` and
+`mesh_surfaces` node with its map into the scene. `GuestView::visit_window_meshes` walks the layers
+under the node of one volume (`VolumeNode` records that node) with no allocation, and reports each
+mesh with the map from its own space to the volume's content space. The walk is `SpaceTree`'s own,
+generic over what it keeps, so picking and drawing agree on where a node stands: the layout offset,
+the `transform3d` nodes above it and the surface's transform. The headset keeps the list in
+`PickMeshes`, in storage that it reuses. It takes the list again for each volume that a ray points
+at or that a press is on, from the scene's last draw. A volume that no ray points at keeps its last
+list. A mesh that moves in a frame is therefore hit where it stood in the frame before.
+
+**The pick.** `ContentRay::of` turns the room's ray into the volume's content space with the
+direction in dp for each meter, so the distance that a mesh gives is in meters and compares with the
+distance to a panel. Each mesh takes the ray into its own space through the inverse of its map. The
+mesh's box (`Mesh::bounds`, worked out once) turns most rays away with a slab test. `Mesh::cast`
+then reads the triangles, from either side, and gives the nearest in front of the ray's origin. A
+triangle's edge counts as a hit. The nearest mesh wins. The pick allocates nothing, and a mesh
+whose map has no inverse takes no ray. A volume with no mesh in the list takes the box.
+
+**What the app gets.** `SpatialVolumeScope::on_input_event` receives an `InputEvent`, after Jetpack
+XR's: the source, the hand, the time, the ray in the content's space, an `InputAction` and a
+`HitInfo`. The actions are `HoverEnter`, `HoverMove` and `HoverExit` with no press, and `Down`,
+`Move` and `Up` for a press. Jetpack XR's `CANCEL` has no counterpart: a controller that is lost
+ends a press with an `Up`. The `HitInfo` names the composable node whose mesh the ray meets
+(Jetpack XR's `inputEntity`), which of the node's meshes it is, the place of the hit in the content
+space in dp (`hitPosition`) and the triangle. As in Jetpack XR, a press keeps the entity that it
+began on: its `Move`s and `Up` name that mesh, and `hit_position` is `None` where the ray has left
+it. Jetpack XR's list of every entity that the ray crosses is one nearest hit here, and its
+`transform` has no counterpart. For a glTF model `SpatialGltfModelState::node_of` maps a hit to the
+`GltfModelNode`: each material's node records the composition node that carries it, and the draw
+that the mesh index names gives the file's node, with its name.
+
+The demo's readout panel shows the result in its `Ray meets` line: `torus`, `crate, glTF node
+crate` (the name of the file's node) or `nothing`. The ray passes through the torus's hole.
+
+`SpatialVolumeScope::on_pointer_event` still gives Compose's pointer events. Its position is the
+hit's place projected onto the box's front face where the volume has meshes. The Compose events go
+to the volume as a whole. A composable on a mesh does not receive the ray. A window shows the volume
 under the mouse, where the meshes take input as `mesh_surface` documents.
 
 The handles of a movable or resizable volume stand at its front face, half the depth toward the
@@ -214,13 +309,211 @@ viewer. A handle at the center plane of a deep box would lie behind the entry of
 at it. The resize measures on the front face's plane and changes the width and the height. The
 content does not scale with the box.
 
+### glTF models
+
+`SpatialGltfModel(state, modifier, content)` is a `SpatialVolume` whose content is a glTF 2.0 model.
+It needs the `gltf` feature of `cranpose-xr`, which adds the `gltf`, `image`, `base64` and
+`percent-encoding` crates. An app without the feature has none of that code. The web builds do not
+link `cranpose-xr`, so their size does not change.
+
+**Loading.** `rememberSpatialGltfModelState(source)` starts an effect that reads the file in
+`withBlocking`, on the shared pool of worker threads. The state holds `Loading`, `Loaded` or
+`Failed(GltfError)`. The composable shows nothing until the state is `Loaded`, as Jetpack XR's does.
+The `gltf` crate parses the JSON and the binary container. The loader resolves the buffers and the
+images itself: the binary chunk of a `.glb`, `data:` URIs, and files beside a `.gltf`. The crate's
+own `import` feature would do the same, but it needs `base64` 0.13, a second version of a crate that
+the workspace has once. It would also decode every image of the file, where the loader decodes the
+images that a base color texture names, with the PNG and JPEG decoders of the `image` crate. A
+`SpatialGltfModelSource` is a path or bytes. A source made from bytes has no directory, so it
+finds no external buffer.
+
+**What the loader keeps.** One `Mesh` for each triangle primitive (lists, strips and fans), with
+the file's positions, normals and the texture coordinates of the base color texture. One picture for
+each material: the base color texture multiplied by the base color factor, baked once into
+the pixels (the factor is linear light, the texture is sRGB), with the alpha mode applied. A
+material with no texture is one color. The node tree of the default scene, each node as
+translation, rotation and scale. The animations. The loader leaves out skins and morph targets,
+cameras, lights, vertex colors, the other material properties and the texture samplers. The scene's
+sampler clamps, so a texture does not repeat. A texture beyond 2048 pixels is halved until it fits,
+because each texture is one offscreen layer.
+
+**Axes and fit.** glTF has y up and z toward the viewer, in meters. The volume's content has y down
+and z away, in dp. One matrix, `ModelFit::root`, takes the model's middle to the box's middle,
+scales by the fit and turns the model half a turn about x. The node transforms and the animation stay
+in glTF space, and a node's world transform is `local.then(parent)`. The half turn keeps the
+handedness, so no triangle changes its winding. The fit follows Jetpack XR's measure policy. Each
+side has the ratio of the modifier's size to the model's own side. A side with no size set has the ratio one. The
+model scales by the smallest ratio, up or down. The box takes the modifier's size on the sides that
+set one and the scaled size elsewhere. With no size set the model has its own size, 1000 dp for a
+meter. The box of the model at rest gives its sides. An animation does not change the fit.
+
+**Drawing.** The volume's content has one node for each material, however many nodes of the file
+use it. The node's content is the material's picture (an `Image` or a color), and its
+`mesh_surfaces` holds one surface for each primitive of the material, in the node's frame. Each
+surface's transform is the node's world transform times the fit. A material shared by thirty nodes
+costs one offscreen layer. The surfaces are lit. The scene's light is the default light of the
+model, from the upper left, until the `content` callback sets another.
+
+**Animation.** The loader keeps the keys of each channel: translation, rotation and scale with
+`LINEAR` (a spherical interpolation along the short arc for rotation), `STEP` and `CUBICSPLINE`.
+A `GltfAnimation` holds a state and a clock. A composable of the model runs an effect while one
+animation plays. The effect advances the clocks by the frame time (at most 0.1 s a frame), poses the
+nodes into one preallocated array of world transforms, and bumps a counter that the draw closures
+read. The closures build their surfaces again for the new transforms, so an animation composes
+nothing. A model with no playing animation runs no effect and builds its surfaces once. A start and a
+stop between two frames leave the state unchanged and change the pose, so each start and stop also
+counts into the effect's key.
+
+A layer keeps a few spaces (`LayerSpaces`: the `Arc<LayerSpace>` that a node's graphics layer
+holds) and an evaluation moves the surfaces of one that no node holds any more, in place. A node
+keeps the space of its last evaluation until the next replaces it, so two spaces serve in turn and a
+third covers a frame in flight. An animation of a material with any number of primitives allocates
+no list of surfaces and no `Arc` in a frame. A space that is still held is never changed.
+
+### glTF models on a Quest 3
+
+Measured on a Quest 3 from the compositor's screenshots (`adb exec-out screencap -p`) and
+`scripts/dev/xr_model_check.py`. The crate's texture has magenta and lime tiles in a white frame. The
+`XR_DEMO_VOLUME=model` build shows the crate alone, so its screenshots hold those hues only in the
+crate. The full demo's test patterns have the same hues, so the numbers of the full demo come from
+the crate's region (`--region 3500,1500,4100,2000`, in the screenshot's pixels).
+
+| Build | Left eye | Right eye |
+| --- | --- | --- |
+| `XR_DEMO_VOLUME=model`: the crate alone, standing still, magenta pixels | 103,340 | 102,475 |
+| the same, lime pixels | 99,682 | 99,116 |
+
+Three screenshots of one run differ by 0.1 percent. The two eyes see the crate from their own places,
+so their counts differ by about 1 percent. The picture shows three faces in each eye with the tiles
+upright. The full demo shows the crate beside the torus at 120 frames a second. At the demo's first
+head pose the right eye sees the crate at its lower right, and the left eye's view ends before it. In
+the crate's region of the right eye, 33,137 magenta and 32,355 lime pixels show, and 63,423 pixels
+change their class between two screenshots a second apart, so the animation runs in the headset's
+frame loop. The crate shares the projection layer of the torus's volume, so it adds no layer. The
+log shows the layer count that the earlier measurement of the depth test gave (18 asked, 16 taken,
+two panels left out; see "The layer limit"), with no change after the model loads. It has no
+`glTF model:` failure and no `the 3D content ends`.
+
+The `gltf` feature adds 770 KB to the stripped arm64 library of the demo, which is 11,835 KB without
+the feature and 12,605 KB with it. Both come from a local `release-fast` build. The build without
+the feature leaves out the demo's crate too. Of the 770 KB, the `zune_jpeg`, `image` and `png`
+crates take 209 KB, `serde_json` 181 KB, `gltf` and `gltf_json` 58 KB, and `cranpose_xr` 49 KB. The
+shipping `release` profile has other absolute sizes. An app without the feature has none of it.
+
+### Controller models
+
+A headset draws a model at the grip pose of each controller in use. The models are part of the
+volumes' scene. `VolumeScene` composes a node tree for each hand beside the volumes' content, so one
+projection layer and one depth buffer carry both. Where the runtime tests depth, a panel and a model
+hide each other by their distance from the head, as a panel and a volume do. The scene exists while
+a volume exists or a controller shows a model. An app with no volume gets the projection layer, its
+swapchains and the pass only while a controller shows a model. With the models off it gets none of
+them.
+
+**Which controller shows a model.** `controller_grips::shown` takes the frame's two `Controller`s.
+A controller shows a model while the runtime tracks its grip pose and the hand's interaction
+profile is not that of a hand (`InteractionProfile::is_hand`). A runtime keeps the hand profile's
+poses valid with no hand in view, and a tracked hand with no controller holds nothing to draw, so
+the hand profiles show no model. The state of the pointer decides nothing: a controller that lies on
+a desk is in use. `ControllerStates::track` applies the app's switch. With `set_enabled(false)` no
+hand shows a model.
+
+**Which model a hand shows.** `controller_look::look` decides from three inputs: the app's
+`ControllerModel` for the hand, the runtime's `Offer`, and how far the load of the glTF source has
+come. The offer is `Pending` until the backend has asked the runtime. It is `Absent` where the
+runtime has no model for the hand, where the app did not declare `Use::controller_models()` and
+where the build has no `gltf` feature. It is `Bytes` once the backend has copied the runtime's glTF
+binary out.
+
+| App's choice | Runtime's offer | Load | The hand shows |
+| --- | --- | --- | --- |
+| `Plain` | any | any | the plain model |
+| `Runtime` | `Pending` | none | nothing, until the backend has asked |
+| `Runtime` | `Absent` | none | the plain model |
+| `Runtime` | `Bytes` | loading | nothing |
+| `Runtime` | `Bytes` | loaded | the runtime's model |
+| `Runtime` | `Bytes` | failed | the plain model |
+| `Gltf(source)` | any | loading | nothing |
+| `Gltf(source)` | any | loaded | the app's model |
+| `Gltf(source)` | any | failed | the plain model |
+
+A controller in use shows a picture at all times except while its model is on its way.
+
+**The runtime's model.** A Meta Quest hands out glTF binaries through `XR_FB_render_model`. The
+instance enables the extension when the app declared `Use::controller_models()` (the manifest
+feature `com.oculus.feature.RENDER_MODEL` and the permission `com.oculus.permission.RENDER_MODEL`)
+and the runtime lists it. `render_models::RenderModels` asks for each hand before the frame that the
+runtime waits for. It lists the render model paths, picks the path that has a `controller` segment
+and the hand's side (`model_path::controller_path`), reads the model's properties with the glTF 2.0
+subset 1 capability, then with both subsets if the first answer has no model, and loads the bytes.
+The calls that list the paths and read the properties are made in `render_model_calls`, because the
+`openxr` crate's wrappers pass structs that the runtime may leave unwritten. `model_asks::ModelAsks` schedules the questions. A hand
+that the runtime answered with no model asks again when a controller comes into it. The loader of
+`SpatialGltfModel` decodes the bytes on a worker thread. `ControllerLoaders` stays in the
+composition while the scene is empty, so a controller that leaves and returns finds its model
+loaded. The XR session stays on the frame thread, and only bytes cross to the worker.
+
+**Where the model stands.** The runtime's models are glTF files in meters with x to the right, y up
+and z toward the user. The origin of a model lies at the controller's grip pose.
+`controller_placement::scene_from_grip` carries a point of the model to the scene, whose units are
+millimeters with y down and z away. The half turn about x that takes glTF's axes to the content's
+cancels the half turn that `scene_from_volume` makes. A point `p` of the model therefore lies where
+the grip puts `p`. No box fits the model. `ModelFit` centers a model in a volume's box, and a
+controller keeps the file's origin.
+
+**Allocation.** The frame loop writes one `MutableState<Mat4>` for each hand, the map from the model
+to the scene. The hand's `shown` flag changes only when a controller comes or goes. The surfaces of
+a model carry the placement, and each layer's draw closure reads the state. `SurfaceRing` keeps a
+few `LayerSpace`s for each layer and moves their surfaces in place, as the animations of a glTF
+model need, so no draw builds a space or a list after the ring fills. A node with `transform3d`
+would allocate a space in each evaluation, which is why the models carry their placement in the
+surfaces. The plain model's parts share meshes that a process makes once. The write of the state is
+the framework's. A write of a changed value keeps a record, as the pose of a carried volume and the
+eye's camera do. A test of the ring shows that a moving model reuses its spaces. No allocation
+counter has measured a frame.
+
+**The plain model.** `plain_controller` builds seven parts from `Mesh::cuboid` and `Mesh::sphere`:
+a handle along z, a head in front of it, a thumbstick's dome, a trigger, two button domes and a tip
+that marks the front. Each part has one flat color. A part is a node whose content is a flat swatch,
+drawn on a mesh by a graphics layer, as a glTF material is. `Mesh::cylinder` is an open tube, so no
+part uses it.
+
+**The scene's light.** A volume sets the scene's light. Where no volume sets one, the controllers'
+models stand in the default light of the glTF models.
+
+**What no headset has run.** The runtime's listing of the extension under the manifest entries, the
+render model paths, the contents of the runtime's file, the loader on that file, the alignment of
+the file with the grip pose, the depth test against panels and the frame rate of an app with no
+volume are untested. The permission name, the path names and the origin of the models at the grip
+pose follow the extension's documentation and stay assumptions until a headset confirms them. If
+the runtime does not list the extension on its first run, the permission name is the first suspect:
+the other services of `cranpose-capabilities` write a `horizonos` name beside the `com.oculus` one.
+The extension has three calls and none gives the state of a button, so a model moves its buttons
+only if its file holds clips. `scripts/dev/xr_controller_session.sh` and
+`scripts/dev/xr_controller_check.py` are the procedure for the first run. Neither has run on a
+headset. The check script ran on pictures that a script drew.
+
+**The demo.** The counter panel has a button that cycles the choice of both hands: the runtime's
+model, the plain model and none. The environment variable `XR_DEMO_CONTROLLERS` builds the
+measurements. It holds names that a comma separates. `only` shows nothing but the models. `plain`
+and `off` start with that choice. `panel` adds a magenta panel of 40 cm in the vertical plane through
+the left controller's grip, so that the part of the model behind the plane hides and the part in front
+shows. A build with `only` or `panel` logs the eyes' poses and fields of view, the grips and the
+frames of the last second, once a second. `scripts/dev/xr_controller_session.sh` runs one build on a
+Quest and saves the log and the compositor's picture. `scripts/dev/xr_controller_check.py` marks the
+pixels that differ between the picture of the `only` build and that of the `only,off` build, joins
+them into blobs and projects the logged grips into each eye.
+
 ### What it costs
 
 A frame with volumes updates the composition and renders the window root twice. The scene's draw
 closure reads the camera, so each eye's collection builds the scene again. The depth view that the
 renderer keeps in its pass is the swapchain's own, so the depth costs no copy. The color takes the
-renderer's conversion pass for each eye. The CPU side allocates what `scene3d` allocates for each
-evaluation of its closure. The layer code allocates nothing.
+renderer's conversion pass for each eye. With four samples a frame adds the second pass of one
+sample for the depth: its vertex work and a store of the depth swapchain, which the one-sample pass
+stored too. The CPU side allocates what `scene3d` allocates for each evaluation of its closure. The
+layer code allocates nothing. The pointer's pick allocates nothing either: it takes the list of
+meshes again only for a volume that a ray points at or a press is on, and keeps its storage.
 
 A call of the runtime or of the renderer that fails ends the 3D content with one line in the log
 (`the 3D content ends`). The session and its panels keep running. A runtime that refuses the depth
@@ -299,7 +592,7 @@ multiplication of poses per panel of a subspace that moved. It allocates nothing
 state, so a moving target does not compose the panels again. A composition that draws later in the
 frame reads the live origin in the `place` of each panel. It does not move the panel back.
 
-A target and a mode make four cases:
+A target and a mode make six cases:
 
 - `View(Snap)`: the origin is one meter ahead of the head along its heading, at its height,
   facing it. The headset has no head pose at the first composition. The subspace stands at the
@@ -312,8 +605,15 @@ A target and a mode make four cases:
 - `Controller(hand, Tight)`: the origin is the place of the hand's grip pose, with no offset.
 - `Controller(hand, Snap)`: the origin is that place in the first frame that tracks the controller.
   A recenter places it again. The panels do not show before the first place.
+- `Anchor(anchor, Tight)`: the origin is the anchor's pose in every frame, with all six degrees of
+  freedom, because an anchor on a wall holds a panel that lies against it. A frame in which the
+  runtime does not place the anchor keeps the origin of the frame before.
+- `Anchor(anchor, Snap)`: the origin is the anchor's pose in the first frame that has one. A recenter
+  places it again. The panels do not show before the first place. An anchor that the app created has
+  its place at once, and one that the app loaded from storage waits for the runtime to recognize the
+  room. A detached anchor leaves the panels where they were.
 
-Only the target's turn about the vertical axis counts, so the panels stand upright. A ball that
+For a view and a controller only the target's turn about the vertical axis counts, so the panels stand upright. A ball that
 sits 10 cm above a controller stays straight above it when the hand tilts. Jetpack XR's
 `TrackedDimensions.All` would tilt the ball with the hand. The turn is the heading of the pose's
 forward axis seen from above. A pose whose forward axis is within about 6 degrees of vertical has no
@@ -327,6 +627,7 @@ vanish. The aim pose points where the ray points. That direction stays steady. A
 as tracked when the runtime tracks both poses.
 
 A panel that the user carried keeps its pose relative to the origin, so it moves with the origin.
+A panel that another following subspace takes over, as when the app names a new anchor, is placed by its modifier again, because the place that the user carried it to is relative to the old origin.
 
 A following subspace of a controller has no place while the runtime does not track the controller.
 The loop marks each of its panels `Ride::Hidden`. The panel stays registered with its swapchain
@@ -334,7 +635,7 @@ image, so it shows again at once. The end of the frame leaves it out of the laye
 ignores it. A panel that rides a controller is `Ride::On(hand)`. The pointer skips it in the ray of
 that hand, for hits and for handles, because a ball above the left controller would stop the left
 ray at the user's own hand. The other hand's ray meets it like any panel. The filter is one function
-of `pointer.rs`. `nearest_hit` and `nearest_handle` both use it, so the cursor, the press, the grab
+of `hit.rs`. `nearest_hit` and `nearest_handle` both use it, so the cursor, the press, the grab
 and the length of the beam agree.
 
 A panel with rounded corners and no background around them takes the shape of its corners. The
@@ -719,6 +1020,170 @@ same call), one `xrLocateBodyJointsFB`, one `xrGetFaceExpressionWeights2FB` or `
 and one `xrGetEyeGazesFB`, or a located space for the gaze. The arrays live in the frame or on the
 stack.
 
+### Two pointers, every button
+
+A user holds two controllers, and each works on its own. Before this design the left controller
+could not press or drag on a panel while the right controller carried another panel by its handle.
+Four layers each held the state of one pointer:
+
+1. `pointer.rs` kept one `hand` index, one `press`, one `held` panel and one `over` target.
+   `choose_hand` returned at once while a press or a held panel existed, so the left hand's aim was
+   read and thrown away until the right hand let go.
+2. The frame loop sent the events through `AppShell::set_cursor`, `pointer_pressed` and
+   `pointer_released`, which drive the window's one primary pointer with one cursor, one set of held
+   buttons and one set of hovered nodes. `secondary_pointer_*` takes a second finger, but it routes
+   the finger to the primary pointer's captured nodes, so it cannot press another panel. Every panel
+   with content lives in one atlas, which is one surface of the shell.
+3. `Space::set_cursor` held one dot, `SurfaceInput` held one pressed flag, and the runner kept one
+   pressed surface and one active handle.
+4. The UI nodes that track a gesture, the press and hover interaction sources, the scroll gesture and
+   the long press, skipped every pointer whose id was not `PointerId::PRIMARY`. A pointer that does not
+   share the window's own id would have pressed and then scrolled nothing.
+
+The design gives each layer a pointer of its own:
+
+- `Pointer` (`pointer.rs`) is the state of one hand: its `Reach` (the ray, the panel and the handle
+  that it meets, `reach.rs`), its `Press`, its held panel (`pointer/held.rs`) and its `over` target.
+  `Pointers` (`pointers.rs`) holds the two of them and runs the left hand and then the right hand in
+  each frame, so both read the same panels. The only thing they share is a claim: the panel that one
+  hand holds by a handle has no handle for the other hand. `Gestures` gathers the frame's output: the
+  gestures for the composition, tagged with their hands, the gestures for surfaces and volumes, and the
+  steps of the carries and resizes. The storage lives across frames, so a frame allocates nothing.
+- `Hand::pointer_id` gives each hand its id: 1 for the left hand and 2 for the right hand. The
+  primary id 0 stays with a window's own mouse or finger.
+- `AppShell::independent_pointer_moved`, `_pressed`, `_released`, `_scrolled` and `_exited` (and the
+  same on `SurfaceMut`) drive a pointer with its own place, hovered nodes, held buttons and gesture,
+  keyed by its `PointerId`. The first press hit-tests at the pointer's place and keeps the reached
+  nodes as that pointer's path in the `HitPathTracker`, as `ray_pointer` does for a ray in a 3D scene.
+  The moves and the release reach the path. Without a press, the pointer hovers: exit, enter and move
+  events with its id. The primary pointer's code shares the function that sends the exits and enters.
+  `atlas_input::deliver` sends a frame's atlas gestures to the shell, and the integration tests call
+  the same function.
+- `PressTracker` and `HoverTracker` of `interaction.rs`, and the scroll gesture of
+  `modifier/scroll/drag_gesture.rs`, hold the pointer that went down first and let the others pass by
+  until it lifts, as `clickable` did. A hover lasts while any pointer is over the node. On a phone the
+  first finger is the primary pointer, so the touch behavior stays the same. The long press and the
+  zoom gesture still take only the primary pointer, so a long press with a controller does not fire.
+- `Space::set_cursor(hand, cursor)` shows one dot for each hand on a panel. `SurfaceInput` is kept for
+  each hand, so a surface's callback gets each hand's events under that hand's id. The runner reads
+  `pressed_surfaces` and `handles` as two entries, so each hand highlights its own handle.
+
+Two hands may press one panel. The panel's nodes get a `Down` of each id, as two fingers make, and a
+node that holds a gesture serves the first pointer.
+
+**Buttons.** `Aim` carries the squeeze, the two face buttons, the thumbstick click and the menu
+button next to the trigger. The trigger keeps the pointer's press machine: the press holds the point
+from before the pull, it clicks through a shake, and it drags when the ray turns. The button that the
+press emits comes from `PointerMapping`. The other inputs are extra buttons (`pointer/extras.rs`). Each
+goes down at the pointer's place, to the target of the trigger's press, or else to the target that
+the ray is over, and it comes up at the same target. The shell sees a `ButtonDown` or a `ButtonUp`
+for a button other than the primary one and keeps it in the pointer's held set, so the moves while it
+is down reach the nodes that took it. The thumbstick scrolls the target under the pointer in each
+frame by `scroll_speed` times the frame's time, with a dead zone of 0.15 and no step longer than 100 ms.
+A positive y scrolls up as a wheel does, and a push to the right moves the content to the left.
+A hand that carries a panel gets no extra button and no scroll: the stick pushes the panel.
+
+`Controller::trigger.pressed` and `squeeze.pressed` come from the value with a mark of 0.6 to go down
+and 0.4 to come up (`press_threshold.rs`), which the pointer's own trigger rule uses as well.
+`Controllers::sample` computes them from the frame before. A profile whose trigger is a click gives 0
+or 1, so no `trigger/click` path is bound: a path that one profile does not own makes the runtime
+reject that profile's whole list. The pointer-only fallback list gained the stick's x axis, because
+the scroll needs it.
+
+**Settings.** `PointerSettings` is the handle that `local_pointer_settings()` gives. It is an
+`Arc<Mutex>` of the mapping and a visibility flag, like `Haptics`. The frame loop reads it in each
+frame (`HeadsetInput::pointer_choice`), so an app changes the mapping while it runs, and the tests
+of two apps in one process do not share a global.
+
+**Beams.** A hand's beam exists only while some panel is in reach of that hand (`Reach::in_reach`:
+a panel that is not `Ride::Hidden` and does not ride that hand's own controller) and while the app
+lets the beams show. `RayLayers::layers` makes a layer for each `Some` beam, so a Subspace with no
+visible content submits none.
+
+**The default mapping.** The trigger is the primary button, the thumbstick click is the middle
+button, the first face button (A on the right hand, X on the left) is the secondary button, and the
+stick scrolls at 800 dp each second. The grip is left free: Meta's controller guidance gives it to
+grabbing, and an app that grabs an object with it would also right-click. The thumb is free while the
+fingers hold the controller and point. The mapping rests on these two reasons. No convention of
+the desktop apps for headsets is confirmed.
+
+**Scripted controllers.** `ScriptedController` (feature `scripted-hand`) writes the whole
+`Controller` of a hand after `Controllers::sample`, with the Touch Plus profile, so a hand's
+`pointer_aim` takes the controller path even when the runtime reports the hand interaction profile.
+Steps move the controller and its aim in straight lines, which makes a drag and a carry possible. A
+script for each hand plays at once (the scripted hand has a slot for each hand as well).
+
+**Tests.** `src/tests/two_pointer_tests.rs` runs a real composition in a headless window and the
+frame loop of the headset: two hands drag two lists, press one panel, carry a handle while the other
+presses, right click, scroll, remap the buttons, mix a hand with a controller, and hide the beams.
+`crates/cranpose-testing/tests/independent_pointer_test.rs` tests the shell's calls alone.
+`src/tests/scripted_controller_tests.rs` plays two scripted controllers through the pointer: a carry,
+a right click and a scroll at the same time.
+
+Not run: the demo's scripted controllers on a headset or in the Android XR emulator. The emulator's
+system image (`system-images;android-34;google-xr;arm64-v8a`) was not installed on the machine that
+ran the change, and the Quest was off adb. The beams' rule, the buttons of a real controller and the
+feel of two hands at once are untested on a device. The long press and the zoom gesture ignore a
+pointer that is not the primary one.
+
+### Hands as pointers
+
+The pointer of each hand (`pointer.rs`) takes an `Aim` for its side: a ray, a pose, a trigger value,
+the stick's lean and the other buttons. `pointer_aim.rs` chooses the `Aim` of a side in each frame, from that side's `Controller`
+and `HandState`:
+
+1. A controller whose aim the runtime tracks, and whose profile is not a hand profile, gives the
+   `Aim` with source `InputSource::Controller`.
+2. Otherwise, when the app declared `Use::hand_tracking()`, a hand whose `HandState` is `Tracking`
+   and carries a `HandAim` gives the `Aim` of that aim pose, with the pinch strength of the index
+   finger as the trigger and source `InputSource::Hands`. `XR_FB_hand_tracking_aim` fills it.
+   A hand that makes the system gesture or presses the menu gives none.
+3. Otherwise, when the side's profile is `ExtHand` or `MicrosoftHand`, the declaration is made and
+   the cameras track the hand (`Tracking`) with no `HandAim`, the controller's actions give the
+   `Aim`: the hand interaction profile binds the hand's `aim` pose and its pinch
+   (`aim_activate_ext/value`) to the same actions as a controller's. A runtime that tracks the
+   joints and lacks the FB aim extension reports the hand this way. A hand interaction profile
+   never counts as a controller in rule 1. It gives no aim while no hand is tracked: a Quest 3
+   reports the profile for both hands at the desk with a valid, active aim pose and a pinch value
+   near 0, so a pointer from it would show two rays from nowhere. The first build of this change
+   showed `Pointers L/R: hands / hands` there, with no hand in view, and the gate removed them.
+
+`Reach::update` in `reach.rs` remembers the source of its last aim. A different source in the next
+frame resets the side as a lost aim does: the press ends with a `Release`, a carry or a resize
+ends, and the trigger of the new source counts as held from before if it is down. A hand that
+appears with a closed pinch gets the same treatment, so a hand that the cameras lose and find, or
+that ends the system gesture with its fingers together, does not press by surprise. A controller
+that appears with its trigger down still presses, as before.
+
+The ray, the aim filter, the press rules, the handles and the beam are the controller's. The beam
+starts at the hand's aim pose. A hand has no thumbstick and no button besides the pinch, so a carried
+panel follows the aim pose and cannot be pushed or pulled, and the pinch is the trigger's pointer
+button alone. `Haptics` asks for a side that a hand points for never reach
+`xrApplyHapticFeedback`.
+
+`HeadsetInput::sample` writes the chosen source of each side into `XrFrame::left_pointer` and
+`right_pointer` before the app's frame effects run. The demo's pointer line reads them.
+
+On a Quest 3 at the desk with the right Touch Plus controller awake, the demo reports
+`Pointers L/R: none / controller`: the controller points, and the hand interaction profile of the
+left hand gives nothing. On a Quest 3 and in the Android XR emulator the runtime lists
+`XR_FB_hand_tracking_aim` and `XR_EXT_hand_interaction`. The emulator reports the `ExtHand` profile for both hands at rest.
+Neither runtime was shown a hand of its own. No hand is in the Quest's view at the desk. The
+emulator release in use (37.2.13 with system image revision 7) rejects the hand messages that its
+own window sends to the guest ("Received unexpected message type from simulated input client"), so
+its hand simulation does not run.
+
+The `scripted-hand` feature of `cranpose-xr` plays a hand in place of the cameras'. `script_hand`
+installs a `ScriptedHand`: an aim pose that points at a place in the room, and a `PinchCycle` of
+rest, closing, held and opening times for the index finger. `Trackers::sample` writes it into the
+frame's `HandState` of its side right after the trackers wrote the real hands, so the pointer's
+choice of input, the ray, the press and the button take it by the path of a tracked hand. The
+script stands for what a hand reads. What a real hand's pinch strength and aim pose do while the
+fingers close is untested. The feature is off by default, and the backend has no such code then.
+
+The selection rules and the pointer's behavior with hand states are covered by
+`src/tests/pointer_aim_tests.rs`, `src/tests/pointer_tests.rs` and `src/tests/scripted_hand_tests.rs`.
+
 ### The demo
 
 `apps/xr-demo` shows the tracking in its counter panel. The section lists each feature with its
@@ -730,6 +1195,13 @@ another panel out of the frame. The demo's volume takes two of them, one for the
 at the dot at its fingertip. The build script asks for hand tracking, which needs no prompt on a
 Quest. `XR_DEMO_TRACKING=none` asks for nothing, and `XR_DEMO_TRACKING=all` adds the body, the face
 and the eyes, which the system asks the user to allow.
+
+`XR_DEMO_SCRIPTED_HAND=right` (or `left`) builds a scripted hand that pinches the counter's button
+in a cycle of three seconds: two seconds at rest, 0.2 seconds closing, 0.6 seconds held and 0.2
+seconds opening. In the Android XR emulator the counter counted from 5 to 9 between two
+screenshots, with the beam running from the hand's aim pose to the button and the panel's line
+"Pointers L/R: none / hands". The panel's pointer line reads `XrFrame::pointer`, and the log's
+once-a-second line holds the pointers and the hands' aims.
 
 `XR_DEMO_VOLUME=through` builds a scene of a panel and a torus that pierces it, a meter ahead of
 the head where the demo started, and shows nothing else. A compositor that tests depth shows the
@@ -757,6 +1229,288 @@ cameras:
   second.
 
 The desk shows no hand joints, no aim and no fingertip dots: no hand was in the cameras' view.
+
+## Anchors and planes
+
+An anchor is a place in the room that the runtime holds still while it learns more of the room. A
+plane is a flat surface that the runtime found, such as a wall, the floor, the ceiling or a table.
+An app uses an anchor to keep content on a table or a wall, and to bring it back to the same place
+at its next start. The names follow Jetpack XR's `androidx.xr.arcore` package and its Compose
+package.
+
+| Jetpack XR | Cranpose |
+|---|---|
+| `Anchor.create(session, pose)` | `Anchors::create(pose)` |
+| `Plane.createAnchor(pose)` | `Plane::create_anchor(pose)` |
+| `Anchor.state`: `Anchor.State` with `pose` and `trackingState` | `Anchor::state()`: `AnchorState` with `pose` and `tracking_state` |
+| `Anchor.persist()`, which suspends and returns a `UUID` | `Anchor::persist()`, then `Anchor::persistence()` as an `AnchorPersistence`, and `Anchor::uuid()` |
+| `Anchor.getPersistedAnchorUuids(session)` | `Anchors::persisted_uuids()` |
+| `Anchor.load(session, uuid)` | `Anchors::load(uuid)` |
+| `Anchor.unpersist(session, uuid)` | `Anchors::unpersist(uuid)` |
+| `Anchor.detach()` | `Anchor::detach()` |
+| `AnchorResult`: `AnchorCreateSuccess`, `AnchorCreateResourcesExhausted`, `AnchorCreateTrackingUnavailable`, and exceptions | `AnchorResult`: `Success`, `ResourcesExhausted`, `TrackingUnavailable`, `Unavailable`, `InvalidUuid` |
+| `Plane.subscribe(session)` | `Planes::all()` |
+| `Plane.type`, `Plane.state` (`Plane.State`) | `Plane::plane_type()`, `Plane::state()` (`PlaneState`), `Plane::with_vertices`, `Plane::subsumed_by` |
+| `PlaneType`, `PlaneLabel` | `PlaneType`, `PlaneLabel` with the same values |
+| `FollowTarget.anchor(anchor, mode)` | `FollowTarget::Anchor(anchor, mode)` |
+| `MovePolicy.anchor(orientations, semantics, onMove)`, with `PlaneOrientation` and `PlaneSemantic` | `MovePolicy::anchor(orientations, semantics, on_move)`, with the same two types |
+
+Where Jetpack XR passes a `Session`, the app reads a composition local: `local_anchors()` gives
+`Anchors` and `local_planes()` gives `Planes`. Both are `None` outside a headset. Jetpack XR's
+SceneCore has the same idea as `AnchorPlacement.createForPlanes`, which a `MovableComponent` takes, and
+Compose XR has it as `MovePolicy.anchor`. Cranpose follows the Compose name. Jetpack XR reparents a panel to the plane after the snap. Cranpose keeps the panel in its
+subspace and gives the app the pose, which the app turns into an anchor. `SpatialMoveEvent` has one
+field that Jetpack XR does not have, `room_pose`, which is the pose in the app's room, where
+`Anchors::create` takes its pose. Jetpack XR converts between its spaces with `transformPoseTo`.
+
+### How an app asks
+
+An app declares `Use::anchors()` and `Use::plane_tracking()` in its build script, in the pattern of
+the tracking services. They are Jetpack XR's `Config.anchorPersistence` and `Config.planeTracking`.
+Until the app declares them, the backend enables no extension, makes no call in a frame, adds no
+permission and answers `AnchorResult::Unavailable`. The runtime's extension list decides the rest,
+as it does for tracking: `AnchorCapabilities` (`Anchors::capabilities()`) and
+`Planes::availability()` give a `TrackingAvailability` for each part.
+
+| Service | Meta Quest | Android XR |
+|---|---|---|
+| `Use::anchors()` | `XR_FB_spatial_entity`, `XR_FB_spatial_entity_storage` and `XR_FB_spatial_entity_query`. The manifest holds `USE_ANCHOR_API` as `com.oculus.permission` and `horizonos.permission`, a normal permission | `XR_ANDROID_trackables` and `XR_ANDROID_device_anchor_persistence`. Anchors need no permission. The storage needs `android.permission.SCENE_UNDERSTANDING_COARSE` |
+| `Use::plane_tracking()` | `XR_FB_scene` and the same three. The user allows `USE_SCENE` with the system's prompt | `XR_ANDROID_trackables`. The user allows `SCENE_UNDERSTANDING_COARSE` |
+
+The Horizon OS runtime lists its spatial entity extensions to an app only while the manifest holds
+`USE_ANCHOR_API`, and its scene extension needs the same permission. A Quest log of 16 November names
+the missing string for each hidden extension. A runtime that lists both families gets Android XR's.
+`XR_META_spatial_entity_persistence` is not used: the storage extension of `XR_FB_` keeps and loads
+anchors, and the query extension lists them.
+
+The prompt for `SCENE_UNDERSTANDING_COARSE` and `USE_SCENE` comes before the session, as the tracking
+prompts do, because the system takes an immersive app off the headset to show it. A feature that the
+user has not answered stays `AwaitingPermission`, and the backend looks at it once a second. A
+refusal gives `PermissionRefused`. The backend never starts a scene capture
+(`xrRequestSceneCaptureFB`), which takes over the headset. A room that the user has not set up gives
+no planes.
+
+### Where the state lives
+
+`Anchors`, `Planes`, `Anchor` and `Plane` are handles on one store that the composition makes. The
+backend writes the store in each frame and the app reads it, both on the thread of the composition. An
+`Anchor` holds a shared cell with its pose and tracking state, a `Plane` holds one with its state, and
+both end when the last handle drops, which ends the runtime's space, or when the app detaches the
+anchor. The store keeps one state that counts the changes a composition can observe: the tracking
+state and the persistence of an anchor, the list of persisted identifiers, and the planes that a
+frame adds, removes or relabels. A pose that the runtime refines is not such a change. A frame reads
+each anchor's space and each plane's pose with `xrLocateSpace` or the runtime's plane call, writes
+them into the cells and allocates nothing. A frame effect that wants the live pose reads
+`Anchor::state()`. A following subspace reads the same cell in `Space::track`. The lists of anchors
+and planes and the polygon of a plane allocate when the app creates an anchor or the runtime finds a
+plane, not in a frame.
+
+### Persistence
+
+`Anchor::persist()` sets the persistence to `Persisting` and the backend passes the ask to the runtime
+once. On Android XR, `xrPersistAnchorANDROID` returns the identifier at once, and
+`xrGetAnchorPersistStateANDROID` says when the runtime keeps it. On a Quest every step is a request
+that an event answers: the anchor first enables its storage component, then the runtime saves it into
+the app's local storage, and the save's event carries the identifier. `Persisted(uuid)` follows, and
+the list of identifiers is read again. `Anchors::load(uuid)` makes an anchor from storage. Android XR
+creates the anchor's space from the identifier. A Quest queries the storage by identifier, takes the
+space of the result and enables its location. Until the runtime places the anchor, its state is
+`Paused` and a following subspace hides its panels. The storage query of a Quest leaves out entities
+that have semantic labels, which are the room's scene. The backend lists the storage once the
+permission allows, so `persisted_uuids()` is empty for the first frames of a start.
+
+The room's origin is where the head was at each start, so the pose of one anchor in the room differs
+between two starts. The anchor stays at one place in the world. The demo logs the anchor's pose in the
+stage as well, which the headset's floor defines and a restart does not move.
+
+### Snapping to a plane
+
+`MovePolicy::anchor` makes `Space::carry` ask the store for a resting place at each step of a carry.
+For each plane that the two lists admit and the runtime tracks, the carry measures the distance from
+the content's center, moved by half its depth toward the plane, to the plane. The content snaps when
+that distance is at most 25 cm and its center lies over the plane or within 30 cm of its polygon's
+edge. The nearest plane wins. As in Jetpack XR's `AnchorPlacement`, the content's +Z axis points out
+of the plane, so a panel lies flat along it with its center on the plane. A volume rests with its
+back face on the plane. A wall holds the content upright and facing into the room, on the side where
+the user holds it. A floor, a table or a ceiling holds it with its top edge pointing away from where
+it faced, so a panel that faced the user reads from the user's side. The pose is applied while the
+user carries, so the content follows the controller again when the user moves it beyond the
+distance, and the last pose is the one that the end event reports. The math is `plane_snap.rs`.
+Jetpack XR's two entry points differ for an empty filter: SceneCore's `AnchorPlacement.createForPlanes`
+anchors nothing, and Compose XR's `MovePolicy.anchor` anchors to any plane. Cranpose follows Compose.
+
+The planes' own frame is Jetpack XR's: the +Y axis of `center_pose` is the normal, +X runs along the
+width and +Z along the depth. Android XR gives it so. Meta's scene entity has its rectangle in its
+X-Y plane and its normal along Z, so `plane_frame.rs` turns it by a quarter turn about X. A runtime's
+sign of the normal is a convention. The label corrects it for horizontal planes: a floor and a table
+face up and a ceiling faces down. Meta's labels that Jetpack XR does not name, such as a couch or a
+door frame, give `PlaneLabel::Unknown`.
+
+### The demo
+
+`XR_DEMO_ROOM` builds the demo's room panel, in `apps/xr-demo/src/room_panel.rs`. The build declares
+`Use::anchors()` and `Use::plane_tracking()` only for that variable, because the planes bring the
+user's permission prompt, and the default demo has none. `XR_DEMO_ROOM=with` adds the panel to the demo
+and `only` shows it alone. `script` shows it alone and places it with no user: a start that finds no
+kept anchor makes one at a set place, as if the user had dropped the panel there, and asks the runtime
+to keep it. A device that has no controller to carry the panel shows the persistence that way.
+
+The panel is movable with `MovePolicy::anchor`. When the user lets it go, the demo makes an anchor at
+`SpatialMoveEvent::room_pose`, asks the runtime to keep it and holds the panel to it with
+`FollowTarget::Anchor`. The anchor that held the panel before is unpersisted and detached, so the app
+keeps one. At the next start the demo loads the identifier that the runtime lists, and the panel
+stands there. The panel lists the anchor's state and the planes: label, direction, size and height.
+The demo logs the anchor's identifier and its pose in the room, in the stage and the head's pose
+when the runtime first tracks it.
+
+### Measured on the Android XR emulator
+
+The emulator is the system image android-34 `google-xr` revision 7. Its runtime lists both families,
+`XR_ANDROID_trackables` with `XR_ANDROID_device_anchor_persistence` and the `XR_EXT_spatial_*`
+extensions. The backend uses the first. The demo built with `XR_DEMO_ROOM=script` ran twice after
+`pm clear` and a grant of `SCENE_UNDERSTANDING_COARSE`, with the log of each start kept:
+
+- First start: the runtime read its storage within the first frames and kept 0 anchors. The demo made an
+  anchor at (0.5, -0.1, -1.2) in the room, and the runtime kept it 49 ms later under the identifier
+  `04f2281f-f84b-49a3-b65d-3b420397f3a2`. The anchor was tracked at that pose, which is (0.5, 1.5, -1.2) in
+  the stage.
+- Second start, in a new process: the storage listed that identifier, the demo loaded it with
+  `Anchors::load`, and the runtime tracked it at (0.5, -0.1, -1.2) in the room and (0.5, 1.5, -1.2) in
+  the stage. The panel stood where the first start left it. No anchor was made.
+- The runtime reported 12 planes in both starts: 8 walls, a floor of 8.6 by 7.8 m at a height of -1.59 m
+  and 3 tables at heights of -0.85, -0.99 and -1.11 m. The panel lists them with their labels.
+
+The emulator's head stays at the origin, so the room's origin is the same in both starts. The check
+shows that the identifier survives a restart and that the runtime places the loaded anchor at the stored
+pose. It does not show a room whose origin moved between two starts. A controller's carry of the panel,
+and so the snap to a plane with a real carry, was not run on the emulator: the snap is covered by the
+tests of `plane_snap.rs` and of `Space::carry`.
+
+### What is not measured
+
+No Meta Quest ran this code. The Quest was off adb while the work ran and then too low on charge. The
+Meta backend (`meta_anchors.rs`, `meta_planes.rs`, `meta_calls.rs`) is written from the extensions'
+specifications and checked by the compiler for Android, and its geometry and label handling have unit
+tests. These are open until a Quest runs it: the Horizon OS permission names that make the runtime list the
+extensions (taken from a Quest log of 16 November), the order of the events of a save and a query, the
+axes of a scene entity (`plane_frame.rs` assumes +Z is the normal and corrects the sign by the label),
+whether a query of the local storage returns the room's scene as well (the backend leaves out entities
+with semantic labels), and what the storage holds after the user clears the app's data.
+
+## Text entry
+
+A text field that takes focus asks the platform for its software keyboard, through
+`PlatformTextInputHandler` of `cranpose-ui` (`show_keyboard` on focus and on each tap on the
+field, `hide_keyboard` when focus leaves). Android and iOS install a handler that opens the
+system's keyboard. The headset backend installs one of two handlers on its shell.
+
+### The keyboard that Cranpose draws
+
+Its handler sets the state `open` of the keyboard. A composable that the backend adds after the
+app's content (as `VolumeScene` is) composes a `SpatialPanel` of keys while `open` is true. The
+panel's modifier marks it as standing below the panel of the focused field. The pose is no state of
+the panel's composition: the space derives it each time it reads the panels. It puts the keyboard
+24 dp below the field's panel, in the same plane, and takes the field panel's `Ride`. So a panel that
+the user carries, or that follows a controller, takes its keyboard along with no composition. The
+keyboard shows nowhere while no panel is known to hold the field.
+
+The frame loop runs three steps for the keyboard after it sent the pointers' events to the shell.
+It asks the shell for the focused field's bounds, and the space names the panel of content whose
+part of the atlas holds the bounds' center. Then it hands the keys that were typed to
+`AppShell::on_key_event`. A key's click runs inside the shell's own pointer dispatch, so a key
+cannot call the shell. It pushes the key down and the key up of a hardware keyboard into a queue
+instead. The text reaches the field through the path of a hardware keyboard: the key handlers of
+the app, the focus keys and then the field.
+
+A key is a `Button`. The integration tests press keys with a controller's ray and with a scripted
+hand, and the field keeps its focus through every press. The keys follow the US
+layout, so a symbol that a US keyboard reaches with shift carries shift and the key of its digit or
+punctuation. Backspace, enter and the hide key carry no text, because the field matches a key event
+with text before it matches the key.
+
+The keyboard is one more layer in a frame. `LayerLimit` already drops the panels that stand
+farthest from the head when a frame holds more layers than the runtime takes, and the keyboard
+stands near the head.
+
+### The system's keyboard on Android XR
+
+Android XR shows the Android input method over an immersive OpenXR app. The evidence comes from the
+Android XR emulator (system image android-34 `google-xr` revision 7, Gboard as the input method):
+
+- An activity that has no editor view cannot show it. `InputMethodManager` logs "Ignoring
+  showSoftInput() as view=DecorView ... is not served".
+- With the editor view of `cranpose/android/java` (`CranposeTextInput`), which the Android backend
+  of Cranpose uses on a phone, the input method shows: `dumpsys input_method` reports
+  `mInputShown=true` and `mWindowVisible=true`, and the keyboard is a panel in the compositor's
+  picture below the app's panels.
+- The panel takes the input focus. The session goes from `FOCUSED` to `VISIBLE`, so the app's
+  lifecycle is `Paused` and its pointer gets no aim. The back action hides the keyboard, and the
+  session returns to `FOCUSED`. The next tap on the field shows the keyboard again.
+- What the keyboard types arrives as input connection events. `adb shell input text hello` produced
+  five `commitText` events, and the field of the demo showed the text.
+
+So on a runtime with `XR_ANDROID_` extensions the backend installs `AndroidInputMethod` of `cranpose`
+on the shell: the handler of the Android backend, with the editor view and the event queue,
+without the window insets and without the placement of the editor view. The loop calls its `pump` in
+each frame, which hands the queue's events to the shell and the focused field's text to the editor
+view. The drawn keyboard never opens then. `use_keyboard(Keyboard::Drawn)` keeps the drawn keyboard.
+
+Not run: a real Android XR headset, and tapping the keys of the system keyboard with a hand or a
+controller (the emulator's hand simulation does not reach the guest, and `adb shell input text` types
+through the same input connection without the keys). Whether the Quest's runtime shows the Android
+input method over an immersive app is not run either. The Quest was not on adb for this change.
+
+### Meta's virtual keyboard
+
+`XR_META_virtual_keyboard` gives a Quest app the keyboard that the Meta system draws in its own
+apps, with its suggestions and its animation. The runtime owns the layout and the typing logic, and
+the app draws the keyboard. The app is not built for it yet. A Quest 3 runtime lists
+`XR_META_virtual_keyboard` (the extension list that an app logged on 16 November). It lists
+`XR_FB_render_model` only for an app whose manifest declares `com.oculus.feature.RENDER_MODEL`.
+
+What an app needs, from Meta's integration guide for the extension:
+
+1. The manifest declares `com.oculus.feature.VIRTUAL_KEYBOARD` (not required),
+   `com.oculus.feature.RENDER_MODEL` (required) and the permission `com.oculus.permission.RENDER_MODEL`.
+   The guide names Quest 2 and Quest Pro and Horizon OS v54 or later.
+2. The instance enables `XR_META_virtual_keyboard` and `XR_FB_render_model`. The system properties
+   (`XrSystemVirtualKeyboardPropertiesMETA`) say whether the runtime supports it.
+3. The app creates the keyboard (`xrCreateVirtualKeyboardMETA`) and its space
+   (`xrCreateVirtualKeyboardSpaceMETA`), and suggests a pose and a scale
+   (`xrSuggestVirtualKeyboardLocationMETA`). The runtime has the final say, so the app reads the pose
+   (`xrLocateSpace`) and the scale (`xrGetVirtualKeyboardScaleMETA`) back.
+4. The app loads the keyboard's model through `XR_FB_render_model`: the path
+   `/model_meta/keyboard/virtual`, with `XR_RENDER_MODEL_SUPPORTS_GLTF_2_0_SUBSET_2_BIT_FB`,
+   because the model has several meshes and transparent textures. `xrLoadRenderModelFB` returns a
+   binary glTF (`.glb`).
+5. The app needs a glTF 2.0 loader for what the model holds: meshes, UVs, normals, tangents, vertex
+   colors, materials, transparent textures, translation-rotation-scale and weight animations, and
+   morph targets (16 for each key). The animation channels carry an `additiveWeightIndex` extra,
+   and an index of -1 means every weight.
+6. The model's glyph textures have a custom URI,
+   `metaVirtualKeyboard://texture/{textureID}?w={width}&h={height}&fmt=RGBA32`. The loader needs a
+   handler that makes a writable texture for each URI and keeps it by its id. Each frame the app
+   asks for the dirty textures (`xrGetVirtualKeyboardDirtyTexturesMETA`) and writes their pixels
+   (`xrGetVirtualKeyboardTextureDataMETA`).
+7. Each frame the app applies the animation states (`xrGetVirtualKeyboardModelAnimationStatesMETA`:
+   an animation index and a fraction), marks the morphed nodes dirty and rebuilds their meshes once,
+   after the textures and all animations.
+8. The app sends the input of each controller ray or hand (`xrSendVirtualKeyboardInputMETA`): the
+   input source, its pose, whether it presses, and the interactor's root pose, which the runtime may
+   change to limit the touch. The app draws its input model at the pose that comes back.
+9. The app tells the runtime which text field has focus (`xrChangeVirtualKeyboardTextContextMETA`),
+   shows the model (`xrSetVirtualKeyboardModelVisibilityMETA`) and waits for the shown event
+   before it accepts input. The model's node named "collision" holds the geometry for the app's own
+   collision.
+10. The runtime sends the typing as events: `XrEventDataVirtualKeyboardCommitTextMETA`,
+    `XrEventDataVirtualKeyboardBackspaceMETA` (repeated while the key is held),
+    `XrEventDataVirtualKeyboardEnterMETA`, and the shown and hidden events. The app turns them
+    into the key events of `AppShell::on_key_event`, as the drawn keyboard does.
+
+Items 4 to 7 need a glTF loader and a renderer for skinned, morphed meshes with textures that
+change. The app's glTF models (`SpatialVolume` with a loader) bring both, so this keyboard can
+follow them. Its handler then replaces the drawn keyboard's on a runtime that lists the extension,
+and the keyboard of Cranpose stays for the others.
 
 ## Flat video
 
@@ -984,9 +1738,11 @@ shows none of the app's frames. The `xr` service and the backend take care of th
 The backend also keeps these rules of every runtime and store:
 
 - A session that is VISIBLE but not FOCUSED, such as under the system menu, gets no controller
-  input. The pointer sees both controllers lost, which ends a press and drops a carried panel.
-  The panels still draw.
-- A session that is not VISIBLE gets frames with no layers and no drawing.
+  input. The pointer gets no aim from any source, a controller or a hand. It sees both controllers
+  lost, which ends a press and drops a carried panel. No ray shows. The panels and the volumes
+  still draw, and the app's lifecycle is `Paused`.
+- A session that is not VISIBLE gets frames with no layers and no drawing, and the app's
+  lifecycle is `Stopped`.
 - An app closes itself with `cranpose_services::request_exit()`, as in a flat app. On each turn the
   loop reads `exit_requested()`. While the session runs, it calls `xrRequestExitSession` once. The
   runtime moves the session to STOPPING, the backend ends it, and the loop leaves when the session
@@ -1008,6 +1764,330 @@ The backend also keeps these rules of every runtime and store:
 - The loop takes the activity's key and touch events from the queue and leaves them unhandled.
   An event left in the queue makes Android show an "app is not responding" dialog five seconds
   later.
+
+## Store readiness
+
+The Meta Horizon Store checks a store app for its pause and focus behavior and for its entitlement.
+
+### Focus and pause
+
+Meta's Virtual Reality Checks (VRCs) for Quest apps give an immersive app three rules about focus
+and pause.
+
+- VRC.Quest.Input.4: An app that has lost input focus keeps rendering. It hides the hands and the
+  controllers of the user or shows them at rest. It ignores their input. The app loses input focus
+  when the user opens the Universal Menu or when a windowed app takes the focus. Audio input is
+  not restricted. When the focus returns, the app shows the hands and the controllers again.
+  It takes input again.
+- VRC.Quest.Functional.2: A single-player app pauses its interactive elements when Horizon OS asks
+  it to. Non-interactive elements such as ambient sound may go on. A multiplayer app is exempt.
+  The system asks when the user opens an immersive system view such as passthrough or the
+  boundary setup. It asks when the user turns the display off with the power button. It asks when
+  Auto Sleep ends after the user took the headset off. A Quest 3S has no proximity sensor, so it
+  has no such trigger. The rule lets an app pause on the loss of input focus instead.
+- Taking the headset off: Meta calls the app's reaction optional, such as a pause menu or marking
+  the user inactive. The system pauses the app when Auto Sleep ends.
+
+The rules conflict for the state in which the app has no input focus and the system has not
+paused it. Input.4 wants frames. Functional.2 wants the interactive elements to stop and lets the
+app choose how. The backend follows Input.4 for the picture. It gives the app the state for the
+rest. An app without input focus gets no input, shows no ray and keeps its layers on display. It
+keeps composing and drawing. The app stops what it considers interactive when its lifecycle
+leaves `Resumed`.
+
+| OpenXR session state | Backend status | Lifecycle (`local_lifecycle_state()`) | Layers | Composition and drawing | Input |
+|---|---|---|---|---|---|
+| FOCUSED | `Focused` | `Resumed` | the app's | yes | controllers and hands |
+| VISIBLE | `Visible` | `Paused` | the app's | yes | none, no ray |
+| READY, SYNCHRONIZED | `Hidden` | `Created` until the runtime first shows the app, then `Stopped` | none | none | none |
+| STOPPING, IDLE | `Idle` | `Stopped` | no frames | none | none |
+| EXITING, LOSS_PENDING, activity destroyed | `Exit` | `Destroyed` | no frames | none | none |
+
+The lifecycle maps as Compose maps a window. It is `Resumed` while the window has focus, `Paused`
+while it shows without focus and `Stopped` while it does not show. The backend publishes the
+lifecycle on each change of the status, before the frame that the change affects. A new run in
+the same process starts at `Created` again. The listeners of the lifecycle that the crates of an
+XR app hold act on it as follows:
+
+- `collectAsStateWithLifecycle` and `repeat_on_lifecycle` collect from `Started` on. They go on
+  under `Paused` and stop under `Stopped`.
+- A prompt of `device_auth` shows when the app is `Resumed`. A prompt that waits during a pause
+  shows when the focus returns.
+- The system languages refresh on `Resumed`.
+- The media service stops its playback on `Destroyed`.
+- `Paused` runs the durable saves that the app registered, as an Android activity's pause does.
+  The frame loop waits for them for up to `durable_save_deadline()`, which is 2 s unless the host
+  says otherwise. An app with no durable save waits for nothing.
+
+Jetpack XR Compose has no composition local for the session's state. An XR app reads the
+lifecycle of its activity, so `local_lifecycle_state()`, `LifecycleEffect` and `observe_lifecycle`
+of Cranpose serve it. `XrFrame::focused` gives the same answer in a frame effect.
+
+Each change of the status logs one line with the frames that the app ran in the status that it
+left:
+
+```
+cranpose xr: Focused ran 943 frames, now Visible, lifecycle Paused
+```
+
+### Focus and pause on a Quest 3
+
+The Quest 3 (runtime "Oculus" 210.137.0) gave the sequences below. `scripts/dev/xr_focus_check.sh`
+runs the first and the third through adb. It saves the compositor's picture of each step.
+
+| Trigger | Activity | Session states in order | Lifecycle |
+|---|---|---|---|
+| The Files panel opens over the app (`systemux://file-manager`) | none | VISIBLE | `Paused` |
+| Another immersive app starts. The app starts again 10 s later | `onPause`, `onStop`, then `onStart`, `onResume` | VISIBLE, SYNCHRONIZED, STOPPING, IDLE (no frame for 10.6 s), READY, SYNCHRONIZED, VISIBLE, FOCUSED | `Paused`, `Stopped`, then `Resumed` |
+| The app starts again while the Files panel is open | `onPause`, `onResume` within 10 ms | FOCUSED only, or SYNCHRONIZED, STOPPING, IDLE, READY, SYNCHRONIZED, VISIBLE, FOCUSED in one batch of events (both happened) | `Resumed`, or `Stopped` then `Resumed` |
+| The power button (`adb shell input keyevent POWER`) | `onPause`, `onStop` | VISIBLE, SYNCHRONIZED, STOPPING, IDLE within 100 ms of `onPause` | `Paused`, `Stopped`: the loop ran no frame while the display was off |
+| Home | `onPause`, `onStop`, destroy | VISIBLE, SYNCHRONIZED, STOPPING, IDLE | `Stopped`, then `Destroyed`: the loop ends. The next start in the same process begins at `Created` and reaches `Resumed` |
+
+Under the Files panel the app ran about 115 frames each second. The picture of both eyes kept the
+panels, the video surface and the 3D torus. No ray showed. The readout of the demo said
+`Lifecycle Paused`. After the app came to the front it said `Lifecycle Resumed`. The ray was back.
+The demo's decoder showed 30 frames each second in FOCUSED, under the Files panel and after the
+return. In IDLE the frame effect that logs the count did not run. The log has no line for the
+10.6 s. After the 10.6 s in IDLE the same process resumed with its composition: the log has no
+second `ready` line.
+
+Not run on a device:
+
+- The Universal Menu that the controller's system button opens. Its passthrough entry. A person
+  must press them.
+- The simulated removal of the headset and the Auto Sleep that follows.
+
+A runtime that sends `VISIBLE` for these cases gets the treatment of the Files panel. A runtime that
+sends `STOPPING` gets the treatment of the second row.
+
+### The entitlement check
+
+The Meta Horizon Store needs a store app to check at its start that the viewer owns the app, and
+to quit when the check fails. Meta's Platform SDK does the check. It is a Java library with two
+native libraries (`libovrplatformloader.so`, `libpsdk_jni.so`). All of it comes in one Maven
+Central artifact (`com.meta.horizon.platform.ovr:android-platform-sdk`). A pure Rust app
+reaches it through a small Java class, as the billing service does.
+
+**The license.** The SDK is under the Meta Platform Technologies SDK License Agreement
+(<https://developers.meta.com/vr/licenses/oculussdk/>). The agreement says that downloading or
+using the SDK is acceptance. It binds the person or the entity that does so. It bars
+sublicensing and any use that puts the SDK under an open-source license. So the repository holds
+none of the SDK. It names the Maven coordinate behind three switches that are off by default, and
+whoever turns them on accepts the agreement. The docs of the feature and of the Gradle service say
+so.
+
+**The parts.**
+
+- The cargo feature `meta-entitlement` of `cranpose-xr` (and of `cranpose`) compiles the check in.
+  Without it no code calls the Java class. `local_entitlement_check()` is `None` then.
+- The Gradle service `meta-entitlement` adds `crates/cranpose/android/java-meta-entitlement`
+  (`CranposeMetaEntitlement`) and the dependency on the SDK. An app that does not list it fetches
+  and packs nothing of the SDK: no `com.meta.horizon.platform` class and no `libovrplatformloader.so`.
+- The app id comes from the build: `cranposeMetaAppId` (or `cranpose { metaAppId }`) fills the
+  `com.meta.horizon.platform.ovr.OCULUS_APP_ID` entry of the merged manifest. The build fails when
+  the service is listed and the id is missing or not all digits. The Java class reads the entry as
+  an object, because the manifest compiler stores an all-digit value as a number.
+
+**The flow.** `Host::begin_entitlement` calls `CranposeMetaEntitlement.cranposeMetaEntitlementBegin`
+before the backend connects to the runtime, because Meta asks for the check within 10 seconds of
+the launch and the connection can wait for a permission prompt. The class calls
+`Core.asyncInitialize(appId, activity)` and, when that succeeds, `Entitlements.getIsViewerEntitled()`.
+The SDK answers on the Java main thread. The answer sits in a volatile field. The app's handle
+(`EntitlementCheck`) lives in the composition, as the state of any composable does. The loop
+reads it. The loop asks for the answer every 100 ms while the check runs (`EntitlementWatch`) and
+stops asking at the outcome, so a frame pays for no JNI call. An exception, an initialization that fails, an error answer, a missing
+Gradle service and 30 seconds with no answer all end the check as `NotEntitled`, because Meta's
+guide counts each as a failed check and an app must not run unchecked when the platform is silent.
+
+**A quit app keeps its process.** Android caches the process after the activity finishes. The
+SDK's message pump goes on logging at verbose level. The Java class keeps a running check and an
+entitled answer for the process. A failed check starts again with the next run of the loop in the
+same process, so a failure that came from a busy platform does not lock an owner out until Android
+ends the process. Each run on the Quest below started after a force-stop, so this restart is not run
+on a device.
+
+**What the app does next.** The default is `OnNotEntitled::Quit`: the backend logs the result and
+calls `request_exit`. The loop that already closes an app ends the session and finishes the
+activity. An app picks `OnNotEntitled::Continue` through `EntitlementCheck::set_on_not_entitled`
+in its first composition and reads `EntitlementCheck::entitlement` to limit itself. Jetpack XR has
+no entitlement API, so the names are this crate's.
+
+**Measured on a Quest 3** (runtime 210.137.0), with the demo (`just android-xr-entitlement <id>`)
+installed through adb and a placeholder app id (`1234567890123456`). The placeholder names no
+store app. An adb install is not a store install, so the check must fail. It does. The
+Platform SDK says why: the user does not have the app in the library.
+
+| Build | Log of the app | What the app did |
+|---|---|---|
+| Default policy | `Meta entitlement: the check starts for app 1234567890123456`, 0.64 s later `Meta entitlement: the viewer is not entitled: code 8, http -1, user does not have app in library`, then `cranpose xr: entitlement check: NotEntitled (...); the app quits` and `cranpose xr: ends in Exit, lifecycle Destroyed` | The loop logged the result 0.3 s after the SDK answered, because it asks every 100 ms and waits up to 100 ms per turn before the session shows. The session ended 54 ms later and the activity finished. The Quest showed the app that was open before. The process stayed as a cached process |
+| `XR_DEMO_ENTITLEMENT=continue` (the app picks `OnNotEntitled::Continue`) | The same lines, ending in `NotEntitled (...); the app goes on` | The app ran on. Its readout showed `Entitlement NotEntitled` and `Lifecycle Resumed` |
+| The feature on and the Gradle service missing | `ClassNotFoundException` for `dev.cranpose.android.CranposeMetaEntitlement`, `the Meta entitlement check cannot start; list the meta-entitlement service in the Gradle build`, then `entitlement check: NotEntitled (the build carries no entitlement service); the app quits` | The app quit at once: a build never runs unchecked |
+| The feature off | No line about the check | The APK holds no `com.meta.horizon.platform` class, no `CranposeMetaEntitlement` and neither `libovrplatformloader.so` nor `libpsdk_jni.so`. The build with the service has all of them |
+
+`scripts/dev/xr_entitlement_check.sh` runs a build through adb and prints these lines.
+
+Not run on a device: a store install that the check finds entitled. It needs an app in the Meta
+Horizon store, a user who owns it and a real app id. The success path has tests of the decision
+logic and of the numbers that Java gives. It has no run across JNI.
+
+## Spatial audio
+
+A sound source stands at a pose in a `Subspace`, or at a panel or a volume. In each frame the sound
+reaches each ear with the level and the delay that the place of the source relative to the head gives.
+The model is Cranpose's own panner in the audio mixer. Every backend of Cranpose's audio engine runs
+the mixer, so the model needs no help from the runtime.
+
+### The choice
+
+Three ways to place a sound in a headset exist. This crate takes the first.
+
+| Way | What it gives | Why this crate does not take it |
+|---|---|---|
+| Cranpose's own panner in `cranpose-audio`'s mixer | A distance gain, a level and a delay for each ear and a head shadow. They come from the pose of the source and the pose of the head | |
+| `android.media.Spatializer` (API 32) | Queries about the device: `isAvailable`, `isEnabled`, `getImmersiveAudioLevel`, `canBeSpatialized` and `isHeadTrackerAvailable` | It renders the channels of a stream as virtual speakers around the listener. It has no call that gives a source a position or a distance. A sound at a pose cannot use it |
+| Jetpack XR's `SpatialSoundPool.play(session, soundPool, soundID, params, entity, ...)` | A point source of the system that follows an `Entity` | It takes a SceneCore `Session` and an `Entity`. Cranpose draws through OpenXR and holds neither |
+
+Meta's XR Audio SDK is a licensed download, so this crate does not use it. A backend for Android XR could
+hand the sources to SceneCore. This crate has no such backend.
+
+### The API
+
+The names follow Jetpack XR where it has one:
+
+| Cranpose | Jetpack XR | Difference |
+|---|---|---|
+| `PointSourceParams` | `PointSourceParams` | It has `distance_attenuation` only. Jetpack XR adds `directivity` and `spread`. The panner has a point that sounds the same in every direction |
+| `DistanceAttenuation` (`Auto`, `None`, `Linear { .. }`, `Natural { .. }`) | `DistanceAttenuation` (`Auto`, `None`, `Linear`, `Natural`, `Custom`) | It has no `Custom` curve. A `min_distance` below 0.1 m counts as 0.1 m. Jetpack XR throws for it |
+| `PointSource { sound, params, playback, looping }` | The arguments of `SpatialSoundPool.play`: `soundID`, `params`, `volume`, `priority`, `loop`, `rate` | `playback` is Cranpose's `PlaybackParams` with the volume, the rate and the bus. It has no priority. `looping` is the `loop` of -1 in Jetpack XR. A count of loops does not exist |
+| `SpatialPointSource(modifier, source)` | `SpatialSoundPool.play(.., entity)` at an `Entity` | It is a composable. The sound plays while the composable is in the composition. Jetpack XR has no composable for it |
+| `SubspaceModifier::point_source(source)` | The `entity` argument of `play` | The sound comes from the own pose of the panel or the volume. A carry and a following subspace move that pose |
+| `SpatialCapabilities::is_spatial_audio_enabled()` | `SpatialCapabilities.isSpatialAudioEnabled` | It is on in a headset when the audio player of the app has a spatial scene. Cranpose's engine has one |
+| `SpatialSoundPool.getSpatialSourceType`, `SoundFieldAttributes`, `SpatialMediaPlayer`, `SpatialAudioTrack` | | They do not exist here. Cranpose has no ambisonic sound field and no player other than its mixer |
+
+```rust,ignore
+use cranpose::{PlaybackParams, default_audio};
+use cranpose_xr::{PointSource, SpatialPointSource, SpatialVolume, Subspace, SubspaceModifier};
+
+#[composable]
+fn Scene() {
+    // The app installed Cranpose's audio engine: `cranpose::install_audio()`, or the `audio`
+    // feature on Android
+    let hum = remember(|| default_audio().load(include_bytes!("hum.wav")).ok()).with(|id| *id);
+    Subspace(move || {
+        // A sound at a pose, 80 cm to the right of where the subspace starts
+        if let Some(sound) = hum {
+            SpatialPointSource(
+                SubspaceModifier::new().offset(800.0, 0.0, 0.0),
+                PointSource::new(sound).looping(),
+            );
+        }
+        // A sound at a volume. It moves when a controller's ray carries the volume
+        SpatialVolume(
+            SubspaceModifier::new()
+                .movable()
+                .point_source(PointSource::new(hum.unwrap_or_default()).looping()
+                    .playback(PlaybackParams::new().volume(0.6))),
+            |_| { /* the 3D content */ },
+        );
+    });
+}
+```
+
+A source plays while it is in the composition. A source that does not loop plays once, when it enters
+the composition. A source starts a new voice when its `PointSource` value changes. Outside a headset
+the composables play nothing. `is_spatial_audio_enabled()` is off there.
+
+### The model
+
+The mixer takes the place of the source in the axes of the head: x to the right, y up and z behind.
+The model keeps a first-order filter for each ear and nothing else. Each part is a plain formula:
+
+- **Distance.** The `DistanceAttenuation` of the source gives one gain for both ears. `Auto` is
+  `Natural` from 1 m. The gain is 1 up to a meter. Beyond a meter it is `1 / distance`, which is 6 dB
+  for each doubling.
+- **Level.** `sideways` is the x of the unit vector to the source. It is the sine of the angle between
+  the source and the forward axis of the head. The ear that is farther from the source is quieter by
+  `6 dB * |sideways|`. The other ear keeps the gain. The loudspeakers of a headset sit at the ears and
+  need this cue.
+- **Delay.** Woodworth's formula for a spherical head of 8.75 cm radius gives the delay. The far ear
+  hears the sound `radius / speed * (asin(sideways) + sideways)` later. That is 656 microseconds for a
+  source at the side. Each ear reads the clip at its own position, so the delay costs a second read and
+  no delay line.
+- **Head shadow.** The filter of Brown and Duda (1998) is `(1 + alpha s T) / (1 + s T)` with
+  `T = radius / (2 * speed)`. The bilinear transform makes it digital. The `alpha` of an ear is 2 for a
+  source on the axis of that ear. It falls to 0.1 for a source 150 degrees from that axis. The high
+  frequencies of an ear rise by up to 6 dB and fall by up to 20 dB with it. The shelf starts near
+  1.2 kHz. The gain at zero frequency is 1.
+
+The model has no elevation cue. A source above the head sounds like one below it. A source ahead sounds
+like one behind. The model has no Doppler shift, no reverb and no occlusion. A stereo clip plays as the
+mean of its channels, because a point source has one signal. A voice that plays from an emitter ignores
+`PlaybackParams::pan`.
+
+### The audio thread
+
+The callback allocates nothing and takes no lock. The frame loop hands three kinds of state to the audio
+thread through `cranpose_services::SpatialScene`. The audio engine makes the scene. The app reaches it
+through `AudioPlayer::spatial_scene()`.
+
+- **The pose of the head.** The loop writes it into a cell of atomic words in each frame. The callback
+  reads the cell once for each render call. A write that overlaps the read makes the read fail. The
+  callback then keeps the pose that it read before. A write takes no lock and never waits for a reader.
+- **The emitters.** The `Emitter` of a source is a slot in a fixed array of 32 in the scene. Its place
+  and its distance curve sit in a cell as well. Making an emitter claims a slot with a compare and swap.
+  Dropping the emitter frees the slot. A voice names its emitter with the slot and a generation. A voice
+  stops at the next render call when its emitter ended or when another emitter took its slot.
+- **The pause.** One atomic flag.
+
+A pose does not go through the command queue of the engine. That queue serves rare events. The engine
+takes locks and asks the output device whether it runs when it sends a command. A command in each frame
+would also fill the queue while the stream is paused. The voice itself starts with one command, when the
+source enters the composition.
+
+Across one render call the gain, the delay and the filter coefficients of each ear move in a straight
+line from the old values to the values of the new pose. A head that turns between two frames does not
+click. A voice that plays from no emitter runs the code that it ran before this feature. Its output has
+the same bytes.
+
+### The frame loop
+
+`SoundStage` in `src/sound_stage.rs` runs in each frame, after the moves of the controllers and the
+following subspaces:
+
+1. It sets the listener to the pose of the head. The listener stays where it was while the runtime does
+   not track the head.
+2. It reads the sources from the `Space` into reused storage. The pose of a source is the live pose of
+   its panel or volume. A carry moves the sound without a composition. A source in a following subspace
+   follows the head or the controller.
+3. It makes an emitter and a voice for each new source. It ends the voices of a source that left or
+   changed. It writes the place of each emitter.
+
+An app that installed no audio engine has the no-op player, which has no spatial scene. The stage is then
+absent, the capability is off and the composables play nothing.
+
+### Pause
+
+The stage tells the scene that the app is paused in every lifecycle state except `Resumed`. Those states
+are `Created`, `Started`, `Paused`, `Stopped` and `Destroyed`. The runner sets the flag when it
+dispatches a change of the lifecycle, as the app sees it in "Focus and pause". A runtime that shows none
+of the app silences the sources without a composition. A paused voice fades out in one render call and
+then stands still. The sound goes on from where it stopped. A paused voice keeps the output stream open.
+Sound that does not play from an emitter is the app's to pause with `local_lifecycle_state()`.
+
+### The tap
+
+The `audio-tap` feature of `cranpose-xr` turns on a tap on the mixed output. The mixer sums the squares
+of the left and the right samples that it writes. For every second of output it publishes the root mean
+square of each side into cells. The frame loop reads the cells. The callback does not log. The loop logs
+one line for each second:
+
+```
+cranpose xr: audio tap, second 7: left 0.3711 right 0.1862 (rms), paused false, the source is at x -0.50 y +0.00 z -0.00 m of the head
+```
+
+The line holds the levels of the second that just ended. It holds the place of the source at the time of
+the line. Without the feature the tap is off. The mixer then reads one flag in each render call for the
+tap. `scripts/dev/xr_audio_check.sh` runs the check on a Quest.
 
 ## Headsets
 
@@ -1049,9 +2129,9 @@ Quest lists no `android.hardware.vr.headtracking` among its system features.
 | 1 | `cranpose-xr` with an OpenXR session, one `SpatialPanel` on a quad layer and a controller ray that presses its button | an APK built from this repository runs on a Quest 3, with no streaming library in its dependencies |
 | 2 | `SpatialCurvedRow` on cylinder layers | a curved panel shows text as sharp as a flat one |
 | 3 | `SpatialExternalSurface` | a hardware decoder writes into a panel with no copy |
-| 4 | 3D content, `movable`, `resizable`, `Orbiter`, passthrough | a 3D scene, handles and the room around the panels |
+| 4 | 3D content, glTF models, `movable`, `resizable`, `Orbiter`, passthrough | a 3D scene, a glTF model, handles and the room around the panels |
 | 5 | cranvr's Quest client on `cranpose-xr` | its desktop, console and overlay use the API |
-| 6 | Store readiness: focus and pause, the entitlement check behind a feature, other runtimes | an app passes the Meta store's checks |
+| 6 | Store readiness: focus and pause (the loss of input focus and the power button are shown on a Quest 3; the passthrough entry and the headset's removal are not run), the entitlement check behind a feature (the failing check and its quit are shown on a Quest 3; a passing check needs a store app), other runtimes | an app passes the Meta store's checks |
 
 The cranvr client still uses a streaming library for games. Its own protocol replaces it after
 step 5, outside this repository.

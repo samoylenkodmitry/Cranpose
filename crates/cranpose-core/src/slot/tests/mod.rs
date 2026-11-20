@@ -492,7 +492,8 @@ fn shuffle<T>(values: &mut [T], seed: &mut u64) {
         *seed ^= *seed << 13;
         *seed ^= *seed >> 7;
         *seed ^= *seed << 17;
-        let swap_with = (*seed as usize) % (index + 1);
+        let span = u64::try_from(index + 1).expect("slice index fits in u64");
+        let swap_with = usize::try_from(*seed % span).expect("modulo span fits in usize");
         values.swap(index, swap_with);
     }
 }

@@ -1,6 +1,8 @@
 //! The size, place and turn of a spatial composable.
 
-use crate::{MovePolicy, Pose, ResizeLimits, ResizePolicy, pose::turn_degrees};
+use crate::{
+    MovePolicy, PointSource, Pose, ResizeLimits, ResizePolicy, dock::Dock, pose::turn_degrees,
+};
 
 /// Meters in one dp. In a subspace one dp is a millimeter, so a panel of 800 by 500 dp is 80 by
 /// 50 centimeters.
@@ -30,6 +32,8 @@ pub struct SubspaceModifier {
     orientation: [f32; 4],
     move_policy: Option<MovePolicy>,
     resize: Option<(ResizeLimits, ResizePolicy)>,
+    point_source: Option<PointSource>,
+    dock: Dock,
 }
 
 impl Default for SubspaceModifier {
@@ -48,6 +52,8 @@ impl SubspaceModifier {
             orientation: [0.0, 0.0, 0.0, 1.0],
             move_policy: None,
             resize: None,
+            point_source: None,
+            dock: Dock::Free,
         }
     }
 
@@ -146,6 +152,38 @@ impl SubspaceModifier {
             .map(|(limits, policy)| (*limits, policy))
     }
 
+    /// Makes the content a source of `source`. The sound comes from the pose of the content, which
+    /// is the center of a panel or a volume. It follows the content when the user carries it. A
+    /// sound that stands at no content is a [`SpatialPointSource`](crate::SpatialPointSource).
+    ///
+    /// Jetpack XR plays a sound at an entity. `SpatialSoundPool.play` takes the entity that the
+    /// sound comes from. Jetpack XR has no modifier for it.
+    pub const fn point_source(mut self, source: PointSource) -> Self {
+        self.point_source = Some(source);
+        self
+    }
+
+    // The sound that the content is a source of, if the modifier made it one.
+    pub(crate) const fn attached_point_source(&self) -> Option<PointSource> {
+        self.point_source
+    }
+
+    #[cfg_attr(
+        not(any(test, headset)),
+        expect(dead_code, reason = "the keyboard of a headset calls it")
+    )]
+    // Makes the content stand below the panel of the focused text field, as the keyboard does. The
+    // modifier's offset and turn do not place it.
+    pub(crate) const fn below_field(mut self) -> Self {
+        self.dock = Dock::BelowField;
+        self
+    }
+
+    // Where the content stands in relation to the panel of the focused text field.
+    pub(crate) const fn dock(&self) -> Dock {
+        self.dock
+    }
+
     /// The size in dp, with `fallback` for what the modifier leaves out.
     pub fn size_or(&self, fallback: [f32; 2]) -> [f32; 2] {
         [
@@ -158,6 +196,13 @@ impl SubspaceModifier {
     pub fn size_3d_or(&self, fallback: [f32; 3]) -> [f32; 3] {
         let [width, height] = self.size_or([fallback[0], fallback[1]]);
         [width, height, self.depth.unwrap_or(fallback[2])]
+    }
+
+    // The width, height and depth that the modifier sets, in dp, and `None` for a side it leaves
+    // out.
+    #[cfg(feature = "gltf")]
+    pub(crate) fn size_limits(&self) -> [Option<f32>; 3] {
+        [self.size[0], self.size[1], self.depth]
     }
 
     /// The pose this modifier gives in its parent's frame, in meters.

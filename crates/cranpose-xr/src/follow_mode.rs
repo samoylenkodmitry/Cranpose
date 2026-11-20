@@ -1,6 +1,6 @@
 //! What a following subspace follows, and how.
 
-use crate::Hand;
+use crate::{Anchor, Hand};
 
 /// How content follows its target. Jetpack XR's `FollowMode`.
 ///
@@ -26,9 +26,7 @@ pub enum FollowMode {
 }
 
 /// What a [`FollowingSubspace`](crate::FollowingSubspace) follows. Jetpack XR's `FollowTarget`.
-///
-/// Jetpack XR's `FollowTarget.anchor` is not available here.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FollowTarget {
     /// The user's view, which the head's pose gives. The content is head-locked as `mode` says.
@@ -54,4 +52,15 @@ pub enum FollowTarget {
     /// the left ray passes through a ball above the left controller. The other hand's ray hits
     /// and presses the ball as it does any panel.
     Controller(Hand, FollowMode),
+    /// An anchor, as `mode` says. The content stands in the place that the runtime holds still
+    /// for the anchor, so it stays on a table or a wall while the runtime learns more of the room.
+    /// Jetpack XR's `FollowTarget.anchor`.
+    ///
+    /// The subspace's origin is the anchor's pose with all six degrees of freedom, so an anchor on
+    /// a wall holds content that lies against it. The view and the controller give only a place and
+    /// a heading. Until the runtime places the anchor, the subspace's panels do not show and take
+    /// no hits: an anchor that the app created has its place at once, and one that it loaded from
+    /// storage waits for the runtime to recognize the room. An anchor that is detached or lost
+    /// leaves the content where it was.
+    Anchor(Anchor, FollowMode),
 }

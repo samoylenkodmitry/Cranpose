@@ -28,6 +28,11 @@ pub(crate) struct VolumePass {
 }
 
 impl VolumePass {
+    // The scene's window root, once a draw found it.
+    pub(crate) fn root(&self) -> Option<NodeId> {
+        self.root
+    }
+
     // Draws the scene as `eye` sees it into `image`. Returns whether the scene drew: it has no
     // window root while the app has no volume, and a pass that finds none draws nothing.
     pub(crate) fn draw(

@@ -68,6 +68,8 @@ pub(crate) mod heart_rate;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod host;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+pub(crate) mod host_text_input;
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod host_window_requests;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod input;
@@ -79,6 +81,21 @@ pub(crate) mod keyboard;
 pub(crate) mod launch_args;
 #[cfg(all(feature = "media-backend", target_os = "android"))]
 pub(crate) mod media;
+#[cfg(all(
+    feature = "meta-entitlement",
+    feature = "renderer-wgpu",
+    target_os = "android"
+))]
+pub(crate) mod meta_entitlement;
+#[cfg(any(
+    test,
+    all(
+        feature = "meta-entitlement",
+        feature = "renderer-wgpu",
+        target_os = "android"
+    )
+))]
+pub(crate) mod meta_entitlement_wire;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod microphone;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]

@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use cranpose_services::{
-    AudioBus, AudioClip, AudioError, AudioPlayer, PlaybackParams, SoundId, VoiceId,
+    AudioBus, AudioClip, AudioError, AudioPlayer, PlaybackParams, SoundId, SpatialScene, VoiceId,
 };
 use parking_lot::Mutex;
 
@@ -49,6 +49,9 @@ pub struct AudioEngine {
     device_unavailable: Mutex<bool>,
     suspended: Mutex<bool>,
     streaming: Arc<AtomicBool>,
+    // The listener, the emitters and the pause, which the frame loop writes and the mixer reads
+    // without a lock. They outlive the mixer, so a stream that reopens keeps them.
+    scene: Arc<SpatialScene>,
     parked: Mutex<bool>,
     leaked_clips: Arc<AtomicU32>,
     underruns: Arc<AtomicU32>,
@@ -68,6 +71,7 @@ impl AudioEngine {
         let leaked_clips = Arc::new(AtomicU32::new(0));
         let underruns = Arc::new(AtomicU32::new(0));
         let streaming = Arc::new(AtomicBool::new(false));
+        let scene = Arc::new(SpatialScene::new());
         Self {
             operation: Mutex::new(()),
             commands: Mutex::new(command_tx),
@@ -78,6 +82,7 @@ impl AudioEngine {
                 leaked_clips: Arc::clone(&leaked_clips),
                 underruns: Arc::clone(&underruns),
                 streaming: Arc::clone(&streaming),
+                scene: Arc::clone(&scene),
             })),
             loaded: Mutex::new(vec![None; MAX_CLIPS]),
             sink: Mutex::new(None),
@@ -91,6 +96,7 @@ impl AudioEngine {
             device_unavailable: Mutex::new(false),
             suspended: Mutex::new(false),
             streaming,
+            scene,
             parked: Mutex::new(false),
             leaked_clips,
             underruns,
@@ -147,6 +153,7 @@ impl AudioEngine {
             leaked_clips: Arc::clone(&self.leaked_clips),
             underruns: Arc::clone(&self.underruns),
             streaming: Arc::clone(&self.streaming),
+            scene: Arc::clone(&self.scene),
         }
     }
 
@@ -315,6 +322,7 @@ impl AudioEngine {
             rate: params.rate,
             bus: params.bus.index() as u8,
             looping,
+            emitter: params.emitter,
         });
         self.wake_stream();
         VoiceId::from_raw(voice)
@@ -492,6 +500,10 @@ impl AudioPlayer for AudioEngine {
 
     fn is_available(&self) -> bool {
         backend::is_compiled() && !*self.device_unavailable.lock()
+    }
+
+    fn spatial_scene(&self) -> Option<Arc<SpatialScene>> {
+        Some(Arc::clone(&self.scene))
     }
 }
 
