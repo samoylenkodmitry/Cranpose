@@ -23,9 +23,12 @@
 # The rows of wall-t20, patchwork-t17, gauntlet-t16, gauntlet-t12, feed,
 # ticker, layers and dashboard come from one run at the head of #2406, the
 # text cache that keeps returning texts, on main 268b97781; spreads as before.
-# The copied rows of grid-layer and deep-layer and the malloc and realloc
-# rows of patchwork-t17 come from six runs at the heads of #2430, one culled
-# walk a frame, on main ffe937570: the highest of them; spreads as before.
+# The malloc and realloc rows of patchwork-t17 come from six runs at the
+# heads of #2430, one culled walk a frame, on main ffe937570: the highest of
+# them; spreads as before. The copied rows of grid-layer and deep-layer and
+# the realloc and realloc_bytes rows of layers, grid and grid-layer come from
+# one run at each of its last two heads on main 5e4770c63, which gave equal
+# values.
 # The ticker's copied spread holds both modes of the scene store's shape
 # chunk compaction (`keep_live_runs`), whose copies differ by 2,920 B from
 # run to run of one binary for a reason not yet known (#2247).
@@ -78,20 +81,20 @@ particles        live                         0.00       0.00
 particles        copied                       4500          0
 particles        realloc_bytes                   2          0
 layers           malloc                       0.05       0.00
-layers           realloc                      0.28       0.00
+layers           realloc                      0.27       0.00
 layers           live                         0.00       0.00
 layers           copied                     125057        216
-layers           realloc_bytes                1462          0
+layers           realloc_bytes                1223          0
 grid             malloc                       5.05       0.00
-grid             realloc                      0.32       0.00
+grid             realloc                      0.30       0.00
 grid             live                         0.00       0.00
 grid             copied                      20953          0
-grid             realloc_bytes                2076          0
+grid             realloc_bytes                1598          0
 grid-layer       malloc                       5.05       0.00
-grid-layer       realloc                      0.32       0.00
+grid-layer       realloc                      0.30       0.00
 grid-layer       live                         0.00       0.00
-grid-layer       copied                      99185          0
-grid-layer       realloc_bytes                2075          0
+grid-layer       copied                      99176          0
+grid-layer       realloc_bytes                1597          0
 deep             malloc                       3.05       0.00
 deep             realloc                      0.33       0.00
 deep             live                         0.00       0.00
@@ -100,7 +103,7 @@ deep             realloc_bytes                1009          0
 deep-layer       malloc                       3.05       0.00
 deep-layer       realloc                      0.22       0.00
 deep-layer       live                         0.00       0.00
-deep-layer       copied                      23123          0
+deep-layer       copied                      23115          0
 deep-layer       realloc_bytes                 482          0
 dashboard        malloc                      27.63       0.02
 dashboard        realloc                      0.33       0.02

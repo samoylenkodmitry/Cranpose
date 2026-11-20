@@ -2074,45 +2074,44 @@ fn a_frame_copied_into_a_swapchain_image_between_frames_drawn_into_it() {
     swapchain_frames_after_the_glass(UNSAMPLED, true);
 }
 
-// The pixels the frame that shows the pane of `Scene::GlassOnce` changes:
-// all that its blur reads and writes, as the shape beneath it changes.
-const PANE_SHOWN_PIXELS: u64 = 25_056;
-// The pixels the frame after it changes: the area the pane drew in.
-const PANE_GONE_PIXELS: u64 = 21_216;
-// The pixels of the shape that changes every frame.
+// The pixels of the shape of `Scene::GlassOnce` that changes every frame.
 const SHAPE_PIXELS: u64 = 784;
 
 /// The swapchain hands the image for the frame with glass out without the
 /// frame it held, as after a failed present.
-// That frame changes a part of the window, though its own image takes it
-// whole: the images that hold the frames before it draw that part again,
-// and then the shape alone.
+// The culled first walk of that frame takes the new pane's backdrop. A later
+// walk then takes every record. The frame changes the whole window. The next
+// frame skips working out its damage. The frame after the skip draws whole.
+// The images draw the whole window until each holds a frame after those
+// three, then the shape alone.
 #[test]
 fn a_swapchain_image_handed_out_without_its_frame() {
     let Some(after) = swapchain_frames_after_the_glass(DIRECT, false) else {
         return;
     };
-    let FrameDamage::Part(pane) = &after[0].damage else {
-        panic!(
-            "the frame with glass changes a part of the window: {:?}",
-            after[0]
-        );
-    };
     assert_eq!(
-        pane.pixels(),
-        PANE_SHOWN_PIXELS,
-        "the frame with glass changes what the pane's blur reads and writes"
+        (after[0].damage, after[1].damage, after[2].damage),
+        (FrameDamage::Full, FrameDamage::Skipped, FrameDamage::Full),
+        "the frame with glass changes the whole window"
     );
-    let repainted: Vec<u64> = after[1..=4]
-        .iter()
-        .map(|stats| stats.repainted_pixels)
-        .collect();
+    let shape_alone = after[3..].iter().all(
+        |stats| matches!(&stats.damage, FrameDamage::Part(rects) if rects.pixels() == SHAPE_PIXELS),
+    );
+    assert!(
+        shape_alone,
+        "the frames after the skip change the shape alone"
+    );
+    let whole = u64::from(WIDTH * HEIGHT);
+    let repainted: Vec<u64> = after.iter().map(|stats| stats.repainted_pixels).collect();
     assert_eq!(
         repainted,
         [
-            PANE_SHOWN_PIXELS,
-            PANE_SHOWN_PIXELS,
-            PANE_GONE_PIXELS,
+            whole,
+            whole,
+            whole,
+            whole,
+            whole,
+            SHAPE_PIXELS,
             SHAPE_PIXELS
         ],
         "the images draw again what the frames since theirs changed"

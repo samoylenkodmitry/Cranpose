@@ -203,6 +203,19 @@ enum Moment {
     Predicted,
 }
 
+// What the prediction of a frame's damage tells the frame's walk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Prediction {
+    // The target knows no damage to place the changes over: the walk works
+    // the areas out.
+    Unknown,
+    // The frame changes most of the window, or an area it cannot place:
+    // the walk takes every record.
+    Whole,
+    // The damage holds where the changes land.
+    Part,
+}
+
 // How a culled walk takes a record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Visit {
@@ -322,6 +335,9 @@ pub(crate) struct TargetState {
     // The records the frame's changes leave and what of each they reach,
     // whose new areas the frame adds after its collect.
     changed: Vec<(RecordRef, Scope)>,
+    // Whether the begin took the old area of the last record in `changed`:
+    // it takes none for a new or claimed record.
+    last_took_area: bool,
     // By row, the frame that marked the record and how a culled walk of
     // that frame takes it.
     marks: Vec<(u32, Visit)>,
@@ -416,19 +432,18 @@ impl TargetState {
 
     // Writes into `damage` the damage the frame takes when each change whose
     // record may draw past its old area lands as the store and the frame
-    // before's origins tell, as `own_area` predicts it. The whole window
-    // when the old areas take most of it, or when a changed record's reach
-    // is not known and no ancestor holds its area: the walk finds that
-    // record's area unknown too. `false` when the frame works out no damage
-    // or an old area is not known: the walk then works the areas out.
-    pub(crate) fn predict_damage(&mut self, store: &SceneStore, damage: &mut Damage) -> bool {
+    // before's origins tell, as `own_area` predicts it.
+    pub(crate) fn predict_damage(&mut self, store: &SceneStore, damage: &mut Damage) -> Prediction {
         let (Some(setting), Some(begun)) = (self.setting, self.begun()) else {
-            return false;
+            return Prediction::Unknown;
         };
+        let viewport = setting.viewport;
+        // The damage stays a part: the end then copies only the rects it
+        // holds into it.
         damage.assign_part(begun);
-        // Old areas past half of the window take it whole before any landing.
-        damage.settle(setting.viewport);
-        let mut whole = false;
+        if damage.takes_most_of(viewport) {
+            return Prediction::Whole;
+        }
         if let Damage::Part(rects) = damage {
             // One run: at the bound of rects, a lone add searches every pair.
             let mut run = rects.run();
@@ -437,18 +452,15 @@ impl TargetState {
                 match self.own_area(store, change, Moment::Predicted, setting) {
                     Area::Drawn(pixels) | Area::Composite(pixels) => run.add(pixels.rect()),
                     Area::Hidden => {}
-                    Area::Unknown => {
-                        whole = true;
-                        break;
-                    }
+                    Area::Unknown => return Prediction::Whole,
                 }
             }
         }
-        if whole {
-            *damage = Damage::Full;
+        if damage.takes_most_of(viewport) {
+            Prediction::Whole
+        } else {
+            Prediction::Part
         }
-        damage.settle(setting.viewport);
-        true
     }
 
     // What a walk of the frame leaves out of `region` of the records of
@@ -494,12 +506,30 @@ impl TargetState {
     // damage, and keeps the record to add its area after the collect.
     fn note(&mut self, store: &SceneStore, entry: &JournalEntry) {
         let scope = Scope::of(entry.event);
-        if !matches!(entry.event, RecordEvent::Inserted | RecordEvent::Claimed) {
+        // A record that moves and changes in one update logs the two one
+        // after the other, as a layer that a translation moves does. Each
+        // takes all the record's subtree, so the second adds nothing once
+        // the begin took the old area for the first.
+        if entry.event != RecordEvent::Removed
+            && self.last_took_area
+            && let Some(last) = self.changed.last_mut()
+            && last.0 == entry.record
+            && let (Scope::Subtree | Scope::Placed, Scope::Subtree | Scope::Placed) =
+                (last.1, scope)
+        {
+            if scope == Scope::Placed {
+                last.1 = Scope::Placed;
+            }
+            return;
+        }
+        let takes_area = !matches!(entry.event, RecordEvent::Inserted | RecordEvent::Claimed);
+        if takes_area {
             let area = self.area_of(store, (entry.record, scope), entry.parent);
             self.add(area);
         }
         if entry.event != RecordEvent::Removed {
             self.changed.push((entry.record, scope));
+            self.last_took_area = takes_area;
         }
     }
 
@@ -638,32 +668,6 @@ impl TargetState {
             *damage = Damage::Full;
             return;
         }
-        self.widen_by_captures(root, setting, damage);
-    }
-
-    // Widens the frame's damage, as its end worked it out before any
-    // capture, by the captures of `root`: a later walk of the frame takes in
-    // records the first walk did not, whose backdrops read and write more of
-    // the window. A frame whose end took the whole window or skipped its
-    // damage keeps that.
-    pub(crate) fn widen_again(&mut self, root: &LayerScene, damage: &mut Damage) {
-        let Some(setting) = self.setting else {
-            return;
-        };
-        if self.recording && !self.unknown_before && !self.whole {
-            self.widen_by_captures(Some(root), setting, damage);
-        }
-    }
-
-    // Writes into `damage` the frame's damage grown by what the backdrops of
-    // `root` read and write where it meets them; the whole window when the
-    // frame holds what its captures cannot describe.
-    fn widen_by_captures(
-        &mut self,
-        root: Option<&LayerScene>,
-        setting: TargetSetting,
-        damage: &mut Damage,
-    ) {
         damage.assign_part(self.damage.as_rects());
         if let (Some(root), Damage::Part(rects)) = (root, &mut *damage)
             && !rects.is_empty()
@@ -706,6 +710,16 @@ impl TargetState {
         moment: Moment,
         setting: TargetSetting,
     ) -> Area {
+        // A leaf whose redraw changed only where it reached before redraws
+        // within its own area, which the begin took: a load of its flags in
+        // place of placing its reach.
+        if let (Moment::Predicted, Scope::Own(_)) = (moment, scope)
+            && store
+                .resolve(record)
+                .is_some_and(|id| store.layer(id).redrawn_within())
+        {
+            return Area::Hidden;
+        }
         let kept = self.shown(record);
         let grid = PixelGrid::of(setting);
         match (moment, scope) {
