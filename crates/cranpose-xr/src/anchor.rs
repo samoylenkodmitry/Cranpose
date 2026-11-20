@@ -150,9 +150,12 @@ impl Anchor {
         self.cell.detached.get()
     }
 
+    // Ends the anchor for the runtime too: what the backend holds for it goes now, though a
+    // handle of the app may outlive the anchor.
     pub(crate) fn mark_detached(&self) {
         self.cell.detached.set(true);
         self.cell.tracking.set(TrackingState::Stopped);
+        self.cell.resource.borrow_mut().take();
     }
 
     // Whether the anchor stands where the pose says. A persisted anchor has no place until the

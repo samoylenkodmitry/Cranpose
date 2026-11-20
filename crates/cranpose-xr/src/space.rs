@@ -692,7 +692,7 @@ impl Space {
     // Gives the space the store whose planes a movable panel snaps to. The first store stays.
     #[cfg(any(test, headset))]
     pub(crate) fn attach_spatial_store(&self, store: &Rc<SpatialStore>) {
-        let _ = self.inner.spatial.set(Rc::clone(store));
+        self.inner.spatial.get_or_init(|| Rc::clone(store));
     }
 
     // The keyboard that the headset draws for a focused text field.

@@ -112,8 +112,8 @@ fn a_runtime_that_allows_two_anchors_refuses_the_third_until_one_ends() {
             store.create_anchor(at(2.0)),
             AnchorResult::ResourcesExhausted
         );
+        // A detached anchor no longer counts, before the next frame's sweep lets it go
         first.detach();
-        store.sweep();
         assert!(store.create_anchor(at(2.0)).anchor().is_some());
     });
 }
@@ -250,6 +250,13 @@ fn what_the_backend_attaches_to_an_anchor_ends_with_the_anchor() {
         drop(anchor);
         store.sweep();
         assert_eq!(*ended.borrow(), 1);
+        // A detached anchor gives its resource back to the runtime at once, though the app keeps a
+        // handle
+        let detached = made(store.create_anchor(at(1.0)));
+        detached.attach(Resource(Rc::clone(&ended)));
+        detached.detach();
+        assert_eq!(*ended.borrow(), 2);
+        assert!(!detached.is_attached());
     });
 }
 
@@ -285,6 +292,9 @@ fn the_planes_that_the_app_lists_are_the_tracked_ones_that_no_other_plane_subsum
             ..lost.current()
         });
         wall.set_subsumed_by(Some(PlaneKey(1)));
+        // The runtime may turn a plane that it first took for a wall into a table
+        lost.set_plane_type(PlaneType::HorizontalUpwardFacing);
+        assert_eq!(lost.plane_type(), PlaneType::HorizontalUpwardFacing);
         assert_eq!(store.tracked_planes(), vec![table.clone()]);
         assert_eq!(wall.subsumed_by(), Some(table));
         assert!(store.retain_planes(|plane| plane.key() != PlaneKey(3)));

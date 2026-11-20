@@ -62,7 +62,7 @@ impl SpatialStore {
 
     // Makes the composition that reads a change of the store read it again.
     pub(crate) fn observe(&self) {
-        let _ = self.epoch.get();
+        self.epoch.get();
     }
 
     fn touch(&self) {
@@ -102,7 +102,12 @@ impl SpatialStore {
         if !self.head_tracked.get() {
             return AnchorResult::TrackingUnavailable;
         }
-        let held = self.anchors.borrow().len();
+        let held = self
+            .anchors
+            .borrow()
+            .iter()
+            .filter(|anchor| !anchor.is_detached())
+            .count();
         if capabilities
             .max_anchors
             .is_some_and(|most| held >= most as usize)

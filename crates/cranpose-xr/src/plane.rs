@@ -125,10 +125,12 @@ impl Plane {
         self.cell.state.get()
     }
 
+    #[cfg(any(test, target_os = "android"))]
     pub(crate) fn set_plane_type(&self, plane_type: PlaneType) {
         self.cell.plane_type.set(plane_type);
     }
 
+    #[cfg(any(test, target_os = "android"))]
     pub(crate) fn set_subsumed_by(&self, key: Option<PlaneKey>) {
         self.cell.subsumed_by.set(key);
     }

@@ -28,13 +28,13 @@ enum Backend {
     // The app asked for nothing, or the runtime offers nothing
     None,
     Meta {
-        anchors: MetaAnchors,
-        planes: MetaPlanes,
+        anchors: Box<MetaAnchors>,
+        planes: Box<MetaPlanes>,
     },
     #[cfg(target_os = "android")]
     Android {
-        anchors: AndroidAnchors,
-        planes: AndroidPlanes,
+        anchors: Box<AndroidAnchors>,
+        planes: Box<AndroidPlanes>,
     },
 }
 
@@ -91,13 +91,13 @@ impl Room {
         let (instance, session) = (xr_session.instance(), &xr_session.session);
         let backend = match setup.provider.filter(|_| setup.request.asks_any()) {
             Some(SpatialProvider::Meta) => Backend::Meta {
-                anchors: MetaAnchors::new(instance, session, setup.enabled),
-                planes: MetaPlanes::new(instance, session),
+                anchors: Box::new(MetaAnchors::new(instance, session, setup.enabled)),
+                planes: Box::new(MetaPlanes::new(instance, session)),
             },
             #[cfg(target_os = "android")]
             Some(SpatialProvider::Android) => Backend::Android {
-                anchors: AndroidAnchors::new(instance, session),
-                planes: AndroidPlanes::new(instance, session),
+                anchors: Box::new(AndroidAnchors::new(instance, session)),
+                planes: Box::new(AndroidPlanes::new(instance, session)),
             },
             #[cfg(not(target_os = "android"))]
             Some(SpatialProvider::Android) => Backend::None,
