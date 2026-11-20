@@ -842,6 +842,16 @@ impl RenderScene for Scene {
         hit.into_iter().cloned().collect()
     }
 
+    fn visit_meshes(&self, under: NodeId, visit: &mut dyn FnMut(&crate::space::MeshVisit<'_>)) {
+        let layer = self
+            .store
+            .root_layer()
+            .and_then(|root| crate::space::layer_of_node(root, under));
+        if let Some(layer) = layer {
+            crate::space::visit_meshes(layer, visit);
+        }
+    }
+
     fn surface_windows(&self, visit: &mut dyn FnMut(NodeId, ProjectiveTransform)) {
         let Some(root_layer) = self.store.root_layer() else {
             return;

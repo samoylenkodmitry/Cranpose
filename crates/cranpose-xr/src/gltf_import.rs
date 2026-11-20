@@ -65,9 +65,14 @@ pub(crate) fn parse(bytes: &[u8], base: Option<&Path>) -> Result<GltfModel, Gltf
             }
         })
         .collect();
+    let names = nodes
+        .iter()
+        .map(|node| node.name().map(Arc::from))
+        .collect();
     let mut model = GltfModel {
         rest,
         parents: scene.parents,
+        names,
         order: scene.order,
         draws,
         layers: layers.baked,

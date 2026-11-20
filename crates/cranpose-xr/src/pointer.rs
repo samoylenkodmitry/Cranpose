@@ -7,11 +7,14 @@ use crate::{
     Hand as Side, InputSource, Pose, Ray, SpatialMoveEventType, SpatialResizeEventType,
     aim_filter::{AimFilter, angle_between},
     carry::Carry,
+    content_ray::ContentRay,
     handle::HandleKind,
+    mesh_ref::MeshRef,
     ray::Beam,
     resize::Resize,
     space::{Cursor, PanelKind, PanelMove, PanelResize, PanelSlot, Ride},
-    surface_input::{Gesture, SurfaceGesture},
+    surface_input::{Gesture, RayHit, SurfaceGesture, VolumeRay},
+    volume_pick::{MeshPick, PickMeshes},
 };
 
 // A trigger counts as down above PRESS and as up below RELEASE, so a trigger held near one value
@@ -73,11 +76,14 @@ enum Target {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Hit {
     slot: PanelSlot,
-    // The place on the panel in dp from its top left corner
+    // The place on the panel in dp from its top left corner. On a volume with meshes it is the place
+    // of the mesh's hit projected onto the box's front face.
     x: f32,
     y: f32,
     // How far along the ray, in meters
     distance: f32,
+    // The mesh of a volume that the ray meets
+    pick: Option<MeshPick>,
 }
 
 impl Hit {
@@ -144,7 +150,7 @@ impl Hand {
         side: Side,
         aim: Option<Aim>,
         time: Duration,
-        panels: &[PanelSlot],
+        (panels, picks): (&[PanelSlot], &PickMeshes),
     ) -> Trigger {
         let Some(aim) = aim else {
             // A hand the runtime stops tracking lets its press go
@@ -172,7 +178,7 @@ impl Hand {
         self.source = Some(aim.source);
         let ray = self.filter.apply(aim.ray, time);
         self.ray = Some(ray);
-        self.hit = nearest_hit(&ray, panels, side);
+        self.hit = nearest_hit(&ray, panels, side, picks);
         self.content_hit = self.hit.filter(Hit::on_content);
         self.handle = nearest_handle(&ray, panels, side);
         self.pose = Some(aim.pose);
@@ -200,7 +206,12 @@ impl Hand {
 
     // The hit that a press in this frame takes: the one from just before the pull, if the ray
     // still points near it.
-    fn press_hit(&self, side: Side, time: Duration, panels: &[PanelSlot]) -> Option<Hit> {
+    fn press_hit(
+        &self,
+        side: Side,
+        time: Duration,
+        (panels, picks): (&[PanelSlot], &PickMeshes),
+    ) -> Option<Hit> {
         let now = self.ray?;
         let before = self
             .rest
@@ -208,7 +219,7 @@ impl Hand {
                 time.saturating_sub(*rest) <= PULL_TIME
                     && angle_between(ray.direction, now.direction).to_degrees() < CLICK_ANGLE
             })
-            .and_then(|(_, ray)| nearest_hit(&ray, panels, side));
+            .and_then(|(_, ray)| nearest_hit(&ray, panels, side, picks));
         before.or(self.hit)
     }
 
@@ -251,6 +262,8 @@ struct Press {
     peak: f32,
     // The press's point while it holds; None once it drags
     held: Option<Hit>,
+    // The mesh of a volume that the press began on
+    entity: Option<MeshRef>,
 }
 
 // A panel the user carries.
@@ -311,15 +324,18 @@ pub(crate) struct Pointer {
     // allocate
     events: Vec<Gesture>,
     surface_events: Vec<SurfaceGesture>,
+    // The ray behind the frame's gestures on volumes
+    volume_ray: Option<VolumeRay>,
 }
 
 impl Pointer {
-    // The events of a frame at `time` with `aims` over `panels`, and the cursor to show.
+    // The events of a frame at `time` with `aims` over `panels`, and the cursor to show. A volume
+    // whose meshes `picks` holds takes the ray where it meets one of them.
     pub(crate) fn update(
         &mut self,
         aims: [Option<Aim>; 2],
         time: Duration,
-        panels: &[PanelSlot],
+        (panels, picks): (&[PanelSlot], &PickMeshes),
     ) -> (&[Gesture], Option<Cursor>) {
         self.events.clear();
         self.surface_events.clear();
@@ -329,14 +345,16 @@ impl Pointer {
             .time
             .map_or(0.0, |last| time.saturating_sub(last).as_secs_f32());
         self.time = Some(time);
-        let triggers = Side::BOTH
-            .map(|side| self.hands[side.index()].update(side, aims[side.index()], time, panels));
+        let triggers = Side::BOTH.map(|side| {
+            self.hands[side.index()].update(side, aims[side.index()], time, (panels, picks))
+        });
         self.choose_hand(triggers);
         let hand = self.hands[self.hand];
+        self.volume_ray = self.volume_ray_of(&hand, (panels, picks));
         match triggers[self.hand] {
             Trigger::Pulled => match hand.grab() {
                 Some(handle) => self.grab(&hand, &handle),
-                None => self.pull(&hand, time, panels),
+                None => self.pull(&hand, time, (panels, picks)),
             },
             Trigger::Up if self.held.is_some() => self.put_down(&hand),
             Trigger::Up if self.press.is_some() => self.release(&hand),
@@ -382,6 +400,14 @@ impl Pointer {
         &self.resizes
     }
 
+    // The surface or volume that a press is on, which takes the gestures until the release.
+    pub(crate) fn pressed_surface(&self) -> Option<u64> {
+        match self.press?.target {
+            Target::Surface(surface) => Some(surface),
+            Target::Atlas => None,
+        }
+    }
+
     // The pointer's gestures on surfaces in this frame.
     pub(crate) fn surface_events(&self) -> &[SurfaceGesture] {
         &self.surface_events
@@ -417,13 +443,18 @@ impl Pointer {
 
     // A press starts where the trigger goes down over a panel. A trigger that was down before
     // the ray reached a panel does not press.
-    fn pull(&mut self, hand: &Hand, time: Duration, panels: &[PanelSlot]) {
+    fn pull(&mut self, hand: &Hand, time: Duration, (panels, picks): (&[PanelSlot], &PickMeshes)) {
         match (
-            hand.press_hit(Side::BOTH[self.hand], time, panels),
+            hand.press_hit(Side::BOTH[self.hand], time, (panels, picks)),
             hand.ray,
         ) {
             (Some(hit), Some(ray)) => {
                 self.move_to(hit.target(), hit.position());
+                // The press goes where the ray pointed before the pull, which may be another mesh
+                // than the one it points at now
+                if let Some(volume_ray) = &mut self.volume_ray {
+                    volume_ray.hit = hit.pick.map(ray_hit);
+                }
                 self.emit(hit.target(), Gesture::Press);
                 self.press = Some(Press {
                     target: hit.target(),
@@ -431,6 +462,7 @@ impl Pointer {
                     direction: ray.direction,
                     peak: hand.trigger,
                     held: Some(hit),
+                    entity: hit.pick.map(|pick| pick.mesh),
                 });
             }
             _ => self.hover(hand.hit),
@@ -615,10 +647,53 @@ impl Pointer {
     fn emit(&mut self, target: Target, gesture: Gesture) {
         match target {
             Target::Atlas => self.events.push(gesture),
-            Target::Surface(surface) => self
-                .surface_events
-                .push(SurfaceGesture { surface, gesture }),
+            Target::Surface(surface) => self.surface_events.push(SurfaceGesture {
+                surface,
+                gesture,
+                ray: self.volume_ray,
+            }),
         }
+    }
+
+    // The ray behind this frame's gestures on volumes: the driving hand's, with the mesh that it
+    // meets. A press that began on a mesh keeps that mesh, and meets it again where the ray still
+    // does.
+    fn volume_ray_of(
+        &self,
+        hand: &Hand,
+        (panels, picks): (&[PanelSlot], &PickMeshes),
+    ) -> Option<VolumeRay> {
+        let (ray, source) = (hand.ray?, hand.source?);
+        let hit = match self.press {
+            Some(Press {
+                target: Target::Surface(volume),
+                entity: Some(mesh),
+                ..
+            }) => {
+                let slot = panels.iter().find(|slot| slot.id == volume)?;
+                let again = picks.pick(volume, &ContentRay::of(&ray, &slot.pose), Some(mesh));
+                Some(RayHit {
+                    mesh,
+                    place: again.map(|pick| (pick.triangle, pick.position)),
+                })
+            }
+            _ => hand.hit.and_then(|hit| hit.pick).map(ray_hit),
+        };
+        Some(VolumeRay {
+            source,
+            hand: Side::BOTH[self.hand],
+            time: self.time?,
+            ray,
+            hit,
+        })
+    }
+}
+
+// The mesh that a pick meets, as a gesture reports it.
+fn ray_hit(pick: MeshPick) -> RayHit {
+    RayHit {
+        mesh: pick.mesh,
+        place: Some((pick.triangle, pick.position)),
     }
 }
 
@@ -647,19 +722,31 @@ fn nearest_handle(ray: &Ray, panels: &[PanelSlot], side: Side) -> Option<(Handle
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
-// The panel the ray of `side` meets first and the place on it.
-fn nearest_hit(ray: &Ray, panels: &[PanelSlot], side: Side) -> Option<Hit> {
+// The panel the ray of `side` meets first and the place on it. A volume whose meshes `picks` holds
+// is met where the ray meets one of them, and the volume's box only decides whether to look.
+fn nearest_hit(ray: &Ray, panels: &[PanelSlot], side: Side, picks: &PickMeshes) -> Option<Hit> {
     panels
         .iter()
         .filter(|slot| reachable(slot, side))
         .filter_map(|slot| {
             let size = slot.size();
             let hit = slot.hit(ray)?;
+            if matches!(slot.kind, PanelKind::Volume { .. }) && picks.has_meshes(slot.id) {
+                let pick = picks.pick(slot.id, &ContentRay::of(ray, &slot.pose), None)?;
+                return Some(Hit {
+                    slot: *slot,
+                    x: pick.position[0] + size[0] / 2.0,
+                    y: pick.position[1] + size[1] / 2.0,
+                    distance: pick.distance,
+                    pick: Some(pick),
+                });
+            }
             Some(Hit {
                 slot: *slot,
                 x: hit.u * size[0],
                 y: hit.v * size[1],
                 distance: hit.distance,
+                pick: None,
             })
         })
         .min_by(|a, b| a.distance.total_cmp(&b.distance))

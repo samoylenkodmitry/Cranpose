@@ -232,3 +232,92 @@ fn a_looping_animation_goes_on_until_paused_and_goes_on_again_when_resumed() {
     let moved = (0..6).any(|_| frame(&mut headset, &mut pass, &atlas, &eyes) != held_pose);
     assert!(moved, "a resumed animation did not move the model");
 }
+
+// A tower volume whose callback writes the input events of a ray into `events`.
+#[composable]
+fn pickable_tower(
+    held: Rc<RefCell<Option<crate::SpatialGltfModelState>>>,
+    events: Rc<RefCell<Vec<crate::InputEvent>>>,
+) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/models/tower.glb");
+    let state = rememberSpatialGltfModelState(SpatialGltfModelSource::from_path(path));
+    held.replace(Some(state.clone()));
+    SpatialGltfModel(
+        state,
+        SubspaceModifier::new().size(300.0, 300.0).depth(300.0),
+        move |scope| {
+            let events = Rc::clone(&events);
+            scope.on_input_event(move |event| events.borrow_mut().push(event));
+        },
+    );
+}
+
+// A pointer over the tower volume once its model has loaded, and the model's state.
+fn pointing_at_the_tower() -> (picking::Pointing, crate::SpatialGltfModelState) {
+    let held = Rc::new(RefCell::new(None));
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let (keep, sink) = (Rc::clone(&held), Rc::clone(&events));
+    let mut headset = headset_of(Rc::new(move |_, _| {
+        pickable_tower(Rc::clone(&keep), Rc::clone(&sink));
+    }));
+    wait_for_the_volume(&mut headset);
+    let pointing = picking::Pointing::new(headset, events);
+    (pointing, held.take().expect("the state"))
+}
+
+#[test]
+fn a_ray_meets_a_model_and_the_state_names_the_gltf_node_that_it_hit() {
+    let (mut pointing, state) = pointing_at_the_tower();
+    // The block stands at the middle of the volume at rest, and the ray points at it
+    let hit = pointing.point(0.0, 0.0)[0]
+        .hit_info
+        .expect("the ray meets the block");
+    let node = state
+        .node_of(&hit)
+        .expect("the hit is on a node of the model");
+    assert_eq!(node.index, 1);
+    assert_eq!(node.name.as_deref(), Some("block"));
+    // A ray far to the side meets nothing
+    assert!(
+        pointing
+            .point(0.25, 0.0)
+            .iter()
+            .all(|event| event.hit_info.is_none())
+    );
+}
+
+#[test]
+fn a_ray_follows_the_node_that_an_animation_moves() {
+    let (mut pointing, state) = pointing_at_the_tower();
+    let atlas = Eye::new(&pointing.headset.gpu);
+    let eyes = [
+        Eye::new(&pointing.headset.gpu),
+        Eye::new(&pointing.headset.gpu),
+    ];
+    let at_rest = pointing.point(0.0, 0.0)[0]
+        .hit_info
+        .expect("the ray meets the block at rest")
+        .hit_position;
+
+    // The animation runs to its end, which puts the block elsewhere
+    let swing = state.animations().remove(0);
+    swing.set_speed(1000.0);
+    swing.start();
+    let mut frames = 0;
+    while swing.animation_state() != crate::GltfAnimationState::Stopped {
+        frames += 1;
+        assert!(frames < 100, "the animation never ended");
+        frame(&mut pointing.headset, &mut pointing.pass, &atlas, &eyes);
+    }
+    frame(&mut pointing.headset, &mut pointing.pass, &atlas, &eyes);
+    let after = pointing
+        .point(0.0, 0.0)
+        .iter()
+        .rev()
+        .find_map(|event| event.hit_info)
+        .and_then(|hit| hit.hit_position);
+    assert_ne!(
+        after, at_rest,
+        "the ray met the block where it stood at rest"
+    );
+}

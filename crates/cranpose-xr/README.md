@@ -168,8 +168,30 @@ SpatialVolume(
 The modifier's `width`, `height` and `depth` give a box in dp, which are millimeters, 500 each by
 default. The content's space has its origin at the box's center, x to the right, y down and z away
 from the viewer, and a unit is a dp. The modifier's `offset`, `rotate`, `movable` and `resizable`
-work as on a panel. A controller's ray stops at the box. `scope.on_pointer_event` receives its
-events, with the position in dp on the box's front face. The meshes do not receive the ray.
+work as on a panel.
+
+A controller's or a hand's ray meets the content's meshes on the CPU. It stops at the nearest
+triangle of any mesh in the volume, from either side, and passes through the empty part of the box.
+A volume with no mesh stops the ray at its box. `scope.on_input_event` receives an `InputEvent`, as
+Jetpack XR's `InteractableComponent` gives its listener: the ray in the content's space, an
+`InputAction` (`HoverEnter`, `HoverMove`, `HoverExit`, `Down`, `Move`, `Up`) and a `HitInfo` with
+the node of the content whose mesh the ray meets (`input_entity`), which of its meshes (`mesh_index`),
+the place of the hit in dp (`hit_position`) and the triangle. A press names the mesh that it began on
+until the release. `SpatialGltfModelState::node_of(&hit)` names the glTF node of a hit on a model.
+`scope.on_pointer_event` still receives Compose's pointer events, with the position in dp on the
+box's front face. The meshes are those that the last draw left in the scene, so a mesh that moves in
+a frame is hit where it stood in the frame before.
+
+```rust,ignore
+SpatialVolume(modifier, move |scope| {
+    scope.on_input_event(move |event| {
+        if let (InputAction::Down, Some(hit)) = (event.action, event.hit_info) {
+            log::info!("pressed node {:?} at {:?}", hit.input_entity, hit.hit_position);
+        }
+    });
+    // ...the meshes
+});
+```
 
 Jetpack XR 1.0 shows 3D content with `SpatialGltfModel` for a glTF model and `SceneCoreEntity` for a
 SceneCore entity. Cranpose has no SceneCore entities, so its composable has its own name. It has a
@@ -181,8 +203,15 @@ layer carries the scene's depth (`XR_KHR_composition_layer_depth`), and where it
 `XR_FB_composition_layer_depth_test` the panels and rays over it are set to test against that depth.
 A Quest 3 shows the panels behind the 3D content where they stand behind it. Otherwise the
 panels cover the 3D content. A frame with no volume has no projection layer and costs
-no GPU time. The scene draws with one sample for each pixel, and a movable volume takes two of the
-compositor's layers. A window shows the volume as a 3D view in its box.
+no GPU time. A movable volume takes two of the compositor's layers. A window shows the volume as a
+3D view in its box.
+
+The scene takes four samples in each pixel where the device takes four in its colour and depth
+formats, so the edges of a mesh show smooth. The renderer averages the samples straight into the
+page that the eye's image is converted from, and a second pass with one sample leaves the layer's
+depth. A pixel that an edge covers in part carries the depth of the surface at its centre. A sheet
+made with `Mesh::plane` already smooths its outline, so the gain shows on the edges of solids. The
+`docs/xr_architecture.md` file has the path and the measurements.
 
 ## glTF models
 

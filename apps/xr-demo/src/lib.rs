@@ -36,6 +36,7 @@ mod decoder_limits;
 mod foveated_player;
 mod headset_readout;
 mod pattern_writer;
+mod ray_target;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod scripted_hand;
 mod torus_volume;
@@ -47,6 +48,7 @@ use crate_model::CrateModel;
 use foveated_player::FoveatedPlayer;
 use headset_readout::{HeadsetClock, HeadsetReadout, Readout, StreamLogs};
 use pattern_writer::PatternWriter;
+use ray_target::{RayTarget, rememberRayTarget};
 use torus_volume::TorusVolume;
 use tracking_panel::{TrackedHands, TrackingSection, TrackingView};
 use type_panel::TypePanel;
@@ -75,6 +77,7 @@ pub fn XrDemo() {
     let logs = remember(StreamLogs::default).with(Clone::clone);
     remember(decoder_limits::log_in_background);
     let tracking = TrackedHands();
+    let target = rememberRayTarget();
     EntitlementChoice();
     Subspace(move || {
         HeadsetReadout(presses, readout, clock.clone(), logs.clone());
@@ -112,6 +115,7 @@ pub fn XrDemo() {
                 .offset(600.0, -330.0, 100.0)
                 .rotate(0.0, -30.0, 0.0),
             true,
+            target,
         );
         // The crate's volume has no handle, so it adds no layer to the frame: the torus's volume
         // already brings the projection layer, which all volumes share
@@ -120,13 +124,14 @@ pub fn XrDemo() {
                 .offset(950.0, -330.0, 100.0)
                 .rotate(0.0, -30.0, 0.0),
             true,
+            target,
         );
         CounterPanel(presses, tracking);
         TypePanel();
         if strip_shown.get() {
             CurvedStrip();
         }
-        PressesPanel(presses, readout);
+        PressesPanel(presses, readout, target);
     });
     ControllerBall(strip_shown);
 }
@@ -165,7 +170,11 @@ fn depth_test_build() -> bool {
 fn DepthTest() {
     if VOLUME_BUILD == Some("model") {
         FollowingSubspace(FollowTarget::View(FollowMode::Snap), || {
-            CrateModel(SubspaceModifier::new().rotate(20.0, 30.0, 0.0), false);
+            CrateModel(
+                SubspaceModifier::new().rotate(20.0, 30.0, 0.0),
+                false,
+                rememberRayTarget(),
+            );
         });
         return;
     }
@@ -189,7 +198,11 @@ fn DepthTest() {
                 );
             });
         }
-        TorusVolume(SubspaceModifier::new().rotate(0.0, 45.0, 0.0), false);
+        TorusVolume(
+            SubspaceModifier::new().rotate(0.0, 45.0, 0.0),
+            false,
+            rememberRayTarget(),
+        );
     });
 }
 
@@ -402,7 +415,7 @@ fn CurvedStrip() {
 // A smaller panel to the right, turned toward the viewer, that counts the presses too and shows
 // what the frame effect reads of the headset.
 #[composable]
-fn PressesPanel(presses: MutableState<u32>, readout: MutableState<Readout>) {
+fn PressesPanel(presses: MutableState<u32>, readout: MutableState<Readout>, target: RayTarget) {
     SpatialPanel(
         SubspaceModifier::new()
             .size(320.0, 380.0)
@@ -427,7 +440,7 @@ fn PressesPanel(presses: MutableState<u32>, readout: MutableState<Readout>) {
                                 Modifier::empty(),
                                 sized(28.0, Some(FontWeight::BOLD)),
                             );
-                            ReadoutLines(readout);
+                            ReadoutLines(readout, target);
                         },
                     );
                 },
@@ -440,7 +453,7 @@ fn PressesPanel(presses: MutableState<u32>, readout: MutableState<Readout>) {
 // with input focus, paused under the system menu, stopped while the session does not run.
 // Outside a headset the frame effect never runs. The readout stays at its start then.
 #[composable]
-fn ReadoutLines(readout: MutableState<Readout>) {
+fn ReadoutLines(readout: MutableState<Readout>, target: RayTarget) {
     let Readout {
         head_cm,
         trigger_percent,
@@ -468,6 +481,7 @@ fn ReadoutLines(readout: MutableState<Readout>) {
         format!("Right trigger {trigger_percent}%"),
         format!("Right pinch {pinch_percent}%"),
         format!("Pointers L/R: {left} / {right}"),
+        format!("Ray meets {}", target.text()),
         format!("Frame effect {frames_per_second} Hz"),
         format!("Lifecycle {:?}", local_lifecycle_state().current()),
     ] {

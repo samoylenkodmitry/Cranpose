@@ -19,6 +19,7 @@ use cranpose_core::CompositionLocal;
 
 #[cfg(any(test, headset))]
 pub(crate) mod field_dock;
+mod surface_delivery;
 
 use crate::{
     FollowTarget, Hand, METERS_PER_DP, MovePolicy, PanelHit, Pose, Ray, Recenter, ResizeLimits,
@@ -28,7 +29,7 @@ use crate::{
     follow_origin::{FollowOrigins, Standing},
     locals::with_locals,
     stream_source::StreamSource,
-    surface_input::{PointerSink, SurfaceGesture, SurfaceInput},
+    surface_input::{InputSink, PointerSink, SurfaceInput},
     volumes::{VolumeContent, Volumes},
 };
 
@@ -310,6 +311,8 @@ struct Entry {
     // For a surface: where the app takes the pointer's events, and what the surface knows of
     // the pointer
     sink: Option<PointerSink>,
+    // For a volume: where the app takes the ray's input events
+    input_sink: Option<InputSink>,
     input: SurfaceInput,
     // Whether the panel stands below the panel of the focused text field, as the keyboard does,
     // wherever that panel stands
@@ -606,6 +609,7 @@ impl Space {
                     resize_policy: None,
                     resizing: false,
                     sink: None,
+                    input_sink: None,
                     input: SurfaceInput::default(),
                     dock: Dock::Free,
                 });
@@ -657,15 +661,6 @@ impl Space {
             entry.resizing = false;
             settle(entry);
             restack(&mut entries);
-        }
-    }
-
-    // Sets where the surface `id` sends the pointer's events, or `None` for a surface that takes
-    // none.
-    pub(crate) fn set_surface_sink(&self, id: u64, sink: Option<PointerSink>) {
-        let mut entries = self.inner.entries.borrow_mut();
-        if let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == id) {
-            entry.sink = sink;
         }
     }
 
@@ -804,29 +799,6 @@ impl Space {
                 settle(entry);
             }
             restack(&mut entries);
-        }
-    }
-
-    #[cfg_attr(
-        not(any(test, headset)),
-        expect(dead_code, reason = "the headset backend calls it")
-    )]
-    // Tells the surface that `gesture` names what the pointer did on it, as Compose's pointer
-    // event. A surface that takes no pointer events sees nothing.
-    pub(crate) fn deliver_to_surface(&self, gesture: &SurfaceGesture) {
-        let heard = {
-            let mut entries = self.inner.entries.borrow_mut();
-            entries
-                .iter_mut()
-                .find(|entry| entry.slot.id == gesture.surface)
-                .and_then(|entry| {
-                    let sink = entry.sink.clone()?;
-                    Some((sink, entry.input.event(gesture.gesture)?))
-                })
-        };
-        // The callback runs with no borrow held, so that it may call the space
-        if let Some((sink, event)) = heard {
-            sink(event);
         }
     }
 
