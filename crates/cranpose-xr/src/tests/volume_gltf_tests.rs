@@ -172,10 +172,12 @@ fn a_playing_animation_moves_the_model_and_a_stop_puts_it_back_at_rest() {
     // of a second: a few frames reach the end
     swing.set_speed(1000.0);
     swing.start();
-    for _ in 0..8 {
+    let mut frames = 0;
+    while swing.animation_state() != crate::GltfAnimationState::Stopped {
+        frames += 1;
+        assert!(frames < 100, "the animation never ended");
         frame(&mut headset, &mut pass, &atlas, &eyes);
     }
-    assert_eq!(swing.animation_state(), crate::GltfAnimationState::Stopped);
     let ended = frame(&mut headset, &mut pass, &atlas, &eyes);
     assert!(rest != ended, "the block stayed where it was");
     // A run that ended keeps its last pose, and a stop changes nothing then

@@ -59,6 +59,11 @@ def quadrants(side):
     return png(side, side, pixel)
 
 
+def half_clear(side):
+    """Transparent on the left half, opaque green on the right half."""
+    return png(side, side, lambda x, y: (0, 255, 0, 255) if x >= side // 2 else (255, 0, 0, 0))
+
+
 def crate_texture(side):
     """Magenta and lime tiles with a white frame: colors that no other part of the demo has."""
 
@@ -176,8 +181,8 @@ def cube(model, half, textured):
     }
 
 
-def checker_quad():
-    """A quad of a meter, facing +z, with a four color texture and no node transform."""
+def textured_quad(name, texture, material):
+    """A quad of a meter, facing +z, with a texture and no node transform."""
     model = Model()
     half = 0.5
     corners = [(-half, half, 0), (half, half, 0), (-half, -half, 0), (half, -half, 0)]
@@ -198,18 +203,33 @@ def checker_quad():
         scenes=[{"nodes": [0]}],
         nodes=[{"name": "quad", "mesh": 0}],
         meshes=[{"primitives": [primitive]}],
-        materials=[
-            {
-                "pbrMetallicRoughness": {
-                    "baseColorTexture": {"index": 0},
-                    "baseColorFactor": [1, 1, 1, 1],
-                }
-            }
-        ],
+        materials=[material],
         textures=[{"source": 0}],
-        images=[{"uri": data_uri("image/png", quadrants(64)), "mimeType": "image/png"}],
+        images=[{"uri": data_uri("image/png", texture), "mimeType": "image/png"}],
     )
-    (TESTS / "checker_quad.gltf").write_text(json.dumps(document, indent=1))
+    (TESTS / name).write_text(json.dumps(document, indent=1))
+
+
+def checker_quad():
+    """A quad with a four color texture of 512 pixels, more than the windows of the tests."""
+    textured_quad(
+        "checker_quad.gltf",
+        quadrants(512),
+        {"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}, "baseColorFactor": [1, 1, 1, 1]}},
+    )
+
+
+def masked_quad():
+    """A quad whose texture is clear on the left half, in the MASK alpha mode."""
+    textured_quad(
+        "masked_quad.gltf",
+        half_clear(64),
+        {
+            "pbrMetallicRoughness": {"baseColorTexture": {"index": 0}},
+            "alphaMode": "MASK",
+            "alphaCutoff": 0.5,
+        },
+    )
 
 
 def tower():
@@ -316,6 +336,7 @@ def crate():
 if __name__ == "__main__":
     TESTS.mkdir(parents=True, exist_ok=True)
     checker_quad()
+    masked_quad()
     tower()
     triangle_external()
     crate()

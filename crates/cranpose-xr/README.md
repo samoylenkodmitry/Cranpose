@@ -192,7 +192,8 @@ dependencies (`gltf`, `image`, `base64` and `percent-encoding`).
 
 ```rust,ignore
 use cranpose_xr::{
-    SpatialGltfModel, SpatialGltfModelSource, SubspaceModifier, rememberSpatialGltfModelState,
+    SpatialGltfModel, SpatialGltfModelSource, SpatialGltfModelStatus, SubspaceModifier,
+    rememberSpatialGltfModelState,
 };
 
 // A source made from bytes is a new source each time, so the app keeps it
@@ -203,18 +204,25 @@ SpatialGltfModel(
     SubspaceModifier::new().size(300.0, 300.0).depth(300.0),
     |_| {},
 );
-// Once the model has loaded, its animations play
-if let Some(spin) = state.animations().first() {
-    spin.set_looping(true);
-    spin.start();
-}
+// The animations exist once the model has loaded. An effect keyed by the status starts them
+// once, where a call in the composable's body would start them again at each composition.
+let status = state.status();
+LaunchedEffect(status.clone(), async move |_| {
+    if status == SpatialGltfModelStatus::Loaded {
+        for animation in state.animations() {
+            animation.set_looping(true);
+            animation.start();
+        }
+    }
+});
 ```
 
 A source is a file (`.glb`, or `.gltf` with embedded buffers or files beside it) or bytes. The model
 loads on a worker thread. `state.status()` is `Loading`, `Loaded` or `Failed(GltfError)`, and the
 composable shows nothing until it is `Loaded`. The model keeps its proportions and scales to fit the
-box that the modifier sets, as in Jetpack XR. A side that the modifier leaves out has no limit. With no
-size at all the model has its own size, a meter for each glTF unit.
+box that the modifier sets, as in Jetpack XR. A side that the modifier leaves out never makes the
+model larger than its own size. With no size at all the model has its own size, a meter for each
+glTF unit.
 
 The scene shows the node tree of the file's default scene with each node's transform. Each mesh
 carries its material's base color, which is the base color texture times the base color factor. The

@@ -76,16 +76,26 @@ const DEFAULT_LIGHT: Light = Light {
 /// rotation and scale of its nodes. A frame that has no playing animation takes no time for them.
 ///
 /// ```ignore
-/// let state = rememberSpatialGltfModelState(SpatialGltfModelSource::from_bytes(MODEL));
+/// // A source made from bytes is a new source each time, so the composable keeps it
+/// let source = remember(|| SpatialGltfModelSource::from_bytes(MODEL)).with(Clone::clone);
+/// let state = rememberSpatialGltfModelState(source);
 /// SpatialGltfModel(
 ///     state.clone(),
 ///     SubspaceModifier::new().size(300.0, 300.0).depth(300.0),
 ///     |_| {},
 /// );
-/// if let Some(spin) = state.animations().first() {
-///     spin.set_looping(true);
-///     spin.start();
-/// }
+/// // The animations exist once the model has loaded. An effect keyed by the status starts
+/// // them once, where a call in the composable's body would start them again at each
+/// // composition.
+/// let status = state.status();
+/// LaunchedEffect(status.clone(), async move |_| {
+///     if status == SpatialGltfModelStatus::Loaded {
+///         for animation in state.animations() {
+///             animation.set_looping(true);
+///             animation.start();
+///         }
+///     }
+/// });
 /// ```
 #[composable]
 pub fn SpatialGltfModel(

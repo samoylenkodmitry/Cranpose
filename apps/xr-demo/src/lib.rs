@@ -107,8 +107,8 @@ pub fn XrDemo() {
                 .rotate(0.0, -30.0, 0.0),
             true,
         );
-        // The crate's volume has no handle, so it adds one layer to the frame and no more: the
-        // projection layer of the volumes is shared
+        // The crate's volume has no handle, so it adds no layer to the frame: the torus's volume
+        // already brings the projection layer, which all volumes share
         CrateModel(
             SubspaceModifier::new()
                 .offset(950.0, -330.0, 100.0)

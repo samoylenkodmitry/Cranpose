@@ -17,6 +17,10 @@ fn load(name: &str) -> Result<GltfModel, GltfError> {
     import(&SpatialGltfModelSource::from_path(path(name)))
 }
 
+fn text_of(name: &str) -> String {
+    std::fs::read_to_string(path(name)).expect("a model file")
+}
+
 fn bytes_of(name: &str) -> Vec<u8> {
     std::fs::read(path(name)).expect("a model file")
 }
@@ -43,11 +47,11 @@ fn a_gltf_with_embedded_buffer_and_texture_gives_a_mesh_with_normals_and_a_bitma
     let LayerContent::Bitmap(bitmap) = &model.layers[0].content else {
         panic!("the material has a texture");
     };
-    assert_eq!((bitmap.width(), bitmap.height()), (64, 64));
-    assert_eq!(model.layers[0].size, [64, 64]);
+    assert_eq!((bitmap.width(), bitmap.height()), (512, 512));
+    assert_eq!(model.layers[0].size, [512, 512]);
     // Red in the top left quadrant, yellow in the bottom right
     assert_eq!(bitmap.rgba8_pixel(0), [255, 0, 0, 255]);
-    assert_eq!(bitmap.rgba8_pixel(63 * 64 + 63), [255, 255, 0, 255]);
+    assert_eq!(bitmap.rgba8_pixel(511 * 512 + 511), [255, 255, 0, 255]);
     assert_eq!(model.bounds, ([-0.5, -0.5, 0.0], [0.5, 0.5, 0.0]));
 }
 
@@ -210,4 +214,75 @@ fn the_animation_of_a_file_moves_its_nodes_by_the_clips_time() {
         block(9.0, &mut locals, &mut worlds),
         Vec3::new(0.0, 1.0, -4.0),
     );
+}
+
+// The triangle file with its buffer embedded, so that bytes can hold it, and `node` as its node.
+fn embedded_triangle(node: &str) -> String {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let buffer = STANDARD.encode(bytes_of("triangle_external.bin"));
+    text_of("triangle_external.gltf")
+        .replace(
+            "triangle_external.bin",
+            &format!("data:application/octet-stream;base64,{buffer}"),
+        )
+        .replace(r#""mesh": 0"#, node)
+}
+
+#[test]
+fn a_node_with_a_matrix_loads_as_its_translation_and_scale() {
+    // Twice the size, five meters along x
+    let matrix = r#""mesh": 0, "matrix": [2,0,0,0, 0,2,0,0, 0,0,2,0, 5,0,0,1]"#;
+    let source = SpatialGltfModelSource::from_bytes(embedded_triangle(matrix).into_bytes());
+    let model = import(&source).expect("the triangle loads from bytes");
+    assert_eq!(model.rest[0].translation, [5.0, 0.0, 0.0]);
+    for scale in model.rest[0].scale {
+        assert!((scale - 2.0).abs() < 1e-5, "{scale}");
+    }
+    // The triangle's corners at 0 and 1 span x from 5 to 7 and y from 0 to 2
+    near(Vec3::from_array(model.bounds.0), Vec3::new(5.0, 0.0, 0.0));
+    near(Vec3::from_array(model.bounds.1), Vec3::new(7.0, 2.0, 0.0));
+}
+
+#[test]
+fn a_jpeg_texture_decodes() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let mut jpeg = Vec::new();
+    let red = image::RgbImage::from_pixel(32, 16, image::Rgb([250, 10, 10]));
+    image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+        .encode_image(&red)
+        .expect("a jpeg");
+    // The quad's png becomes the jpeg
+    let text = text_of("checker_quad.gltf");
+    let start = text.find("data:image/png;base64,").expect("the png");
+    let end = start + text[start..].find('"').expect("the end of the uri");
+    let swapped = format!(
+        "{}data:image/jpeg;base64,{}{}",
+        &text[..start],
+        STANDARD.encode(&jpeg),
+        &text[end..]
+    );
+    let model =
+        import(&SpatialGltfModelSource::from_bytes(swapped.into_bytes())).expect("the quad loads");
+    let LayerContent::Bitmap(bitmap) = &model.layers[0].content else {
+        panic!("the material has a texture");
+    };
+    assert_eq!((bitmap.width(), bitmap.height()), (32, 16));
+    let [red, green, blue, alpha] = bitmap.rgba8_pixel(100);
+    assert!(
+        red > 200 && green < 60 && blue < 60 && alpha == 255,
+        "{red} {green} {blue}"
+    );
+}
+
+#[test]
+fn strips_and_fans_become_triangles_that_keep_their_winding() {
+    // A strip of five corners holds three triangles, and every other one turns its first two
+    // corners over
+    assert_eq!(
+        strip_triangles(&[0, 1, 2, 3, 4]),
+        [0, 1, 2, 2, 1, 3, 2, 3, 4]
+    );
+    assert_eq!(fan_triangles(&[9, 1, 2, 3]), [9, 1, 2, 9, 2, 3]);
+    assert!(strip_triangles(&[0, 1]).is_empty());
+    assert!(fan_triangles(&[]).is_empty());
 }

@@ -172,3 +172,23 @@ fn a_model_that_does_not_load_shows_nothing_and_says_why() {
         "nothing shows"
     );
 }
+
+#[test]
+fn a_masked_texture_shows_where_it_is_opaque_and_the_window_where_it_is_clear() {
+    let (mut view, _state) = window(SpatialGltfModelSource::from_path(model("masked_quad.gltf")));
+    let mut pixels = Vec::new();
+    draw_until(&mut view, &mut pixels, |pixels| {
+        is_pure(rgb_at(pixels, MIDDLE + 56, MIDDLE), [false, true, false])
+    });
+    // The quad's right half is green, and its left half is clear, so the window's own background
+    // shows there although the quad covers it
+    let clear = rgb_at(&pixels, MIDDLE - 56, MIDDLE);
+    assert!(
+        clear.iter().all(|&value| value < 60),
+        "the clear half shows {clear:?}"
+    );
+    assert!(is_pure(
+        rgb_at(&pixels, MIDDLE + 56, MIDDLE),
+        [false, true, false]
+    ));
+}
