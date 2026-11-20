@@ -108,11 +108,13 @@ impl DamageRects {
         .add(rect);
     }
 
-    // Adds every rect of `rects`. A list that holds none takes them as they
-    // are: they share no pixel already.
+    // Adds every rect of `rects`. A list that holds none takes each as it
+    // is: they share no pixel already.
     pub(crate) fn add_all(&mut self, rects: &Self) {
         if self.is_empty() {
-            self.assign(rects);
+            for rect in rects.as_slice() {
+                self.push(*rect);
+            }
             return;
         }
         let mut merge = Merge {
@@ -214,18 +216,17 @@ struct Partner {
 struct Partners([Option<Partner>; MAX_DAMAGE_RECTS]);
 
 impl Partners {
-    // Every held rect's cheapest partner, each pair tested once.
-    fn of(held: &DamageRects) -> Self {
-        let mut partners = Self([None; MAX_DAMAGE_RECTS]);
+    // Finds every held rect's cheapest partner, each pair tested once, for
+    // partners that hold none.
+    fn pair(&mut self, held: &DamageRects) {
         let rects = held.as_slice();
         for (first, a) in (0u8..).zip(rects) {
             for (second, b) in (0u8..).zip(rects).skip(usize::from(first) + 1) {
                 let added = added_pixels(*a, *b);
-                partners.offer(first, second, added);
-                partners.offer(second, first, added);
+                self.offer(first, second, added);
+                self.offer(second, first, added);
             }
         }
-        partners
     }
 
     // Takes `partner` as the partner of the rect at `at` when the two add
@@ -265,7 +266,7 @@ impl Merge<'_> {
             let mut nearest: Option<(u8, f32)> = None;
             let mut shared = None;
             for (at, part) in (0u8..).zip(self.held.as_slice()) {
-                if part.intersect(rect).is_some() {
+                if shares_pixels(*part, rect) {
                     shared = Some(at);
                     break;
                 }
@@ -309,7 +310,14 @@ impl Merge<'_> {
     // those pixels.
     fn cheapest_pair(&mut self) -> (u8, u8, f32) {
         let held = &*self.held;
-        let partners = self.partners.get_or_insert_with(|| Partners::of(held));
+        let partners = match &mut *self.partners {
+            Some(partners) => partners,
+            none => {
+                let partners = none.insert(Partners([None; MAX_DAMAGE_RECTS]));
+                partners.pair(held);
+                partners
+            }
+        };
         let mut cheapest = (0, 0, f32::INFINITY);
         for at in 0..held.len {
             if partners.0[usize::from(at)].is_none() {
@@ -365,9 +373,20 @@ impl Merge<'_> {
 }
 
 // The pixels the bounds of `a` and `b` add to theirs.
+// The edges compare as plain numbers: the rects of a damage are finite,
+// and `f32::min` and `f32::max` cost more for their NaN rule.
 fn added_pixels(a: DeviceRect, b: DeviceRect) -> f32 {
-    let area = |rect: DeviceRect| rect.width * rect.height;
-    area(a.union(b)) - area(a) - area(b)
+    let lower = |p: f32, q: f32| if p < q { p } else { q };
+    let higher = |p: f32, q: f32| if p > q { p } else { q };
+    let width = higher(a.x + a.width, b.x + b.width) - lower(a.x, b.x);
+    let height = higher(a.y + a.height, b.y + b.height) - lower(a.y, b.y);
+    width * height - a.width * a.height - b.width * b.height
+}
+
+// Whether `a` and `b` share a pixel: both hold one at least, as whole
+// pixels grown out or kept within a window.
+fn shares_pixels(a: DeviceRect, b: DeviceRect) -> bool {
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 }
 
 fn holds(outer: DeviceRect, inner: DeviceRect) -> bool {

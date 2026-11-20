@@ -85,6 +85,9 @@ enum Scene {
     SpinnerAndCaret,
     // Ten small spots scattered over the window changing colour.
     TenSpots,
+    // Thirty-four small spots changing colour, two more than the renderer
+    // keeps rects for.
+    ManySpots,
     // The page moving for `MOVES` steps, then a shape changing colour over
     // the page held still.
     MovedThenStill,
@@ -155,6 +158,28 @@ const SPOTS: [[f32; 4]; 10] = [
     [92.0, 344.0, 12.0, 12.0],
     [204.0, 380.0, 12.0, 12.0],
 ];
+
+// The spots of `Scene::ManySpots`, 20 by 20 points each, 36 of them on
+// the dark squares of a checkerboard of 34 points, 9 columns by 8 rows: two
+// spots in a row or a column lie 68 points apart, two on a diagonal 34 by
+// 34. The first three of the top row lie 67 points apart instead, the
+// fourth 70 points past them.
+fn many_spots() -> impl Iterator<Item = [f32; 4]> {
+    let top = [4.0, 71.0, 138.0, 208.0, 276.0].map(|x| [x, 4.0, 20.0, 20.0]);
+    let checkerboard = (1..8u8).flat_map(|row| {
+        (0..9u8)
+            .filter(move |column| (row + column) % 2 == 0)
+            .map(move |column| {
+                [
+                    4.0 + 34.0 * f32::from(column),
+                    4.0 + 34.0 * f32::from(row),
+                    20.0,
+                    20.0,
+                ]
+            })
+    });
+    top.into_iter().chain(checkerboard)
+}
 
 // The frames a target draws whole before one can draw a part: the first,
 // with nothing to draw over.
@@ -418,6 +443,7 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         | Scene::MovedCaster
         | Scene::SpinnerAndCaret
         | Scene::TenSpots
+        | Scene::ManySpots
         | Scene::TurnedSurface
         | Scene::ShrunkParent
         | Scene::LazyLabel => return None,
@@ -490,15 +516,7 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
                 || {},
             );
         }
-        Scene::TenSpots => {
-            for spot in SPOTS {
-                Box(
-                    rect_modifier(spot).background(shade(step.get())),
-                    BoxSpec::default(),
-                    || {},
-                );
-            }
-        }
+        Scene::TenSpots | Scene::ManySpots => Spots(scene, step),
         Scene::MovedCaster => {
             let [x, y, width, height] = SPOT;
             Box(
@@ -548,6 +566,24 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
                 });
             }
         }
+    }
+}
+
+// The spots of `Scene::TenSpots` or `Scene::ManySpots`, changing colour a
+// step.
+#[composable]
+fn Spots(scene: Scene, step: MutableState<u32>) {
+    let spots: Vec<[f32; 4]> = if scene == Scene::ManySpots {
+        many_spots().collect()
+    } else {
+        SPOTS.to_vec()
+    };
+    for spot in spots {
+        Box(
+            rect_modifier(spot).background(shade(step.get())),
+            BoxSpec::default(),
+            || {},
+        );
     }
 }
 
@@ -1691,6 +1727,62 @@ fn ten_small_changes_scattered_over_the_window_draw_only_their_areas() {
                 );
             }
             before = Some(frame.direct);
+        }
+    }
+}
+
+// Thirty-six small changes, four more than the renderer keeps rects for:
+// past its 32 rects each frame merges the pairs that add the fewest pixels,
+// into rects that share no pixel, and every frame equals the whole frame.
+// The first two merges take the top row's three close spots, 1,032 pixels
+// apart each, as the second merge finds the third spot's cheapest partner
+// again once the first took its partner; the other two take spots 68
+// points apart, 1,056 pixels each.
+#[test]
+fn changes_past_the_rect_bound_merge_the_pairs_that_add_the_fewest_pixels() {
+    const PARTIAL_FRAMES: u32 = 6;
+    const RECTS: usize = 32;
+    // A spot's 20 by 20 pixels with the 2 past them all around that its
+    // area takes.
+    const SPOT_AREA: u64 = 24 * 24;
+    // The pixels between two areas 43 and 44 pixels apart.
+    const MERGES: u64 = 2 * 43 * 24 + 2 * 44 * 24;
+    let spots = many_spots().count() as u64;
+    let changing = SPOT_AREA * spots + MERGES;
+    for keeper in KEEPERS {
+        let Some((_lock, renderer)) = renderer() else {
+            return;
+        };
+        let mut harness = Harness::new(renderer, Scene::ManySpots, 1.0, keeper);
+        let start = keeper.start_frames();
+        for step in 0..start + PARTIAL_FRAMES {
+            let frame = harness.frame(step);
+            let stats = frame.stats;
+            let label = format!("{keeper:?} frame {step}: {stats:?}");
+            support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+            if step < start {
+                continue;
+            }
+            let FrameDamage::Part(rects) = stats.damage else {
+                panic!("{label}: small changes draw a part of the window");
+            };
+            let rects = rects.rects();
+            assert_eq!(rects.len(), RECTS, "{label}: the rects reach their bound");
+            for (at, a) in rects.iter().enumerate() {
+                for b in &rects[at + 1..] {
+                    assert!(
+                        a[0] + a[2] <= b[0]
+                            || b[0] + b[2] <= a[0]
+                            || a[1] + a[3] <= b[1]
+                            || b[1] + b[3] <= a[1],
+                        "{label}: rects {a:?} and {b:?} share pixels"
+                    );
+                }
+            }
+            assert_eq!(
+                stats.repainted_pixels, changing,
+                "{label}: the spots and the pixels of the four cheapest merges"
+            );
         }
     }
 }
