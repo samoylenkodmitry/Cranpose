@@ -426,6 +426,8 @@ impl TargetState {
             return false;
         };
         damage.assign_part(begun);
+        // Old areas past half of the window take it whole before any landing.
+        damage.settle(setting.viewport);
         let mut whole = false;
         if let Damage::Part(rects) = damage {
             // One run: at the bound of rects, a lone add searches every pair.
