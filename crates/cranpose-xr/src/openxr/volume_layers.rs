@@ -54,6 +54,8 @@ pub(crate) struct VolumeLayers {
     extensions: (bool, bool),
     eyes: Option<[EyeSwapchains; 2]>,
     drawn: Option<Drawn>,
+    // The plan that the log named last, so that it names each change once
+    logged: Option<VolumePlan>,
     // Whether the 3D content failed. A failure ends the 3D content and leaves the session, with
     // its panels, running.
     failed: bool,
@@ -69,6 +71,7 @@ impl VolumeLayers {
             extensions: xr_session.depth_extensions(),
             eyes: None,
             drawn: None,
+            logged: None,
             failed: false,
         }
     }
@@ -154,6 +157,7 @@ impl VolumeLayers {
         let Self {
             pass,
             eyes: Some(eyes),
+            logged,
             ..
         } = self
         else {
@@ -166,6 +170,14 @@ impl VolumeLayers {
             submits_depth: frame_plan.submits_depth && has_depth,
             tests_depth: frame_plan.tests_depth && has_depth,
         };
+        if *logged != Some(frame_plan) {
+            *logged = Some(frame_plan);
+            log::info!(
+                "cranpose xr: the volumes' layer carries depth {}, and the layers over it test it {}",
+                frame_plan.submits_depth,
+                frame_plan.tests_depth
+            );
+        }
         let mut drew = true;
         for (eye, camera) in eyes.iter_mut().zip(&cameras) {
             drew &= draw_eye(

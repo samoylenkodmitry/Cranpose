@@ -286,7 +286,7 @@ pub(crate) struct XrSession {
     // The raw layers of the frame that ends. The lists keep their capacity from frame to frame.
     layers: FrameLayers,
     // The number of layers that the last logged frame had, so that the log names each change once
-    logged_layers: usize,
+    logged_layers: (usize, usize),
     // The most layers that the system reports it takes. A runtime may take fewer.
     max_layers: u32,
 }
@@ -349,7 +349,7 @@ impl XrSession {
             flips_layers: flips_layers && !Graphics::TOP_ROW_FIRST,
             status: SessionStatus::Idle,
             layers: FrameLayers::new(local_handle),
-            logged_layers: 0,
+            logged_layers: (0, 0),
             max_layers,
         })
     }
@@ -534,11 +534,13 @@ impl XrSession {
                 headers.len(),
             )
         };
-        if references.len() != self.logged_layers {
-            self.logged_layers = references.len();
+        let counts = (references.len(), self.layers.tested());
+        if counts != self.logged_layers {
+            self.logged_layers = counts;
             log::info!(
-                "cranpose xr: the frame has {} layers, of {} that the system takes",
-                references.len(),
+                "cranpose xr: the frame has {} layers, {} of them test depth, of {} that the system takes",
+                counts.0,
+                counts.1,
                 self.max_layers
             );
         }
