@@ -291,6 +291,65 @@ lifecycle that an Android app reads. `XrFrame::focused` gives the same answer in
 `Paused` runs the durable saves that the app registered. The frame loop waits for them for up to
 `durable_save_deadline()`.
 
+## Store entitlement
+
+The Meta Horizon Store needs a store app to check at its start that the viewer owns it. The app
+must quit when the check fails. The `meta-entitlement` feature of this crate runs Meta's check for an
+Android app. It is off by default. With the feature off, nothing of Meta's Platform SDK is linked
+or downloaded.
+
+The app turns it on in three places. The Rust package enables the feature. The Gradle build lists
+the service. The build's configuration gives the app's id from the Meta Horizon developer
+dashboard (My Apps, then Development, then API). The id is never in the code.
+
+```toml
+# Cargo.toml of the Android package
+cranpose-xr = { version = "0.26", features = ["openxr", "meta-entitlement"] }
+```
+
+```kotlin
+// build.gradle.kts
+cranpose {
+    services.addAll("xr", "meta-entitlement")
+    metaAppId.set(providers.gradleProperty("cranposeMetaAppId")) // or -PcranposeMetaAppId=<id>
+}
+```
+
+**Whoever turns the feature on accepts Meta's license.** The `meta-entitlement` service downloads
+`com.meta.horizon.platform.ovr:android-platform-sdk` from Maven Central. The SDK is under the
+[Meta Platform Technologies SDK License Agreement](https://developers.meta.com/vr/licenses/oculussdk/).
+The agreement says that downloading or using the SDK accepts it. It binds the person or the
+entity that does so. The repository holds none of the SDK.
+
+The backend starts the check before it connects to the runtime, as Meta asks for the check within
+10 seconds of the launch. The Platform SDK initializes with the id of the merged manifest and asks
+whether the viewer is entitled. Every failure counts as a failed check: an SDK that does not
+initialize, an id that the store does not know, an exception, no answer for 30 seconds and a build
+that lacks the Gradle service. A failed check quits the app by default. The backend calls
+`request_exit`, so the session ends and the activity finishes. An app that prefers to limit itself,
+as a demo does, picks `OnNotEntitled::Continue`. `EntitlementCheck::entitlement` then tells it
+`NotEntitled`.
+
+```rust,ignore
+use cranpose_xr::{Entitlement, OnNotEntitled, local_entitlement_check};
+
+#[composable]
+fn Root() {
+    if let Some(check) = local_entitlement_check().current() {
+        // Before the answer comes: the first composition is early enough
+        remember(move || check.set_on_not_entitled(OnNotEntitled::Continue));
+        if check.entitlement() == Entitlement::NotEntitled {
+            Text("Buy the app to unlock this", Modifier::empty(), TextStyle::default());
+        }
+    }
+}
+```
+
+`local_entitlement_check()` is `None` where no check runs: in a build without the feature, on a
+desktop headset and in a window. Jetpack XR has no entitlement API. A build that installs without the
+store fails the check, so a test on a headset needs the app's store channel or a test user. The log
+names the result: `cranpose xr: entitlement check: NotEntitled (...); the app quits`.
+
 ## Hands, body, face and eyes
 
 An app that wants the user's hands, body, face or eyes asks for them in its build script, with the

@@ -27,6 +27,12 @@
 //! the app in the headset of the machine's OpenXR runtime (SteamVR, Monado, Meta Link) and opens
 //! a flat window when the machine has none. On macOS its `run` opens the flat window. Elsewhere
 //! the composables draw flat.
+//!
+//! The `meta-entitlement` feature adds the entitlement check of the Meta Horizon Store to an
+//! Android app. A failed check ends the app unless the app picks [`OnNotEntitled::Continue`].
+//! [`local_entitlement_check`] gives the app what the check found. Whoever turns the feature on
+//! accepts the Meta Platform Technologies SDK License Agreement, because the app's Gradle build
+//! downloads the Meta Platform SDK.
 
 #[cfg(any(test, headset))]
 mod aim_filter;
@@ -45,6 +51,10 @@ mod controller;
 mod controller_bindings;
 #[cfg(any(test, headset))]
 mod depth_order;
+mod entitlement;
+mod entitlement_check;
+#[cfg(any(test, headset))]
+mod entitlement_watch;
 #[cfg(any(test, headset))]
 mod exit_request;
 #[cfg(any(test, headset))]
@@ -89,6 +99,7 @@ mod layer_limit;
 mod locals;
 mod meta_face_state;
 mod move_policy;
+mod on_not_entitled;
 mod pinch;
 #[cfg(any(test, headset))]
 mod pointer;
@@ -171,6 +182,8 @@ pub use controller::{Button, Controller, Thumbstick, TrackedPose, Trigger};
 #[doc(hidden)]
 pub use cranpose as __cranpose;
 pub use cranpose::ExternalSurface;
+pub use entitlement::Entitlement;
+pub use entitlement_check::{EntitlementCheck, local_entitlement_check};
 pub use eye_state::EyeState;
 pub use eyes::Eyes;
 pub use face_blend_shape_type::FaceBlendShapeType;
@@ -196,6 +209,7 @@ pub use input_source::InputSource;
 pub use interaction_profile::InteractionProfile;
 pub use meta_face_state::MetaFaceState;
 pub use move_policy::MovePolicy;
+pub use on_not_entitled::OnNotEntitled;
 #[cfg(all(headset, target_os = "android"))]
 #[doc(hidden)]
 pub use openxr::run;

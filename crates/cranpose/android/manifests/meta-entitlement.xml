@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The app id for the Meta Platform SDK, which `CranposeMetaEntitlement` reads
+    to check that the viewer owns the app. The Gradle property
+    `cranposeMetaAppId` (or `cranpose { metaAppId }`) fills the placeholder, and
+    the build fails when the service is listed without it.
+    https://developers.meta.com/horizon/documentation/android-apps/ps-setup/
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <meta-data
+            android:name="com.meta.horizon.platform.ovr.OCULUS_APP_ID"
+            android:value="${cranposeMetaAppId}" />
+    </application>
+</manifest>

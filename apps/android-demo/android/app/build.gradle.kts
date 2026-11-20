@@ -18,6 +18,11 @@ cranpose {
     cargoPackage.set(demoProperty("cranposeCargoPackage", "desktop-app-platform"))
     libraryName.set(demoProperty("cranposeLibraryName", "desktop_app"))
     label.set(demoProperty("cranposeLabel", "Compose Demo"))
+    // More Cargo features of the package, such as `meta-entitlement` of the XR demo. They come
+    // after the plugin's defaults, which an explicit value would replace.
+    providers.gradleProperty("cranposeFeatures").orNull?.let { more ->
+        features.set(features.get() + more.split(",").filter { it.isNotBlank() })
+    }
     // The demo draws an overlay window, plays designed haptics and runs on TVs,
     // and needs nothing else optional. It posts no notifications, so it does
     // not ask to.

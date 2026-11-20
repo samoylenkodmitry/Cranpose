@@ -283,6 +283,15 @@ wearable = [
 # sells nothing should not carry. Harmless to enable on other targets — the
 # whole backend is Android-only and compiles away.
 playbilling = []
+# The entitlement check of the Meta Horizon Store on Android, through
+# `begin_meta_entitlement` and `meta_entitlement`. Off by default: the bridge
+# expects the app's Gradle build to list the `meta-entitlement` service, which
+# adds the `crates/cranpose/android/java-meta-entitlement` source directory and
+# the Meta Platform SDK. The SDK is under the Meta Platform Technologies SDK
+# License Agreement (https://developers.meta.com/vr/licenses/oculussdk/), which
+# binds whoever downloads or uses it. Harmless to enable on other targets: the
+# bridge is Android-only and compiles away.
+meta-entitlement = []
 preview = ["embed", "dep:inventory", "cranpose-ui/inspection"]
 # Development-only structural keys for hot-patched previews; the plugin's
 # development runner enables it for private debug builds. Release builds and
