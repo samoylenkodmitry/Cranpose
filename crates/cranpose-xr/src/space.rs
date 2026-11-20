@@ -31,6 +31,7 @@ use crate::{
     dock::Dock,
     follow_origin::{FollowOrigins, Standing},
     locals::with_locals,
+    sound_sources::SoundSources,
     stream_source::StreamSource,
     surface_input::{InputSink, PointerSink, SurfaceInput},
     volumes::{VolumeContent, Volumes},
@@ -75,6 +76,11 @@ impl Origin {
     // The pose `child`, given in this origin's frame.
     pub(crate) fn then(&self, child: &Pose) -> Pose {
         self.pose.then(child)
+    }
+
+    // The following subspace that this origin belongs to, if it is one.
+    pub(crate) const fn follower(&self) -> Option<u64> {
+        self.follower
     }
 }
 
@@ -268,6 +274,8 @@ struct Inner {
     streams: RefCell<Vec<(u64, Rc<StreamSource>)>>,
     // Where following subspaces stand
     follow_origins: RefCell<FollowOrigins>,
+    // The point sources of sound
+    sounds: RefCell<SoundSources>,
     next_id: Cell<u64>,
     // Whether the headset shows curved panels. If not, they show and answer rays as flat ones.
     curves: Cell<bool>,
@@ -378,6 +386,7 @@ impl Space {
                 entries: RefCell::new(Vec::new()),
                 streams: RefCell::new(Vec::new()),
                 follow_origins: RefCell::new(FollowOrigins::default()),
+                sounds: RefCell::new(SoundSources::default()),
                 next_id: Cell::new(1),
                 curves: Cell::new(true),
                 volumes: OnceCell::new(),
@@ -839,6 +848,7 @@ impl Space {
         if let Some(volumes) = self.inner.volumes.get() {
             volumes.remove(id);
         }
+        self.inner.sounds.borrow_mut().remove(id);
     }
 
     // The scene of the volumes takes the content of the volume `content.id`, or replaces what it
@@ -969,6 +979,8 @@ pub(crate) fn local_subspace_origin() -> CompositionLocal<Origin> {
 pub(crate) fn local_space() -> CompositionLocal<Option<Space>> {
     with_locals(|locals| locals.space.clone())
 }
+
+mod sounds;
 
 #[cfg(test)]
 #[path = "tests/space_tests.rs"]

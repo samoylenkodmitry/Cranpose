@@ -96,9 +96,11 @@ pub use app_update::{
 };
 pub use async_io::{ChunkChannel, ChunkNext, ChunkStream, MAX_PENDING_CHUNKS, Signal, SignalWait};
 pub use audio::{
-    AudioBus, AudioClip, AudioError, AudioPlayer, AudioPlayerRef, NoopAudioPlayer, PlaybackParams,
-    ProvideAudio, SoundBank, SoundBankEntry, SoundBankFailure, SoundId, SoundSpec, VoiceId,
-    clear_platform_audio, default_audio, local_audio, rememberSoundBank, set_platform_audio,
+    AudioBus, AudioClip, AudioError, AudioListener, AudioPlayer, AudioPlayerRef,
+    DistanceAttenuation, Emitter, EmitterId, EmitterReading, MAX_EMITTERS, NoopAudioPlayer,
+    OutputLevels, OutputTap, PlaybackParams, ProvideAudio, SoundBank, SoundBankEntry,
+    SoundBankFailure, SoundId, SoundSpec, SpatialScene, VoiceId, clear_platform_audio,
+    default_audio, local_audio, rememberSoundBank, set_platform_audio,
 };
 pub use background::{
     BackgroundActivity, BackgroundActivityRef, BackgroundWork, BackgroundWorkLease,

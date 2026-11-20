@@ -3,6 +3,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
+use cranpose_services::DistanceAttenuation;
 use parking_lot::Mutex;
 
 use super::*;
@@ -586,4 +587,50 @@ fn a_looping_voice_keeps_the_device_for_as_long_as_it_plays() {
     rig.engine.stop_voice(voice);
     assert_eq!(rig.go_idle(), RenderStatus::Idle);
     assert!(!rig.engine.is_streaming());
+}
+
+#[test]
+fn a_voice_that_names_an_emitter_sounds_from_its_place_and_stops_with_it() {
+    let rig = Rig::new();
+    let scene = rig.engine.spatial_scene().expect("the engine has a scene");
+    let id = rig.engine.load_clip(tone(48_000)).expect("loads");
+    // Left of a head that looks along -z, 1 m away
+    let emitter = scene
+        .add_emitter([-1.0, 0.0, 0.0], DistanceAttenuation::Auto)
+        .expect("a free slot");
+    rig.engine
+        .play_loop(id, PlaybackParams::new().emitter(emitter.id()));
+    let out = rig.render(2_048);
+    let (left, right) = (out[out.len() - 2], out[out.len() - 1]);
+    assert!(
+        left > right * 1.5,
+        "a source at the left is louder in the left ear: {left} and {right}"
+    );
+    // The frame loop moves it to the right with no call into the engine
+    emitter.place([1.0, 0.0, 0.0]);
+    let out = rig.render(2_048);
+    let (left, right) = (out[out.len() - 2], out[out.len() - 1]);
+    assert!(
+        right > left * 1.5,
+        "and now at the right: {left} and {right}"
+    );
+    drop(emitter);
+    assert!(rig.render(256).iter().all(|sample| *sample == 0.0));
+    assert_eq!(rig.active_voices(), 0);
+}
+
+#[test]
+fn the_scene_is_the_same_one_after_the_stream_reopens() {
+    let rig = Rig::new();
+    let scene = rig.engine.spatial_scene().expect("the engine has a scene");
+    let id = rig.engine.load_clip(tone(4_096)).expect("loads");
+    rig.engine.play(id, PlaybackParams::new());
+    assert_eq!(rig.opens.get(), 1);
+    scene.set_paused(true);
+    rig.sink.dead.set(true);
+    rig.engine.play(id, PlaybackParams::new());
+    assert_eq!(rig.opens.get(), 2);
+    let again = rig.engine.spatial_scene().expect("the engine has a scene");
+    assert!(Arc::ptr_eq(&scene, &again));
+    assert!(again.is_paused(), "the pause outlives the stream");
 }

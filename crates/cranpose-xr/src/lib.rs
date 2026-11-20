@@ -33,6 +33,12 @@
 //! draws one below the field's panel, or shows the system's where the runtime does, as Android XR
 //! does. [`use_keyboard`] chooses.
 //!
+//! A [`SpatialPointSource`] plays a sound from a pose in a [`Subspace`]. [`SubspaceModifier::point_source`]
+//! makes a panel or a volume the source of a sound. The sound follows the head and the source in each
+//! frame. Cranpose's own panner in the audio mixer gives each ear its level and its delay, so the
+//! runtime has no part in it. The audio player must be Cranpose's engine.
+//! [`SpatialCapabilities::is_spatial_audio_enabled`] says whether it is.
+//!
 //! The `openxr` feature adds the backend for headsets. On Android, as on a Meta Quest, its
 //! [`android_main!`] starts the app as an immersive app. On Linux and Windows its `run` starts
 //! the app in the headset of the machine's OpenXR runtime (SteamVR, Monado, Meta Link) and opens
@@ -165,6 +171,8 @@ mod plane_snap;
 mod plane_state;
 mod plane_type;
 mod planes;
+mod point_source;
+mod point_source_params;
 #[cfg(any(test, headset))]
 mod pointer;
 #[cfg(any(test, headset))]
@@ -190,6 +198,9 @@ mod scripted_hand;
 mod session_status;
 #[cfg(any(test, headset))]
 mod soft_keyboard;
+mod sound_sources;
+#[cfg(any(test, headset))]
+mod sound_stage;
 mod space;
 mod spatial_capabilities;
 mod spatial_curved_row;
@@ -208,6 +219,7 @@ mod spatial_move_event;
 #[cfg(any(test, headset))]
 mod spatial_offer;
 mod spatial_panel;
+mod spatial_point_source;
 #[cfg(any(test, headset))]
 mod spatial_request;
 mod spatial_resize_event;
@@ -275,7 +287,7 @@ pub use body_state::BodyState;
 pub use controller::{Button, Controller, Thumbstick, TrackedPose, Trigger};
 #[doc(hidden)]
 pub use cranpose as __cranpose;
-pub use cranpose::ExternalSurface;
+pub use cranpose::{DistanceAttenuation, ExternalSurface};
 pub use entitlement::Entitlement;
 pub use entitlement_check::{EntitlementCheck, local_entitlement_check};
 pub use eye_state::EyeState;
@@ -327,6 +339,8 @@ pub use plane_semantic::PlaneSemantic;
 pub use plane_state::PlaneState;
 pub use plane_type::PlaneType;
 pub use planes::{Planes, local_planes};
+pub use point_source::PointSource;
+pub use point_source_params::PointSourceParams;
 pub use pose::Pose;
 pub use ray::{PanelHit, Ray};
 pub use recenter::Recenter;
@@ -352,6 +366,7 @@ pub use spatial_gltf_model_state::{SpatialGltfModelState, rememberSpatialGltfMod
 pub use spatial_gltf_model_status::SpatialGltfModelStatus;
 pub use spatial_move_event::{SpatialMoveEvent, SpatialMoveEventType};
 pub use spatial_panel::SpatialPanel;
+pub use spatial_point_source::SpatialPointSource;
 pub use spatial_resize_event::{SpatialResizeEvent, SpatialResizeEventType};
 pub use spatial_volume::{SpatialVolume, SpatialVolumeScope};
 pub use stereo_mode::StereoMode;

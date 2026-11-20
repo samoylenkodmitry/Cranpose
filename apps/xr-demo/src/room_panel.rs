@@ -75,7 +75,7 @@ pub(crate) fn RoomDemo(script: bool) {
                         placed,
                         planes.clone(),
                         Some(anchor.clone()),
-                    )
+                    );
                 },
             );
         }

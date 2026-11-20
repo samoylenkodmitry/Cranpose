@@ -13,6 +13,7 @@ fn a_build_without_a_device_reports_unsupported() {
         leaked_clips: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
         underruns: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
         streaming: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        scene: std::sync::Arc::new(cranpose_services::SpatialScene::new()),
     };
     assert!(matches!(open_mixer(seed), Err(AudioError::Unsupported)));
 }
