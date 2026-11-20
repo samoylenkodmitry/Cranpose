@@ -6,8 +6,8 @@
 use cranpose_core::{CompositionLocal, compositionLocalOf};
 
 use crate::{
-    EntitlementCheck, Haptics, HeadsetProperties, SpatialCapabilities, SpatialEnvironment,
-    TrackingCapabilities,
+    Anchors, EntitlementCheck, Haptics, HeadsetProperties, Planes, SpatialCapabilities,
+    SpatialEnvironment, TrackingCapabilities,
     frame_effects::FrameEffects,
     space::{Origin, SUBSPACE_ORIGIN, Space},
     spatial_curved_row::Curve,
@@ -24,6 +24,8 @@ pub(crate) struct Locals {
     pub(crate) headset_properties: CompositionLocal<Option<HeadsetProperties>>,
     pub(crate) tracking_capabilities: CompositionLocal<TrackingCapabilities>,
     pub(crate) entitlement_check: CompositionLocal<Option<EntitlementCheck>>,
+    pub(crate) anchors: CompositionLocal<Option<Anchors>>,
+    pub(crate) planes: CompositionLocal<Option<Planes>>,
 }
 
 thread_local! {
@@ -38,6 +40,8 @@ thread_local! {
         headset_properties: compositionLocalOf(|| None),
         tracking_capabilities: compositionLocalOf(TrackingCapabilities::default),
         entitlement_check: compositionLocalOf(|| None),
+        anchors: compositionLocalOf(|| None),
+        planes: compositionLocalOf(|| None),
     };
 }
 

@@ -23,6 +23,12 @@
 //! with no controller in it points at the panels and presses with a pinch, as a controller does. [`Haptics`] plays
 //! vibrations on the controllers. A pure Cranpose app can stream a headset to a host with them.
 //!
+//! A runtime holds the room still for the app. [`Anchors`] creates an [`Anchor`], a place that stays where
+//! the app put it, keeps it for the next start with [`Anchor::persist`] and loads it back with
+//! [`Anchors::load`]. `FollowTarget::Anchor` holds a subspace's panels to an anchor. [`Planes`] lists the
+//! [`Plane`]s of the room, such as its walls and tables, and [`MovePolicy::anchor`] lets a movable panel
+//! snap to them. An app asks for them with `Use::anchors()` and `Use::plane_tracking()` in its build.
+//!
 //! A text field in a panel opens a keyboard when it takes focus, with no code in the app. A headset
 //! draws one below the field's panel, or shows the system's where the runtime does, as Android XR
 //! does. [`use_keyboard`] chooses.
@@ -41,6 +47,12 @@
 
 #[cfg(any(test, headset))]
 mod aim_filter;
+mod anchor;
+mod anchor_capabilities;
+mod anchor_persistence;
+mod anchor_result;
+mod anchor_state;
+mod anchors;
 #[cfg(any(test, headset))]
 mod beam_pose;
 #[cfg(any(test, headset))]
@@ -139,6 +151,20 @@ mod meta_face_state;
 mod move_policy;
 mod on_not_entitled;
 mod pinch;
+mod plane;
+#[cfg(any(test, headset))]
+mod plane_classify;
+mod plane_filter;
+#[cfg(any(test, headset))]
+mod plane_frame;
+mod plane_label;
+mod plane_orientation;
+mod plane_semantic;
+#[cfg(any(test, headset))]
+mod plane_snap;
+mod plane_state;
+mod plane_type;
+mod planes;
 #[cfg(any(test, headset))]
 mod pointer;
 #[cfg(any(test, headset))]
@@ -179,8 +205,17 @@ mod spatial_gltf_model_state;
 #[cfg(feature = "gltf")]
 mod spatial_gltf_model_status;
 mod spatial_move_event;
+#[cfg(any(test, headset))]
+mod spatial_offer;
 mod spatial_panel;
+#[cfg(any(test, headset))]
+mod spatial_request;
 mod spatial_resize_event;
+#[cfg(any(test, headset))]
+mod spatial_setup;
+mod spatial_store;
+#[cfg(any(test, headset))]
+mod spatial_support;
 mod spatial_volume;
 mod stereo_mode;
 mod stream_source;
@@ -200,6 +235,7 @@ mod tracking_permission;
 #[cfg(any(test, headset))]
 mod tracking_request;
 mod tracking_state;
+mod uuid;
 #[cfg(any(test, headset))]
 mod vector;
 #[cfg(any(test, headset))]
@@ -227,6 +263,12 @@ mod openxr;
 #[cfg(desktop_run)]
 mod run_error;
 
+pub use anchor::Anchor;
+pub use anchor_capabilities::AnchorCapabilities;
+pub use anchor_persistence::AnchorPersistence;
+pub use anchor_result::AnchorResult;
+pub use anchor_state::AnchorState;
+pub use anchors::{Anchors, local_anchors};
 pub use body_joint::BodyJoint;
 pub use body_joint_type::BodyJointType;
 pub use body_state::BodyState;
@@ -278,6 +320,13 @@ pub use openxr::run;
 #[cfg(all(headset, not(target_os = "android")))]
 pub use openxr::run;
 pub use pinch::Pinch;
+pub use plane::Plane;
+pub use plane_label::PlaneLabel;
+pub use plane_orientation::PlaneOrientation;
+pub use plane_semantic::PlaneSemantic;
+pub use plane_state::PlaneState;
+pub use plane_type::PlaneType;
+pub use planes::{Planes, local_planes};
 pub use pose::Pose;
 pub use ray::{PanelHit, Ray};
 pub use recenter::Recenter;
@@ -317,4 +366,5 @@ pub use tracking_availability::TrackingAvailability;
 pub use tracking_capabilities::{TrackingCapabilities, local_tracking_capabilities};
 pub use tracking_feature::TrackingFeature;
 pub use tracking_state::TrackingState;
+pub use uuid::{Uuid, UuidParseError};
 pub use xr_frame::XrFrame;

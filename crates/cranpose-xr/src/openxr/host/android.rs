@@ -19,6 +19,7 @@ use crate::{
     keyboard::chosen,
     openxr::{entitlement_run::EntitlementRun, runner::run_immersive, runtime::Runtime},
     session_status::SessionStatus,
+    spatial_request::SpatialRequest,
     tracking_permission::PermissionAnswer,
     tracking_request::TrackingRequest,
 };
@@ -249,10 +250,11 @@ pub fn run<Fonts: LauncherFonts>(
         android_xr: Cell::new(false),
     };
     let request = TrackingRequest::of(&settings.capabilities);
+    let spatial_request = SpatialRequest::of(&settings.capabilities);
     // The check starts first: Meta wants it within 10 seconds of the launch. The connection can
     // wait for the user's answer to a permission prompt.
     let entitlement = EntitlementRun::start(&host);
-    let result = Runtime::connect(&host, request)
+    let result = Runtime::connect(&host, request, spatial_request)
         .and_then(|runtime| run_immersive(&host, runtime, &settings, entitlement, content));
     if let Err(error) = result {
         log::error!("cranpose xr: {error}");

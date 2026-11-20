@@ -27,4 +27,9 @@ pub struct SpatialMoveEvent {
     /// The content's pose in the event before. In a [`Start`](SpatialMoveEventType::Start) event
     /// and in an [`End`](SpatialMoveEventType::End) event it equals `pose`.
     pub previous_pose: Pose,
+    /// The content's new pose in the app's room, the OpenXR LOCAL space that
+    /// [`XrFrame`](crate::XrFrame) describes, which [`Anchors::create`](crate::Anchors::create)
+    /// takes. Jetpack XR has no such field: its apps convert the pose from the subspace to
+    /// the perception space with `transformPoseTo`.
+    pub room_pose: Pose,
 }

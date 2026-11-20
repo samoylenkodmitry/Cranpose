@@ -20,22 +20,24 @@ use super::{
     ray_layers::RayLayers,
     runtime::Runtime,
     session::{ProjectionLayer, QuadLayer, XrSession},
+    spatial::{Frame as RoomFrame, Room, SpatialEvent},
     stream_layers::StreamLayers,
     surface_layers::SurfaceLayers,
     volume_layers::VolumeLayers,
 };
 use crate::{
-    EntitlementCheck, SpatialCapabilities, SpatialEnvironment,
+    Anchors, EntitlementCheck, Planes, SpatialCapabilities, SpatialEnvironment,
     depth_order::sort_back_to_front,
     exit_request::{ExitRequest, ExitStep, leave},
     frame_effects::local_frame_effects,
     keyboard_panel::SoftKeyboardPanel,
-    local_entitlement_check, local_haptics, local_headset_properties, local_spatial_capabilities,
-    local_spatial_environment, local_tracking_capabilities,
+    local_anchors, local_entitlement_check, local_haptics, local_headset_properties, local_planes,
+    local_spatial_capabilities, local_spatial_environment, local_tracking_capabilities,
     pointer::Pointer,
     session_status::{SessionStatus, StatusWatch},
     soft_keyboard::SoftKeyboard,
     space::{PanelSlot, Ride, Space, local_space},
+    spatial_store::SpatialStore,
     surface_input::Gesture,
     volume_host::VolumeScene,
     volume_pick::PickMeshes,
@@ -106,6 +108,15 @@ pub(crate) fn run_immersive(
     Ok(())
 }
 
+// What the first composition makes and the backend keeps: the space, the environment, the
+// entitlement check when one runs and the room's store.
+type Composed = (
+    Space,
+    SpatialEnvironment,
+    Option<EntitlementCheck>,
+    Rc<SpatialStore>,
+);
+
 // The app in the headset. The fields drop in their order: what draws, then the session, then the
 // device and what it draws on.
 struct Immersive {
@@ -118,6 +129,11 @@ struct Immersive {
     environment: SpatialEnvironment,
     // The app's handle on the entitlement check, when one runs
     entitlement: Option<EntitlementCheck>,
+    // The room's anchors and planes: what the runtime holds, and what the app reads of it
+    room: Room,
+    store: Rc<SpatialStore>,
+    // The events about spatial entities that the last frame read, which keep their storage
+    room_events: Vec<SpatialEvent>,
     pointer: Pointer,
     // The meshes of the volumes that a ray points at, for the pointer to meet
     picks: PickMeshes,
@@ -145,7 +161,9 @@ impl Immersive {
     ) -> Result<Self, String> {
         let (graphics, gpu) = Graphics::open(&runtime.instance, runtime.system)?;
         let tracking = runtime.tracking;
+        let spatial = runtime.spatial;
         let xr_session = XrSession::new(runtime, &graphics)?;
+        let room = Room::new(spatial, &xr_session);
         let headset = HeadsetInput::new(&xr_session, tracking)?;
         let layers = PanelLayers::new(&xr_session)?;
         let streams = StreamLayers::new(&graphics, &xr_session);
@@ -159,16 +177,18 @@ impl Immersive {
             SpatialCapabilities::in_headset(xr_session.passthrough.is_controllable());
         let (effects, haptics, properties) =
             (headset.effects(), headset.haptics(), headset.properties());
-        let composed = Rc::new(RefCell::new(
-            None::<(Space, SpatialEnvironment, Option<EntitlementCheck>)>,
-        ));
+        let composed = Rc::new(RefCell::new(None::<Composed>));
         let held = Rc::clone(&composed);
         let mut guest = GuestView::new(settings, &gpu, format.wgpu, 16, 16, DENSITY, move || {
             let space = remember(move || Space::with_scene_size(scene_size)).with(Clone::clone);
             let environment = remember(SpatialEnvironment::new).with(|environment| *environment);
             // The handle lives in the composition, as the state of a composition does
             let check = entitled.then(|| remember(EntitlementCheck::new).with(|check| *check));
-            held.replace(Some((space.clone(), environment, check)));
+            // The room's anchors and planes belong to the composition, as its states do
+            let store = remember(move || SpatialStore::new(spatial.anchors, spatial.planes))
+                .with(Clone::clone);
+            space.attach_spatial_store(&store);
+            held.replace(Some((space.clone(), environment, check, Rc::clone(&store))));
             let volume_space = space.clone();
             CompositionLocalProvider(
                 [
@@ -180,6 +200,8 @@ impl Immersive {
                     local_headset_properties().provides(Some(properties.clone())),
                     local_tracking_capabilities().provides(tracking.capabilities),
                     local_entitlement_check().provides(check),
+                    local_anchors().provides(Some(Anchors::new(Rc::clone(&store)))),
+                    local_planes().provides(Some(Planes::new(store))),
                 ],
                 || {
                     content();
@@ -191,7 +213,7 @@ impl Immersive {
         .map_err(|error| format!("composition: {error}"))?;
         guest.shell().renderer().set_transparent_background(true);
         // The view composes its content when it is made, and the space stays for the view's life
-        let (space, environment, entitlement) = composed
+        let (space, environment, entitlement, store) = composed
             .borrow()
             .clone()
             .ok_or("the content did not compose")?;
@@ -210,6 +232,9 @@ impl Immersive {
             system_keyboard,
             environment,
             entitlement,
+            room,
+            store,
+            room_events: Vec::new(),
             pointer: Pointer::default(),
             picks: PickMeshes::default(),
             layers,
@@ -238,6 +263,19 @@ impl Immersive {
             self.headset
                 .sample(&mut self.xr_session, &frame, status, host),
         );
+        self.xr_session
+            .spatial_events
+            .take_into(&mut self.room_events);
+        self.room.sample(&RoomFrame {
+            xr_session: &self.xr_session,
+            host,
+            store: &self.store,
+            events: &self.room_events,
+            now: self.headset.now(),
+            time: frame.predicted_display_time,
+            head_tracked: self.headset.device_pose().is_some(),
+        });
+        self.room_events.clear();
         self.space.track(
             self.headset.device_pose(),
             self.headset.controllers(),

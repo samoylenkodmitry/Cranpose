@@ -19,12 +19,14 @@ use crate::{
 /// the head, which can take a few frames after the app starts, the panels stand where a
 /// `Subspace` puts them. With `FollowMode::Tight` the origin follows the target in every frame.
 /// [`FollowTarget::Controller`] follows the controller in a hand, for example to put a small ball
-/// above it.
+/// above it. [`FollowTarget::Anchor`] follows an [`Anchor`](crate::Anchor), which holds content on a
+/// table or a wall and keeps it there after the app restarts, with
+/// [`Anchor::persist`](crate::Anchor::persist).
 ///
-/// The origin has the target's place and its turn about the vertical axis, so the panels stand
-/// upright. A panel that the user carried keeps its place relative to the origin, so it moves
-/// with the origin. A panel's [`SpatialMoveEvent`](crate::SpatialMoveEvent) poses are relative to
-/// this origin.
+/// The origin of a view or a controller has the target's place and its turn about the vertical
+/// axis, so the panels stand upright. The origin of an anchor is the anchor's pose. A panel that
+/// the user carried keeps its place relative to the origin, so it moves with the origin. A panel's
+/// [`SpatialMoveEvent`](crate::SpatialMoveEvent) poses are relative to this origin.
 ///
 /// A following subspace moves its panels in the headset's frame loop. A moving target does not
 /// compose the subspace's content again.
@@ -36,7 +38,7 @@ pub fn FollowingSubspace(follow: FollowTarget, content: impl FnMut() + 'static) 
         Subspace(content);
         return;
     };
-    let id = rememberKeyed(follow, |target| space.new_follow_origin(*target));
+    let id = rememberKeyed(follow, |target| space.new_follow_origin(target.clone()));
     DisposableEffect(id, move |_| {
         DisposableEffectResult::new(move || space.remove_follow_origin(id))
     });

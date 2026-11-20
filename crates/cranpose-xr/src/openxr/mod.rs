@@ -22,6 +22,7 @@ mod refresh_rate;
 mod runner;
 mod runtime;
 mod session;
+mod spatial;
 mod static_image;
 #[cfg(target_os = "android")]
 mod stream_costs;

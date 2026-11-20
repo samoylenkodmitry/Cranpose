@@ -160,3 +160,67 @@ fn an_application_that_declares_no_tracking_names_no_tracking_permission_or_feat
         "services that ask nothing at run time have no group"
     );
 }
+
+const ROOM: [Use; 2] = [Use::anchors(), Use::plane_tracking()];
+
+#[test]
+fn anchors_name_the_meta_permission_that_lists_the_extensions_and_the_android_xr_one_for_storage() {
+    let anchors = Capabilities {
+        uses: &ROOM[..1],
+        demands: &[],
+        opens: &[],
+        links: &[],
+    };
+    assert_eq!(
+        android_permissions(&anchors),
+        vec![
+            "android.permission.SCENE_UNDERSTANDING_COARSE",
+            "com.oculus.permission.USE_ANCHOR_API",
+            "horizonos.permission.USE_ANCHOR_API",
+        ]
+    );
+    assert_eq!(
+        Service::Anchors.android_permission_groups(),
+        &[&["android.permission.SCENE_UNDERSTANDING_COARSE"][..]]
+    );
+    assert!(json(&anchors).contains("{ \"name\": \"anchors\", \"reason\": null }"));
+    assert!(rust_source(&anchors).contains("Use::anchors(),"));
+}
+
+#[test]
+fn plane_tracking_asks_the_user_for_scene_data_and_lists_the_scene_extension_with_the_anchor_permission()
+ {
+    let planes = Capabilities {
+        uses: &ROOM[1..],
+        demands: &[],
+        opens: &[],
+        links: &[],
+    };
+    let permissions = android_permissions(&planes);
+    for wanted in [
+        "android.permission.SCENE_UNDERSTANDING_COARSE",
+        "com.oculus.permission.USE_SCENE",
+        "horizonos.permission.USE_SCENE",
+        "com.oculus.permission.USE_ANCHOR_API",
+        "horizonos.permission.USE_ANCHOR_API",
+    ] {
+        assert!(permissions.contains(&wanted), "{wanted} in {permissions:?}");
+    }
+    assert_eq!(
+        Service::PlaneTracking.android_permission_groups(),
+        &[&[
+            "com.oculus.permission.USE_SCENE",
+            "horizonos.permission.USE_SCENE",
+            "android.permission.SCENE_UNDERSTANDING_COARSE",
+        ][..]]
+    );
+    assert!(json(&planes).contains("{ \"name\": \"plane-tracking\", \"reason\": null }"));
+}
+
+#[test]
+fn an_application_that_declares_neither_asks_for_no_room_permission() {
+    let manifest = android_manifest(&NONE);
+    assert!(!manifest.contains("USE_ANCHOR_API"), "{manifest}");
+    assert!(!manifest.contains("USE_SCENE"), "{manifest}");
+    assert!(!manifest.contains("SCENE_UNDERSTANDING"), "{manifest}");
+}

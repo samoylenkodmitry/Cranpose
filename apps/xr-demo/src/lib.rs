@@ -37,6 +37,7 @@ mod foveated_player;
 mod headset_readout;
 mod pattern_writer;
 mod ray_target;
+mod room_panel;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod scripted_hand;
 mod torus_volume;
@@ -49,6 +50,7 @@ use foveated_player::FoveatedPlayer;
 use headset_readout::{HeadsetClock, HeadsetReadout, Readout, StreamLogs};
 use pattern_writer::PatternWriter;
 use ray_target::{RayTarget, rememberRayTarget};
+use room_panel::RoomDemo;
 use torus_volume::TorusVolume;
 use tracking_panel::{TrackedHands, TrackingSection, TrackingView};
 use type_panel::TypePanel;
@@ -68,6 +70,10 @@ const BALL: f32 = 40.0;
 pub fn XrDemo() {
     if depth_test_build() {
         DepthTest();
+        return;
+    }
+    if matches!(ROOM_BUILD, Some("only" | "script")) {
+        RoomDemo(room_panel::scripted(ROOM_BUILD));
         return;
     }
     let presses = rememberMutableStateOf(|| 0_u32);
@@ -134,6 +140,9 @@ pub fn XrDemo() {
         PressesPanel(presses, readout, target);
     });
     ControllerBall(strip_shown);
+    if ROOM_BUILD == Some("with") {
+        RoomDemo(false);
+    }
 }
 
 // A build with the `meta-entitlement` feature quits when the store's check fails. A build made with
@@ -156,6 +165,11 @@ fn EntitlementChoice() {
 // still and turned to show three faces, so that a screenshot tells how many pixels its texture
 // covers in each eye.
 const VOLUME_BUILD: Option<&str> = option_env!("XR_DEMO_VOLUME");
+
+// The room builds ask for the anchors and the planes, which the user's permission gates, so the
+// default build leaves them out. `XR_DEMO_ROOM=with` adds the room panel to the demo, `only` shows it
+// alone and `script` shows it alone and places it with no user. See `room_panel`.
+const ROOM_BUILD: Option<&str> = option_env!("XR_DEMO_ROOM");
 
 fn depth_test_build() -> bool {
     matches!(VOLUME_BUILD, Some("through" | "alone" | "model"))

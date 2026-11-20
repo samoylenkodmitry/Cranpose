@@ -17,10 +17,13 @@ use std::{
 use cranpose::{ExternalSurface, MutableState, mutableStateOf};
 use cranpose_core::CompositionLocal;
 
+mod carry_snap;
 #[cfg(any(test, headset))]
 pub(crate) mod field_dock;
 mod surface_delivery;
 
+#[cfg(any(test, headset))]
+use crate::spatial_store::SpatialStore;
 use crate::{
     FollowTarget, Hand, METERS_PER_DP, MovePolicy, PanelHit, Pose, Ray, Recenter, ResizeLimits,
     ResizePolicy, SpatialMoveEvent, SpatialMoveEventType, SpatialResizeEvent,
@@ -278,6 +281,9 @@ struct Inner {
     // content asks, because its state belongs to a composition's runtime
     #[cfg(any(test, headset))]
     keyboard: OnceCell<crate::soft_keyboard::SoftKeyboard>,
+    // The planes that a movable panel snaps to, once the headset's content made the store
+    #[cfg(any(test, headset))]
+    spatial: OnceCell<Rc<SpatialStore>>,
     // The size in pixels of one eye's picture of the volumes, in logical pixels
     #[cfg_attr(
         not(any(test, headset)),
@@ -379,6 +385,8 @@ impl Space {
                 field_panel: Cell::new(None),
                 #[cfg(any(test, headset))]
                 keyboard: OnceCell::new(),
+                #[cfg(any(test, headset))]
+                spatial: OnceCell::new(),
                 scene_size,
             }),
         }
@@ -672,6 +680,12 @@ impl Space {
         }
     }
 
+    // Gives the space the store whose planes a movable panel snaps to. The first store stays.
+    #[cfg(any(test, headset))]
+    pub(crate) fn attach_spatial_store(&self, store: &Rc<SpatialStore>) {
+        let _ = self.inner.spatial.set(Rc::clone(store));
+    }
+
     // The keyboard that the headset draws for a focused text field.
     #[cfg(any(test, headset))]
     pub(crate) fn keyboard(&self) -> crate::soft_keyboard::SoftKeyboard {
@@ -736,7 +750,9 @@ impl Space {
             let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == step.panel) else {
                 return;
             };
-            let pose = entry.origin.inverse().then(&step.pose);
+            // A policy that snaps puts the carried pose on a plane near it, while the user moves
+            let room = carry_snap::snapped(self, entry, step);
+            let pose = entry.origin.inverse().then(&room);
             let previous = entry.moving.unwrap_or(pose);
             let (pose, previous) = match step.event_type {
                 SpatialMoveEventType::Start => (pose, pose),
@@ -747,7 +763,7 @@ impl Space {
             if step.event_type == SpatialMoveEventType::Moving
                 && entry.policy.as_ref().is_some_and(MovePolicy::moves_content)
             {
-                entry.slot.pose = step.pose;
+                entry.slot.pose = room;
                 entry.carried = Some(pose);
                 entry.publish_pose();
             }
@@ -755,6 +771,7 @@ impl Space {
                 event_type: step.event_type,
                 pose,
                 previous_pose: previous,
+                room_pose: entry.origin.then(&pose),
             };
             let listener = entry.policy.as_ref().and_then(MovePolicy::listener);
             listener.map(|listener| (listener, event))

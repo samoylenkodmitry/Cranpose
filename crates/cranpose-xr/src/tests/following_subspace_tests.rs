@@ -158,6 +158,7 @@ fn ball(target: FollowTarget) -> Ball {
         let space = remember(Space::new).with(Clone::clone);
         let diameter = rememberMutableStateOf(|| 40.0);
         keep.replace(Some((space.clone(), diameter)));
+        let target = target.clone();
         CompositionLocalProvider([local_space().provides(Some(space))], move || {
             FollowingSubspace(target, move || {
                 let size = diameter.get();
@@ -330,4 +331,167 @@ fn a_tight_subspace_of_the_view_follows_the_head_in_every_frame() {
             &ahead.then(&Pose::at([0.0, 0.1, 0.0]))
         ));
     }
+}
+
+// A headset whose app holds a panel to an anchor of its own store, 10 cm above the anchor.
+struct OnAnchor {
+    robot: RobotTestRule<TestRenderer>,
+    space: Space,
+    store: Rc<crate::spatial_store::SpatialStore>,
+    anchor: crate::Anchor,
+}
+
+fn on_anchor(mode: FollowMode, persisted: Option<crate::Uuid>) -> OnAnchor {
+    let held = Rc::new(RefCell::new(None));
+    let keep = Rc::clone(&held);
+    let robot = create_headless_robot_test(500, 400, move || {
+        let space = remember(Space::new).with(Clone::clone);
+        let store = remember(|| {
+            crate::spatial_store::SpatialStore::new(
+                crate::AnchorCapabilities {
+                    anchors: crate::TrackingAvailability::Active,
+                    persistence: crate::TrackingAvailability::Active,
+                    max_anchors: None,
+                },
+                crate::TrackingAvailability::Active,
+            )
+        })
+        .with(Clone::clone);
+        let anchor = remember({
+            let store = Rc::clone(&store);
+            move || match persisted {
+                Some(uuid) => {
+                    store.set_persisted(&[uuid]);
+                    store
+                        .load(uuid)
+                        .into_anchor()
+                        .expect("the storage holds it")
+                }
+                None => store
+                    .create_anchor(Pose::at([2.0, 0.0, -1.0]))
+                    .into_anchor()
+                    .expect("the store makes it"),
+            }
+        })
+        .with(Clone::clone);
+        keep.replace(Some((space.clone(), Rc::clone(&store), anchor.clone())));
+        CompositionLocalProvider([local_space().provides(Some(space))], move || {
+            FollowingSubspace(FollowTarget::Anchor(anchor.clone(), mode), || {
+                SpatialPanel(
+                    SubspaceModifier::new()
+                        .size(100.0, 100.0)
+                        .offset(0.0, 100.0, 0.0),
+                    || {},
+                );
+            });
+        });
+    });
+    let (space, store, anchor) = held.take().expect("the content composed");
+    OnAnchor {
+        robot,
+        space,
+        store,
+        anchor,
+    }
+}
+
+impl OnAnchor {
+    fn slot(&mut self) -> crate::space::PanelSlot {
+        self.robot.wait_for_idle();
+        self.space.panels()[0]
+    }
+
+    // A frame of the runtime: the anchor's pose, then the space's follow.
+    fn frame(&self, pose: Option<Pose>, tracking: crate::TrackingState, time: Duration) {
+        self.store.publish_anchor(&self.anchor, pose, tracking);
+        self.space.track(None, [None, None], time, None);
+    }
+}
+
+#[test]
+fn a_panel_on_an_anchor_stands_at_its_full_pose_and_follows_every_refinement() {
+    let mut on = on_anchor(FollowMode::Tight, None);
+    // A new anchor has its place from the start: 10 cm above it, at its turn
+    assert_eq!(on.slot().ride, Ride::Free);
+    assert!(same(&on.slot().pose, &Pose::at([2.0, 0.1, -1.0])));
+
+    // The runtime puts the anchor on a wall: its pose is turned about the horizontal axis too
+    let on_a_wall = Pose {
+        position: [2.0, 1.0, -3.0],
+        orientation: turn_degrees(90.0, 0.0, 0.0),
+    };
+    on.frame(Some(on_a_wall), crate::TrackingState::Tracking, seconds(1));
+    assert!(same(
+        &on.slot().pose,
+        &on_a_wall.then(&Pose::at([0.0, 0.1, 0.0]))
+    ));
+
+    // A frame in which the anchor is paused keeps the panel where it was
+    on.frame(None, crate::TrackingState::Paused, seconds(2));
+    assert!(same(
+        &on.slot().pose,
+        &on_a_wall.then(&Pose::at([0.0, 0.1, 0.0]))
+    ));
+    assert_eq!(on.slot().ride, Ride::Free);
+}
+
+#[test]
+fn a_snap_panel_takes_the_anchors_place_once_and_again_after_a_recenter() {
+    let mut on = on_anchor(FollowMode::Snap, None);
+    let first = on.slot().pose;
+    on.frame(
+        Some(Pose::at([4.0, 0.0, 0.0])),
+        crate::TrackingState::Tracking,
+        seconds(1),
+    );
+    assert!(
+        same(&on.slot().pose, &first),
+        "a snap follows no later movement"
+    );
+    let recenter = Recenter {
+        change_time: seconds(2),
+        pose_in_previous_space: None,
+    };
+    on.space
+        .track(None, [None, None], seconds(2), Some(recenter));
+    assert!(same(&on.slot().pose, &Pose::at([4.0, 0.1, 0.0])));
+}
+
+#[test]
+fn a_panel_on_an_anchor_from_storage_is_hidden_until_the_runtime_places_it() {
+    let uuid = crate::Uuid::from_bytes([7; 16]);
+    let mut on = on_anchor(FollowMode::Tight, Some(uuid));
+    assert_eq!(on.slot().ride, Ride::Hidden);
+    on.frame(None, crate::TrackingState::Paused, seconds(1));
+    assert_eq!(on.slot().ride, Ride::Hidden);
+    let found = Pose {
+        position: [1.0, 0.8, -2.0],
+        orientation: turn_degrees(0.0, 40.0, 0.0),
+    };
+    on.frame(Some(found), crate::TrackingState::Tracking, seconds(2));
+    assert_eq!(on.slot().ride, Ride::Free);
+    assert!(same(
+        &on.slot().pose,
+        &found.then(&Pose::at([0.0, 0.1, 0.0]))
+    ));
+}
+
+#[test]
+fn a_detached_anchor_leaves_its_panel_where_it_was() {
+    let mut on = on_anchor(FollowMode::Tight, None);
+    let moved = Pose::at([3.0, 0.5, -2.0]);
+    on.frame(Some(moved), crate::TrackingState::Tracking, seconds(1));
+    let before = on.slot().pose;
+    on.anchor.detach();
+    assert_eq!(
+        on.anchor.state().tracking_state,
+        crate::TrackingState::Stopped
+    );
+    on.frame(
+        Some(Pose::at([9.0, 9.0, 9.0])),
+        crate::TrackingState::Tracking,
+        seconds(2),
+    );
+    assert!(same(&on.slot().pose, &before));
+    assert_eq!(on.slot().ride, Ride::Free);
 }

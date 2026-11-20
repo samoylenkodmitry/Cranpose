@@ -526,6 +526,91 @@ from, at, PinchCycle::default()))` installs a hand whose aim pose points at a pl
 whose index finger pinches in a cycle. The frame holds it as a tracked hand, so the pointer treats
 it as the cameras' hand. The feature is off by default.
 
+## Anchors and planes
+
+An anchor is a place in the room that the runtime holds still. A plane is a wall, a floor, a ceiling
+or a table that the runtime found. The names follow Jetpack XR's `androidx.xr.arcore` and its Compose
+package. An app asks for them in its build script:
+
+```rust,ignore
+// build.rs
+use cranpose_capabilities::{Use, declare};
+
+fn main() {
+    declare(&[Use::anchors(), Use::plane_tracking()]).emit();
+}
+```
+
+`Use::anchors()` is Jetpack XR's `Config.anchorPersistence` and enables the runtime's anchors and their
+storage. `Use::plane_tracking()` is `Config.planeTracking` and enables the planes. The planes need
+the user's permission: the system shows its prompt before the session starts. An app that asks for
+neither enables no extension, makes no call in a frame and adds no permission. A Meta Quest holds
+anchors through `XR_FB_spatial_entity`, keeps them with `XR_FB_spatial_entity_storage` and reads the room
+that the user set up through `XR_FB_scene`. Android XR holds both through `XR_ANDROID_trackables` and
+keeps anchors with `XR_ANDROID_device_anchor_persistence`.
+
+```rust,ignore
+#[composable]
+fn Notes() {
+    let (Some(anchors), Some(planes)) = (local_anchors().current(), local_planes().current()) else {
+        return;
+    };
+    let placed = rememberMutableStateOf(|| None::<Anchor>);
+    // A panel that the user carries snaps to a table or a wall that it is dropped near, and the
+    // app keeps the place where it came to rest
+    let keep = anchors.clone();
+    let policy = MovePolicy::anchor(&[], &[], move |event| {
+        if event.event_type == SpatialMoveEventType::End {
+            if let Some(anchor) = keep.create(event.room_pose).into_anchor() {
+                anchor.persist();
+                placed.set(Some(anchor));
+            }
+        }
+    });
+    // The next start loads what the runtime kept, once the list has come
+    let kept = anchors.persisted_uuids().last().copied();
+    let loader = anchors.clone();
+    DisposableEffect(kept, move |_| {
+        if let (None, Some(uuid)) = (placed.get_non_reactive(), kept) {
+            placed.set(loader.load(uuid).into_anchor());
+        }
+        DisposableEffectResult::new(|| {})
+    });
+    match placed.get() {
+        Some(anchor) => FollowingSubspace(FollowTarget::Anchor(anchor, FollowMode::Tight), move || {
+            SpatialPanel(SubspaceModifier::new().movable_with(policy.clone()), || {});
+        }),
+        None => Subspace(move || {
+            SpatialPanel(SubspaceModifier::new().movable_with(policy.clone()), || {});
+        }),
+    }
+    for plane in planes.all() {
+        Text(format!("{:?}", plane.state().label), Modifier::empty(), TextStyle::default());
+    }
+}
+```
+
+`Anchors::create(pose)` and `Plane::create_anchor(pose)` take a pose in the app's room, the OpenXR
+LOCAL space that `XrFrame` describes. `SpatialMoveEvent::room_pose` gives the pose of a carried panel
+in that space. An anchor starts `Paused` at the pose that the app gave. The runtime holds it from the next
+frame on, and the state becomes `Tracking`. `Anchor::persist()` asks the runtime to keep it, and
+`Anchor::persistence()` goes from `Persisting` to `Persisted(uuid)`. `Anchors::persisted_uuids()` lists what
+the runtime kept for the app, and `Anchors::load(uuid)` gives an anchor that stands where the runtime
+finds the place again. A runtime needs some frames after the start to read its storage and to
+recognize the room, so an app reads the list in a composition, which composes again when the list
+changes. The room's origin is where the head was at each start, so the pose of a loaded anchor in the
+room differs from one start to the next while the anchor stays at one place in the world.
+
+`FollowTarget::Anchor(anchor, mode)` holds the panels of a `FollowingSubspace` to an anchor with all six
+degrees of freedom. The panels do not show until the runtime places the anchor. A detached or lost anchor
+leaves them where they were. `MovePolicy::anchor(orientations, semantics, on_move)` is Jetpack Compose
+XR's `MovePolicy.anchor`: a panel or a volume that the user carries comes to rest on the plane that it
+is near, when the two lists admit the plane. A wall holds it flat against the wall. A floor or a table
+holds it standing on its bottom edge. `Anchors::capabilities()` and `Planes::availability()` say what
+the runtime offers and how far each part has come. A pose that the runtime refines in a frame writes no
+state and allocates nothing. A composition that reads `Anchor::state()` composes again when the
+tracking state changes, not when the pose moves.
+
 ## Text entry
 
 A text field asks for the platform's software keyboard when it takes focus, as it does on a phone.

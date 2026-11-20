@@ -1,4 +1,4 @@
-//! The services that track the user's body in a headset.
+//! The services that track the user's body or read the room in a headset.
 
 use crate::Service;
 
@@ -81,6 +81,44 @@ const EYES: Tracking = Tracking {
     features: &["oculus.software.eye_tracking"],
 };
 
+// The anchors of Meta's spatial entities need `USE_ANCHOR_API`, a normal permission that the system
+// grants at install. The Horizon OS runtime lists `XR_FB_spatial_entity`, its storage and query and
+// `XR_FB_scene` to an app only while the manifest holds it, under the `horizonos` name on a current
+// system and the `com.oculus` name on an older one. Android XR creates anchors with no permission,
+// and its storage of anchors asks for `SCENE_UNDERSTANDING_COARSE`, because it exposes the geometry
+// of the room.
+const ANCHORS: Tracking = Tracking {
+    name: "anchors",
+    permissions: &[
+        "android.permission.SCENE_UNDERSTANDING_COARSE",
+        "com.oculus.permission.USE_ANCHOR_API",
+        "horizonos.permission.USE_ANCHOR_API",
+    ],
+    groups: &[&["android.permission.SCENE_UNDERSTANDING_COARSE"]],
+    features: &[],
+};
+
+// The planes of the room come from Meta's scene data, which a Quest user allows with the "spatial
+// data" prompt (`USE_SCENE`), and from Android XR's scene understanding, which asks as
+// `SCENE_UNDERSTANDING_COARSE`. Meta's scene extension is listed only while the manifest holds
+// `USE_ANCHOR_API` as well, because the scene's planes are spatial entities.
+const PLANES: Tracking = Tracking {
+    name: "plane-tracking",
+    permissions: &[
+        "android.permission.SCENE_UNDERSTANDING_COARSE",
+        "com.oculus.permission.USE_ANCHOR_API",
+        "com.oculus.permission.USE_SCENE",
+        "horizonos.permission.USE_ANCHOR_API",
+        "horizonos.permission.USE_SCENE",
+    ],
+    groups: &[&[
+        "com.oculus.permission.USE_SCENE",
+        "horizonos.permission.USE_SCENE",
+        "android.permission.SCENE_UNDERSTANDING_COARSE",
+    ]],
+    features: &[],
+};
+
 // A service that asks nothing of the kind
 const NONE: Tracking = Tracking {
     name: "",
@@ -95,6 +133,8 @@ pub(crate) const fn of(service: Service) -> &'static Tracking {
         Service::BodyTracking => &BODY,
         Service::FaceTracking => &FACE,
         Service::EyeTracking => &EYES,
+        Service::Anchors => &ANCHORS,
+        Service::PlaneTracking => &PLANES,
         _ => &NONE,
     }
 }

@@ -71,6 +71,12 @@ pub enum Service {
     FaceTracking,
     /// Where the user's eyes look, which a headset's inward cameras track.
     EyeTracking,
+    /// Places in the room that stay put, which a headset's tracking holds, and
+    /// that an application can keep for its next start.
+    Anchors,
+    /// The planes of the room, such as its walls, floor and tables, which a
+    /// headset has scanned.
+    PlaneTracking,
 }
 
 impl Service {
@@ -95,9 +101,12 @@ impl Service {
             Self::Wearable => "wearable",
             Self::DeviceAuth => "device-auth",
             Self::DeviceMotion => "device-motion",
-            Self::HandTracking | Self::BodyTracking | Self::FaceTracking | Self::EyeTracking => {
-                tracking::of(self).name
-            }
+            Self::HandTracking
+            | Self::BodyTracking
+            | Self::FaceTracking
+            | Self::EyeTracking
+            | Self::Anchors
+            | Self::PlaneTracking => tracking::of(self).name,
         }
     }
 
@@ -149,9 +158,12 @@ impl Service {
             // it. The permission is a normal one: the system grants it at
             // install and asks nobody. Reading the rotation needs no other.
             Self::DeviceMotion => &["android.permission.HIGH_SAMPLING_RATE_SENSORS"],
-            Self::HandTracking | Self::BodyTracking | Self::FaceTracking | Self::EyeTracking => {
-                tracking::of(self).permissions
-            }
+            Self::HandTracking
+            | Self::BodyTracking
+            | Self::FaceTracking
+            | Self::EyeTracking
+            | Self::Anchors
+            | Self::PlaneTracking => tracking::of(self).permissions,
         }
     }
 

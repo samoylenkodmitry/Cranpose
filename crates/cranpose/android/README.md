@@ -123,6 +123,13 @@ Oculus feature (`oculus.software.handtracking`, `com.oculus.software.body_tracki
 `oculus.software.face_tracking` and `oculus.software.eye_tracking`) as not required. They are the
 declarations `cranpose-xr` reads to enable the OpenXR extension of the same name.
 
+`Use::anchors()` and `Use::plane_tracking()` also select `CranposePermissions`. They write
+`com.oculus.permission.USE_ANCHOR_API` and `horizonos.permission.USE_ANCHOR_API` into the manifest, which a
+Meta Quest needs to list its spatial entity extensions to the app, and `android.permission.SCENE_UNDERSTANDING_COARSE`
+for Android XR's anchor storage and planes. `Use::plane_tracking()` adds `USE_SCENE` of both Quest
+names, which the user allows with the system's prompt. `cranpose-xr` reads the declaration to enable the
+extensions.
+
 `Use::update()` also selects the package installer, its receiver and
 `REQUEST_INSTALL_PACKAGES`. The launcher registers the updater when the declared
 capabilities include updates.
