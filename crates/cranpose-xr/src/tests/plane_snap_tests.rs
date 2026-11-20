@@ -47,54 +47,92 @@ fn content(position: [f32; 3], size: [f32; 3]) -> Content {
 }
 
 #[test]
-fn a_panel_above_a_table_stands_on_it_by_its_bottom_edge() {
-    // A panel 40 cm tall whose center is 30 cm above the table top: its bottom edge is 10 cm up
-    let (gap, snapped) = snap(&table(), &content([0.1, -0.4, -1.0], [0.6, 0.4, 0.0])).unwrap();
+fn a_panel_above_a_table_lies_flat_on_it_with_its_front_up() {
+    // The panel's center is 10 cm above the table top
+    let (gap, snapped) = snap(&table(), &content([0.1, -0.6, -1.0], [0.6, 0.4, 0.0])).unwrap();
     assert!((gap - 0.1).abs() < 1e-4, "{gap}");
-    assert!(near(snapped.position, [0.1, -0.5, -1.0]), "{snapped:?}");
-}
-
-#[test]
-fn a_panel_that_stands_on_a_table_keeps_the_way_it_faced() {
-    let mut carried = content([0.0, -0.4, -1.0], [0.6, 0.4, 0.0]);
-    carried.pose.orientation = turn_degrees(0.0, 35.0, 0.0);
-    let (_, snapped) = snap(&table(), &carried).unwrap();
-    let facing = snapped.rotate([0.0, 0.0, 1.0]);
-    let expected = [
-        35.0_f32.to_radians().sin(),
-        0.0,
-        35.0_f32.to_radians().cos(),
-    ];
-    assert!(near(facing, expected), "{facing:?}");
-    assert!(near(snapped.rotate([0.0, 1.0, 0.0]), [0.0, 1.0, 0.0]));
-}
-
-#[test]
-fn a_panel_that_a_carry_tilted_stands_upright_on_the_table() {
-    let mut carried = content([0.0, -0.4, -1.0], [0.6, 0.4, 0.0]);
-    carried.pose.orientation = turn_degrees(-25.0, 20.0, 5.0);
-    let (_, snapped) = snap(&table(), &carried).unwrap();
+    assert!(near(snapped.position, [0.1, -0.7, -1.0]), "{snapped:?}");
     assert!(
-        near(snapped.rotate([0.0, 1.0, 0.0]), [0.0, 1.0, 0.0]),
+        near(snapped.rotate([0.0, 0.0, 1.0]), [0.0, 1.0, 0.0]),
         "{snapped:?}"
     );
 }
 
 #[test]
-fn a_volume_stands_on_the_floor_by_its_bottom_face() {
-    // A box 50 cm tall whose bottom face is 5 cm above the floor
+fn a_panel_that_faced_the_user_lies_with_its_top_edge_away_from_the_user() {
+    // The panel stood upright with its front toward +Z, where the user is
+    let (_, snapped) = snap(&table(), &content([0.0, -0.6, -1.0], [0.6, 0.4, 0.0])).unwrap();
+    assert!(
+        near(snapped.rotate([0.0, 1.0, 0.0]), [0.0, 0.0, -1.0]),
+        "{snapped:?}"
+    );
+    // Turned to face +X, its top edge points toward -X
+    let mut carried = content([0.0, -0.6, -1.0], [0.6, 0.4, 0.0]);
+    carried.pose.orientation = turn_degrees(0.0, 90.0, 0.0);
+    let (_, snapped) = snap(&table(), &carried).unwrap();
+    assert!(
+        near(snapped.rotate([0.0, 1.0, 0.0]), [-1.0, 0.0, 0.0]),
+        "{snapped:?}"
+    );
+}
+
+#[test]
+fn a_panel_that_a_carry_tilted_still_has_its_front_straight_up_on_the_table() {
+    let mut carried = content([0.0, -0.6, -1.0], [0.6, 0.4, 0.0]);
+    carried.pose.orientation = turn_degrees(-25.0, 20.0, 5.0);
+    let (_, snapped) = snap(&table(), &carried).unwrap();
+    assert!(
+        near(snapped.rotate([0.0, 0.0, 1.0]), [0.0, 1.0, 0.0]),
+        "{snapped:?}"
+    );
+    assert!(near(
+        snapped.rotate([1.0, 0.0, 0.0]),
+        cross_of(snapped.rotate([0.0, 1.0, 0.0]), [0.0, 1.0, 0.0])
+    ));
+}
+
+// The cross product of two vectors, for a check that a frame is right handed.
+fn cross_of(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+#[test]
+fn a_panel_that_already_lies_flat_keeps_the_way_its_top_points() {
+    let mut carried = content([0.0, -0.6, -1.0], [0.6, 0.4, 0.0]);
+    carried.pose.orientation = turn_degrees(-90.0, 0.0, 0.0);
+    let (_, snapped) = snap(&table(), &carried).unwrap();
+    assert!(
+        near(snapped.rotate([0.0, 0.0, 1.0]), [0.0, 1.0, 0.0]),
+        "{snapped:?}"
+    );
+    assert!(
+        near(
+            snapped.rotate([0.0, 1.0, 0.0]),
+            carried.pose.rotate([0.0, 1.0, 0.0])
+        ),
+        "{snapped:?}"
+    );
+}
+
+#[test]
+fn a_volume_stands_on_the_floor_by_its_back_face() {
+    // A box 50 cm deep whose back face is 5 cm above the floor: its center is 30 cm up
     let (_, snapped) = snap(&floor(), &content([0.0, -1.2, 0.0], [0.5, 0.5, 0.5])).unwrap();
     assert!(near(snapped.position, [0.0, -1.25, 0.0]), "{snapped:?}");
 }
 
 #[test]
 fn a_panel_beyond_the_snap_distance_does_not_snap() {
-    // The panel's bottom edge is 60 cm above the table
-    assert!(snap(&table(), &content([0.0, 0.1, -1.0], [0.6, 0.4, 0.0])).is_none());
+    // The panel's center is 60 cm above the table
+    assert!(snap(&table(), &content([0.0, -0.1, -1.0], [0.6, 0.4, 0.0])).is_none());
 }
 
 #[test]
-fn a_panel_below_the_plane_does_not_snap_to_its_far_side() {
+fn a_panel_far_below_the_plane_does_not_snap_to_its_far_side() {
     // The center is 1 meter under the table top
     assert!(snap(&table(), &content([0.0, -1.7, -1.0], [0.6, 0.4, 0.0])).is_none());
 }
@@ -102,8 +140,8 @@ fn a_panel_below_the_plane_does_not_snap_to_its_far_side() {
 #[test]
 fn a_panel_beside_the_table_snaps_only_within_the_edge_margin() {
     // The table reaches 50 cm each side of its center: 20 cm beyond the edge is inside the margin
-    assert!(snap(&table(), &content([0.7, -0.4, -1.0], [0.6, 0.4, 0.0])).is_some());
-    assert!(snap(&table(), &content([1.0, -0.4, -1.0], [0.6, 0.4, 0.0])).is_none());
+    assert!(snap(&table(), &content([0.7, -0.6, -1.0], [0.6, 0.4, 0.0])).is_some());
+    assert!(snap(&table(), &content([1.0, -0.6, -1.0], [0.6, 0.4, 0.0])).is_none());
 }
 
 #[test]
@@ -139,7 +177,7 @@ fn content_that_the_wall_hides_faces_the_other_way_when_it_is_behind_the_plane()
 }
 
 #[test]
-fn a_ceiling_holds_a_panel_by_its_top_edge() {
+fn a_ceiling_holds_a_panel_flat_with_its_front_down() {
     let ceiling = Surface {
         center: Pose {
             position: [0.0, 1.0, 0.0],
@@ -149,9 +187,13 @@ fn a_ceiling_holds_a_panel_by_its_top_edge() {
         vertices: &[],
         plane_type: PlaneType::HorizontalDownwardFacing,
     };
-    // The panel is 40 cm tall and hangs with its top edge 10 cm under the ceiling
-    let (_, snapped) = snap(&ceiling, &content([0.0, 0.7, 0.0], [0.6, 0.4, 0.0])).unwrap();
-    assert!(near(snapped.position, [0.0, 0.8, 0.0]), "{snapped:?}");
+    // The panel's center is 10 cm under the ceiling
+    let (_, snapped) = snap(&ceiling, &content([0.0, 0.9, 0.0], [0.6, 0.4, 0.0])).unwrap();
+    assert!(near(snapped.position, [0.0, 1.0, 0.0]), "{snapped:?}");
+    assert!(
+        near(snapped.rotate([0.0, 0.0, 1.0]), [0.0, -1.0, 0.0]),
+        "{snapped:?}"
+    );
 }
 
 #[test]
@@ -184,7 +226,7 @@ fn a_polygon_decides_where_the_surface_is_and_a_concave_corner_is_outside() {
 #[test]
 fn the_nearest_surface_wins_in_the_store_and_the_gap_is_reported() {
     // Two planes at once: the floor, and the table that is closer
-    let panel = content([0.0, -0.45, -1.0], [0.6, 0.4, 0.0]);
+    let panel = content([0.0, -0.65, -1.0], [0.6, 0.4, 0.0]);
     let on_floor = snap(&floor(), &panel);
     let on_table = snap(&table(), &panel).unwrap();
     assert!(on_floor.is_none());

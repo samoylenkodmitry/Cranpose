@@ -587,6 +587,12 @@ impl Space {
         let (index, changed) = match entries.iter().position(|entry| entry.slot.id == panel.id) {
             Some(index) => {
                 let entry = &mut entries[index];
+                // Content that another subspace holds is placed by its modifier again: the place that
+                // the user carried it to is relative to the origin of the subspace that held it before
+                if entry.follow.map(|follow| follow.id) != subspace.follower {
+                    entry.carried = None;
+                    entry.moving = None;
+                }
                 entry.origin = origin;
                 entry.slot.pose = entry.carried.map_or(pose, |carried| origin.then(&carried));
                 entry.slot.kind = kind;

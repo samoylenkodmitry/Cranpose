@@ -131,30 +131,34 @@ fn a_panel_dropped_near_a_table_that_the_policy_admits_comes_to_rest_on_it() {
         &[PlaneOrientation::Horizontal],
         &[PlaneSemantic::Table],
     )));
-    let held = Pose::at([0.1, -0.45, -1.5]);
+    let held = Pose::at([0.1, -0.55, -1.5]);
     headset.step(SpatialMoveEventType::Start, held);
     headset.step(SpatialMoveEventType::Moving, held);
-    // The panel is 30 cm tall, so it rests with its center 15 cm over the table top
+    // The panel lies flat on the table top, its front up
     assert!(
-        near(headset.pose().position, [0.1, -0.55, -1.5]),
+        near(headset.pose().position, [0.1, -0.7, -1.5]),
         "{:?}",
         headset.pose()
     );
+    assert!(near(
+        headset.pose().rotate([0.0, 0.0, 1.0]),
+        [0.0, 1.0, 0.0]
+    ));
     headset.step(SpatialMoveEventType::End, held);
     let events = headset.events.borrow();
     let end = events.last().expect("the callback heard the end");
     assert_eq!(end.event_type, SpatialMoveEventType::End);
-    assert!(near(end.room_pose.position, [0.1, -0.55, -1.5]), "{end:?}");
+    assert!(near(end.room_pose.position, [0.1, -0.7, -1.5]), "{end:?}");
     // The subspace's origin is a meter ahead of the start: poses are relative to it
-    assert!(near(end.pose.position, [0.1, -0.55, -0.5]), "{end:?}");
+    assert!(near(end.pose.position, [0.1, -0.7, -0.5]), "{end:?}");
 }
 
 #[test]
 fn the_panel_follows_the_controller_again_when_it_leaves_the_snap_distance() {
     let mut headset = headset(Some((&[], &[])));
     headset.step(SpatialMoveEventType::Start, Pose::at([0.0, 0.3, -1.5]));
-    headset.step(SpatialMoveEventType::Moving, Pose::at([0.0, -0.45, -1.5]));
-    assert!(near(headset.pose().position, [0.0, -0.55, -1.5]));
+    headset.step(SpatialMoveEventType::Moving, Pose::at([0.0, -0.55, -1.5]));
+    assert!(near(headset.pose().position, [0.0, -0.7, -1.5]));
     let free = Pose::at([0.0, 0.6, -1.5]);
     headset.step(SpatialMoveEventType::Moving, free);
     assert!(
@@ -183,7 +187,7 @@ fn a_plane_that_the_policy_does_not_admit_leaves_the_panel_where_the_user_holds_
         &[PlaneOrientation::Vertical],
         &[PlaneSemantic::Wall],
     )));
-    let near_the_table = Pose::at([0.0, -0.45, -1.5]);
+    let near_the_table = Pose::at([0.0, -0.55, -1.5]);
     headset.step(SpatialMoveEventType::Start, near_the_table);
     headset.step(SpatialMoveEventType::Moving, near_the_table);
     assert!(near(headset.pose().position, near_the_table.position));
@@ -192,7 +196,7 @@ fn a_plane_that_the_policy_does_not_admit_leaves_the_panel_where_the_user_holds_
 #[test]
 fn a_policy_that_does_not_ask_for_planes_moves_the_panel_freely() {
     let mut headset = headset(None);
-    let near_the_table = Pose::at([0.0, -0.45, -1.5]);
+    let near_the_table = Pose::at([0.0, -0.55, -1.5]);
     headset.step(SpatialMoveEventType::Start, near_the_table);
     headset.step(SpatialMoveEventType::Moving, near_the_table);
     assert!(near(headset.pose().position, near_the_table.position));

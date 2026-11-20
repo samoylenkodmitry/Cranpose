@@ -25,7 +25,9 @@ use crate::{
 ///
 /// The origin of a view or a controller has the target's place and its turn about the vertical
 /// axis, so the panels stand upright. The origin of an anchor is the anchor's pose. A panel that
-/// the user carried keeps its place relative to the origin, so it moves with the origin. A panel's
+/// the user carried keeps its place relative to the origin, so it moves with the origin. A panel
+/// that another following subspace takes over, as when the app names a new anchor, is placed by its
+/// modifier again. A panel's
 /// [`SpatialMoveEvent`](crate::SpatialMoveEvent) poses are relative to this origin.
 ///
 /// A following subspace moves its panels in the headset's frame loop. A moving target does not

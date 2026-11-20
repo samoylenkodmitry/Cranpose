@@ -333,6 +333,22 @@ fn a_tight_subspace_of_the_view_follows_the_head_in_every_frame() {
     }
 }
 
+// The store of a headset that offers anchors and their storage. A composition makes it, because its
+// states belong to the composition's runtime.
+fn anchor_store() -> Rc<crate::spatial_store::SpatialStore> {
+    remember(|| {
+        crate::spatial_store::SpatialStore::new(
+            crate::AnchorCapabilities {
+                anchors: crate::TrackingAvailability::Active,
+                persistence: crate::TrackingAvailability::Active,
+                max_anchors: None,
+            },
+            crate::TrackingAvailability::Active,
+        )
+    })
+    .with(Clone::clone)
+}
+
 // A headset whose app holds a panel to an anchor of its own store, 10 cm above the anchor.
 struct OnAnchor {
     robot: RobotTestRule<TestRenderer>,
@@ -346,17 +362,7 @@ fn on_anchor(mode: FollowMode, persisted: Option<crate::Uuid>) -> OnAnchor {
     let keep = Rc::clone(&held);
     let robot = create_headless_robot_test(500, 400, move || {
         let space = remember(Space::new).with(Clone::clone);
-        let store = remember(|| {
-            crate::spatial_store::SpatialStore::new(
-                crate::AnchorCapabilities {
-                    anchors: crate::TrackingAvailability::Active,
-                    persistence: crate::TrackingAvailability::Active,
-                    max_anchors: None,
-                },
-                crate::TrackingAvailability::Active,
-            )
-        })
-        .with(Clone::clone);
+        let store = anchor_store();
         let anchor = remember({
             let store = Rc::clone(&store);
             move || match persisted {
@@ -494,4 +500,81 @@ fn a_detached_anchor_leaves_its_panel_where_it_was() {
     );
     assert!(same(&on.slot().pose, &before));
     assert_eq!(on.slot().ride, Ride::Free);
+}
+
+// A headset whose app holds a movable panel to the anchor that a state names, as the demo's room panel
+// does: a drop makes a new anchor and names it.
+struct Swapping {
+    robot: RobotTestRule<TestRenderer>,
+    space: Space,
+    store: Rc<crate::spatial_store::SpatialStore>,
+    target: MutableState<crate::Anchor>,
+}
+
+fn swapping() -> Swapping {
+    let held = Rc::new(RefCell::new(None));
+    let keep = Rc::clone(&held);
+    let robot = create_headless_robot_test(500, 400, move || {
+        let space = remember(Space::new).with(Clone::clone);
+        let store = anchor_store();
+        let first = store
+            .create_anchor(Pose::at([1.0, 0.0, -2.0]))
+            .into_anchor()
+            .expect("the store makes it");
+        let target = rememberMutableStateOf(move || first);
+        keep.replace(Some((space.clone(), Rc::clone(&store), target)));
+        CompositionLocalProvider([local_space().provides(Some(space))], move || {
+            FollowingSubspace(
+                FollowTarget::Anchor(target.get(), FollowMode::Tight),
+                || {
+                    SpatialPanel(SubspaceModifier::new().size(100.0, 100.0).movable(), || {});
+                },
+            );
+        });
+    });
+    let (space, store, target) = held.take().expect("the content composed");
+    Swapping {
+        robot,
+        space,
+        store,
+        target,
+    }
+}
+
+#[test]
+fn a_panel_that_a_new_anchor_holds_after_a_carry_stands_at_the_anchor_and_not_at_the_old_offset() {
+    let mut swapping = swapping();
+    swapping.robot.wait_for_idle();
+    let id = swapping.space.panels()[0].id;
+    // The user carries the panel to a place beside the first anchor, and lets it go
+    let dropped = Pose::at([2.5, 0.4, -1.5]);
+    for event_type in [
+        SpatialMoveEventType::Start,
+        SpatialMoveEventType::Moving,
+        SpatialMoveEventType::End,
+    ] {
+        swapping.space.carry(&PanelMove {
+            panel: id,
+            event_type,
+            pose: dropped,
+        });
+    }
+    assert!(same(&swapping.space.panels()[0].pose, &dropped));
+    // The app makes an anchor where the panel stands and holds the panel to it
+    let anchor = swapping
+        .store
+        .create_anchor(dropped)
+        .into_anchor()
+        .expect("the store makes it");
+    swapping.target.set(anchor);
+    swapping.robot.wait_for_idle();
+    assert!(same(&swapping.space.panels()[0].pose, &dropped));
+    // The panel follows the new anchor from then on
+    let moved = Pose::at([2.7, 0.4, -1.5]);
+    let anchor = swapping.target.get_non_reactive();
+    swapping
+        .store
+        .publish_anchor(&anchor, Some(moved), crate::TrackingState::Tracking);
+    swapping.space.track(None, [None, None], seconds(1), None);
+    assert!(same(&swapping.space.panels()[0].pose, &moved));
 }

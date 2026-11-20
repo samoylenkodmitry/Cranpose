@@ -33,20 +33,22 @@ impl MovePolicy {
     /// plane of the room when the user lets it go near one that the two lists admit. A plane
     /// is admitted when its direction is in `orientations` and its label is in `semantics`. An
     /// empty list admits every plane, as in Jetpack Compose XR, whose `MovePolicy.anchor` this
-    /// follows. `on_move` hears of each step, including the pose that the snap gave.
+    /// follows. Jetpack's SceneCore `AnchorPlacement.createForPlanes` anchors nothing for an empty
+    /// set. `on_move` hears of each step, including the pose that the snap gave.
     ///
     /// The content comes to rest on a plane at most 25 centimeters from the place where the user
-    /// holds it, if that place is over the plane or within 30 centimeters of its edge. A wall
-    /// holds it flat against the wall, facing into the room and upright. A floor or a table holds
-    /// it standing on its bottom edge, and a ceiling holds it hanging by its top edge, both with
-    /// the way it faced. The snap shows while the user carries: the content follows the controller
-    /// again when the user moves it beyond the distance.
+    /// holds it, if that place is over the plane or within 30 centimeters of its edge. As in Jetpack
+    /// XR, its +Z axis then points out of the plane, so a panel lies flat along the plane. A panel's
+    /// center is on the plane, and a volume's back face is. A wall holds the content upright. A
+    /// floor, a table or a ceiling holds it with its top edge pointing away from where it faced, so a
+    /// panel that faced the user reads from the user's side. The snap shows while the user carries:
+    /// the content follows the controller again when the user moves it beyond the distance.
     ///
     /// The app needs `Use::plane_tracking()` in its build and the user's permission. Without
     /// planes the content moves freely. Jetpack Compose XR also reparents the content to the plane,
     /// which this policy does not. An app that keeps the content in place after a restart makes an
-    /// [`Anchor`](crate::Anchor) at the pose of the [`SpatialMoveEventType::End`](crate::SpatialMoveEventType::End)
-    /// event.
+    /// [`Anchor`](crate::Anchor) at the pose of the
+    /// [`SpatialMoveEventType::End`](crate::SpatialMoveEventType::End) event.
     pub fn anchor(
         orientations: &[PlaneOrientation],
         semantics: &[PlaneSemantic],

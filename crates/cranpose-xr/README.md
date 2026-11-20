@@ -672,8 +672,8 @@ room differs from one start to the next while the anchor stays at one place in t
 degrees of freedom. The panels do not show until the runtime places the anchor. A detached or lost anchor
 leaves them where they were. `MovePolicy::anchor(orientations, semantics, on_move)` is Jetpack Compose
 XR's `MovePolicy.anchor`: a panel or a volume that the user carries comes to rest on the plane that it
-is near, when the two lists admit the plane. A wall holds it flat against the wall. A floor or a table
-holds it standing on its bottom edge. `Anchors::capabilities()` and `Planes::availability()` say what
+is near, when the two lists admit the plane. Its +Z axis then points out of the plane, so a panel lies
+flat along it, as in Jetpack XR. `Anchors::capabilities()` and `Planes::availability()` say what
 the runtime offers and how far each part has come. A pose that the runtime refines in a frame writes no
 state and allocates nothing. A composition that reads `Anchor::state()` composes again when the
 tracking state changes, not when the pose moves.

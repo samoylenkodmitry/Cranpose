@@ -523,6 +523,7 @@ vanish. The aim pose points where the ray points. That direction stays steady. A
 as tracked when the runtime tracks both poses.
 
 A panel that the user carried keeps its pose relative to the origin, so it moves with the origin.
+A panel that another following subspace takes over, as when the app names a new anchor, is placed by its modifier again, because the place that the user carried it to is relative to the old origin.
 
 A following subspace of a controller has no place while the runtime does not track the controller.
 The loop marks each of its panels `Ride::Hidden`. The panel stays registered with its swapchain
@@ -1045,8 +1046,8 @@ package.
 
 Where Jetpack XR passes a `Session`, the app reads a composition local: `local_anchors()` gives
 `Anchors` and `local_planes()` gives `Planes`. Both are `None` outside a headset. Jetpack XR's
-`MovePolicy.anchor` is called `AnchorPlacement` in its alpha releases. Cranpose follows the current
-name. Jetpack XR reparents a panel to the plane after the snap. Cranpose keeps the panel in its
+SceneCore has the same idea as `AnchorPlacement.createForPlanes`, which a `MovableComponent` takes, and
+Compose XR has it as `MovePolicy.anchor`. Cranpose follows the Compose name. Jetpack XR reparents a panel to the plane after the snap. Cranpose keeps the panel in its
 subspace and gives the app the pose, which the app turns into an anchor. `SpatialMoveEvent` has one
 field that Jetpack XR does not have, `room_pose`, which is the pose in the app's room, where
 `Anchors::create` takes its pose. Jetpack XR converts between its spaces with `transformPoseTo`.
@@ -1115,14 +1116,17 @@ stage as well, which the headset's floor defines and a restart does not move.
 
 `MovePolicy::anchor` makes `Space::carry` ask the store for a resting place at each step of a carry.
 For each plane that the two lists admit and the runtime tracks, the carry measures the distance from
-the content's resting face to the plane. A wall's resting face is the back of the content. A floor or
-a table has its bottom edge and a ceiling its top edge. The content snaps when that distance is at
-most 25 cm and its center lies over the plane or within 30 cm of its polygon's edge. The nearest
-plane wins. A panel on a wall lies flat against it, faces into the room and stands upright, on the
-side where the user holds it. A panel on a floor, a table or a ceiling stands upright and keeps the
-way it faced. A volume rests with its back or its bottom face on the plane. The pose is applied while
-the user carries, so the content follows the controller again when the user moves it beyond the
+the content's center, moved by half its depth toward the plane, to the plane. The content snaps when
+that distance is at most 25 cm and its center lies over the plane or within 30 cm of its polygon's
+edge. The nearest plane wins. As in Jetpack XR's `AnchorPlacement`, the content's +Z axis points out
+of the plane, so a panel lies flat along it with its center on the plane. A volume rests with its
+back face on the plane. A wall holds the content upright and facing into the room, on the side where
+the user holds it. A floor, a table or a ceiling holds it with its top edge pointing away from where
+it faced, so a panel that faced the user reads from the user's side. The pose is applied while the
+user carries, so the content follows the controller again when the user moves it beyond the
 distance, and the last pose is the one that the end event reports. The math is `plane_snap.rs`.
+Jetpack XR's two entry points differ for an empty filter: SceneCore's `AnchorPlacement.createForPlanes`
+anchors nothing, and Compose XR's `MovePolicy.anchor` anchors to any plane. Cranpose follows Compose.
 
 The planes' own frame is Jetpack XR's: the +Y axis of `center_pose` is the normal, +X runs along the
 width and +Z along the depth. Android XR gives it so. Meta's scene entity has its rectangle in its

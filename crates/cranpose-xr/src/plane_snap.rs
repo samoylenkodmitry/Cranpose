@@ -2,8 +2,8 @@
 
 use crate::{
     PlaneType, Pose,
-    pose::{turn_degrees, turn_of_axes},
-    vector::{add, cross, dot, normalize, scale, sub},
+    pose::turn_of_axes,
+    vector::{add, cross, dot, normalize, perpendicular, scale, sub},
 };
 
 // How far from the plane a composable's resting face may be and still snap to it, in meters.
@@ -12,9 +12,9 @@ pub(crate) const SNAP_DISTANCE: f32 = 0.25;
 // How far beyond the plane's edge a composable's center may be and still snap to it, in meters.
 pub(crate) const EDGE_MARGIN: f32 = 0.30;
 
-// A facing direction whose level part is shorter than this has no yaw: about 6 degrees from the
-// vertical.
-const STEEP: f32 = 0.1;
+// A direction whose part along an axis is longer than this is too close to that axis to say which way
+// it points across it.
+const DEGENERATE: f32 = 1e-3;
 
 // A plane as the snap sees it: the pose of its center, whose +Y axis is the normal, the size of
 // its bounding rectangle along the pose's X and Z axes and the polygon of its vertices along the
@@ -36,9 +36,10 @@ pub(crate) struct Content {
 // Where `content` comes to rest on `surface`, with the gap in meters between the resting face and
 // the plane before the snap, or `None` when the content is too far from the plane or from its edge.
 //
-// A composable on a wall lies against it with its back, faces into the room and stands upright.
-// A composable on a floor or a table stands on it by its bottom edge, and one on a ceiling hangs
-// from it by its top edge. Both keep the yaw of the way they faced.
+// As in Jetpack XR, the content's +Z axis points out of the plane, so a panel lies flat along it. A
+// composable rests with its back on the plane: a panel with its center on it, and a volume half its
+// depth out. On a wall it stands upright. On a floor, a table or a ceiling its top edge points away
+// from where it faced before, so a panel that faced the user reads from the user's side.
 pub(crate) fn snap(surface: &Surface<'_>, content: &Content) -> Option<(f32, Pose)> {
     let normal = surface.center.rotate([0.0, 1.0, 0.0]);
     let across = surface.center.rotate([1.0, 0.0, 0.0]);
@@ -48,28 +49,20 @@ pub(crate) fn snap(surface: &Surface<'_>, content: &Content) -> Option<(f32, Pos
     if !within(surface, [dot(from_center, across), dot(from_center, along)]) {
         return None;
     }
-    let [_, tall, deep] = content.size;
-    let (facing, reach) = match surface.plane_type {
-        PlaneType::Vertical => {
-            let side = if height < 0.0 { -1.0 } else { 1.0 };
-            (scale(normal, side), deep / 2.0)
-        }
-        PlaneType::HorizontalUpwardFacing | PlaneType::HorizontalDownwardFacing => {
-            (normal, tall / 2.0)
-        }
+    let facing = match surface.plane_type {
+        PlaneType::Vertical if height < 0.0 => scale(normal, -1.0),
+        PlaneType::Vertical
+        | PlaneType::HorizontalUpwardFacing
+        | PlaneType::HorizontalDownwardFacing => normal,
     };
+    let reach = content.size[2] / 2.0;
     let gap = (dot(from_center, facing) - reach).abs();
     if gap > SNAP_DISTANCE {
         return None;
     }
     let on_plane = sub(content.pose.position, scale(normal, height));
     let position = add(on_plane, scale(facing, reach));
-    let orientation = match surface.plane_type {
-        PlaneType::Vertical => upright_facing(facing)?,
-        PlaneType::HorizontalUpwardFacing | PlaneType::HorizontalDownwardFacing => {
-            turn_degrees(0.0, yaw_of(&content.pose), 0.0)
-        }
-    };
+    let orientation = facing_with_top(surface.plane_type, facing, &content.pose)?;
     Some((
         gap,
         Pose {
@@ -79,27 +72,25 @@ pub(crate) fn snap(surface: &Surface<'_>, content: &Content) -> Option<(f32, Pos
     ))
 }
 
-// The turn that stands a composable upright and points its +Z axis the way `facing` points
-// level, or `None` for a facing that is straight up or down.
-fn upright_facing(facing: [f32; 3]) -> Option<[f32; 4]> {
-    let level = [facing[0], 0.0, facing[2]];
-    if dot(level, level).sqrt() < STEEP {
-        return None;
-    }
-    let z = normalize(level);
-    let y = [0.0, 1.0, 0.0];
-    Some(turn_of_axes(cross(y, z), y, z))
-}
-
-// The turn about the vertical axis, in degrees, that points +Z where the pose's +Z axis points,
-// seen from above. A pose that faces nearly straight up or down gives no turn.
-fn yaw_of(pose: &Pose) -> f32 {
-    let facing = pose.rotate([0.0, 0.0, 1.0]);
-    if facing[0].hypot(facing[2]) < STEEP {
-        0.0
-    } else {
-        facing[0].atan2(facing[2]).to_degrees()
-    }
+// The turn that points a composable's +Z axis along `facing` and its +Y axis along the top that
+// suits the plane, or `None` when no top can be found.
+fn facing_with_top(plane_type: PlaneType, facing: [f32; 3], held: &Pose) -> Option<[f32; 4]> {
+    let tops = match plane_type {
+        // A wall holds the composable upright
+        PlaneType::Vertical => [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+        // A flat plane holds it with its top away from where it faced, or where its top pointed if it
+        // already faced along the plane's normal
+        PlaneType::HorizontalUpwardFacing | PlaneType::HorizontalDownwardFacing => [
+            scale(held.rotate([0.0, 0.0, 1.0]), -1.0),
+            held.rotate([0.0, 1.0, 0.0]),
+        ],
+    };
+    let top = tops
+        .into_iter()
+        .map(|top| perpendicular(top, facing))
+        .find(|top| dot(*top, *top) > DEGENERATE)?;
+    let y = normalize(top);
+    Some(turn_of_axes(cross(y, facing), y, facing))
 }
 
 // Whether the point `at`, in meters along the surface's X and Z axes, lies on the surface or no
