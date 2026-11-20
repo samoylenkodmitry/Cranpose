@@ -395,9 +395,10 @@ fn draw_shadow<P: Pixel>(
 // The columns of a shadow whose coverage one band of rows shares.
 const SHADOW_COLUMNS: usize = 128;
 
-// Paints the run `start..end` of row `py` with one color: a fill where it
-// covers the run opaquely, else a blend over each pixel.
-fn paint_row<P: Pixel>(
+// Blends one color over each pixel of the run `start..end` of row `py`. Out
+// of line: the rows of most gradients cover their pixels opaquely.
+#[inline(never)]
+fn blend_row<P: Pixel>(
     target: &mut Target<'_, P>,
     py: i32,
     (start, end): (i32, i32),
@@ -405,9 +406,7 @@ fn paint_row<P: Pixel>(
     blend_mode: BlendMode,
     diagnostics: &RenderDiagnostics,
 ) {
-    if blend_mode == BlendMode::SrcOver && color[3] >= 1.0 {
-        P::fill(target.row(py, start, end), P::opaque(opaque_bytes(color)));
-    } else if color[3] > 0.0 {
+    if color[3] > 0.0 {
         let paint = P::paint(color, blend_mode);
         for dst in target.row(py, start, end) {
             dst.blend_paint(paint, 1.0, diagnostics);
