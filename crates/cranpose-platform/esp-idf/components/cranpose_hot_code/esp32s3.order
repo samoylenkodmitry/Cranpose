@@ -82,7 +82,7 @@
   *(.literal._RNvNtCs*_22cranpose_render_common14primitive_emit23round_rect_shape_params* .text._RNvNtCs*_22cranpose_render_common14primitive_emit23round_rect_shape_params*)
   *(.literal._RNvM*NtCs*_11cranpose_ui12render_stateNt*10AppContext17has_focused_field* .text._RNvM*NtCs*_11cranpose_ui12render_stateNt*10AppContext17has_focused_field*)
   *(.literal._RNvM*NtCs*_20cranpose_ui_graphics6recordNt*13ShapeRecorder11push_shaded* .text._RNvM*NtCs*_20cranpose_ui_graphics6recordNt*13ShapeRecorder11push_shaded*)
-  *(.literal._RINvNtCs*_22cranpose_render_pixels4draw9paint_rowNtNtCs*_22cranpose_render_common6rgb5658Rgb565BeE* .text._RINvNtCs*_22cranpose_render_pixels4draw9paint_rowNtNtCs*_22cranpose_render_common6rgb5658Rgb565BeE*)
+  *(.literal._RINvNtCs*_22cranpose_render_pixels4draw9blend_rowNtNtCs*_22cranpose_render_common6rgb5658Rgb565BeE* .text._RINvNtCs*_22cranpose_render_pixels4draw9blend_rowNtNtCs*_22cranpose_render_common6rgb5658Rgb565BeE*)
   *(.literal._RNvM*NtNtCs*_13cranpose_core7runtime7ui_taskNt*13RuntimeHandle22enqueue_shared_ui_task* .text._RNvM*NtNtCs*_13cranpose_core7runtime7ui_taskNt*13RuntimeHandle22enqueue_shared_ui_task*)
   *(.literal._RNCNvM*NtCs*_13cranpose_core23snapshot_state_observerNt*26SnapshotStateObserverInner5start0* .text._RNCNvM*NtCs*_13cranpose_core23snapshot_state_observerNt*26SnapshotStateObserverInner5start0*)
   *(.literal._RNvNtCs*_22cranpose_render_pixels6damage11edge_strips* .text._RNvNtCs*_22cranpose_render_pixels6damage11edge_strips*)

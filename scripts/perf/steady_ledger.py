@@ -280,6 +280,7 @@ def rows(run, frames, start_row, groups_path, tree):
             }
             out.extend((row, metric, values[metric] / frames) for metric in METRICS)
             out.extend(instructions(row, f"{base}.fb-instr.out", frames))
+            out.extend(instructions(f"{row}-rgba", f"{base}.fb-instr-rgba.out", frames))
             continue
         counts = bench_counts(f"{base}.count")
         traced = trace(f"{base}.copy")
@@ -418,6 +419,9 @@ def diff(budget_path, groups_path, base_path, head_path):
     print("head values, then head minus base; * marks a change past its spread")
     print(f"{'row':<16}" + "".join(f" {label:>10} {'diff':>8}" for label in LABELS))
     for row, values in head.items():
+        # A row of instructions alone prints in the table below.
+        if not any(metric in values for metric in METRICS):
+            continue
         line, marked = f"{row:<16}", False
         for metric in METRICS:
             delta, past = change(row, metric)

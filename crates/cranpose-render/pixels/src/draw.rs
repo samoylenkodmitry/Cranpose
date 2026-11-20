@@ -393,28 +393,21 @@ fn draw_shadow<P: Pixel>(
 // The columns of a shadow whose coverage one band of rows shares.
 const SHADOW_COLUMNS: usize = 128;
 
-// Paints the runs of row `py` with one color: a fill where it covers them
-// opaquely, else a blend over each pixel.
-fn paint_row<P: Pixel>(
+// Blends one color over each pixel of the run `start..end` of row `py`. Out
+// of line: the rows of most gradients cover their pixels opaquely.
+#[inline(never)]
+fn blend_row<P: Pixel>(
     target: &mut Target<'_, P>,
     py: i32,
-    runs: RowRuns,
+    (start, end): (i32, i32),
     color: [f32; 4],
     blend_mode: BlendMode,
     diagnostics: &RenderDiagnostics,
 ) {
-    let runs = runs.into_iter().filter(|(start, end)| start < end);
-    if blend_mode == BlendMode::SrcOver && color[3] >= 1.0 {
-        let pixel = P::opaque(opaque_bytes(color));
-        for (start, end) in runs {
-            P::fill(target.row(py, start, end), pixel);
-        }
-    } else if color[3] > 0.0 {
+    if color[3] > 0.0 {
         let paint = P::paint(color, blend_mode);
-        for (start, end) in runs {
-            for dst in target.row(py, start, end) {
-                dst.blend_paint(paint, 1.0, diagnostics);
-            }
+        for dst in target.row(py, start, end) {
+            dst.blend_paint(paint, 1.0, diagnostics);
         }
     }
 }
@@ -550,9 +543,9 @@ fn draw_shape<P: Pixel>(
             radii: Some(radii),
         } => {
             let fill = RoundedFill::new(*rect, radii);
-            paint.fill(|y, min_x, max_x| [fill.run(y, min_x, max_x), NO_RUN]);
+            paint.fill(|y, min_x, max_x| fill.run(y, min_x, max_x));
         }
-        ShapeCoverage::Fill { radii: None, .. } => paint.fill(whole_rows),
+        ShapeCoverage::Fill { radii: None, .. } => paint.fill(|_, min_x, max_x| (min_x, max_x)),
     }
 }
 
