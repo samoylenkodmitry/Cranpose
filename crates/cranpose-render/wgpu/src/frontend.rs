@@ -378,8 +378,10 @@ impl RendererFrontend {
                 }
             } else if root.contains_backdrop() {
                 // The end widened the damage by the captures of the first
-                // walk's backdrops alone.
-                damage.damage = Damage::Full;
+                // walk's backdrops alone. The captures of the later walk's
+                // backdrops widen it again.
+                self.target.end_again(&root, &mut damage.damage);
+                damage.damage.add(overlay_damage, viewport);
             }
             let Some(region) = cull.as_mut() else {
                 break root;
