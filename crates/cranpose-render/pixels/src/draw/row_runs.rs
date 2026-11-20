@@ -1,8 +1,6 @@
 //! Which pixels of a row a shape can cover: the runs a fill, a stroke or an
 //! arc band paints, before the coverage of each pixel in them.
 
-use std::cell::Cell;
-
 use cranpose_ui_graphics::{
     ArcGeometry, CornerRadii, LineFrame, LineGeometry, Point, Rect, StrokeJoin, whole,
 };
@@ -241,17 +239,8 @@ pub(super) struct RoundedFill {
     bottom_left: Corner,
     // The rows from the lower of the top corners' centres to the higher of
     // the bottom corners', on which no corner cuts the row: each has the
-    // same run, which the first of them works out.
+    // same run within the same columns.
     middle: (f32, f32),
-    middle_run: Cell<Option<MiddleRun>>,
-}
-
-// The run of the middle rows within `min_x..max_x`.
-#[derive(Clone, Copy)]
-struct MiddleRun {
-    min_x: i32,
-    max_x: i32,
-    run: (i32, i32),
 }
 
 /// A rounded corner: a point in its square, the one between the circle's
@@ -341,8 +330,16 @@ impl RoundedFill {
                 top_left.centre_y.max(top_right.centre_y),
                 bottom_left.centre_y.min(bottom_right.centre_y),
             ),
-            middle_run: Cell::new(None),
         }
+    }
+
+    // Whether the row centred at `y` lies within the rect's height and
+    // between the corners, where every row takes the same run.
+    fn in_middle(&self, y: f32) -> bool {
+        y >= self.rect.y
+            && y <= self.rect.y + self.rect.height
+            && y >= self.middle.0
+            && y <= self.middle.1
     }
 
     /// Whether a point of a row within the rect's height passes the left
@@ -376,17 +373,10 @@ impl RoundedFill {
     /// line, so the row loop around a fill stays small enough to keep
     /// inline.
     #[inline(never)]
-    pub(super) fn run(&self, y: f32, min_x: i32, max_x: i32) -> (i32, i32) {
+    fn run(&self, y: f32, min_x: i32, max_x: i32) -> (i32, i32) {
         let rect = self.rect;
         if !(y >= rect.y && y <= rect.y + rect.height) {
             return NO_RUN;
-        }
-        let middle = y >= self.middle.0 && y <= self.middle.1;
-        if middle
-            && let Some(kept) = self.middle_run.get()
-            && (kept.min_x, kept.max_x) == (min_x, max_x)
-        {
-            return kept.run;
         }
         let flat = |x: i32| (self.flat_left..=self.flat_right).contains(&(x as f32 + 0.5));
         let mut start = min_x;
@@ -401,13 +391,50 @@ impl RoundedFill {
                 end -= 1;
             }
         }
-        if middle {
-            self.middle_run.set(Some(MiddleRun {
-                min_x,
-                max_x,
-                run: (start, end),
-            }));
-        }
         (start, end)
+    }
+}
+
+// The rows a fill covers: every row of its rect whole, or the rows of a
+// rounded rect.
+#[derive(Clone, Copy)]
+pub(super) enum FillRows<'a> {
+    Rect,
+    Rounded(&'a RoundedFill),
+}
+
+impl<'a> FillRows<'a> {
+    // The runs of the rows within `min_x..max_x`, for a loop over rows.
+    pub(super) fn within(self, min_x: i32, max_x: i32) -> FillRuns<'a> {
+        FillRuns {
+            rows: self,
+            min_x,
+            max_x,
+            middle: None,
+        }
+    }
+}
+
+// The run of each row of a fill within the columns `min_x..max_x`, which
+// a loop over the fill's rows owns. A rounded rect's rows between its
+// corners take the run the first of them works out.
+pub(super) struct FillRuns<'a> {
+    rows: FillRows<'a>,
+    min_x: i32,
+    max_x: i32,
+    middle: Option<(i32, i32)>,
+}
+
+impl FillRuns<'_> {
+    // The run of the row centred at `y`.
+    pub(super) fn run(&mut self, y: f32) -> (i32, i32) {
+        let (min_x, max_x) = (self.min_x, self.max_x);
+        match self.rows {
+            FillRows::Rect => (min_x, max_x),
+            FillRows::Rounded(fill) if fill.in_middle(y) => {
+                *self.middle.get_or_insert_with(|| fill.run(y, min_x, max_x))
+            }
+            FillRows::Rounded(fill) => fill.run(y, min_x, max_x),
+        }
     }
 }
