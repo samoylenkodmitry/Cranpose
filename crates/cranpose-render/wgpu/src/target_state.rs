@@ -267,6 +267,8 @@ pub(crate) struct TargetState {
     // By record row, how the target last drew the record.
     shown: Vec<Shown>,
     setting: Option<TargetSetting>,
+    // The frame's damage: from its begin to its end the damage of the old
+    // areas, which the end adds the new areas to.
     damage: DamageBuilder,
     // Whether the frame changes the whole window: an area it changes is not
     // known.
@@ -277,9 +279,6 @@ pub(crate) struct TargetState {
     // The records the frame's changes leave and what of each they reach,
     // whose new areas the frame adds after its collect.
     changed: Vec<(RecordRef, Scope)>,
-    // The damage of the old areas, and whether one is not known, which the
-    // frame's end starts from.
-    begun: (DamageRects, bool),
     // By row, the frame that marked the record and how a culled walk of
     // that frame takes it.
     marks: Vec<(u32, Visit)>,
@@ -351,8 +350,6 @@ impl TargetState {
                 }
             }
         }
-        self.begun.0.assign(self.damage.as_rects());
-        self.begun.1 = self.whole;
     }
 
     // The changes the records keep for the target from the next update on:
@@ -366,12 +363,12 @@ impl TargetState {
         }
     }
 
-    // The damage of the areas the frame before drew the changed records in;
-    // `None` when the frame works out no damage or one of them is not
-    // known.
+    // Between the frame's begin and its end, the damage of the areas the
+    // frame before drew the changed records in; `None` when the frame works
+    // out no damage or one of them is not known.
     pub(crate) fn begun(&self) -> Option<&DamageRects> {
         let known = self.recording && !self.unknown_before && self.lost_root.is_none();
-        (known && !self.begun.1).then_some(&self.begun.0)
+        (known && !self.whole).then_some(self.damage.as_rects())
     }
 
     // Writes into `damage` the damage the frame takes when each moved and
@@ -550,8 +547,10 @@ impl TargetState {
             *damage = Damage::Full;
             return;
         };
-        self.damage.assign(&self.begun.0);
-        self.whole = self.begun.1;
+        // The end's adds start a run of their own over the old areas: the
+        // merges of the frame's damage follow those areas, not the order the
+        // begin merged them in.
+        self.damage.start_run();
         let shown = root.map_or(&[][..], |root| &root.shown);
         let grid = PixelGrid::of(setting);
         for shown in shown {

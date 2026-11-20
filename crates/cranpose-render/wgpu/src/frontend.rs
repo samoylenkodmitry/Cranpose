@@ -228,6 +228,15 @@ impl RendererFrontend {
         }
         self.scene.root_layer()?;
         self.returned_scenes = self.returned_scenes.saturating_sub(1);
+        // The region starts from the areas the targets drew the changed
+        // records in, which their ends add the new areas to.
+        let mut cull = None;
+        if window {
+            let region = cull.insert(DamageRects::default());
+            if !self.cull_region(region) {
+                cull = None;
+            }
+        }
         let mut overlay_damage = Damage::Full;
         let overlay = self.collect_overlays(root_scale, purpose, &mut overlay_damage);
         // Built field by field: a constant of the whole packet damage would
@@ -236,7 +245,6 @@ impl RendererFrontend {
             since: None,
             damage: Damage::Full,
         };
-        let mut cull = None;
         let root = self.collect_scene(
             (width, height, root_scale),
             purpose,
@@ -314,10 +322,11 @@ impl RendererFrontend {
 
     // The scene's root scene for a frame of `viewport` at `root_scale` for
     // `purpose`, over `overlay` that changes `overlay_damage`. Writes into
-    // `damage` what a window frame changes against the packet before, and
-    // into `cull` the region a window walk culled the root to. A culled walk
-    // an image repaints past is taken again over what it repaints once, and
-    // then over every record.
+    // `damage` what a window frame changes against the packet before. A
+    // window walk culls the root to `cull`, which the frame widens by what
+    // the next image repaints, or drops. A culled walk an image repaints
+    // past is taken again over what it repaints once, and then over every
+    // record.
     fn collect_scene(
         &mut self,
         (width, height, root_scale): (u32, u32, f32),
@@ -329,13 +338,10 @@ impl RendererFrontend {
         let viewport = (width, height);
         damage.since = self.since();
         let next = self.frame_sequence.wrapping_add(1);
-        if window {
-            let region = cull.insert(DamageRects::default());
-            if !self.cull_region(region)
-                || !self.widen_by_predicted_repaint(region, next, overlay_damage, viewport, damage)
-            {
-                *cull = None;
-            }
+        if let Some(region) = cull.as_mut()
+            && !self.widen_by_predicted_repaint(region, next, overlay_damage, viewport, damage)
+        {
+            *cull = None;
         }
         let store = self.scene.store();
         let root_layer = store.root_layer().expect("the scene has a root");

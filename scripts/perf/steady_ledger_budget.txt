@@ -27,7 +27,7 @@
 wall-t20         malloc                       2.02       0.00
 wall-t20         realloc                      0.13       0.00
 wall-t20         live                         0.00       0.00
-wall-t20         copied                       5540          0
+wall-t20         copied                       5476          0
 wall-t20         realloc_bytes                  68          0
 wall-t20-start   malloc                       9.73       0.01
 wall-t20-start   realloc                      0.03       0.00
@@ -64,7 +64,7 @@ feed             realloc_bytes                1490          0
 ticker           malloc                     303.28       0.42
 ticker           realloc                      0.05       0.00
 ticker           live                        16.18       0.53
-ticker           copied                      31825          8
+ticker           copied                      29777          8
 ticker           realloc_bytes                1783          0
 particles        malloc                       0.05       0.00
 particles        realloc                      0.02       0.00
