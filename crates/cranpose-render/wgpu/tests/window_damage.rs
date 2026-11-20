@@ -2076,30 +2076,43 @@ fn a_frame_copied_into_a_swapchain_image_between_frames_drawn_into_it() {
 
 // The pixels of the shape of `Scene::GlassOnce` that changes every frame.
 const SHAPE_PIXELS: u64 = 784;
+// The pixels of the pane of `Scene::GlassOnce`, which hold the shape.
+const PANE_PIXELS: u64 = 21_216;
+// The pixels the pane reads and writes.
+const PANE_CAPTURE_PIXELS: u64 = 25_056;
 
 /// The swapchain hands the image for the frame with glass out without the
 /// frame it held, as after a failed present.
 // The culled first walk of that frame takes the new pane's backdrop. A later
-// walk then takes every record. The frame changes the whole window. The next
-// frame skips working out its damage. The frame after the skip draws whole.
-// The images draw the whole window until each holds a frame after those
-// three, then the shape alone.
+// walk then takes every record. The captures of its backdrops widen the
+// frame's damage to all the pane reads and writes. The frame after it takes
+// the pane away. Each image draws again what the frames since its own
+// changed, the image of the frame with glass the whole window.
 #[test]
 fn a_swapchain_image_handed_out_without_its_frame() {
     let Some(after) = swapchain_frames_after_the_glass(DIRECT, false) else {
         return;
     };
+    let damaged: Vec<Option<u64>> = after
+        .iter()
+        .map(|stats| match &stats.damage {
+            FrameDamage::Part(rects) => Some(rects.pixels()),
+            _ => None,
+        })
+        .collect();
+    let shape = Some(SHAPE_PIXELS);
     assert_eq!(
-        (after[0].damage, after[1].damage, after[2].damage),
-        (FrameDamage::Full, FrameDamage::Skipped, FrameDamage::Full),
-        "the frame with glass changes the whole window"
-    );
-    let shape_alone = after[3..].iter().all(
-        |stats| matches!(&stats.damage, FrameDamage::Part(rects) if rects.pixels() == SHAPE_PIXELS),
-    );
-    assert!(
-        shape_alone,
-        "the frames after the skip change the shape alone"
+        damaged,
+        [
+            Some(PANE_CAPTURE_PIXELS),
+            Some(PANE_PIXELS),
+            shape,
+            shape,
+            shape,
+            shape,
+            shape
+        ],
+        "the frame with glass changes what the pane reads and writes"
     );
     let whole = u64::from(WIDTH * HEIGHT);
     let repainted: Vec<u64> = after.iter().map(|stats| stats.repainted_pixels).collect();
@@ -2107,10 +2120,10 @@ fn a_swapchain_image_handed_out_without_its_frame() {
         repainted,
         [
             whole,
-            whole,
-            whole,
-            whole,
-            whole,
+            PANE_CAPTURE_PIXELS,
+            PANE_CAPTURE_PIXELS,
+            PANE_PIXELS,
+            SHAPE_PIXELS,
             SHAPE_PIXELS,
             SHAPE_PIXELS
         ],
