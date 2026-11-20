@@ -80,6 +80,8 @@ impl Trackers {
         frame.tracking = self.capabilities;
         if status.listens() {
             self.locate(xr_session, time, frame);
+            #[cfg(feature = "scripted-hand")]
+            crate::scripted_hand::apply(frame);
         } else {
             Self::rest(frame);
         }

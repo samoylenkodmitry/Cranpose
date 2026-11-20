@@ -9,10 +9,12 @@ use cranpose_testing::{
 
 use super::*;
 use crate::{
-    MovePolicy, Pose, ResizeLimits, ResizePolicy, SpatialExternalSurface, SpatialMoveEvent,
-    SpatialMoveEventType, SpatialPanel, SpatialResizeEvent, SpatialResizeEventType, SpatialVolume,
-    StereoMode, SubspaceModifier,
+    Controller, HandAim, HandState, MovePolicy, Pinch, Pose, ResizeLimits, ResizePolicy,
+    SpatialExternalSurface, SpatialMoveEvent, SpatialMoveEventType, SpatialPanel,
+    SpatialResizeEvent, SpatialResizeEventType, SpatialVolume, StereoMode, SubspaceModifier,
+    TrackedPose, TrackingState,
     handle::HandleKind,
+    pointer_aim::pointer_aim,
     space::{Mobility, SUBSPACE_ORIGIN, Shape, Space, local_space},
     volume_host::VolumeScene,
 };
@@ -54,6 +56,7 @@ fn aim(x: f32, yaw: f32, trigger: f32) -> Option<Aim> {
         pose: Pose::at([x, 0.0, 0.0]),
         trigger,
         stick: 0.0,
+        source: InputSource::Controller,
     })
 }
 
@@ -73,6 +76,7 @@ fn aim_at(origin: [f32; 3], target: [f32; 3], trigger: f32) -> Option<Aim> {
         pose: Pose::at(origin),
         trigger,
         stick: 0.0,
+        source: InputSource::Controller,
     })
 }
 
@@ -80,6 +84,50 @@ fn aim_at(origin: [f32; 3], target: [f32; 3], trigger: f32) -> Option<Aim> {
 // `trigger`.
 fn handle_aim(slot: &PanelSlot, x: f32, trigger: f32) -> Option<Aim> {
     aim_at([x, 0.0, 0.0], crate::carry::handle_center(slot), trigger)
+}
+
+// A hand that the cameras track at `x` meters, pointing straight ahead turned right by `yaw`
+// degrees, whose index finger pinches by `strength`.
+fn tracked_hand(x: f32, yaw: f32, strength: f32) -> HandState {
+    let half = (-yaw).to_radians() / 2.0;
+    HandState {
+        tracking_state: TrackingState::Tracking,
+        aim: Some(HandAim {
+            pose: Pose {
+                position: [x, 0.0, 0.0],
+                orientation: [0.0, half.sin(), 0.0, half.cos()],
+            },
+            index: Pinch {
+                strength,
+                pinching: strength > 0.8,
+            },
+            ..HandAim::default()
+        }),
+        ..HandState::default()
+    }
+}
+
+// The pointer's aim for `hand` when no controller is in use, in an app that asked for hand
+// tracking.
+fn hand_aim_of(hand: &HandState) -> Option<Aim> {
+    pointer_aim(&Controller::default(), Some(hand))
+}
+
+// A controller in use at `x` meters that points straight ahead, in the frame that the controller
+// helpers `aim` build for.
+fn controller_in_use(x: f32, trigger: f32) -> Controller {
+    Controller {
+        aim: Some(TrackedPose {
+            pose: Pose::at([x, 0.0, 0.0]),
+            linear_velocity: None,
+            angular_velocity: None,
+        }),
+        trigger: crate::Trigger {
+            value: trigger,
+            touched: true,
+        },
+        ..Controller::default()
+    }
 }
 
 // Frames 10 ms apart.
@@ -103,6 +151,15 @@ impl Frames {
 
     fn right(&mut self, x: f32, yaw: f32, trigger: f32) -> (Vec<Gesture>, Option<Cursor>) {
         self.update([None, aim(x, yaw, trigger)], &[PANEL])
+    }
+
+    // The right hand points as a tracked hand with no controller, pinching by `strength`.
+    fn right_hand(&mut self, x: f32, yaw: f32, strength: f32) -> (Vec<Gesture>, Option<Cursor>) {
+        self.right_state(&tracked_hand(x, yaw, strength))
+    }
+
+    fn right_state(&mut self, hand: &HandState) -> (Vec<Gesture>, Option<Cursor>) {
+        self.update([None, hand_aim_of(hand)], &[PANEL])
     }
 }
 
@@ -1032,6 +1089,7 @@ fn a_ray_that_enters_a_volume_by_its_side_reports_the_place_on_its_front_face() 
         pose: Pose::at([0.7, 0.0, -1.0]),
         trigger: 0.0,
         stick: 0.0,
+        source: InputSource::Controller,
     });
     frames.update([None, aim], &space.panels());
     for gesture in frames.pointer.surface_events() {
@@ -1168,4 +1226,221 @@ fn a_hidden_panel_takes_no_hits_from_either_ray() {
         let (_, cursor) = frames.update(aims, &panels);
         assert_eq!(cursor.map(|cursor| cursor.panel), Some(1));
     }
+}
+
+#[test]
+fn a_pinch_over_a_panel_moves_presses_and_releases() {
+    let mut frames = Frames::default();
+    let (events, cursor) = frames.right_hand(0.0, 0.0, 0.0);
+    assert_eq!(events, [Gesture::Move { x: 400.0, y: 250.0 }]);
+    assert_eq!(
+        cursor.map(|cursor| (cursor.panel, cursor.x, cursor.y)),
+        Some((1, 400.0, 250.0))
+    );
+    // The hand's aim shows as the ray, which ends at the panel
+    let beam = frames.pointer.beams()[1].expect("the hand's ray shows");
+    assert_eq!(beam.ray.origin, [0.0, 0.0, 0.0]);
+    assert!((beam.length - 1.0).abs() < 1e-4);
+    assert_eq!(frames.pointer.beams()[0], None);
+    let (events, cursor) = frames.right_hand(0.0, 0.0, 1.0);
+    assert_eq!(events, [Gesture::Press]);
+    assert!(cursor.is_some_and(|cursor| cursor.pressed));
+    let (events, _) = frames.right_hand(0.0, 0.0, 0.0);
+    assert_eq!(events, [Gesture::Release]);
+}
+
+#[test]
+fn a_half_closed_pinch_neither_presses_nor_releases() {
+    let mut frames = Frames::default();
+    frames.right_hand(0.0, 0.0, 0.0);
+    assert!(frames.right_hand(0.0, 0.0, 0.5).0.is_empty());
+    assert_eq!(frames.right_hand(0.0, 0.0, 0.7).0, [Gesture::Press]);
+    assert!(frames.right_hand(0.0, 0.0, 0.5).0.is_empty());
+    assert_eq!(frames.right_hand(0.0, 0.0, 0.3).0, [Gesture::Release]);
+}
+
+#[test]
+fn a_pinching_hand_clicks_through_a_shake_and_drags_when_it_turns() {
+    let mut frames = Frames::default();
+    frames.right_hand(0.0, 0.0, 0.0);
+    frames.right_hand(0.0, 0.0, 1.0);
+    for frame in 0..60 {
+        let yaw = if frame % 2 == 0 { 3.0 } else { -3.0 };
+        let (events, cursor) = frames.right_hand(0.0, yaw, 1.0);
+        assert!(events.is_empty());
+        assert_eq!(cursor.map(|cursor| cursor.x), Some(400.0));
+    }
+    assert_eq!(
+        frames.right_hand(0.0, 0.0, 0.0).0.first(),
+        Some(&Gesture::Release)
+    );
+
+    frames.right_hand(0.0, 0.0, 1.0);
+    let moved = (0..60).any(|_| {
+        let (events, _) = frames.right_hand(0.0, 15.0, 1.0);
+        matches!(events.first(), Some(Gesture::Move { x, .. }) if *x > 400.0)
+    });
+    assert!(moved);
+}
+
+#[test]
+fn closing_the_pinch_turns_the_hand_and_the_press_keeps_the_point_before_it() {
+    let mut frames = Frames::default();
+    frames.right_hand(0.0, 0.0, 0.0);
+    // The pinch's own motion turns the aim by 6 degrees before the fingers meet
+    frames.right_hand(0.0, 3.0, 0.3);
+    let (events, cursor) = frames.right_hand(0.0, 6.0, 1.0);
+    assert_eq!(
+        events,
+        [Gesture::Move { x: 400.0, y: 250.0 }, Gesture::Press]
+    );
+    assert_eq!(cursor.map(|cursor| cursor.x), Some(400.0));
+}
+
+#[test]
+fn a_hand_that_makes_the_system_gesture_does_not_press_and_lets_a_press_go() {
+    let mut frames = Frames::default();
+    frames.right_hand(0.0, 0.0, 0.0);
+    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [Gesture::Press]);
+    let mut gesture = tracked_hand(0.0, 0.0, 1.0);
+    if let Some(aim) = &mut gesture.aim {
+        aim.system_gesture = true;
+    }
+    // The palm turns up and the pinch is the menu's. The press ends and its ray goes away
+    let (events, cursor) = frames.right_state(&gesture);
+    assert_eq!(events, [Gesture::Release, Gesture::Leave]);
+    assert_eq!(cursor, None);
+    assert_eq!(frames.pointer.beams(), [None, None]);
+    for _ in 0..5 {
+        let (events, cursor) = frames.right_state(&gesture);
+        assert!(events.is_empty());
+        assert_eq!(cursor, None);
+    }
+    // The palm turns away with the fingers still together. That pinch began as the menu's
+    let (events, _) = frames.right_hand(0.0, 0.0, 1.0);
+    assert_eq!(events, [Gesture::Move { x: 400.0, y: 250.0 }]);
+    assert!(frames.right_hand(0.0, 0.0, 1.0).0.is_empty());
+    assert!(frames.right_hand(0.0, 0.0, 0.0).0.is_empty());
+    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [Gesture::Press]);
+}
+
+#[test]
+fn a_pinch_that_is_closed_when_the_hand_appears_does_not_press() {
+    let mut frames = Frames::default();
+    let (events, cursor) = frames.right_hand(0.0, 0.0, 1.0);
+    assert_eq!(events, [Gesture::Move { x: 400.0, y: 250.0 }]);
+    assert!(cursor.is_some_and(|cursor| !cursor.pressed));
+    assert!(frames.right_hand(0.0, 0.0, 1.0).0.is_empty());
+    assert!(frames.right_hand(0.0, 0.0, 0.0).0.is_empty());
+    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [Gesture::Press]);
+}
+
+#[test]
+fn a_hand_that_the_cameras_lose_lets_its_press_go_and_presses_again_after_a_new_pinch() {
+    let mut frames = Frames::default();
+    frames.right_hand(0.0, 0.0, 0.0);
+    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [Gesture::Press]);
+    let lost = HandState {
+        tracking_state: TrackingState::Paused,
+        ..HandState::default()
+    };
+    assert_eq!(
+        frames.right_state(&lost).0,
+        [Gesture::Release, Gesture::Leave]
+    );
+    // The cameras find the hand with its fingers still together
+    assert!(
+        frames
+            .right_hand(0.0, 0.0, 1.0)
+            .0
+            .contains(&Gesture::Move { x: 400.0, y: 250.0 })
+    );
+    assert!(!frames.right_hand(0.0, 0.0, 1.0).0.contains(&Gesture::Press));
+    frames.right_hand(0.0, 0.0, 0.0);
+    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [Gesture::Press]);
+}
+
+#[test]
+fn a_switch_from_the_controller_to_the_hand_in_a_press_releases_it_cleanly() {
+    let mut frames = Frames::default();
+    frames.update([None, aim(0.0, 0.0, 0.0)], &[PANEL]);
+    assert_eq!(
+        frames.update([None, aim(0.0, 0.0, 1.0)], &[PANEL]).0,
+        [Gesture::Press]
+    );
+    // The user lets go of the controller and the cameras find the hand, with its fingers open
+    let (events, cursor) = frames.right_hand(0.0, 0.0, 0.0);
+    assert_eq!(events, [Gesture::Release, Gesture::Leave]);
+    assert_eq!(cursor, None);
+    assert_eq!(
+        frames.right_hand(0.0, 0.0, 0.0).0,
+        [Gesture::Move { x: 400.0, y: 250.0 }]
+    );
+    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [Gesture::Press]);
+    assert_eq!(frames.right_hand(0.0, 0.0, 0.0).0, [Gesture::Release]);
+}
+
+#[test]
+fn a_switch_from_the_hand_to_the_controller_in_a_press_releases_it_cleanly() {
+    let mut frames = Frames::default();
+    frames.right_hand(0.0, 0.0, 0.0);
+    assert_eq!(frames.right_hand(0.0, 0.0, 1.0).0, [Gesture::Press]);
+    // The controller's trigger is down as the controller takes the side over
+    let (events, _) = frames.update([None, aim(0.0, 0.0, 1.0)], &[PANEL]);
+    assert_eq!(events, [Gesture::Release, Gesture::Leave]);
+    assert!(
+        frames
+            .update([None, aim(0.0, 0.0, 1.0)], &[PANEL])
+            .0
+            .contains(&Gesture::Move { x: 400.0, y: 250.0 })
+    );
+    // That trigger was held from before the switch, so it presses only after it went up
+    assert!(
+        frames
+            .update([None, aim(0.0, 0.0, 1.0)], &[PANEL])
+            .0
+            .is_empty()
+    );
+    assert_eq!(frames.update([None, aim(0.0, 0.0, 0.0)], &[PANEL]).0, []);
+    assert_eq!(
+        frames.update([None, aim(0.0, 0.0, 1.0)], &[PANEL]).0,
+        [Gesture::Press]
+    );
+}
+
+#[test]
+fn a_controller_in_one_hand_and_a_hand_on_the_other_side_each_point() {
+    let mut frames = Frames::default();
+    // The left hand has a controller in use. The cameras track both hands, and the right one has
+    // no controller
+    let left = pointer_aim(
+        &controller_in_use(-0.3, 0.0),
+        Some(&tracked_hand(-0.3, 0.0, 1.0)),
+    );
+    let right = hand_aim_of(&tracked_hand(0.3, 0.0, 0.0));
+    let (events, _) = frames.update([left, right], &[PANEL]);
+    assert!(!events.is_empty());
+    let beams = frames.pointer.beams();
+    assert_eq!(beams[0].map(|beam| beam.ray.origin), Some([-0.3, 0.0, 0.0]));
+    assert_eq!(beams[1].map(|beam| beam.ray.origin), Some([0.3, 0.0, 0.0]));
+    // The pinch of the right hand takes the pointer from the left controller
+    let right = hand_aim_of(&tracked_hand(0.3, 0.0, 1.0));
+    let (events, cursor) = frames.update([left, right], &[PANEL]);
+    assert_eq!(events.last(), Some(&Gesture::Press));
+    assert!(cursor.is_some_and(|cursor| cursor.pressed));
+}
+
+#[test]
+fn an_app_that_did_not_ask_for_hand_tracking_gets_no_pointer_from_a_pinch() {
+    let mut frames = Frames::default();
+    // The frame holds the pinch, and the backend passes the hand on only for an app that asked
+    let asked = false;
+    for strength in [0.0, 1.0, 0.0] {
+        let hand = tracked_hand(0.0, 0.0, strength);
+        let aim = pointer_aim(&Controller::default(), asked.then_some(&hand));
+        let (events, cursor) = frames.update([None, aim], &[PANEL]);
+        assert!(events.is_empty());
+        assert_eq!(cursor, None);
+    }
+    assert_eq!(frames.pointer.beams(), [None, None]);
 }

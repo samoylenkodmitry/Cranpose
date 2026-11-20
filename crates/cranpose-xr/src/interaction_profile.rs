@@ -73,6 +73,15 @@ impl InteractionProfile {
         Self::KhrSimple,
     ];
 
+    // Whether the profile is that of hands that cameras track, not of a controller in a hand.
+    #[cfg_attr(
+        not(any(test, headset)),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    pub(crate) const fn is_hand(self) -> bool {
+        matches!(self, Self::ExtHand | Self::MicrosoftHand)
+    }
+
     /// The profile's OpenXR path, such as `/interaction_profiles/oculus/touch_controller`.
     pub const fn path(self) -> &'static str {
         match self {

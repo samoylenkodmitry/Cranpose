@@ -719,6 +719,57 @@ same call), one `xrLocateBodyJointsFB`, one `xrGetFaceExpressionWeights2FB` or `
 and one `xrGetEyeGazesFB`, or a located space for the gaze. The arrays live in the frame or on the
 stack.
 
+### Hands as pointers
+
+The pointer of `pointer.rs` takes an `Aim` for each side: a ray, a pose, a trigger value and a
+stick. `pointer_aim.rs` chooses the `Aim` of a side in each frame, from that side's `Controller`
+and `HandState`:
+
+1. A controller whose aim the runtime tracks, and whose profile is not a hand profile, gives the
+   `Aim` with source `InputSource::Controller`.
+2. Otherwise, when the app declared `Use::hand_tracking()`, a hand whose `HandState` is `Tracking`
+   and carries a `HandAim` gives the `Aim` of that aim pose, with the pinch strength of the index
+   finger as the trigger and source `InputSource::Hands`. `XR_FB_hand_tracking_aim` fills it.
+   A hand that makes the system gesture or presses the menu gives none.
+3. Otherwise, when the side's profile is `ExtHand` or `MicrosoftHand`, the controller's actions
+   give the `Aim`: the hand interaction profile binds the hand's `aim` pose and its pinch
+   (`aim_activate_ext/value`) to the same actions as a controller's. A runtime without the FB aim
+   extension reports the hand this way. A hand interaction profile never counts as a controller in
+   rule 1. The declaration gates it as well.
+
+`Hand::update` in `pointer.rs` remembers the source of its last aim. A different source in the next
+frame resets the side as a lost aim does: the press ends with a `Release`, a carry or a resize
+ends, and the trigger of the new source counts as held from before if it is down. A hand that
+appears with a closed pinch gets the same treatment, so a hand that the cameras lose and find, or
+that ends the system gesture with its fingers together, does not press by surprise. A controller
+that appears with its trigger down still presses, as before.
+
+The ray, the aim filter, the press rules, the handles and the beam are the controller's. The beam
+starts at the hand's aim pose. A hand has no thumbstick, so a carried panel follows the aim pose
+and cannot be pushed or pulled. `Haptics` asks for a side that a hand points for never reach
+`xrApplyHapticFeedback`.
+
+`HeadsetInput::sample` writes the chosen source of each side into `XrFrame::left_pointer` and
+`right_pointer` before the app's frame effects run. The demo's pointer line reads them.
+
+On a Quest 3 and in the Android XR emulator the runtime lists `XR_FB_hand_tracking_aim` and
+`XR_EXT_hand_interaction`. The emulator reports the `ExtHand` profile for both hands at rest.
+Neither runtime was shown a hand of its own. No hand is in the Quest's view at the desk. The
+emulator release in use (37.2.13 with system image revision 7) rejects the hand messages that its
+own window sends to the guest ("Received unexpected message type from simulated input client"), so
+its hand simulation does not run.
+
+The `scripted-hand` feature of `cranpose-xr` plays a hand in place of the cameras'. `script_hand`
+installs a `ScriptedHand`: an aim pose that points at a place in the room, and a `PinchCycle` of
+rest, closing, held and opening times for the index finger. `Trackers::sample` writes it into the
+frame's `HandState` of its side right after the trackers wrote the real hands, so the pointer's
+choice of input, the ray, the press and the button take it by the path of a tracked hand. The
+script stands for what a hand reads. What a real hand's pinch strength and aim pose do while the
+fingers close is untested. The feature is off by default, and the backend has no such code then.
+
+The selection rules and the pointer's behavior with hand states are covered by
+`src/tests/pointer_aim_tests.rs`, `src/tests/pointer_tests.rs` and `src/tests/scripted_hand_tests.rs`.
+
 ### The demo
 
 `apps/xr-demo` shows the tracking in its counter panel. The section lists each feature with its
@@ -730,6 +781,13 @@ another panel out of the frame. The demo's volume takes two of them, one for the
 at the dot at its fingertip. The build script asks for hand tracking, which needs no prompt on a
 Quest. `XR_DEMO_TRACKING=none` asks for nothing, and `XR_DEMO_TRACKING=all` adds the body, the face
 and the eyes, which the system asks the user to allow.
+
+`XR_DEMO_SCRIPTED_HAND=right` (or `left`) builds a scripted hand that pinches the counter's button
+in a cycle of three seconds: two seconds at rest, 0.2 seconds closing, 0.6 seconds held and 0.2
+seconds opening. In the Android XR emulator the counter counted from 5 to 9 between two
+screenshots, with the beam running from the hand's aim pose to the button and the panel's line
+"Pointers L/R: none / hands". The panel's pointer line reads `XrFrame::pointer`, and the log's
+once-a-second line holds the pointers and the hands' aims.
 
 `XR_DEMO_VOLUME=through` builds a scene of a panel and a torus that pierces it, a meter ahead of
 the head where the demo started, and shows nothing else. A compositor that tests depth shows the

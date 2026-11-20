@@ -18,7 +18,8 @@
 //! the controllers and the recenter event, as an [`XrFrame`]. An app that asks for it in its build,
 //! with `Use::hand_tracking()`, `Use::body_tracking()`, `Use::face_tracking()` or
 //! `Use::eye_tracking()` of `cranpose::capabilities`, also gets the user's hands, body, face and
-//! gaze there, and [`local_tracking_capabilities`] tells what the runtime offers. [`Haptics`] plays
+//! gaze there, and [`local_tracking_capabilities`] tells what the runtime offers. A tracked hand
+//! with no controller in it points at the panels and presses with a pinch, as a controller does. [`Haptics`] plays
 //! vibrations on the controllers. A pure Cranpose app can stream a headset to a host with them.
 //!
 //! The `openxr` feature adds the backend for headsets. On Android, as on a Meta Quest, its
@@ -79,6 +80,7 @@ mod hand_state;
 mod handle;
 mod haptics;
 mod headset_properties;
+mod input_source;
 mod interaction_profile;
 #[cfg(any(test, headset))]
 mod joint_flags;
@@ -90,6 +92,8 @@ mod move_policy;
 mod pinch;
 #[cfg(any(test, headset))]
 mod pointer;
+#[cfg(any(test, headset))]
+mod pointer_aim;
 mod pose;
 mod ray;
 mod recenter;
@@ -98,6 +102,8 @@ mod render_viewpoint;
 mod resize;
 mod resize_limits;
 mod resize_policy;
+#[cfg(any(test, all(feature = "scripted-hand", headset)))]
+mod scripted_hand;
 mod space;
 mod spatial_capabilities;
 mod spatial_curved_row;
@@ -177,6 +183,7 @@ pub use hand_joint_type::HandJointType;
 pub use hand_state::HandState;
 pub use haptics::{Haptics, Vibration, local_haptics};
 pub use headset_properties::{EyeImageSize, HeadsetProperties, local_headset_properties};
+pub use input_source::InputSource;
 pub use interaction_profile::InteractionProfile;
 pub use meta_face_state::MetaFaceState;
 pub use move_policy::MovePolicy;
@@ -194,6 +201,8 @@ pub use resize_limits::ResizeLimits;
 pub use resize_policy::ResizePolicy;
 #[cfg(desktop_run)]
 pub use run_error::RunError;
+#[cfg(all(feature = "scripted-hand", headset))]
+pub use scripted_hand::{PinchCycle, ScriptedHand, script_hand};
 pub use spatial_capabilities::{SpatialCapabilities, local_spatial_capabilities};
 pub use spatial_curved_row::SpatialCurvedRow;
 pub use spatial_environment::{SpatialEnvironment, local_spatial_environment};
