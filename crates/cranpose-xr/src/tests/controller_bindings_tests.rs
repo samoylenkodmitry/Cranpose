@@ -93,7 +93,7 @@ fn a_trackpad_leans_the_pointer_forward_where_a_controller_has_no_stick() {
 }
 
 #[test]
-fn the_pointer_inputs_are_the_aim_the_trigger_and_the_forward_axis() {
+fn the_pointer_inputs_are_the_aim_the_trigger_and_the_two_stick_axes() {
     let pointing: Vec<_> = inputs(InteractionProfile::OculusTouch, Hand::Left)
         .into_iter()
         .filter(|&(input, _)| input.points())
@@ -104,6 +104,7 @@ fn the_pointer_inputs_are_the_aim_the_trigger_and_the_forward_axis() {
         [
             "input/aim/pose",
             "input/trigger/value",
+            "input/thumbstick/x",
             "input/thumbstick/y"
         ]
     );

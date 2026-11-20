@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Pinch, Pose, TrackedPose, Trigger};
+use crate::{Button, Pinch, Pose, Squeeze, Thumbstick, TrackedPose, Trigger};
 
 // A controller that the runtime tracks, pulled by `trigger`, at `x` meters.
 fn controller(x: f32, trigger: f32) -> Controller {
@@ -13,6 +13,7 @@ fn controller(x: f32, trigger: f32) -> Controller {
         trigger: Trigger {
             value: trigger,
             touched: true,
+            ..Trigger::default()
         },
         ..Controller::default()
     }
@@ -51,7 +52,7 @@ fn a_tracked_hand_with_no_controller_points_by_its_aim_and_presses_with_its_inde
     assert_eq!(aim.ray.origin, [0.25, 0.0, 0.0]);
     assert_eq!(aim.ray.direction, [0.0, 0.0, -1.0]);
     assert_eq!(aim.trigger, 0.7);
-    assert_eq!(aim.stick, 0.0);
+    assert_eq!(aim.stick, [0.0; 2]);
 }
 
 #[test]
@@ -143,7 +144,7 @@ fn a_runtime_without_the_aim_extension_points_through_the_hand_interaction_profi
     assert_eq!(aim.source, InputSource::Hands);
     assert_eq!(aim.pose, Pose::at([0.3, 0.0, 0.0]));
     assert_eq!(aim.trigger, 0.8);
-    assert_eq!(aim.stick, 0.0);
+    assert_eq!(aim.stick, [0.0; 2]);
 }
 
 #[test]
@@ -170,16 +171,58 @@ fn the_aim_extension_takes_the_hand_before_the_hand_interaction_profile() {
 fn only_a_controllers_thumbstick_pushes() {
     let mut touch = controller(0.0, 0.0);
     touch.thumbstick.y = 1.0;
+    touch.thumbstick.x = -0.5;
     let aim = pointer_aim(&touch, Some(&HandState::default())).expect("it points");
-    assert_eq!(aim.stick, 1.0);
+    assert_eq!(aim.stick, [-0.5, 1.0]);
     let hand_profile = Controller {
         thumbstick: touch.thumbstick,
         ..profile_hand(0.0, 0.0)
     };
     let aim = pointer_aim(&hand_profile, Some(&joints_only())).expect("it points");
-    assert_eq!(aim.stick, 0.0);
+    assert_eq!(aim.stick, [0.0; 2]);
     assert_eq!(
         pointer_aim(&Controller::default(), Some(&hand(0.0, 0.0))).map(|aim| aim.stick),
-        Some(0.0)
+        Some([0.0; 2])
     );
+}
+
+#[test]
+fn a_controllers_buttons_reach_the_aim_and_a_hand_has_none() {
+    let touch = Controller {
+        squeeze: Squeeze {
+            value: 0.8,
+            pressed: true,
+        },
+        primary: Button {
+            pressed: true,
+            touched: true,
+        },
+        secondary: Button::default(),
+        thumbstick: Thumbstick {
+            pressed: true,
+            ..Thumbstick::default()
+        },
+        menu: true,
+        ..controller(0.0, 0.0)
+    };
+    let aim = pointer_aim(&touch, Some(&HandState::default())).expect("it points");
+    assert_eq!(
+        aim.buttons,
+        Buttons {
+            squeeze: 0.8,
+            primary: true,
+            secondary: false,
+            stick_click: true,
+            menu: true,
+        }
+    );
+    // The hand interaction profile's grasp is a squeeze that presses nothing
+    let hand_profile = Controller {
+        squeeze: touch.squeeze,
+        ..profile_hand(0.0, 0.0)
+    };
+    let aim = pointer_aim(&hand_profile, Some(&joints_only())).expect("it points");
+    assert_eq!(aim.buttons, Buttons::default());
+    let aim = pointer_aim(&Controller::default(), Some(&hand(0.0, 0.0))).expect("it points");
+    assert_eq!(aim.buttons, Buttons::default());
 }

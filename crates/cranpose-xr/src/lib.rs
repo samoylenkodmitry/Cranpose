@@ -59,6 +59,8 @@
 //! downloads the Meta Platform SDK.
 
 #[cfg(any(test, headset))]
+mod aim;
+#[cfg(any(test, headset))]
 mod aim_filter;
 mod anchor;
 mod anchor_capabilities;
@@ -66,6 +68,8 @@ mod anchor_persistence;
 mod anchor_result;
 mod anchor_state;
 mod anchors;
+#[cfg(any(test, headset))]
+mod atlas_input;
 #[cfg(any(test, headset))]
 mod beam_pose;
 #[cfg(any(test, headset))]
@@ -82,6 +86,7 @@ mod controller;
 mod controller_bindings;
 #[cfg(any(test, headset))]
 mod controller_grips;
+mod controller_input;
 #[cfg(all(feature = "gltf", any(test, headset)))]
 mod controller_loaders;
 #[cfg(any(test, headset))]
@@ -129,6 +134,8 @@ mod foveated_unwarp;
 mod frame_effects;
 #[cfg(any(test, all(headset, target_os = "android")))]
 mod frame_queue;
+#[cfg(any(test, headset))]
+mod gestures;
 #[cfg(feature = "gltf")]
 mod gltf_animation;
 #[cfg(feature = "gltf")]
@@ -158,6 +165,8 @@ mod hand_state;
 mod handle;
 mod haptics;
 mod headset_properties;
+#[cfg(any(test, headset))]
+mod hit;
 mod hit_info;
 mod input_action;
 mod input_event;
@@ -206,14 +215,31 @@ mod point_source_params;
 mod pointer;
 #[cfg(any(test, headset))]
 mod pointer_aim;
+mod pointer_mapping;
+mod pointer_settings;
+#[cfg(any(test, headset))]
+mod pointers;
 mod pose;
+#[cfg(any(test, headset))]
+mod press_threshold;
 mod ray;
+#[cfg(any(test, headset))]
+mod reach;
 mod recenter;
 mod render_viewpoint;
 #[cfg(any(test, headset))]
 mod resize;
 mod resize_limits;
 mod resize_policy;
+#[cfg(any(test, all(feature = "scripted-hand", headset)))]
+#[cfg_attr(
+    not(all(feature = "scripted-hand", headset)),
+    allow(
+        unreachable_pub,
+        reason = "the tests reach the module, and its API is public only with the feature"
+    )
+)]
+mod scripted_controller;
 #[cfg(any(test, all(feature = "scripted-hand", headset)))]
 #[cfg_attr(
     not(all(feature = "scripted-hand", headset)),
@@ -315,7 +341,8 @@ pub use anchors::{Anchors, local_anchors};
 pub use body_joint::BodyJoint;
 pub use body_joint_type::BodyJointType;
 pub use body_state::BodyState;
-pub use controller::{Button, Controller, Thumbstick, TrackedPose, Trigger};
+pub use controller::{Button, Controller, Squeeze, Thumbstick, TrackedPose, Trigger};
+pub use controller_input::ControllerInput;
 pub use controller_model::ControllerModel;
 pub use controller_models::{ControllerModels, local_controller_models};
 #[doc(hidden)]
@@ -374,6 +401,8 @@ pub use plane_type::PlaneType;
 pub use planes::{Planes, local_planes};
 pub use point_source::PointSource;
 pub use point_source_params::PointSourceParams;
+pub use pointer_mapping::PointerMapping;
+pub use pointer_settings::{PointerSettings, local_pointer_settings};
 pub use pose::Pose;
 pub use ray::{PanelHit, Ray};
 pub use recenter::Recenter;
@@ -382,6 +411,8 @@ pub use resize_limits::ResizeLimits;
 pub use resize_policy::ResizePolicy;
 #[cfg(desktop_run)]
 pub use run_error::RunError;
+#[cfg(all(feature = "scripted-hand", headset))]
+pub use scripted_controller::{ScriptedButtons, ScriptedController, script_controller};
 #[cfg(all(feature = "scripted-hand", headset))]
 pub use scripted_hand::{PinchCycle, ScriptedHand, script_hand};
 pub use spatial_capabilities::{SpatialCapabilities, local_spatial_capabilities};

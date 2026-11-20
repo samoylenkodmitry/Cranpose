@@ -49,7 +49,7 @@ use std::{
 
 use cranpose_core::{OwnedMutableState, RuntimeCell};
 use cranpose_foundation::{
-    DRAG_THRESHOLD, PointerUptime,
+    DRAG_THRESHOLD, PointerEvent, PointerId, PointerUptime,
     nodes::input::gestures::{TransformGesture, TransformGestureEvent},
 };
 use cranpose_ui_graphics::{GraphicsLayer, Point, TransformOrigin};
@@ -258,6 +258,8 @@ impl ZoomState {
 #[derive(Default)]
 struct ZoomGestureState {
     tracker: TransformGesture,
+    // The first pointer that went down, which taps. A pointer that joins it only pinches.
+    leader: Option<PointerId>,
     active: bool,
     travel: f32,
     tap_down: Option<Point>,
@@ -274,9 +276,26 @@ impl ZoomGestureState {
         })
     }
 
+    // The first pointer down starts a tap and leads the gesture.
+    fn begin_tap(&mut self, at: Point, pointer: PointerId) {
+        self.travel = 0.0;
+        self.tap_down = Some(at);
+        self.leader = Some(pointer);
+    }
+
+    // Whether `event` is from the leader, which gives the lead up when it lifts.
+    fn leads(&mut self, event: &PointerEvent) -> bool {
+        let leads = self.leader == Some(event.id);
+        if leads && event.kind == PointerEventKind::Up {
+            self.leader = None;
+        }
+        leads
+    }
+
     fn abandon_tap(&mut self) {
         self.tap_down = None;
         self.last_tap = None;
+        self.leader = None;
     }
 }
 
@@ -343,16 +362,16 @@ impl Modifier {
                                             gs.active = true;
                                             gs.tap_down = None;
                                         } else {
-                                            gs.travel = 0.0;
-                                            gs.tap_down = Some(event.global_position);
+                                            gs.begin_tap(event.global_position, event.id);
                                         }
-                                        if !event.id.is_primary() {
+                                        if gs.leader != Some(event.id) {
                                             event.consume();
                                         }
                                         continue;
                                     }
 
-                                    if event.kind == PointerEventKind::Up && event.id.is_primary() {
+                                    let leads = gs.leads(&event);
+                                    if event.kind == PointerEventKind::Up && leads {
                                         let up_position = event.global_position;
                                         let is_tap = !gs.active
                                             && gs.tap_down.is_some_and(|down| {
@@ -405,7 +424,7 @@ impl Modifier {
                                             }
                                         }
                                         TransformGestureEvent::None => {
-                                            if !event.id.is_primary()
+                                            if !leads
                                                 || (gs.active
                                                     && matches!(
                                                         event.kind,

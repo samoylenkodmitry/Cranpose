@@ -3,7 +3,7 @@
 use openxr as xr;
 
 use super::{graphics::Api, session::XrSession, tracked_pose::tracked};
-use crate::{Button, Controller, Thumbstick, Trigger, controller_bindings::Input};
+use crate::{Button, Controller, Squeeze, Thumbstick, Trigger, controller_bindings::Input};
 
 pub(crate) fn failed(what: &str) -> impl Fn(xr::sys::Result) -> String + use<> {
     let what = what.to_owned();
@@ -109,8 +109,8 @@ impl HandInput {
         })
     }
 
-    // Writes what the hand reports at `time` into `controller`, except its profile. The actions
-    // must have been synced.
+    // Writes what the hand reports at `time` into `controller`, except its profile and its
+    // presses. The actions must have been synced.
     pub(crate) fn read(&self, xr_session: &XrSession, time: xr::Time, controller: &mut Controller) {
         let session = &xr_session.session;
         let actions = &self.actions;
@@ -132,8 +132,12 @@ impl HandInput {
         controller.trigger = Trigger {
             value: float(&actions.trigger),
             touched: on(&actions.trigger_touch),
+            ..Trigger::default()
         };
-        controller.squeeze = float(&actions.squeeze);
+        controller.squeeze = Squeeze {
+            value: float(&actions.squeeze),
+            ..Squeeze::default()
+        };
         controller.thumbstick = Thumbstick {
             x: float(&actions.stick_x),
             y: float(&actions.stick_y),

@@ -8,7 +8,7 @@ use std::{cell::Cell, rc::Rc};
 use cranpose_testing::{
     RobotTestRule, TestRenderer, create_headless_robot_test, robot_assertions::find_semantics_node,
 };
-use cranpose_ui::{Box, BoxSpec, Modifier, Size};
+use cranpose_ui::{Box, BoxSpec, Modifier, PointerButton, PointerId, Size};
 
 const LABEL: &str = "Show details";
 
@@ -135,4 +135,29 @@ fn a_long_press_beside_a_click_on_one_control_does_not_click() {
     assert_eq!(screen.clicks.get(), 0);
     screen.press(100, 0.0);
     assert_eq!(screen.clicks.get(), 1, "a tap still clicks");
+}
+
+#[test]
+fn a_rested_press_of_a_pointer_that_is_not_the_primary_one_long_presses_too() {
+    // A controller of a headset has a pointer id of its own
+    let mut screen = screen();
+    let hand = PointerId(1);
+    screen
+        .robot
+        .shell_mut()
+        .independent_pointer_moved(hand, 50.0, 25.0);
+    screen
+        .robot
+        .shell_mut()
+        .independent_pointer_pressed(hand, PointerButton::Primary);
+    for _ in 0..12 {
+        screen.robot.advance_time(50_000_000);
+    }
+    screen
+        .robot
+        .shell_mut()
+        .independent_pointer_released(hand, PointerButton::Primary);
+    screen.robot.wait_for_idle();
+    assert_eq!(screen.long_presses.get(), 1);
+    assert_eq!(screen.clicks.get(), 0);
 }

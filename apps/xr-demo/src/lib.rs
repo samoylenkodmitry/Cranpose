@@ -21,10 +21,10 @@ use cranpose::{CropRect, DecodedFrames, prelude::*};
 use cranpose_ui::text::FontWeight;
 use cranpose_xr::{
     DEFAULT_PANEL_SIZE, FieldOfView, FollowMode, FollowTarget, FollowingSubspace, Hand,
-    InputSource, OnNotEntitled, Pose, ResizeLimits, ResizePolicy, SpatialCurvedRow,
-    SpatialExternalSurface, SpatialPanel, StereoMode, StreamStats, StreamedScene, StreamedView,
-    StreamedViews, Subspace, SubspaceModifier, local_entitlement_check, local_headset_properties,
-    local_spatial_capabilities, local_spatial_environment,
+    OnNotEntitled, Pose, ResizeLimits, ResizePolicy, SpatialCurvedRow, SpatialExternalSurface,
+    SpatialPanel, StereoMode, StreamStats, StreamedScene, StreamedView, StreamedViews, Subspace,
+    SubspaceModifier, local_entitlement_check, local_spatial_capabilities,
+    local_spatial_environment,
 };
 #[cfg(not(target_os = "android"))]
 use player_demo::Clips;
@@ -38,6 +38,7 @@ mod foveated_player;
 mod headset_readout;
 mod hum;
 mod pattern_writer;
+mod presses_panel;
 mod ray_target;
 mod room_panel;
 #[cfg(all(feature = "android", target_os = "android"))]
@@ -54,7 +55,8 @@ use foveated_player::FoveatedPlayer;
 use headset_readout::{HeadsetClock, HeadsetReadout, Readout, StreamLogs};
 use hum::rememberHum;
 use pattern_writer::PatternWriter;
-use ray_target::{RayTarget, rememberRayTarget};
+use presses_panel::PressesPanel;
+use ray_target::rememberRayTarget;
 use room_panel::RoomDemo;
 use sound_probe::{SoundProbe, probe_build};
 use torus_volume::TorusVolume;
@@ -446,90 +448,6 @@ fn CurvedStrip() {
     });
 }
 
-// A smaller panel to the right, turned toward the viewer, that counts the presses too and shows
-// what the frame effect reads of the headset.
-#[composable]
-fn PressesPanel(presses: MutableState<u32>, readout: MutableState<Readout>, target: RayTarget) {
-    SpatialPanel(
-        SubspaceModifier::new()
-            .size(320.0, 380.0)
-            .offset(600.0, 0.0, 100.0)
-            .rotate(0.0, -30.0, 0.0),
-        move || {
-            Box(
-                Modifier::empty()
-                    .fill_max_size()
-                    .background(Color(0.16, 0.13, 0.1, 0.94))
-                    .rounded_corners(20.0)
-                    .padding(24.0),
-                BoxSpec::default(),
-                move || {
-                    Column(
-                        Modifier::empty(),
-                        ColumnSpec::default()
-                            .vertical_arrangement(LinearArrangement::spaced_by(6.0)),
-                        move || {
-                            Text(
-                                format!("{} presses", presses.get()),
-                                Modifier::empty(),
-                                sized(28.0, Some(FontWeight::BOLD)),
-                            );
-                            ReadoutLines(readout, target);
-                        },
-                    );
-                },
-            );
-        },
-    );
-}
-
-// The lines of the headset's readout and the app's lifecycle as the headset reports it: resumed
-// with input focus, paused under the system menu, stopped while the session does not run.
-// Outside a headset the frame effect never runs. The readout stays at its start then.
-#[composable]
-fn ReadoutLines(readout: MutableState<Readout>, target: RayTarget) {
-    let Readout {
-        head_cm,
-        trigger_percent,
-        pinch_percent,
-        pointers,
-        frames_per_second,
-    } = readout.get();
-    let [left, right] = pointers.map(|pointer| match pointer {
-        Some(InputSource::Controller) => "controller",
-        Some(InputSource::Hands) => "hands",
-        _ => "none",
-    });
-    let head = head_cm.map_or_else(|| "not tracked".to_owned(), |cm| format!("{cm} cm"));
-    let (system, eye) = local_headset_properties().current().map_or_else(
-        || (String::new(), String::new()),
-        |headset| {
-            let [width, height] = headset.eye_image_sizes[0].recommended;
-            (headset.system_name, format!("Eye image {width}x{height}"))
-        },
-    );
-    for line in [
-        system,
-        eye,
-        format!("Head y {head}"),
-        format!("Right trigger {trigger_percent}%"),
-        format!("Right pinch {pinch_percent}%"),
-        format!("Pointers L/R: {left} / {right}"),
-        format!("Ray meets {}", target.text()),
-        format!("Frame effect {frames_per_second} Hz"),
-        format!("Lifecycle {:?}", local_lifecycle_state().current()),
-    ] {
-        Text(line, Modifier::empty(), sized(18.0, None));
-    }
-    if let Some(check) = local_entitlement_check().current() {
-        Text(
-            format!("Entitlement {:?}", check.entitlement()),
-            Modifier::empty(),
-            sized(18.0, None),
-        );
-    }
-}
-
 // A button that shows or hides the room around the panels, or a note where the headset cannot.
 // The room shows from the start.
 #[composable]
@@ -695,6 +613,11 @@ fn launcher() -> AppLauncher {
         option_env!("XR_DEMO_SCRIPTED_TEXT"),
     ) {
         cranpose_xr::script_hand(hand);
+    }
+    for controller in
+        scripted_hand::controllers_from_build(option_env!("XR_DEMO_SCRIPTED_CONTROLLERS"))
+    {
+        cranpose_xr::script_controller(controller);
     }
     // `XR_DEMO_KEYBOARD=drawn` draws the keyboard on Android XR too, where the system shows its own
     if option_env!("XR_DEMO_KEYBOARD") == Some("drawn") {
