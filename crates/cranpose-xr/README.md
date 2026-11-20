@@ -271,6 +271,73 @@ Jetpack XR's `SpatialGltfModelState` also lists the model's `nodes`. Cranpose ha
 and its `SpatialGltfModelSource` has `from_path` and `from_bytes` where Jetpack XR's has `fromPath`,
 `fromUri` and `fromResource`. The doc comments say where each call differs.
 
+## Spatial audio
+
+`SpatialPointSource(modifier, source)` plays a sound from the pose that `modifier` gives in its
+`Subspace`. `SubspaceModifier::point_source(source)` makes a panel or a volume the source of a sound.
+That sound comes from the pose of the content and follows it when the user carries it. In each frame
+the sound reaches each ear with the level and the delay that the place of the source relative to the
+head gives. Cranpose's own panner in the audio mixer computes them, so the runtime has no part in it.
+
+```rust,ignore
+use cranpose::{PlaybackParams, default_audio};
+use cranpose_xr::{
+    DistanceAttenuation, PointSource, PointSourceParams, SpatialPointSource, SpatialVolume,
+    Subspace, SubspaceModifier, local_spatial_capabilities,
+};
+
+// The app installs the audio engine before it composes: `cranpose::install_audio()`, or the
+// `audio` feature of `cranpose` in an Android app. Jetpack XR's `SpatialSoundPool.play` has no
+// counterpart for a sound id: the engine's `load` gives it.
+let hum = default_audio().load(include_bytes!("hum.wav")).ok();
+
+if local_spatial_capabilities().current().is_spatial_audio_enabled()
+    && let Some(sound) = hum
+{
+    Subspace(move || {
+        // A sound 80 cm to the right of where the subspace starts, which fades from 1 m to 8 m
+        SpatialPointSource(
+            SubspaceModifier::new().offset(800.0, 0.0, 0.0),
+            PointSource::new(sound).looping().params(
+                PointSourceParams::new().distance_attenuation(DistanceAttenuation::Linear {
+                    min_distance: 1.0,
+                    max_distance: 8.0,
+                    gain_at_max_distance: 0.0,
+                }),
+            ),
+        );
+        // A sound at a volume: a controller's ray carries both
+        SpatialVolume(
+            SubspaceModifier::new()
+                .movable()
+                .point_source(PointSource::new(sound).looping()
+                    .playback(PlaybackParams::new().volume(0.6))),
+            |_| { /* the 3D content */ },
+        );
+    });
+}
+```
+
+`PointSourceParams` and `DistanceAttenuation` carry the names of Jetpack XR. `PointSource` bundles the
+arguments of `SpatialSoundPool.play`: the sound, the params and the `PlaybackParams` with the volume,
+the rate and the bus. A flag says whether the sound loops. A sound plays while its source is in the
+composition.
+Outside a headset the composables play nothing.
+
+The sources sound while the app has input focus. Every other lifecycle state silences them. Those states
+occur under a system panel, while the runtime shows none of the app and after the app ends. A paused
+sound goes on from where it stopped. The app pauses the sound that does not play from a source.
+
+The model has four parts: a distance gain, a level difference between the ears, a delay between the ears
+and a head shadow filter. It has no elevation cue. A source ahead sounds like one behind.
+`docs/xr_architecture.md` gives the formulas. It tells why this crate uses its own panner and neither
+`android.media.Spatializer` nor `SpatialSoundPool`. It shows how the pose of the head reaches the audio
+thread without a lock.
+
+The `audio-tap` feature logs the level of each ear of the mixed output once a second. The line also
+holds the place of the first source relative to the head. `scripts/dev/xr_audio_check.sh` reads it on a
+Quest.
+
 ## Video and camera surfaces
 
 `SpatialExternalSurface` gives the app a surface that a hardware video decoder or a camera

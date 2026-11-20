@@ -1,16 +1,17 @@
 use super::*;
 use crate::ring;
 
-struct Harness {
-    commands: Producer<Command>,
+pub(crate) struct Harness {
+    pub(crate) commands: Producer<Command>,
     retired: Consumer<ClipData>,
-    mixer: Mixer,
+    pub(crate) mixer: Mixer,
     leaked: Arc<AtomicU32>,
     streaming: Arc<AtomicBool>,
+    pub(crate) scene: Arc<SpatialScene>,
 }
 
 impl Harness {
-    fn run(&mut self, frames: usize) -> RenderStatus {
+    pub(crate) fn run(&mut self, frames: usize) -> RenderStatus {
         let burst = 128;
         let channels = self.mixer.device_channels;
         let mut out = vec![0.0f32; burst * channels];
@@ -25,17 +26,19 @@ impl Harness {
     }
 }
 
-fn harness(sample_rate: f32, channels: usize) -> Harness {
+pub(crate) fn harness(sample_rate: f32, channels: usize) -> Harness {
     let (command_tx, command_rx) = ring::channel::<Command>(64);
     let (retired_tx, retired_rx) = ring::channel::<ClipData>(64);
     let leaked = Arc::new(AtomicU32::new(0));
     let streaming = Arc::new(AtomicBool::new(true));
+    let scene = Arc::new(SpatialScene::new());
     let seed = MixerSeed {
         commands: command_rx,
         retired: retired_tx,
         leaked_clips: Arc::clone(&leaked),
         underruns: Arc::new(AtomicU32::new(0)),
         streaming: Arc::clone(&streaming),
+        scene: Arc::clone(&scene),
     };
     Harness {
         commands: command_tx,
@@ -43,10 +46,11 @@ fn harness(sample_rate: f32, channels: usize) -> Harness {
         mixer: Mixer::new(seed, sample_rate, channels),
         leaked,
         streaming,
+        scene,
     }
 }
 
-fn clip(samples: Vec<f32>, channels: u8, sample_rate: u32) -> ClipData {
+pub(crate) fn clip(samples: Vec<f32>, channels: u8, sample_rate: u32) -> ClipData {
     ClipData {
         samples: samples.into(),
         channels,
@@ -63,6 +67,7 @@ fn play(voice: u64, slot: u32) -> Command {
         rate: 1.0,
         bus: 0,
         looping: false,
+        emitter: None,
     }
 }
 
@@ -148,6 +153,7 @@ fn rate_shifts_the_read_position() {
             rate: 2.0,
             bus: 0,
             looping: false,
+            emitter: None,
         })
         .expect("queued");
 
@@ -203,6 +209,7 @@ fn looping_voice_keeps_going_until_stopped() {
             rate: 1.0,
             bus: 1,
             looping: true,
+            emitter: None,
         })
         .expect("queued");
 
@@ -236,6 +243,7 @@ fn muting_a_bus_silences_only_that_bus() {
             rate: 1.0,
             bus: 1,
             looping: true,
+            emitter: None,
         })
         .expect("queued");
     h.commands
@@ -278,6 +286,7 @@ fn master_volume_scales_every_bus() {
             rate: 1.0,
             bus: 0,
             looping: true,
+            emitter: None,
         })
         .expect("queued");
     h.commands.push(Command::SetMaster(0.0)).expect("queued");
@@ -341,6 +350,7 @@ fn voice_stealing_prefers_one_shots_over_loops() {
             rate: 1.0,
             bus: 0,
             looping: true,
+            emitter: None,
         })
         .expect("queued");
     let mut out = vec![0.0f32; 8];
@@ -445,6 +455,7 @@ fn retune_changes_gain_and_rate_of_a_running_voice() {
             rate: 1.0,
             bus: 0,
             looping: true,
+            emitter: None,
         })
         .expect("queued");
     let mut out = vec![0.0f32; 8];
@@ -483,6 +494,7 @@ fn device_format_change_keeps_voice_pitch() {
             rate: 1.0,
             bus: 0,
             looping: true,
+            emitter: None,
         })
         .expect("queued");
     let mut out = vec![0.0f32; 8];
@@ -520,6 +532,7 @@ fn nan_gains_and_rates_do_not_wedge_the_mixer() {
             rate: f32::NAN,
             bus: 0,
             looping: true,
+            emitter: None,
         })
         .expect("queued");
     let mut out = vec![0.0f32; 16];
@@ -571,6 +584,7 @@ fn a_looping_voice_holds_the_device_open_indefinitely() {
             rate: 1.0,
             bus: 0,
             looping: true,
+            emitter: None,
         })
         .expect("queued");
 
@@ -597,6 +611,7 @@ fn a_muted_voice_still_counts_as_a_reason_to_run() {
             rate: 1.0,
             bus: 1,
             looping: true,
+            emitter: None,
         })
         .expect("queued");
     h.commands

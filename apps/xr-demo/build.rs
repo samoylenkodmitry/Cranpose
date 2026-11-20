@@ -28,6 +28,13 @@ fn main() {
     if let Ok(hand) = std::env::var("XR_DEMO_SCRIPTED_HAND") {
         println!("cargo::rustc-env=XR_DEMO_SCRIPTED_HAND={hand}");
     }
+    // `XR_DEMO_SOUND=left`, `right` or `swing` plays the demo's hum from a place that stays at the
+    // head's side. The head does not move on a desk, so the build shows that the sound follows the
+    // head's pose, through the audio tap's log.
+    println!("cargo::rerun-if-env-changed=XR_DEMO_SOUND");
+    if let Ok(side) = std::env::var("XR_DEMO_SOUND") {
+        println!("cargo::rustc-env=XR_DEMO_SOUND={side}");
+    }
     println!("cargo::rerun-if-env-changed=XR_DEMO_TRACKING");
     match std::env::var("XR_DEMO_TRACKING").as_deref() {
         Ok("none") => declare(&[]).emit(),

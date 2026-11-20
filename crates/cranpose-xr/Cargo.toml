@@ -49,6 +49,11 @@ meta-entitlement = ["openxr", "cranpose/meta-entitlement"]
 # the backend has no such code.
 scripted-hand = ["openxr"]
 
+# Taps the mixed output of the audio player and logs the level of each ear once a second, with where
+# the first point source stands relative to the head. A check that a source at the left sounds in the
+# left ear reads the log. Off, the mixer does no work for the tap.
+audio-tap = ["openxr"]
+
 # Times the streamed scenes' passes on the CPU and the GPU, and logs the cost once a second. Off, the
 # passes run with no timing.
 stream-costs = ["openxr"]

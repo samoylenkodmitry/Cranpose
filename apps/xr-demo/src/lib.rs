@@ -35,10 +35,12 @@ mod crate_model;
 mod decoder_limits;
 mod foveated_player;
 mod headset_readout;
+mod hum;
 mod pattern_writer;
 mod ray_target;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod scripted_hand;
+mod sound_probe;
 mod torus_volume;
 mod tracking_panel;
 mod type_panel;
@@ -47,8 +49,10 @@ use clip_player::{ClipPlayer, target_display_time};
 use crate_model::CrateModel;
 use foveated_player::FoveatedPlayer;
 use headset_readout::{HeadsetClock, HeadsetReadout, Readout, StreamLogs};
+use hum::rememberHum;
 use pattern_writer::PatternWriter;
 use ray_target::{RayTarget, rememberRayTarget};
+use sound_probe::{SoundProbe, probe_build};
 use torus_volume::TorusVolume;
 use tracking_panel::{TrackedHands, TrackingSection, TrackingView};
 use type_panel::TypePanel;
@@ -77,6 +81,7 @@ pub fn XrDemo() {
     let logs = remember(StreamLogs::default).with(Clone::clone);
     remember(decoder_limits::log_in_background);
     let tracking = TrackedHands();
+    let hum = rememberHum();
     let target = rememberRayTarget();
     EntitlementChoice();
     Subspace(move || {
@@ -109,14 +114,20 @@ pub fn XrDemo() {
         // A volume takes two of the compositor's layers, one for the 3D content and one for its
         // handle. A Quest takes 16. With both rays, the ball and the text panel the demo has more,
         // and the open keyboard is one more, so the frame leaves out the panels that stand
-        // farthest from the head.
+        // farthest from the head. The torus hums: the sound comes from the torus and follows it
+        // when a controller carries it. A build that plays the hum from the head's side leaves
+        // the torus silent.
         TorusVolume(
             SubspaceModifier::new()
                 .offset(600.0, -330.0, 100.0)
                 .rotate(0.0, -30.0, 0.0),
             true,
             target,
+            hum.filter(|_| !probe_build()).map(hum::source),
         );
+        if let Some(sound) = hum.filter(|_| probe_build()) {
+            SoundProbe(sound);
+        }
         // The crate's volume has no handle, so it adds no layer to the frame: the torus's volume
         // already brings the projection layer, which all volumes share
         CrateModel(
@@ -202,6 +213,7 @@ fn DepthTest() {
             SubspaceModifier::new().rotate(0.0, 45.0, 0.0),
             false,
             rememberRayTarget(),
+            None,
         );
     });
 }

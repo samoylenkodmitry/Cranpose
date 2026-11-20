@@ -9,7 +9,7 @@ use cranpose::{
     prelude::*,
     space::{Light, Mat4, Material, Mesh, MeshSurface, Vec3},
 };
-use cranpose_xr::{SpatialVolume, SubspaceModifier};
+use cranpose_xr::{PointSource, SpatialVolume, SubspaceModifier};
 
 use crate::ray_target::RayTarget;
 
@@ -34,9 +34,15 @@ const LONGEST_STEP: f32 = 0.1;
 
 // The torus in a volume at `modifier`'s place. A movable torus has a handle under its box that the
 // user carries it by. A ray meets the torus's triangles, so it passes through the hole of the ring,
-// and `target` hears when the ray is on the torus.
+// and `target` hears when the ray is on the torus. A torus with a `sound` is the source of that
+// sound, wherever it stands.
 #[composable]
-pub(crate) fn TorusVolume(modifier: SubspaceModifier, movable: bool, target: RayTarget) {
+pub(crate) fn TorusVolume(
+    modifier: SubspaceModifier,
+    movable: bool,
+    target: RayTarget,
+    sound: Option<PointSource>,
+) {
     let torus = remember(|| {
         Mesh::from_obj(TORUS_OBJ)
             .map_err(|error| log::error!("xr demo: no torus: {error}"))
@@ -62,6 +68,10 @@ pub(crate) fn TorusVolume(modifier: SubspaceModifier, movable: bool, target: Ray
         modifier.movable()
     } else {
         modifier
+    };
+    let modifier = match sound {
+        Some(sound) => modifier.point_source(sound),
+        None => modifier,
     };
     SpatialVolume(modifier, move |scope| {
         scope.on_input_event(move |event| target.report(&event, |_| "torus".to_owned()));

@@ -3,7 +3,8 @@
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use cranpose::{
-    AppSettings, GpuContext, GuestView, LifecycleState, dispatch_lifecycle_state, remember,
+    AppSettings, GpuContext, GuestView, LifecycleState, default_audio, dispatch_lifecycle_state,
+    remember,
 };
 use cranpose_core::CompositionLocalProvider;
 use openxr as xr;
@@ -35,6 +36,7 @@ use crate::{
     pointer::Pointer,
     session_status::{SessionStatus, StatusWatch},
     soft_keyboard::SoftKeyboard,
+    sound_stage::SoundStage,
     space::{PanelSlot, Ride, Space, local_space},
     surface_input::Gesture,
     volume_host::VolumeScene,
@@ -73,6 +75,7 @@ pub(crate) fn run_immersive(
                 change.lifecycle
             );
             dispatch_lifecycle_state(change.lifecycle);
+            immersive.set_lifecycle(change.lifecycle);
         }
         if let (Some(run), Some(check)) = (&mut entitlement, &immersive.entitlement) {
             run.poll(host, check);
@@ -99,6 +102,7 @@ pub(crate) fn run_immersive(
     }
     log::info!("cranpose xr: ends in {status:?}, lifecycle Destroyed");
     dispatch_lifecycle_state(LifecycleState::Destroyed);
+    immersive.set_lifecycle(LifecycleState::Destroyed);
     // The session ends when `immersive` drops, before the device it draws on. The host closes
     // after that, when the app asked for it.
     drop(immersive);
@@ -127,6 +131,8 @@ struct Immersive {
     surfaces: SurfaceLayers,
     rays: RayLayers,
     handles: HandleLayers,
+    // The sound of the app, or `None` while its audio player has no spatial sound
+    sounds: Option<SoundStage>,
     headset: HeadsetInput,
     xr_session: XrSession,
     gpu: GpuContext,
@@ -155,8 +161,10 @@ impl Immersive {
         let scene_size = [width as f32, height as f32];
         let rays = RayLayers::new(&xr_session, &gpu, format)?;
         let handles = HandleLayers::new(&xr_session, &gpu, format)?;
+        let sounds = SoundStage::new(default_audio());
         let capabilities =
-            SpatialCapabilities::in_headset(xr_session.passthrough.is_controllable());
+            SpatialCapabilities::in_headset(xr_session.passthrough.is_controllable())
+                .with_spatial_audio(sounds.is_some());
         let (effects, haptics, properties) =
             (headset.effects(), headset.haptics(), headset.properties());
         let composed = Rc::new(RefCell::new(
@@ -218,12 +226,21 @@ impl Immersive {
             surfaces: SurfaceLayers::new(),
             rays,
             handles,
+            sounds,
             headset,
             xr_session,
             gpu,
             _graphics: graphics,
             panels: Vec::new(),
         })
+    }
+
+    // Tells the app's sound what the lifecycle is, which silences it while the app has no input
+    // focus.
+    fn set_lifecycle(&self, state: LifecycleState) {
+        if let Some(sounds) = &self.sounds {
+            sounds.lifecycle(state);
+        }
     }
 
     // One frame of a running session. The controllers move the pointer, the panels that changed
@@ -282,6 +299,9 @@ impl Immersive {
             self.space.resize(step);
         }
         self.follow_environment();
+        if let Some(sounds) = &mut self.sounds {
+            sounds.update(self.headset.device_pose(), &self.space);
+        }
         let mut panels = std::mem::take(&mut self.panels);
         let presented = self.present(frame.predicted_display_time, shown, &mut panels);
         self.panels = panels;
