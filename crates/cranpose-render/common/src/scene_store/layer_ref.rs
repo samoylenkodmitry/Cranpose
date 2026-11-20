@@ -321,6 +321,15 @@ impl<'a> LayerRef<'a> {
         self.store.reach(self.id.index())
     }
 
+    /// Whether the record is a leaf whose last redraw changed only where it
+    /// reached at the [`SceneStore::refresh_reach`] before that redraw. Such
+    /// a leaf redraws within where it drew then, as long as it did not move.
+    #[cfg(feature = "window-damage")]
+    #[inline]
+    pub fn redrawn_within(self) -> bool {
+        self.flags().contains(RecordFlags::REDRAWN_WITHIN)
+    }
+
     /// Where the record's own draws reach, beside its children's, in its
     /// own space and within its clip. A change beneath the record since
     /// [`SceneStore::refresh_reach`] leaves it unknown.

@@ -20,7 +20,7 @@ use crate::{
     },
     render::{frame_clear_color, instant_ms, should_log_wgpu_render_stage},
     scene::{Scene, SceneCapacityHint},
-    target_state::{TargetSetting, TargetState},
+    target_state::{Prediction, TargetSetting, TargetState},
     window_packets::{PacketDraws, WindowPackets},
 };
 
@@ -410,7 +410,8 @@ impl RendererFrontend {
     // Widens `region`, which a window walk culls to, by what the next image
     // repaints when the frame changes what the target predicts, so the walk
     // takes in the repaint without walking again; `false`, a walk of every
-    // record, when that image repaints whole. The predicted damage goes into
+    // record, when the frame changes most of the window or that image
+    // repaints whole. The predicted damage goes into
     // `packet`, the damage of the packet `next`, which the frame's own
     // damage replaces after its walk.
     fn widen_by_predicted_repaint(
@@ -421,11 +422,13 @@ impl RendererFrontend {
         viewport: (u32, u32),
         packet: &mut PacketDamage,
     ) -> bool {
-        if !self
+        match self
             .target
             .predict_damage(self.scene.store(), &mut packet.damage)
         {
-            return true;
+            Prediction::Unknown => return true,
+            Prediction::Whole => return false,
+            Prediction::Part => {}
         }
         packet.damage.add(overlay_damage, viewport);
         let mut repaint = DamageRects::default();

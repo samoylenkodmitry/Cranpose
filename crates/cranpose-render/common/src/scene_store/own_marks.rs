@@ -8,7 +8,10 @@ use std::mem::size_of_val;
 
 use cranpose_core::{RecordId, RecordRef};
 
-use super::{LayerRef, Reach, RecordEvent, RecordFlags, SceneStore, SpanPool, content_hash, reach};
+use super::{
+    LayerRef, Reach, RecordEvent, RecordFlags, RecordKind, SceneStore, SpanPool, content_hash,
+    reach,
+};
 
 // One own draw of a record: a hash of what it draws, whether a child lies
 // beneath it, and where it draws in the record's space.
@@ -78,8 +81,7 @@ fn settle_redrawn(store: &mut SceneStore, follow: bool) {
             lose(store, index);
             continue;
         }
-        store.tree[index].flags =
-            flags.without(RecordFlags::REDRAW_PENDING.with(RecordFlags::INSERTED));
+        store.tree[index].flags = flags.without(RecordFlags::REDRAW_STATE);
         // With the marks lost, a record does not know what it drew before,
         // and the refresh that ends the settle marks it. A record made in the
         // update is new as a whole.
@@ -95,7 +97,16 @@ fn settle_redrawn(store: &mut SceneStore, follow: bool) {
         };
         if changed != Reach::Empty {
             let clip = LayerRef::new(store, id).visual_clip_rect();
-            store.log(RecordEvent::Redrawn(changed.within(clip)), id);
+            let changed = changed.within(clip);
+            // The store holds the reach of the refresh before the update
+            // still, the one a reader's areas follow.
+            if store.tree[index].kind == RecordKind::Leaf
+                && reach::holds(store.reach(index), changed)
+            {
+                let flags = &mut store.tree[index].flags;
+                *flags = flags.with(RecordFlags::REDRAWN_WITHIN);
+            }
+            store.log(RecordEvent::Redrawn(changed), id);
         }
     }
     store.marks.redrawn = redrawn;
@@ -116,8 +127,7 @@ pub(super) fn pend_inserted(store: &mut SceneStore, index: usize) {
 #[inline]
 pub(super) fn lose(store: &mut SceneStore, index: usize) {
     let flags = store.tree[index].flags;
-    store.tree[index].flags =
-        flags.without(RecordFlags::REDRAW_PENDING.with(RecordFlags::INSERTED));
+    store.tree[index].flags = flags.without(RecordFlags::REDRAW_STATE);
     store.marks.lost = true;
     if !flags.contains(RecordFlags::INSERTED) {
         store.log(
