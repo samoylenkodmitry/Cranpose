@@ -93,6 +93,11 @@ impl PixelBox {
     }
 }
 
+// The area `rect` takes in the pixels of `grid`, placed at `origin`.
+fn area_at(rect: Rect, origin: Point, grid: PixelGrid) -> Area {
+    PixelBox::of(rect.translate(origin.x, origin.y), grid).map_or(Area::Hidden, Area::Drawn)
+}
+
 // The pixel `value` lies at in a window `most` pixels long, clamped to it.
 #[expect(
     clippy::cast_possible_truncation,
@@ -140,24 +145,74 @@ struct Shown {
 }
 
 impl Shown {
-    // The part of the record's own area that `within`, in the record's
-    // space, covers.
-    fn own_part(self, within: Reach, setting: TargetSetting) -> Area {
-        let (Reach::Finite(rect), Some(origin)) = (within, self.origin) else {
-            return if within == Reach::Empty {
-                Area::Hidden
-            } else {
-                self.own
-            };
-        };
-        let part = PixelBox::of(rect.translate(origin.x, origin.y), PixelGrid::of(setting));
-        match (self.own, part) {
-            (_, None) | (Area::Hidden, _) => Area::Hidden,
-            (Area::Drawn(own), Some(part)) => part.intersect(own).map_or(Area::Hidden, Area::Drawn),
-            (Area::Unknown, Some(part)) => Area::Drawn(part),
-            (own @ Area::Composite(_), Some(_)) => own,
+    // Where `within`, in the record's space, lies in the target at the
+    // record's origin: drawn or hidden; `None` when the reach is not known
+    // or the target did not draw the record in place.
+    fn landing(self, within: Reach, grid: PixelGrid) -> Option<Area> {
+        match (within, self.origin) {
+            (Reach::Empty, _) => Some(Area::Hidden),
+            (Reach::Finite(rect), Some(origin)) => Some(area_at(rect, origin, grid)),
+            _ => None,
         }
     }
+
+    // The part of the record's own area that `within`, in the record's
+    // space, covers; it passes that part when `within` reaches past the own
+    // area, as a record whose own draws grow does.
+    fn own_part(self, within: Reach, grid: PixelGrid) -> Taken {
+        let held = |area| Taken {
+            area,
+            passes: false,
+        };
+        match (self.landing(within, grid), self.own) {
+            (None, own) => held(own),
+            (Some(Area::Drawn(_)), Area::Hidden) => Taken {
+                area: Area::Hidden,
+                passes: true,
+            },
+            (Some(Area::Drawn(part)), Area::Drawn(own)) => {
+                let kept = part.intersect(own);
+                Taken {
+                    area: kept.map_or(Area::Hidden, Area::Drawn),
+                    passes: kept != Some(part),
+                }
+            }
+            (Some(Area::Drawn(part)), Area::Unknown) => held(Area::Drawn(part)),
+            (Some(Area::Drawn(_)), own @ Area::Composite(_)) => held(own),
+            (Some(_), _) => held(Area::Hidden),
+        }
+    }
+}
+
+// What a change of a record takes of the target's areas, and whether the
+// record's new area may pass it: the prediction of the frame's damage
+// places such a change anew.
+#[derive(Clone, Copy)]
+struct Taken {
+    area: Area,
+    passes: bool,
+}
+
+// Which areas `TargetState::own_area` reads for a changed record.
+#[derive(Clone, Copy)]
+enum Moment {
+    // The areas a walk kept: the frame before's as a frame begins, its own
+    // as it ends.
+    Kept,
+    // Before the frame's walk, where the change lands at the origins the
+    // frame before kept: a record's own change at the record's origin, a
+    // moved, new or changed record's reach at its parent's. A change whose
+    // landing is not known takes its kept area.
+    Predicted,
+}
+
+// A record a frame's changes leave, what of it they reach, and whether its
+// new area may pass the area the frame before drew it in.
+#[derive(Clone, Copy)]
+struct Change {
+    record: RecordRef,
+    scope: Scope,
+    passes: bool,
 }
 
 // How a culled walk takes a record.
@@ -278,7 +333,7 @@ pub(crate) struct TargetState {
     unknown_before: bool,
     // The records the frame's changes leave and what of each they reach,
     // whose new areas the frame adds after its collect.
-    changed: Vec<(RecordRef, Scope)>,
+    changed: Vec<Change>,
     // By row, the frame that marked the record and how a culled walk of
     // that frame takes it.
     marks: Vec<(u32, Visit)>,
@@ -371,46 +426,45 @@ impl TargetState {
         (known && !self.whole).then_some(self.damage.as_rects())
     }
 
-    // Writes into `damage` the damage the frame takes when each moved and
-    // new record takes the area the frame before tells for it: its reach,
-    // placed at the origin the frame before drew its parent's space at. The
-    // whole window when a moved record's reach is not known: the walk finds
-    // that record's area unknown too. `false` when the frame works out no
-    // damage, an old area is not known, or a moved record casts an
-    // elevation shadow or lies under a parent the frame before drew through
-    // a surface or under a turn: the walk then works the areas out.
+    // Writes into `damage` the damage the frame takes when each change whose
+    // record may draw past its old area lands as the store and the frame
+    // before's origins tell, as `own_area` predicts it. The begin read the
+    // ancestors of each record it took an old area for, and a change under
+    // an ancestor whose area holds it does not pass; a new record under a
+    // parent that holds no kept area lies in that parent's. The whole window
+    // when the old areas take most of it, or when a changed record's reach
+    // is not known: the walk finds that record's area unknown too. `false`
+    // when the frame works out no damage or an old area is not known: the
+    // walk then works the areas out.
     pub(crate) fn predict_damage(&self, store: &SceneStore, damage: &mut Damage) -> bool {
         let (Some(setting), Some(begun)) = (self.setting, self.begun()) else {
             return false;
         };
         damage.assign_part(begun);
-        for &(record, scope) in &self.changed {
-            let (Scope::Placed, Some(id)) = (scope, store.resolve(record)) else {
-                continue;
-            };
-            let extent = store.layer(id).extent();
-            let rect = match (extent.reach, extent.caster) {
-                (Reach::Unknown, _) => {
-                    *damage = Damage::Full;
-                    return true;
+        damage.settle(setting.viewport);
+        let mut whole = false;
+        if let Damage::Part(rects) = damage {
+            // One run: at the bound of rects, a lone add searches every pair.
+            let mut run = rects.run();
+            for change in self.changed.iter().filter(|change| change.passes) {
+                let taken = self.own_area(
+                    store,
+                    (change.record, change.scope),
+                    Moment::Predicted,
+                    setting,
+                );
+                match taken.area {
+                    Area::Drawn(pixels) | Area::Composite(pixels) => run.add(pixels.rect()),
+                    Area::Hidden => {}
+                    Area::Unknown => {
+                        whole = true;
+                        break;
+                    }
                 }
-                (Reach::Finite(rect), None) => rect,
-                (Reach::Empty, None) => continue,
-                (_, Some(_)) => return false,
-            };
-            let Some(origin) = store
-                .parent(id)
-                .and_then(|parent| self.shown(store.record_ref(parent)))
-                .and_then(|shown| shown.origin)
-            else {
-                return false;
-            };
-            let placed = rect.translate(origin.x, origin.y);
-            if let (Some(pixels), Damage::Part(rects)) =
-                (PixelBox::of(placed, PixelGrid::of(setting)), &mut *damage)
-            {
-                rects.add(pixels.rect());
             }
+        }
+        if whole {
+            *damage = Damage::Full;
         }
         damage.settle(setting.viewport);
         true
@@ -422,7 +476,7 @@ impl TargetState {
     pub(crate) fn cull<'a>(&'a mut self, store: &SceneStore, region: &'a DamageRects) -> Cull<'a> {
         self.stamp = self.stamp.wrapping_add(1).max(1);
         for at in 0..self.changed.len() {
-            let (record, scope) = self.changed[at];
+            let Change { record, scope, .. } = self.changed[at];
             let Some(id) = store.resolve(record) else {
                 continue;
             };
@@ -459,12 +513,18 @@ impl TargetState {
     // damage, and keeps the record to add its area after the collect.
     fn note(&mut self, store: &SceneStore, entry: &JournalEntry) {
         let scope = Scope::of(entry.event);
+        let mut passes = true;
         if !matches!(entry.event, RecordEvent::Inserted | RecordEvent::Claimed) {
-            let area = self.area_of(store, (entry.record, scope), entry.parent);
-            self.add(area);
+            let taken = self.area_of(store, (entry.record, scope), entry.parent);
+            self.add(taken.area);
+            passes = taken.passes;
         }
         if entry.event != RecordEvent::Removed {
-            self.changed.push((entry.record, scope));
+            self.changed.push(Change {
+                record: entry.record,
+                scope,
+                passes,
+            });
         }
     }
 
@@ -593,16 +653,42 @@ impl TargetState {
             if self.whole {
                 break;
             }
-            let (record, scope) = self.changed[at];
+            let Change { record, scope, .. } = self.changed[at];
             if store.resolve(record).is_some() {
-                let area = self.area_of(store, (record, scope), None);
-                self.add(area);
+                let taken = self.area_of(store, (record, scope), None);
+                self.add(taken.area);
             }
         }
         if self.whole {
             *damage = Damage::Full;
             return;
         }
+        self.widen_by_captures(root, setting, damage);
+    }
+
+    // Widens the frame's damage, as its end worked it out before any
+    // capture, by the captures of `root`: a later walk of the frame takes in
+    // records the first walk did not, whose backdrops read and write more of
+    // the window. A frame whose end took the whole window or skipped its
+    // damage keeps that.
+    pub(crate) fn widen_again(&mut self, root: &LayerScene, damage: &mut Damage) {
+        let Some(setting) = self.setting else {
+            return;
+        };
+        if self.recording && !self.unknown_before && !self.whole {
+            self.widen_by_captures(Some(root), setting, damage);
+        }
+    }
+
+    // Writes into `damage` the frame's damage grown by what the backdrops of
+    // `root` read and write where it meets them; the whole window when the
+    // frame holds what its captures cannot describe.
+    fn widen_by_captures(
+        &mut self,
+        root: Option<&LayerScene>,
+        setting: TargetSetting,
+        damage: &mut Damage,
+    ) {
         damage.assign_part(self.damage.as_rects());
         if let (Some(root), Damage::Part(rects)) = (root, &mut *damage)
             && !rects.is_empty()
@@ -619,24 +705,87 @@ impl TargetState {
         damage.settle(setting.viewport);
     }
 
-    // The area the target drew `record` in, as the target's areas say: that
-    // of its topmost ancestor drawn hidden or through a surface, or that
-    // shows a scene, else its own. The walk keeps no area of a record in a
-    // scene's space, and a change there changes all the scene draws. A
-    // record gone from the store is found under `parent`; one whose parent
-    // went too lies in the area of that parent.
+    // The area a change of `record` of `scope` takes, as the target's areas
+    // say: that of its topmost ancestor drawn hidden or through a surface,
+    // or that shows a scene, else its own as the walk kept it. A record gone
+    // from the store is found under `parent`.
     fn area_of(
         &mut self,
         store: &SceneStore,
         (record, scope): (RecordRef, Scope),
         parent: Option<RecordRef>,
-    ) -> Area {
+    ) -> Taken {
+        let ruled = self.ancestor_area(store, record, parent);
+        match (ruled, self.setting) {
+            (Some(area), _) => Taken {
+                area,
+                passes: false,
+            },
+            (None, None) => Taken {
+                area: Area::Unknown,
+                passes: false,
+            },
+            (None, Some(setting)) => self.own_area(store, (record, scope), Moment::Kept, setting),
+        }
+    }
+
+    // The area a change of `record` of `scope` takes beside what its
+    // ancestors hold, as `moment` reads it in a frame of `setting`, and
+    // whether the record's new area may pass it.
+    fn own_area(
+        &self,
+        store: &SceneStore,
+        (record, scope): (RecordRef, Scope),
+        moment: Moment,
+        setting: TargetSetting,
+    ) -> Taken {
+        let kept = self.shown(record);
+        let landed = match (moment, scope) {
+            (Moment::Kept, _) => None,
+            (Moment::Predicted, Scope::Own(within)) => {
+                kept.and_then(|shown| shown.landing(within, PixelGrid::of(setting)))
+            }
+            (Moment::Predicted, Scope::Subtree | Scope::Placed) => {
+                self.landed_reach(store, record, PixelGrid::of(setting))
+            }
+        };
+        if let Some(area) = landed {
+            return Taken { area, passes: true };
+        }
+        let placed = matches!(scope, Scope::Subtree | Scope::Placed);
+        kept.map_or(
+            Taken {
+                area: Area::Hidden,
+                passes: placed,
+            },
+            |shown| match scope {
+                Scope::Subtree | Scope::Placed => Taken {
+                    area: shown.area,
+                    passes: true,
+                },
+                Scope::Own(within) => shown.own_part(within, PixelGrid::of(setting)),
+            },
+        )
+    }
+
+    // The area of the topmost ancestor of `record` that holds the record's
+    // area: one drawn hidden or through a surface, or that shows a scene;
+    // `None` when the record's own area tells. The walk keeps no area of a
+    // record in a scene's space, and a change there changes all the scene
+    // draws. A record gone from the store is found under `parent`; one whose
+    // parent went too lies in the area of that parent.
+    fn ancestor_area(
+        &mut self,
+        store: &SceneStore,
+        record: RecordRef,
+        parent: Option<RecordRef>,
+    ) -> Option<Area> {
         let mut current = match store.resolve(record) {
             Some(id) => store.parent(id),
             None => match parent {
                 Some(parent) => match store.resolve(parent) {
                     Some(id) => Some(id),
-                    None => return Area::Hidden,
+                    None => return Some(Area::Hidden),
                 },
                 None => None,
             },
@@ -651,28 +800,41 @@ impl TargetState {
                 .shown(store.record_ref(ancestor))
                 .map(|shown| shown.area);
             if scene_of(store.layer(ancestor)).is_some() {
-                return match area {
+                return Some(match area {
                     Some(Area::Drawn(pixels)) => Area::Composite(pixels),
                     Some(area) => area,
                     None => Area::Hidden,
-                };
+                });
             }
             match area {
                 Some(Area::Drawn(_) | Area::Unknown) => {}
-                Some(area) => return area,
+                Some(area) => return Some(area),
                 // An ancestor new since the frame: the record moved under
                 // it, and its old parent's change holds where it was.
-                None => return Area::Hidden,
+                None => return Some(Area::Hidden),
             }
         }
-        let Some(setting) = self.setting else {
-            return Area::Unknown;
+        None
+    }
+
+    // Where the subtree of `record` lands at the origin the frame before
+    // drew its parent's space at: its reach there. `None` when that origin
+    // is not known, or the record casts an elevation shadow, which the
+    // window's light places.
+    fn landed_reach(&self, store: &SceneStore, record: RecordRef, grid: PixelGrid) -> Option<Area> {
+        let id = store.resolve(record)?;
+        let extent = store.layer(id).extent();
+        let rect = match (extent.reach, extent.caster) {
+            (Reach::Unknown, _) => return Some(Area::Unknown),
+            (Reach::Empty, None) => return Some(Area::Hidden),
+            (Reach::Finite(rect), None) => rect,
+            (_, Some(_)) => return None,
         };
-        self.shown(record)
-            .map_or(Area::Hidden, |shown| match scope {
-                Scope::Subtree | Scope::Placed => shown.area,
-                Scope::Own(within) => shown.own_part(within, setting),
-            })
+        let origin = store
+            .parent(id)
+            .and_then(|parent| self.shown(store.record_ref(parent)))
+            .and_then(|shown| shown.origin)?;
+        Some(area_at(rect, origin, grid))
     }
 
     fn shown(&self, record: RecordRef) -> Option<Shown> {

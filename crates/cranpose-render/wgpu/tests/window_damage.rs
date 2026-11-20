@@ -2071,14 +2071,52 @@ fn a_swapchain_image_that_holds_the_frame_draws_nothing() {
 /// glass through the composition target, which copies it into its image.
 #[test]
 fn a_frame_copied_into_a_swapchain_image_between_frames_drawn_into_it() {
-    assert_swapchain_frames_after_the_glass(UNSAMPLED, true);
+    swapchain_frames_after_the_glass(UNSAMPLED, true);
 }
+
+// The pixels the frame that shows the pane of `Scene::GlassOnce` changes:
+// all that its blur reads and writes, as the shape beneath it changes.
+const PANE_SHOWN_PIXELS: u64 = 25_056;
+// The pixels the frame after it changes: the area the pane drew in.
+const PANE_GONE_PIXELS: u64 = 21_216;
+// The pixels of the shape that changes every frame.
+const SHAPE_PIXELS: u64 = 784;
 
 /// The swapchain hands the image for the frame with glass out without the
 /// frame it held, as after a failed present.
+// That frame changes a part of the window, though its own image takes it
+// whole: the images that hold the frames before it draw that part again,
+// and then the shape alone.
 #[test]
 fn a_swapchain_image_handed_out_without_its_frame() {
-    assert_swapchain_frames_after_the_glass(DIRECT, false);
+    let Some(after) = swapchain_frames_after_the_glass(DIRECT, false) else {
+        return;
+    };
+    let FrameDamage::Part(pane) = &after[0].damage else {
+        panic!(
+            "the frame with glass changes a part of the window: {:?}",
+            after[0].damage
+        );
+    };
+    assert_eq!(
+        pane.pixels(),
+        PANE_SHOWN_PIXELS,
+        "the frame with glass changes what the pane's blur reads and writes"
+    );
+    let repainted: Vec<u64> = after[1..=4]
+        .iter()
+        .map(|stats| stats.repainted_pixels)
+        .collect();
+    assert_eq!(
+        repainted,
+        [
+            PANE_SHOWN_PIXELS,
+            PANE_SHOWN_PIXELS,
+            PANE_GONE_PIXELS,
+            SHAPE_PIXELS
+        ],
+        "the images draw again what the frames since theirs changed"
+    );
 }
 
 /// Draws [`Scene::GlassOnce`] into a swapchain of `usage` whose image for the
@@ -2087,16 +2125,20 @@ fn a_swapchain_image_handed_out_without_its_frame() {
 /// it held the frame drawn into it before the glass, and once the images
 /// hold frames the history follows again, frames draw a part of the window
 /// again.
-fn assert_swapchain_frames_after_the_glass(usage: wgpu::TextureUsages, glass_image_kept: bool) {
-    let Some((_lock, renderer)) = renderer() else {
-        return;
-    };
+// Returns the statistics of the frame with glass and of the frames after
+// it; `None` without a renderer.
+fn swapchain_frames_after_the_glass(
+    usage: wgpu::TextureUsages,
+    glass_image_kept: bool,
+) -> Option<Vec<RenderStatsSnapshot>> {
+    let (_lock, renderer) = renderer()?;
     let mut harness = Harness::new(renderer, Scene::GlassOnce, 1.0, Keeper::Swapchain(usage));
     if !glass_image_kept {
         harness.unkept = Some(GLASS_STEP as usize);
     }
     let whole = u64::from(WIDTH * HEIGHT);
     let (mut partial_before, mut partial_after) = (0, 0);
+    let mut after = Vec::new();
     for step in 0..=GLASS_STEP + 2 * SWAPCHAIN_IMAGES as u32 {
         let frame = harness.frame(step);
         let label = format!("step {step}: {:?}", frame.stats);
@@ -2107,12 +2149,16 @@ fn assert_swapchain_frames_after_the_glass(usage: wgpu::TextureUsages, glass_ima
             std::cmp::Ordering::Equal => {}
             std::cmp::Ordering::Greater => partial_after += partial,
         }
+        if step >= GLASS_STEP {
+            after.push(frame.stats);
+        }
     }
     assert!(
         partial_before > 0 && partial_after > 0,
         "frames draw a part of the window before the glass ({partial_before}) and after it \
          ({partial_after})"
     );
+    Some(after)
 }
 
 const OVERLAY: Rect = Rect {

@@ -117,12 +117,17 @@ impl DamageRects {
             }
             return;
         }
-        let mut merge = Merge {
-            held: self,
-            partners: &mut None,
-        };
+        let mut run = self.run();
         for rect in rects.as_slice() {
-            merge.add(*rect);
+            run.add(*rect);
+        }
+    }
+
+    // Starts a run of adds into the rects.
+    pub(crate) fn run(&mut self) -> DamageRun<'_> {
+        DamageRun {
+            held: self,
+            partners: None,
         }
     }
 
@@ -193,6 +198,24 @@ impl DamageBuilder {
     pub(crate) fn add(&mut self, rect: DeviceRect) {
         Merge {
             held: &mut self.rects,
+            partners: &mut self.partners,
+        }
+        .add(rect);
+    }
+}
+
+// A run of adds into a list of rects: it keeps between its adds what their
+// merges need, as `DamageBuilder` does, while the run lasts.
+pub(crate) struct DamageRun<'a> {
+    held: &'a mut DamageRects,
+    partners: Option<Partners>,
+}
+
+impl DamageRun<'_> {
+    // Adds `rect`, grown out to whole pixels, as `Merge::add` merges it.
+    pub(crate) fn add(&mut self, rect: DeviceRect) {
+        Merge {
+            held: self.held,
             partners: &mut self.partners,
         }
         .add(rect);
