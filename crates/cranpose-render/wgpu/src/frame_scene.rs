@@ -218,26 +218,48 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             return Ok(());
         };
         let first_z = first.z;
+        let scene = Arc::clone(&first.mesh.scene);
         self.run_stages(pass)?;
-        self.flush_page(pass, first_z)?;
-        self.start_page(pass)?;
+        // A scene that averages its samples into a blank page replaces the page's clear
+        let into_page = pass.resolves_into_page(&scene, first_z);
+        if !into_page {
+            self.flush_page(pass, first_z)?;
+            self.start_page(pass)?;
+        }
         let mut meshes = std::mem::take(&mut pass.meshes);
         meshes.sort_by(|a, b| b.depth.total_cmp(&a.depth));
-        self.encode_scene_pass(pass, &meshes, first_z)
+        let drew = self.encode_scene_pass(pass, &meshes, (first_z, into_page))?;
+        if into_page {
+            if drew {
+                pass.load_op = None;
+                pass.drawn_z = pass.drawn_z.max(first_z);
+            } else {
+                // No pass ran, so the page still owes its clear
+                self.flush_page(pass, first_z)?;
+                self.start_page(pass)?;
+            }
+        }
+        Ok(())
     }
 
+    // Draws the scene's surfaces; returns whether the pass of the first colour ran.
     fn encode_scene_pass(
         &mut self,
         pass: &mut LayerPass<'_>,
         meshes: &[PendingMesh],
-        first_z: usize,
-    ) -> Result<(), String> {
+        (first_z, into_page): (usize, bool),
+    ) -> Result<bool, String> {
         let Some(first) = meshes.first() else {
-            return Ok(());
+            return Ok(false);
         };
         let scene = Arc::clone(&first.mesh.scene);
-        let Some(target) = self.scene_target(pass, &scene, first_z) else {
-            return Ok(());
+        let Some(target) = self.scene_target(pass, &scene, (first_z, into_page)) else {
+            return Ok(false);
+        };
+        let full_page = ScenePage {
+            scale: pass.scale,
+            offset: pass.page.offset,
+            size: (pass.page.texture.width, pass.page.texture.height),
         };
         let page = target.page;
         let light_projection = shadow_projection(&scene, meshes);
@@ -270,22 +292,28 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         let portals = |pass: PortalPass| (StepPipeline::Portals(pass), ScenePhase::Portal);
         let glow = (StepPipeline::Fixed(ScenePipeline::Glow), ScenePhase::Glow);
         let Some(backdrop) = backdrop else {
-            self.encode_steps(
+            let steps = [
+                (opaque, ScenePhase::Opaque),
+                shaded,
+                (volumes, ScenePhase::Volume),
+                portals(PortalPass::Colour { glow: true }),
+                glow,
+            ];
+            let drawn = self.encode_steps(
                 (pass, &target, shadows),
-                &[
-                    (opaque, ScenePhase::Opaque),
-                    shaded,
-                    (volumes, ScenePhase::Volume),
-                    portals(PortalPass::Colour { glow: true }),
-                    glow,
-                ],
+                &steps,
                 (&draws, windows.as_ref(), None),
             );
-            return Ok(());
+            self.write_host_depth(
+                (pass, &target, full_page),
+                (&steps, drawn.filter(|_| into_page)),
+                &draws,
+            );
+            return Ok(drawn.is_some());
         };
         // Glass reads the page the other surfaces left, so draws in a pass
         // of its own after the copy, over their depth drawn again.
-        self.encode_steps(
+        let first = self.encode_steps(
             (pass, &target, shadows),
             &[
                 (opaque, ScenePhase::Opaque),
@@ -295,6 +323,23 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             ],
             (&draws, windows.as_ref(), None),
         );
+        self.write_host_depth((pass, &target, full_page), (&[], None), &draws);
+        self.encode_glass(
+            (pass, &target, shadows),
+            (&draws, windows.as_ref(), backdrop),
+            first_z,
+        )?;
+        Ok(first.is_some())
+    }
+
+    // Draws the scene's glass in a pass of its own, over a copy of the page that the other
+    // surfaces left and their depth drawn again.
+    fn encode_glass(
+        &mut self,
+        (pass, target, shadows): (&mut LayerPass<'_>, &SceneTarget, bool),
+        (draws, windows, backdrop): (&[PreparedSurface<'_>], Option<&PreparedWindows>, DeviceRect),
+        first_z: usize,
+    ) -> Result<(), String> {
         if self
             .renderer
             .scene_surface_pipeline(ScenePipeline::Glass, target.samples)
@@ -305,7 +350,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         let below = target.drawn_below(first_z);
         let copy = self.capture(pass, below, backdrop, "Scene Glass Backdrop")?;
         self.encode_steps(
-            (pass, &target, shadows),
+            (pass, target, shadows),
             &[
                 (
                     StepPipeline::Fixed(ScenePipeline::Depth),
@@ -321,13 +366,65 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 ),
                 // Glass beyond the doorways first, then the nearer glass of
                 // the eye's own space.
-                portals(PortalPass::Glass),
+                (StepPipeline::Portals(PortalPass::Glass), ScenePhase::Portal),
                 (StepPipeline::Fixed(ScenePipeline::Glass), ScenePhase::Glass),
-                glow,
+                (StepPipeline::Fixed(ScenePipeline::Glow), ScenePhase::Glow),
             ],
-            (&draws, windows.as_ref(), Some(&copy)),
+            (draws, windows, Some(&copy)),
         );
         Ok(())
+    }
+
+    // Leaves the host's depth for a scene of several samples, which the pass of the samples cannot
+    // store: one wgpu depth attachment holds one sample count, and a depth of four samples per
+    // pixel costs four times the bandwidth to store and read back. A second pass with one sample
+    // draws the surfaces again with the depth pipelines, so each pixel holds the depth of its
+    // centre. The pass draws only the steps that the colour pass drew, so the depth never shows
+    // what the picture does not. `drawn` is `None` where the scene did not average into the page
+    // whole: the host's depth then holds the far plane, as the clear leaves it. A host with no
+    // depth, and a scene of one sample, which stores its depth in its own pass, run nothing.
+    fn write_host_depth(
+        &mut self,
+        (pass, target, page): (&mut LayerPass<'_>, &SceneTarget, ScenePage),
+        (steps, drawn): (&[(StepPipeline, ScenePhase)], Option<u8>),
+        draws: &[PreparedSurface<'_>],
+    ) {
+        if target.samples == Multisample::Off {
+            return;
+        }
+        let Some(depth) = self.host_depth_target(page) else {
+            return;
+        };
+        let mut depth_steps = [(
+            StepPipeline::Fixed(ScenePipeline::Depth),
+            ScenePhase::Opaque,
+        ); 5];
+        let mut count = 0;
+        for (index, &(kind, phase)) in steps.iter().enumerate() {
+            let swapped = match kind {
+                StepPipeline::Fixed(ScenePipeline::Plain | ScenePipeline::Shadowed)
+                | StepPipeline::Shaded(_) => StepPipeline::Fixed(ScenePipeline::Depth),
+                StepPipeline::Volumes(_) => StepPipeline::Volumes(VolumeVariant::Depth),
+                _ => continue,
+            };
+            if drawn.is_some_and(|mask| mask & (1 << index) != 0) {
+                depth_steps[count] = (swapped, phase);
+                count += 1;
+            }
+        }
+        let ran = self.encode_steps(
+            (pass, &depth, false),
+            &depth_steps[..count],
+            (draws, None, None),
+        );
+        if ran.is_none() {
+            // The pass clears the depth even where it draws nothing
+            drop(self.recorder.begin_scene_pass(
+                "Scene Host Depth",
+                depth.colour(None),
+                depth.depth(),
+            ));
+        }
     }
 
     // Draws, in one pass into `target`, each step's surfaces with the
@@ -342,7 +439,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             Option<&PreparedWindows>,
             Option<&Rc<OffscreenTarget>>,
         ),
-    ) {
+    ) -> Option<u8> {
         let drawn = |phase: ScenePhase| draws.iter().filter(move |draw| draw.phase == phase);
         // The portals' step draws while a window shows any space.
         let empty = |&(kind, phase): &(StepPipeline, ScenePhase)| match kind {
@@ -350,8 +447,9 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             _ => drawn(phase).next().is_none(),
         };
         if steps.iter().all(empty) {
-            return;
+            return None;
         }
+        let mut drew = 0_u8;
         let resolved = self.scene_resolved(target);
         let samples = target.samples;
         let renderer = &*self.renderer;
@@ -373,7 +471,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             self.recorder
                 .begin_scene_pass("Scene Surfaces", colour, target.depth());
         render_pass.set_bind_group(2, shadow_group, &[]);
-        for step in steps {
+        for (index, step) in steps.iter().enumerate() {
             // A pipeline no surface takes is not asked for, so never compiles.
             if empty(step) {
                 continue;
@@ -387,6 +485,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 },
                 StepPipeline::Volumes(_) | StepPipeline::Shaded(_) => None,
                 StepPipeline::Portals(portal_pass) => {
+                    drew |= 1 << index;
                     if let (Some(first), Some(windows)) = (draws.first(), windows) {
                         let texture = first.texture((device, effects));
                         encode_portals(
@@ -400,18 +499,20 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                     continue;
                 }
             };
+            drew |= 1 << index;
             if let Some(pipeline) = fixed {
                 render_pass.set_pipeline(pipeline);
             }
             draw_surfaces(
                 &mut render_pass,
-                (renderer, kind),
+                (renderer, kind, samples),
                 phase_draws,
                 (device, backdrop),
             );
         }
         drop(render_pass);
         pass.pending.extend(target.composite(resolved));
+        Some(drew)
     }
 
     /// Draws the scene's shadow casters into the shadow map, as the light
@@ -568,11 +669,6 @@ impl PreparedSurface<'_> {
         self.held.mesh.seen
     }
 
-    // The samples its scene's pass takes in each pixel.
-    fn samples(&self) -> Multisample {
-        self.held.mesh.scene.multisample
-    }
-
     /// The surface's texture, bound as the scene's shaders read it.
     fn texture(
         &self,
@@ -592,13 +688,13 @@ impl PreparedSurface<'_> {
     fn shaded_pipeline<'r>(
         &self,
         renderer: &'r crate::render::GpuRenderer,
-        variant: ShadedVariant,
+        (variant, samples): (ShadedVariant, Multisample),
     ) -> Option<&'r wgpu::RenderPipeline> {
         let Material::Shaded(shaded) = &self.held.mesh.surface.material else {
             return None;
         };
         self.shaded.as_ref()?;
-        renderer.scene_shaded_pipeline(&shaded.shader, (variant, self.samples()))
+        renderer.scene_shaded_pipeline(&shaded.shader, (variant, samples))
     }
 
     /// Binds the values a shaded surface's shader reads, in the place of
@@ -632,7 +728,7 @@ impl PreparedSurface<'_> {
 /// shaded surface whose shader has not built on the lit pipeline.
 fn draw_surfaces<'d>(
     render_pass: &mut wgpu::RenderPass<'_>,
-    (renderer, kind): (&crate::render::GpuRenderer, StepPipeline),
+    (renderer, kind, samples): (&crate::render::GpuRenderer, StepPipeline, Multisample),
     draws: impl Iterator<Item = &'d PreparedSurface<'d>>,
     (device, backdrop): (&wgpu::Device, Option<&wgpu::BindGroup>),
 ) {
@@ -641,17 +737,16 @@ fn draw_surfaces<'d>(
         let mut shaded = false;
         match (kind, &draw.held.mesh.surface.material) {
             (StepPipeline::Volumes(variant), Material::Volume(volume)) => {
-                let pipeline =
-                    renderer.scene_volume_pipeline(&volume.shader, (variant, draw.samples()));
+                let pipeline = renderer.scene_volume_pipeline(&volume.shader, (variant, samples));
                 let Some(pipeline) = pipeline else {
                     continue;
                 };
                 render_pass.set_pipeline(pipeline);
             }
             (StepPipeline::Shaded(variant), _) => {
-                let own = draw.shaded_pipeline(renderer, variant);
+                let own = draw.shaded_pipeline(renderer, (variant, samples));
                 shaded = own.is_some();
-                let lit = || renderer.scene_surface_pipeline(variant.lit(), draw.samples());
+                let lit = || renderer.scene_surface_pipeline(variant.lit(), samples);
                 let Some(pipeline) = own.or_else(lit) else {
                     continue;
                 };

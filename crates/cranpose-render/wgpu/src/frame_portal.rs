@@ -308,7 +308,7 @@ fn draw_space(
                 }
             }
             (Material::Shaded(_), SpaceStep::Opaque(_, Some(variant), _)) => draw
-                .shaded_pipeline(renderer, variant)
+                .shaded_pipeline(renderer, (variant, samples))
                 .map_or((fixed, false), |pipeline| (pipeline, true)),
             _ => (fixed, false),
         };

@@ -9,12 +9,25 @@
 // the same way. The targets take the scene's size, within the page's, so a
 // scene that scrolls finds the same targets each frame. They lie over the
 // part of the scene the page shows.
+//
+// A scene that covers a page which still holds only its transparent clear
+// needs no composite: its one pass clears the samples and averages them
+// into the page, which that pass replaces. The samples are a transient
+// attachment that the pass drops, so a tiled GPU never writes them out: on
+// GLES with `GL_EXT_multisampled_render_to_texture` the driver averages in
+// tile memory as it writes the page, and on Vulkan the pass resolves in its
+// subpass.
 
 use std::rc::Rc;
 
-use cranpose_ui_graphics::{BlendMode, space::Multisample};
+use cranpose_ui_graphics::{
+    BlendMode,
+    space::{Material, Multisample},
+};
 
-use super::super::{FrameExecutor, LayerPass};
+use super::super::{
+    FrameExecutor, LayerPass, composite_z, draw_op_z, filtered_ops_in_range, is_transparent_clear,
+};
 use crate::{
     collect::SceneDraw,
     draw_pass::{ResolvedComposite, ResolvedCompositeKind, SourceContent},
@@ -46,6 +59,14 @@ enum SceneColour {
         z: usize,
         shown: (u32, u32, u32, u32),
     },
+    // Colour several samples deep, cleared, that the pass averages into the
+    // page whole, which held nothing but its transparent clear.
+    Resolving {
+        view: wgpu::TextureView,
+        page: Rc<OffscreenTarget>,
+    },
+    // The colour of a pass that writes only depth: cleared, and never stored.
+    Placeholder(wgpu::TextureView),
 }
 
 impl SceneTarget {
@@ -53,7 +74,7 @@ impl SceneTarget {
     // have drawn, for a scene whose first surface lies at `z`.
     pub(super) fn drawn_below(&self, z: usize) -> usize {
         match self.colour {
-            SceneColour::Page(_) => z,
+            SceneColour::Page(_) | SceneColour::Resolving { .. } | SceneColour::Placeholder(_) => z,
             SceneColour::Sampled { .. } => z + 1,
         }
     }
@@ -87,11 +108,12 @@ impl SceneTarget {
             SceneColour::Sampled { view, .. } => (
                 view,
                 resolved.map(|resolved| &resolved.view),
-                wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Discard,
-                },
+                cleared_and_dropped(),
             ),
+            SceneColour::Resolving { view, page } => {
+                (view, Some(&page.view), cleared_and_dropped())
+            }
+            SceneColour::Placeholder(view) => (view, None, cleared_and_dropped()),
         };
         wgpu::RenderPassColorAttachment {
             view,
@@ -139,6 +161,50 @@ impl SceneTarget {
     }
 }
 
+impl LayerPass<'_> {
+    // Whether `scene`, whose first surface lies at `z`, can average its samples straight into the
+    // page: it covers the page whole, the page still holds its transparent clear, and nothing
+    // below `z` has drawn or waits to draw. Glass reads the page its scene drew, so a pass of its
+    // own follows the first and needs the page the first left. Where a window of the page is
+    // drawn again, the rest keeps the frame before's pixels.
+    pub(super) fn resolves_into_page(&self, scene: &SceneDraw, z: usize) -> bool {
+        let glass = self
+            .meshes
+            .iter()
+            .any(|held| matches!(held.mesh.surface.material, Material::Glass(_)));
+        let texture = &self.page.texture;
+        let size = (texture.width, texture.height);
+        let page = ScenePage {
+            scale: self.scale,
+            offset: self.page.offset,
+            size,
+        };
+        scene.multisample != Multisample::Off
+            && !glass
+            && self.page.window.is_none()
+            && is_transparent_clear(self.load_op)
+            && scene_scissor(scene, None, page) == Some((0, 0, size.0, size.1))
+            && self.deferred.iter().all(|op| draw_op_z(op) >= z)
+            && self
+                .pending
+                .iter()
+                .all(|composite| composite_z(composite) >= z)
+            && self
+                .in_place
+                .iter()
+                .all(|&index| self.layer.children[index].z_index >= z)
+            && filtered_ops_in_range(&self.layer.scene.draw_ops, self.drawn_z, z, &self.excluded)
+                .is_empty()
+    }
+}
+
+fn cleared_and_dropped() -> wgpu::Operations<wgpu::Color> {
+    wgpu::Operations {
+        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+        store: wgpu::StoreOp::Discard,
+    }
+}
+
 #[expect(clippy::multiple_inherent_impl, reason = "3D steps in their files")]
 impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
     // The target the passes of `scene`, whose first surface lies at `z` in
@@ -148,7 +214,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         &mut self,
         pass: &LayerPass<'_>,
         scene: &SceneDraw,
-        z: usize,
+        (z, into_page): (usize, bool),
     ) -> Option<SceneTarget> {
         let texture = &pass.page.texture;
         let page = ScenePage {
@@ -166,6 +232,22 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 depth,
                 keeps_depth,
                 colour: SceneColour::Page(Rc::clone(texture)),
+            });
+        }
+        if into_page {
+            let format = renderer.pipelines.composition_format;
+            let (view, depth) = renderer
+                .sampled_targets
+                .scene(&renderer.device, (page.size, format, samples));
+            return Some(SceneTarget {
+                page,
+                samples,
+                depth,
+                keeps_depth: false,
+                colour: SceneColour::Resolving {
+                    view,
+                    page: Rc::clone(texture),
+                },
             });
         }
         let (left, top, width, height) = scene_scissor(scene, None, page)?;
@@ -212,12 +294,33 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
     // none for a target that is the page.
     pub(super) fn scene_resolved(&mut self, target: &SceneTarget) -> Option<Rc<OffscreenTarget>> {
         match target.colour {
-            SceneColour::Page(_) => None,
+            SceneColour::Page(_) | SceneColour::Resolving { .. } | SceneColour::Placeholder(_) => {
+                None
+            }
             SceneColour::Sampled { .. } => Some(self.acquire_transient(
                 "Scene Samples Averaged",
                 target.page.size.0,
                 target.page.size.1,
             )),
         }
+    }
+
+    // The target of the pass that writes the host's depth for a scene of several samples: the
+    // host's view, cleared and stored, behind a colour that the pass clears and drops, with one
+    // sample in each pixel. `None` where the host gave no view of the page's size.
+    pub(super) fn host_depth_target(&mut self, page: ScenePage) -> Option<SceneTarget> {
+        let renderer = &mut *self.renderer;
+        let depth = renderer.depth_targets.host(page.size)?;
+        let format = renderer.pipelines.composition_format;
+        let colour = renderer
+            .depth_targets
+            .placeholder(&renderer.device, page.size, format);
+        Some(SceneTarget {
+            page,
+            samples: Multisample::Off,
+            depth,
+            keeps_depth: true,
+            colour: SceneColour::Placeholder(colour),
+        })
     }
 }
