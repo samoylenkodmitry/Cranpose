@@ -30,9 +30,10 @@ const LEAN: f32 = FRAC_PI_2 - 0.45;
 // The longest step of a frame, in seconds, so that a late frame does not jump the turn.
 const LONGEST_STEP: f32 = 0.1;
 
-// The torus in a volume at `modifier`'s place. The user carries it by the handle under its box.
+// The torus in a volume at `modifier`'s place. A movable torus has a handle under its box that the
+// user carries it by.
 #[composable]
-pub(crate) fn TorusVolume(modifier: SubspaceModifier) {
+pub(crate) fn TorusVolume(modifier: SubspaceModifier, movable: bool) {
     let torus = remember(|| {
         Mesh::from_obj(TORUS_OBJ)
             .map_err(|error| log::error!("xr demo: no torus: {error}"))
@@ -53,7 +54,13 @@ pub(crate) fn TorusVolume(modifier: SubspaceModifier) {
             last = now;
         }
     });
-    SpatialVolume(modifier.size(BOX, BOX).depth(BOX).movable(), move |scope| {
+    let modifier = modifier.size(BOX, BOX).depth(BOX);
+    let modifier = if movable {
+        modifier.movable()
+    } else {
+        modifier
+    };
+    SpatialVolume(modifier, move |scope| {
         // The light shines from the upper left, over the viewer's shoulder
         scope.light(Light {
             direction: Vec3::new(0.45, 0.6, 0.65),

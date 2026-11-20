@@ -178,7 +178,8 @@ A headset composes the content once and draws it for each eye, from that eye's p
 view, into one projection layer for all volumes. Where the runtime offers a depth swapchain, the
 layer carries the scene's depth (`XR_KHR_composition_layer_depth`), and where it has
 `XR_FB_composition_layer_depth_test` the panels and rays over it are set to test against that depth.
-No headset has run that test yet. Otherwise the panels cover the 3D content. A frame with no volume has no projection layer and costs
+A Quest 3 shows the panels behind the 3D content where they stand behind it. Otherwise the
+panels cover the 3D content. A frame with no volume has no projection layer and costs
 no GPU time. The scene draws with one sample for each pixel, and a movable volume takes two of the
 compositor's layers. A window shows the volume as a 3D view in its box.
 

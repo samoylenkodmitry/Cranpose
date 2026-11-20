@@ -62,10 +62,17 @@ pub(crate) fn plan(volumes: usize, eyes: [bool; 2], depth: DepthSupport) -> Opti
 }
 
 // Whether the layers of `stage` test against the depth of the projection layer in a frame with
-// `plan`. The room and the streamed scenes lie under the projection layer. The projection layer
-// carries its own depth.
+// `plan`. The room and the streamed scenes lie under the projection layer.
 pub(crate) fn tests_depth(stage: Stage, plan: Option<VolumePlan>) -> bool {
     matches!(stage, Stage::Panels | Stage::Overlay) && plan.is_some_and(|plan| plan.tests_depth)
+}
+
+// Whether the layers of `stage` write their depth into the compositor's depth buffer in a frame
+// with `plan`. The buffer starts at the far plane, and a layer writes into it only when it asks
+// for the depth test with the write on, so the projection layer asks for it. A layer with no
+// depth test leaves the buffer as it was, and the panels over it would have nothing to test.
+pub(crate) fn writes_depth(stage: Stage, plan: Option<VolumePlan>) -> bool {
+    stage == Stage::Volumes && plan.is_some_and(|plan| plan.tests_depth)
 }
 
 #[cfg(test)]

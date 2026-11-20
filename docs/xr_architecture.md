@@ -177,17 +177,16 @@ layer over an earlier one.
 
 Where the runtime has `XR_FB_composition_layer_depth_test` and the projection layer carries depth,
 each panel, surface, handle and ray layer chains an `XrCompositionLayerDepthTestFB` with
-`LESS_OR_EQUAL` and no depth write. The design expects the compositor to test that layer's
-fragments against the projection layer's depth, so that a panel behind a 3D object shows behind it
-and a panel in front of the object shows in front of it. Panels still draw over each other in the
-order of their distance, and a panel's rounded corners still blend. The projection layer carries
-its depth in its views and chains no test struct of its own.
+`LESS_OR_EQUAL` and no depth write. The compositor then tests that layer's fragments against the
+depth that the projection layer wrote. A panel behind a 3D object shows behind it. A panel in
+front of the object shows in front of it. Panels still draw over each other in the order of their
+distance, and a panel's rounded corners still blend.
 
-No device has run this path. The man page of `XrCompositionLayerDepthTestFB` describes `depthMask` as the switch for writes to
-the composition depth buffer. A Quest has to show whether the projection layer
-needs the struct with `depthMask` set for its depth to reach the compositor's buffer. If it does,
-the struct goes onto the projection layer. If panels vanish, the compare direction is the first
-suspect.
+The compositor's depth buffer starts at the far plane. The depth that a projection layer carries in
+its views does not reach the buffer. A layer writes its depth only when it chains the test struct
+with `depthMask` set. The projection layer chains one with `ALWAYS` as the compare operation and the
+write on (`volume_plan::writes_depth`). Without that struct a panel passes its test against a
+buffer that nothing wrote, and it covers the whole torus.
 
 Without the test, the projection layer lies under all panels, and a panel covers the 3D content
 wherever the panel stands, also where the content is nearer. A rule that sorts the one layer among
@@ -230,6 +229,19 @@ swapchain leaves the picture without depth, and the layers over it test nothing.
 A volume takes two of the compositor's layers when it is movable: the projection layer and the
 handle. The projection layer is one layer however many volumes there are.
 
+### The layer limit
+
+A runtime takes a limited number of layers in a frame. The system properties report the number.
+A Quest 3 reports 32 and ends a frame of 18 layers with `XR_ERROR_LAYER_LIMIT_EXCEEDED`. The
+session starts with the reported number. After that error the limit falls to 16, the number that
+the specification guarantees (`layer_limit`). The frame that failed is lost. The frames after it
+leave out the panels that stand farthest from the head, which are the first layers of the panel
+stage, until the frame fits. The projection layers and the rays stay. The log names the refusal
+(`the runtime refused 18 layers and takes 16`) and each change of the frame's layer count with the
+number of panels left out. A frame whose other layers alone pass the limit still fails, and the
+session ends. The demo with a controller in view submits 18 layers on a Quest 3, so it leaves out
+the two panels that stand farthest.
+
 ### Measured
 
 On the Android XR emulator (runtime "Android XR" 1.0.0, system "Moohan", GLES) the demo's torus
@@ -238,8 +250,23 @@ runtime offers `XR_KHR_composition_layer_depth`, `XR_FB_composition_layer_depth_
 `XR_FB_composition_layer_image_layout`. Its swapchain formats are `GL_SRGB8_ALPHA8`, `GL_RGBA8`,
 `GL_RGB10_A2` and `GL_RGBA16F`, so it offers no depth format and the layer carries no depth there.
 Its eye pictures are 2560 by 2558 pixels. With the torus moved through the counter panel's plane the panel, which a later layer draws, covers
-the torus, as the order without a depth test says. The depth path and the depth test have run on no
-device.
+the torus, as the order without a depth test says. The emulator's runtime offers no depth format,
+so the depth test has run only on a Quest.
+
+On a Quest 3 (Horizon OS, runtime "Oculus" 210.137.0) the runtime takes a `Depth24PlusStencil8`
+swapchain for the depth. The screenshot that `adb exec-out screencap -p` gives holds both eyes as
+the compositor draws them. The builds `XR_DEMO_VOLUME=through` and `XR_DEMO_VOLUME=alone` show a
+torus that a panel pierces and the same torus alone. `scripts/dev/xr_depth_check.py` compares the
+torus's pixels in the two pictures:
+
+| Panel | Share of the ring that shows, left and right eye |
+| --- | --- |
+| At the ring's center, with the projection layer's depth write | 0.68 and 0.68 |
+| At the ring's center, without that write | 0.00 and 0.00 |
+| 200 mm nearer to the head than the ring | 0.00 and 0.00 |
+| 200 mm farther from the head than the ring | 0.98 and 0.98 |
+
+With the write the near part of the ring shows over the panel and the far part is hidden.
 The crate's tests run the scene on the GPU of the development machine: two eyes from one
 composition, the depth that the scene leaves, a volume that moves, and a frame with no volume.
 
@@ -698,17 +725,18 @@ stack.
 availability and what the frame gives, and it draws a map of the hands: a dot for each fingertip
 that the cameras track, seen from the front. The map is part of the panel. The compositor of a
 Quest 3 takes 16 layers at most (`xrEndFrame` fails above that, although the system properties
-report 32), and the demo already submits that many, so a panel for the section would end the
-session. The demo's volume takes two of them, one for the 3D content and one for its handle. A panel for each fingertip would add ten layers, and a hand's own pointing ray would stop
+report 32), and the demo already submits that many, so a panel for the section would push
+another panel out of the frame. The demo's volume takes two of them, one for the 3D content and one for its handle. A panel for each fingertip would add ten layers, and a hand's own pointing ray would stop
 at the dot at its fingertip. The build script asks for hand tracking, which needs no prompt on a
 Quest. `XR_DEMO_TRACKING=none` asks for nothing, and `XR_DEMO_TRACKING=all` adds the body, the face
 and the eyes, which the system asks the user to allow.
 
-`XR_DEMO_VOLUME=through` puts the demo's torus in the plane of the counter panel, so that a part of
-it lies in front of the panel and a part behind. A compositor that tests depth shows the front part
-over the panel and hides the rest. One that does not shows the panel over all of it. The log
-names, once for each change, whether the volumes' layer carries depth and how many of the frame's
-layers test it.
+`XR_DEMO_VOLUME=through` builds a scene of a panel and a torus that pierces it, a meter ahead of
+the head where the demo started, and shows nothing else. A compositor that tests depth shows the
+ring's near part over the panel and hides the rest. One that does not shows the panel over all of
+it. `XR_DEMO_VOLUME=alone` builds the same scene without the panel. The log names, once for each
+change, whether the volumes' layer carries depth, how many of the frame's layers test it, how many
+write it and how many panels the frame leaves out.
 
 ### Measured on a Quest 3
 
