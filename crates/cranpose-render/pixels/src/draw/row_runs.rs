@@ -411,3 +411,22 @@ impl RoundedFill {
         (start, end)
     }
 }
+
+// The rows a fill covers: each row of its rect whole, or the rows of a
+// rounded rect.
+#[derive(Clone, Copy)]
+pub(super) enum FillRows<'a> {
+    Rect,
+    Rounded(&'a RoundedFill),
+}
+
+impl FillRows<'_> {
+    // The run of the row centred at `y` within `min_x..max_x`.
+    #[inline]
+    pub(super) fn run(self, y: f32, min_x: i32, max_x: i32) -> (i32, i32) {
+        match self {
+            Self::Rect => (min_x, max_x),
+            Self::Rounded(fill) => fill.run(y, min_x, max_x),
+        }
+    }
+}

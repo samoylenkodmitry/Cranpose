@@ -2,9 +2,9 @@
 //! runs, and the coverage of a pixel.
 
 use super::{
-    BlendMode, BrushSampler, COLUMN_BAND, ClipBounds, DitherAxis, DitheredLine, GradientColors,
-    NO_RUN, Pixel, Point, Rect, RenderDiagnostics, RowRuns, Target, blend_row, color_to_rgba,
-    opaque_bytes, sample_brush_rgba, shape_sdf,
+    BlendMode, BrushSampler, COLUMN_BAND, ClipBounds, DitherAxis, DitheredLine, FillRows,
+    GradientColors, NO_RUN, Pixel, Point, Rect, RenderDiagnostics, RowRuns, Target, blend_row,
+    color_to_rgba, opaque_bytes, sample_brush_rgba, shape_sdf,
 };
 
 // A placed shape's rows to paint. Each kind of coverage paints them through
@@ -26,12 +26,12 @@ pub(super) struct ShapeRows<'a, 'p, P> {
 impl<P: Pixel> ShapeRows<'_, '_, P> {
     // Paints a fill, which covers every pixel of its run of each row whole:
     // a fill is convex, so a row holds one run.
-    pub(super) fn fill(self, runs: impl Fn(f32, i32, i32) -> (i32, i32)) {
+    pub(super) fn fill(self, rows: FillRows<'_>) {
         match self.opaque {
             Some(pixel) => {
                 let bounds = self.clip_bounds;
                 for py in bounds.min_y..bounds.max_y {
-                    let (start, end) = runs(py as f32 + 0.5, bounds.min_x, bounds.max_x);
+                    let (start, end) = rows.run(py as f32 + 0.5, bounds.min_x, bounds.max_x);
                     P::fill(self.target.row(py, start, end), pixel);
                 }
             }
@@ -39,17 +39,17 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
                 let brush = BrushSampler::new(&self.draw.brush, self.rect);
                 if brush.is_solid() {
                     let color = color_to_rgba(brush.color_at(Point::new(0.0, 0.0)));
-                    self.blend_solid_rows(color, runs);
+                    self.blend_solid_rows(color, rows);
                 } else if brush.has_uniform_rows() {
-                    self.fill_uniform_rows(runs);
+                    self.fill_uniform_rows(rows);
                 } else if brush.has_uniform_columns()
                     && brush.is_opaque()
                     && self.draw.blend_mode == BlendMode::SrcOver
                 {
-                    self.fill_uniform_columns(runs);
+                    self.fill_uniform_columns(rows);
                 } else {
                     self.paint(
-                        |y, min_x, max_x| [runs(y, min_x, max_x), NO_RUN],
+                        |y, min_x, max_x| [rows.run(y, min_x, max_x), NO_RUN],
                         |_| Coverage::of(1.0),
                     );
                 }
@@ -61,7 +61,7 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
     // one paint, so a table keeps what it left over each byte it met before.
     // The pixels are those [`Self::fill_uniform_rows`] paints.
     #[inline(never)]
-    fn blend_solid_rows(self, color: [f32; 4], runs: impl Fn(f32, i32, i32) -> (i32, i32)) {
+    fn blend_solid_rows(self, color: [f32; 4], rows: FillRows<'_>) {
         if color[3] <= 0.0 {
             return;
         }
@@ -69,7 +69,7 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
         let mut table = None;
         let bounds = self.clip_bounds;
         for py in bounds.min_y..bounds.max_y {
-            let (start, end) = runs(py as f32 + 0.5, bounds.min_x, bounds.max_x);
+            let (start, end) = rows.run(py as f32 + 0.5, bounds.min_x, bounds.max_x);
             let pixels = self.target.row(py, start, end);
             P::blend_run(pixels, paint, &mut table, self.diagnostics);
         }
@@ -80,7 +80,7 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
     // paints, with each row's colors worked out once for the four columns
     // of the dither pattern instead of once a pixel.
     #[inline(never)]
-    fn fill_uniform_rows(self, runs: impl Fn(f32, i32, i32) -> (i32, i32)) {
+    fn fill_uniform_rows(self, rows: FillRows<'_>) {
         let Self {
             target,
             draw,
@@ -95,7 +95,7 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
         let over = draw.blend_mode == BlendMode::SrcOver;
         for py in clip_bounds.min_y..clip_bounds.max_y {
             let center_y = py as f32 + 0.5;
-            let (start, end) = runs(center_y, clip_bounds.min_x, clip_bounds.max_x);
+            let (start, end) = rows.run(center_y, clip_bounds.min_x, clip_bounds.max_x);
             if start >= end {
                 continue;
             }
@@ -153,7 +153,7 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
     // [`Self::paint`] paints, with each column's bytes worked out once for
     // the four rows of the dither pattern instead of once a pixel.
     #[inline(never)]
-    fn fill_uniform_columns(self, runs: impl Fn(f32, i32, i32) -> (i32, i32)) {
+    fn fill_uniform_columns(self, rows: FillRows<'_>) {
         let Self {
             target,
             draw,
@@ -163,7 +163,7 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
             ..
         } = self;
         let brush = BrushSampler::new(&draw.brush, rect);
-        let rows = DitherAxis::new(dither_origin.y);
+        let dither_rows = DitherAxis::new(dither_origin.y);
         let top = clip_bounds.min_y as f32 + 0.5;
         let mut band = [[P::opaque([0, 0, 0, 255]); 4]; COLUMN_BAND];
         let mut left = clip_bounds.min_x;
@@ -184,8 +184,8 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
                 };
             }
             for py in clip_bounds.min_y..clip_bounds.max_y {
-                let cell = rows.cell(py);
-                let (start, end) = runs(py as f32 + 0.5, left, right);
+                let cell = dither_rows.cell(py);
+                let (start, end) = rows.run(py as f32 + 0.5, left, right);
                 if start >= end {
                     continue;
                 }

@@ -25,7 +25,9 @@ mod text;
 
 use image::{blit_image_between_pixels, draw_image, image_rect};
 use reach::text_bounds;
-use row_runs::{INK_REACH, LineRows, NO_RUN, RoundedFill, RowRuns, arc_row_runs, stroke_row_runs};
+use row_runs::{
+    FillRows, INK_REACH, LineRows, NO_RUN, RoundedFill, RowRuns, arc_row_runs, stroke_row_runs,
+};
 use shape_rows::{Coverage, ShapeRows};
 pub(crate) use text::rasterize_text;
 use text::{draw_text, is_static_text, rasterize_text_part, text_raster_rect};
@@ -538,14 +540,19 @@ fn draw_shape<P: Pixel>(
                 });
             }
         }
-        ShapeCoverage::Fill {
-            rect,
-            radii: Some(radii),
-        } => {
-            let fill = RoundedFill::new(*rect, radii);
-            paint.fill(|y, min_x, max_x| fill.run(y, min_x, max_x));
+        ShapeCoverage::Fill { rect, radii } => {
+            // One call of the fill, which the item loop then holds inline:
+            // the loop is the code a board keeps in fast memory.
+            let rounded;
+            let rows = match radii {
+                Some(radii) => {
+                    rounded = RoundedFill::new(*rect, radii);
+                    FillRows::Rounded(&rounded)
+                }
+                None => FillRows::Rect,
+            };
+            paint.fill(rows);
         }
-        ShapeCoverage::Fill { radii: None, .. } => paint.fill(|_, min_x, max_x| (min_x, max_x)),
     }
 }
 
