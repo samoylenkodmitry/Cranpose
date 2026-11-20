@@ -651,7 +651,7 @@ events, as a wheel does. The default follows a desktop mouse:
 The grip, the second face button and the menu button press nothing by default. The first face
 button gives the right click because the thumb is free to press it while the fingers hold the
 controller and point. The grip stays free for an app that grabs objects with it, which is what Meta's
-guidance for Touch controllers gives it. The menu button belongs to the system on a Meta Quest.
+guidance for Touch controllers gives it. The menu button stays free for the app's own menu.
 
 The trigger also takes the handles of panels, whatever it presses. Another button goes where the
 trigger's press is, else where the ray points. It goes nowhere while the hand carries a panel, and

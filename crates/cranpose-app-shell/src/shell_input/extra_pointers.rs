@@ -43,6 +43,13 @@ impl IndependentPointers {
         self.0.clear();
     }
 
+    // Whether any independent pointer holds a button down.
+    pub(crate) fn holds_a_button(&self) -> bool {
+        self.0
+            .iter()
+            .any(|pointer| pointer.buttons != PointerButtons::NONE)
+    }
+
     fn find(&self, id: PointerId) -> Option<&IndependentPointer> {
         self.0.iter().find(|pointer| pointer.id == id)
     }
@@ -296,9 +303,19 @@ where
         })
     }
 
+    // Where `pointer` is: the primary pointer's cursor, or the place that an independent pointer
+    // last moved to.
+    pub(super) fn pointer_position(&self, pointer: PointerId) -> Point {
+        let (x, y) = self.surface().cursor;
+        self.surface()
+            .independent_pointers
+            .find(pointer)
+            .map_or(Point { x, y }, |state| state.at)
+    }
+
     // Runs `change` as the handling of an event: with the app's scope and a snapshot, and with the
-    // surface marked for a frame when it changed something. The primary pointer is not
-    // independent, and its own calls serve it.
+    // surface marked for a frame when it changed something. A drag and drop that the pointer
+    // carries follows it. The primary pointer is not independent, and its own calls serve it.
     fn independent_change(
         &mut self,
         pointer: PointerId,
@@ -311,7 +328,9 @@ where
             );
             return false;
         }
-        self.mouse_button_change(change)
+        let changed = self.mouse_button_change(change);
+        self.route_drag_and_drop();
+        changed
     }
 
     // An event of `kind` from `pointer` at its place, with the buttons that it holds.

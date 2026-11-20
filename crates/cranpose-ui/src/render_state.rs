@@ -77,7 +77,7 @@ pub struct AppContext {
     layout_node_registry: crate::widgets::nodes::LayoutNodeRegistryState,
     pointer_dispatch: crate::dirty_node_queue::DirtyNodeQueue,
     mouse_input: crate::mouse_input::MouseInputQueue,
-    pointer_claim: Cell<Option<NodeId>>,
+    pointer_claim: Cell<Option<(NodeId, cranpose_foundation::PointerId)>>,
     focus_dispatch: crate::focus_dispatch::FocusInvalidationState,
     modal: crate::modal::ModalState,
     modal_nodes: crate::modal_nodes::ModalNodes,
@@ -226,14 +226,14 @@ impl AppContext {
         self.mouse_input.take()
     }
 
-    // Gives the rest of the held press to `node` alone: other targets see it cancelled.
-    pub(crate) fn claim_pointer(&self, node: NodeId) {
-        self.pointer_claim.set(Some(node));
+    // Gives the rest of the press that `pointer` holds to `node` alone.
+    pub(crate) fn claim_pointer(&self, node: NodeId, pointer: cranpose_foundation::PointerId) {
+        self.pointer_claim.set(Some((node, pointer)));
     }
 
-    /// Takes the node that claimed the held press since the last call.
+    /// Takes the node and the pointer of a claim made since the last call.
     #[doc(hidden)]
-    pub fn take_pointer_claim(&self) -> Option<NodeId> {
+    pub fn take_pointer_claim(&self) -> Option<(NodeId, cranpose_foundation::PointerId)> {
         self.pointer_claim.take()
     }
 

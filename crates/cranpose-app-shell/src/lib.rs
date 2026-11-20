@@ -1135,18 +1135,18 @@ where
     /// Gives a held press that a node claimed during the frame, as a long
     /// press does, to that node alone.
     fn apply_pointer_claim(&mut self) {
-        let Some(node) = self.app.app_context.take_pointer_claim() else {
+        let Some((node, pointer)) = self.app.app_context.take_pointer_claim() else {
             return;
         };
-        self.give_press_to(node);
+        self.give_press_to(node, pointer);
     }
 
     /// Out of line: a frame seldom has a claim, so the frame's own code
     /// stays small.
     #[inline(never)]
-    fn give_press_to(&mut self, node: NodeId) {
+    fn give_press_to(&mut self, node: NodeId, pointer: PointerId) {
         for index in 0..self.surfaces.len() {
-            SurfaceMut::new(self, index).give_press_to(node);
+            SurfaceMut::new(self, index).give_press_to(node, pointer);
         }
     }
 

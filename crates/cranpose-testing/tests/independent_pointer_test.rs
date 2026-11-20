@@ -11,7 +11,7 @@ use cranpose_core::remember;
 use cranpose_testing::{PointerLog, RobotTestRule, TestRenderer, create_headless_robot_test};
 use cranpose_ui::{
     Box, BoxSpec, Column, ColumnSpec, Modifier, Point, PointerButton, PointerButtons,
-    PointerEventKind, PointerId, Row, RowSpec, ScrollState, Size,
+    PointerEventKind, PointerId, Row, RowSpec, ScrollState, Size, ZoomState,
 };
 
 const LEFT: PointerId = PointerId(1);
@@ -399,4 +399,54 @@ fn a_scroll_of_a_pointer_scrolls_the_list_under_it() {
     robot.wait_for_idle();
     assert!(right.value() > 0.0, "the list under the pointer scrolls");
     assert_eq!(left.value(), 0.0, "the other list stays");
+}
+
+// The features that read the primary pointer of a window in a phone work with a pointer of another
+// id, as the pointers of a headset's two hands have. The long press is in `long_press_test.rs`.
+
+#[test]
+fn an_independent_pointer_taps_and_two_of_them_pinch_a_zoomable_node() {
+    let state = Rc::new(Cell::new(None));
+    let made = Rc::clone(&state);
+    let mut robot = create_headless_robot_test(200, 200, move || {
+        let zoom = remember(ZoomState::new).with(|zoom| *zoom);
+        made.set(Some(zoom));
+        Box(
+            Modifier::empty()
+                .size(Size::new(200.0, 200.0))
+                .zoomable(zoom),
+            BoxSpec::default(),
+            || {},
+        );
+    });
+    robot.wait_for_idle();
+    let zoom = state.get().expect("the zoom state");
+    // Two hands pinch: they start 40 dp apart and end 120 dp apart
+    let shell = robot.shell_mut();
+    shell.independent_pointer_moved(LEFT, 80.0, 100.0);
+    shell.independent_pointer_moved(RIGHT, 120.0, 100.0);
+    shell.independent_pointer_pressed(LEFT, PointerButton::Primary);
+    shell.independent_pointer_pressed(RIGHT, PointerButton::Primary);
+    for step in 1..=8_u8 {
+        let spread = f32::from(step) * 5.0;
+        shell.independent_pointer_moved(LEFT, 80.0 - spread, 100.0);
+        shell.independent_pointer_moved(RIGHT, 120.0 + spread, 100.0);
+    }
+    shell.independent_pointer_released(LEFT, PointerButton::Primary);
+    shell.independent_pointer_released(RIGHT, PointerButton::Primary);
+    robot.wait_for_idle();
+    assert!(
+        zoom.scale_non_reactive() > 1.5,
+        "{}",
+        zoom.scale_non_reactive()
+    );
+    // A double tap of one pointer resets the zoom
+    let shell = robot.shell_mut();
+    for _ in 0..2 {
+        shell.independent_pointer_moved(LEFT, 100.0, 100.0);
+        shell.independent_pointer_pressed(LEFT, PointerButton::Primary);
+        shell.independent_pointer_released(LEFT, PointerButton::Primary);
+    }
+    robot.wait_for_idle();
+    assert!(!zoom.is_transformed(), "a double tap resets the zoom");
 }

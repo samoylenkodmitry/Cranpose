@@ -20,9 +20,9 @@ use crate::ControllerInput;
 /// | thumbstick | scrolls, 800 dp each second at full lean |
 ///
 /// The grip, the second face button and the menu button press nothing by default. The grip is
-/// where an app grabs, and the menu button belongs to the system on a Meta Quest. A tracked
-/// hand has one button, the pinch of its index finger, which presses the button of the trigger.
-/// Jetpack XR has no such type.
+/// where an app grabs, and the menu button is the app's own. A tracked hand has one button, the
+/// pinch of its index finger, which presses the button of the trigger. Jetpack XR has no such
+/// type.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PointerMapping {
     buttons: [Option<PointerButton>; ControllerInput::ALL.len()],

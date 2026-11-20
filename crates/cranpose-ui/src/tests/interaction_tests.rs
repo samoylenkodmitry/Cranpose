@@ -306,3 +306,20 @@ fn a_press_belongs_to_the_pointer_that_went_down_first() {
         "the pointer that is free takes the next press"
     );
 }
+
+#[test]
+fn a_finger_that_joins_and_only_moves_does_not_hold_the_hover_after_the_first_pointer_leaves() {
+    let composition = Composition::new(MemoryApplier::new());
+    let source = MutableInteractionSource::with_runtime(composition.runtime_handle());
+    let hovered = source.collectIsHoveredAsState();
+    let node = hover_node(source, true);
+
+    deliver_from(&node, PointerEventKind::Enter, PointerId::PRIMARY);
+    // The shell sends a joining finger's moves with its id, and never an exit for it
+    deliver_from(&node, PointerEventKind::Move, PointerId(2));
+    deliver_from(&node, PointerEventKind::Exit, PointerId::PRIMARY);
+    assert!(
+        !hovered.get(),
+        "the first pointer left, and the finger sends no exit"
+    );
+}

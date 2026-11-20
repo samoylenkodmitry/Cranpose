@@ -243,8 +243,9 @@ impl<R: Renderer> RootSurface<R> {
     }
 
     pub(crate) fn has_active_pointer_gesture(&self) -> bool {
-        self.buttons_pressed != PointerButtons::NONE
-            && self.hit_path_tracker.has_path(PointerId::PRIMARY)
+        (self.buttons_pressed != PointerButtons::NONE
+            && self.hit_path_tracker.has_path(PointerId::PRIMARY))
+            || self.independent_pointers.holds_a_button()
     }
 
     pub(crate) fn has_active_primary_gesture(&self) -> bool {

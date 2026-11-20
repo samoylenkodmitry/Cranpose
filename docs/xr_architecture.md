@@ -1000,9 +1000,8 @@ visible content submits none.
 button, the first face button (A on the right hand, X on the left) is the secondary button, and the
 stick scrolls at 800 dp each second. The grip is left free: Meta's controller guidance gives it to
 grabbing, and an app that grabs an object with it would also right-click. The thumb is free while the
-fingers hold the controller and point. A developer of the SteamVR desktop overlay XSOverlay said in a
-forum that its lower face button gives the right click. A search for the mappings of other desktop
-apps for headsets, Virtual Desktop, Bigscreen and Immersed among them, found no published mapping.
+fingers hold the controller and point. The mapping rests on these two reasons. No convention of
+the desktop apps for headsets is confirmed.
 
 **Scripted controllers.** `ScriptedController` (feature `scripted-hand`) writes the whole
 `Controller` of a hand after `Controllers::sample`, with the Touch Plus profile, so a hand's

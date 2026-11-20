@@ -467,13 +467,18 @@ impl InteractionTracker for HoverTracker {
     ) {
         let (active, pointers) = (&held.active, &held.pointers);
         match event.kind {
-            PointerEventKind::Enter | PointerEventKind::Move if self.enabled => {
+            PointerEventKind::Enter if self.enabled => {
                 if !pointers.borrow().contains(&event.id) {
                     pointers.borrow_mut().push(event.id);
                 }
                 if active.borrow().is_none() {
                     *active.borrow_mut() = Some(source.enter_hover());
                 }
+            }
+            // A move over a node that saw no enter starts the hover, but it names no pointer: a
+            // finger that joins another sends moves and never an exit.
+            PointerEventKind::Move if self.enabled && active.borrow().is_none() => {
+                *active.borrow_mut() = Some(source.enter_hover());
             }
             PointerEventKind::Exit => {
                 pointers.borrow_mut().retain(|id| *id != event.id);

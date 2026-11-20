@@ -9,7 +9,7 @@
 /// the native window when the desired rate changes.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum FrameRatePreference {
-    /// Ask for the panel's fastest rate while [`FrameRateBoost`] holds, a
+    /// Ask for the panel's fastest rate while [`FrameRateBoost`](crate::FrameRateBoost) holds, a
     /// quiet rate while frames arrive only intermittently, no preference
     /// when the scene is still. This is the default, matching what Compose/HWUI do for every
     /// app without the app's involvement.
@@ -33,7 +33,7 @@ impl FrameRatePreference {
 
     /// The rate the platform should vote right now, in Hz, where `0.0` means
     /// "clear the vote". `producing_frames` is whether the frame loop has a
-    /// frame scheduled, `boosted` what [`FrameRateBoost::boosted`] says, and
+    /// frame scheduled, `boosted` what [`FrameRateBoost::boosted`](crate::FrameRateBoost::boosted) says, and
     /// `panel_max_hz` the display's fastest supported rate when the platform
     /// knows it.
     ///
