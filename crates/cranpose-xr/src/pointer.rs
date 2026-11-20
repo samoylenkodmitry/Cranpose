@@ -1,9 +1,10 @@
-//! One pointer over the panels, from the rays and triggers of two controllers.
+//! One pointer over the panels, from the rays and triggers of two controllers or of two tracked
+//! hands.
 
 use std::time::Duration;
 
 use crate::{
-    Hand as Side, Pose, Ray, SpatialMoveEventType, SpatialResizeEventType,
+    Hand as Side, InputSource, Pose, Ray, SpatialMoveEventType, SpatialResizeEventType,
     aim_filter::{AimFilter, angle_between},
     carry::Carry,
     handle::HandleKind,
@@ -39,14 +40,16 @@ const RAY_LENGTH: f32 = 3.0;
 const PUSH_SPEED: f32 = 1.2;
 const DEAD_ZONE: f32 = 0.15;
 
-// What a controller does in a frame: where it points, how far its trigger is pulled from 0 to
-// 1, and how far its thumbstick is pushed forward from -1 to 1.
+// What a controller or a tracked hand does in a frame: where it points, how far its trigger is
+// pulled or its index finger pinches from 0 to 1, and how far its thumbstick is pushed forward
+// from -1 to 1. A hand has no thumbstick, so its stick stays at 0.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Aim {
     pub(crate) ray: Ray,
     pub(crate) pose: Pose,
     pub(crate) trigger: f32,
     pub(crate) stick: f32,
+    pub(crate) source: InputSource,
 }
 
 // A trigger in a frame, compared with the frame before.
@@ -112,9 +115,11 @@ struct Handle {
     kind: HandleKind,
 }
 
-// One controller across frames.
+// One controller or tracked hand across frames.
 #[derive(Clone, Copy, Debug, Default)]
 struct Hand {
+    // What drove this side's aim in the last frame
+    source: Option<InputSource>,
     filter: AimFilter,
     down: bool,
     // The ray in the last frame where the trigger rested, and that frame's time
@@ -146,6 +151,25 @@ impl Hand {
             *self = Self::default();
             return Trigger::Up;
         };
+        if self.source.is_some_and(|source| source != aim.source) {
+            // The other kind of input takes the side over, with no frame between. The press of the
+            // one before ends as if its aim were lost, so it cannot go on with the other's
+            // trigger. A trigger that is down at the switch counts as held from before, so it
+            // presses only after it went up.
+            *self = Self {
+                source: Some(aim.source),
+                down: aim.trigger >= PRESS,
+                ..Self::default()
+            };
+            return Trigger::Up;
+        }
+        if self.source.is_none() && aim.source == InputSource::Hands {
+            // A pinch that is closed when the hand appears counts as held from before: a hand that
+            // the cameras lose and find again, or that ends the system's menu gesture with its
+            // fingers together, does not press until it opens and pinches anew.
+            self.down = aim.trigger >= PRESS;
+        }
+        self.source = Some(aim.source);
         let ray = self.filter.apply(aim.ray, time);
         self.ray = Some(ray);
         self.hit = nearest_hit(&ray, panels, side);
@@ -267,8 +291,8 @@ impl Held {
     }
 }
 
-// The pointer. One controller drives it at a time: the one whose trigger went down last, or
-// the other one while only that one points at a panel or a handle.
+// The pointer. One controller or hand drives it at a time: the one whose trigger went down last,
+// or the other one while only that one points at a panel or a handle.
 #[derive(Debug, Default)]
 pub(crate) struct Pointer {
     // The controller that drives the pointer: 0 for the left hand, 1 for the right

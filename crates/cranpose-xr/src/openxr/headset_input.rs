@@ -14,8 +14,9 @@ use super::{
     tracking::{EyeGazeAction, Trackers, TrackingSetup},
 };
 use crate::{
-    Controller, Haptics, HeadsetProperties, Pose, Ray, Recenter, RenderViewpoint, XrFrame,
-    frame_effects::FrameEffects, pointer::Aim, session_status::SessionStatus,
+    Hand, Haptics, HeadsetProperties, Pose, Recenter, RenderViewpoint, TrackingFeature, XrFrame,
+    frame_effects::FrameEffects, haptics::controller_asks, pointer::Aim, pointer_aim::pointer_aim,
+    session_status::SessionStatus,
 };
 
 // What the app gets of the headset in a frame, the controllers that it reads, and the callbacks
@@ -28,6 +29,8 @@ pub(crate) struct HeadsetInput {
     effects: FrameEffects,
     haptics: Haptics,
     properties: HeadsetProperties,
+    // Whether tracked hands point: the app asked for hand tracking
+    hands_point: bool,
 }
 
 impl HeadsetInput {
@@ -48,6 +51,7 @@ impl HeadsetInput {
             tracking: tracking.capabilities,
             ..XrFrame::default()
         };
+        let hands_point = tracking.request.asks(TrackingFeature::Hands);
         Ok(Self {
             frame,
             controllers,
@@ -55,6 +59,7 @@ impl HeadsetInput {
             effects: FrameEffects::default(),
             haptics: Haptics::new(),
             properties,
+            hands_point,
         })
     }
 
@@ -116,8 +121,8 @@ impl HeadsetInput {
     }
 
     // Samples the headset for the frame that `state` describes, runs the app's frame effects and
-    // plays the vibrations that they or the app's handlers asked for. Returns where each
-    // controller points, for the pointer.
+    // plays the vibrations that they or the app's handlers asked for. Returns where each hand
+    // points, for the pointer: its controller, or its tracked hand while it holds no controller.
     pub(crate) fn sample(
         &mut self,
         xr_session: &mut XrSession,
@@ -149,20 +154,16 @@ impl HeadsetInput {
             .sample(xr_session, time, status, self.trackers.gaze_set(), frame);
         self.trackers
             .sample(xr_session, host, frame.now, time, status, frame);
+        let hands = self.hands_point;
+        let aims = Hand::BOTH
+            .map(|side| pointer_aim(frame.controller(side), hands.then_some(frame.hand(side))));
+        [frame.left_pointer, frame.right_pointer] = aims.map(|aim| aim.map(|aim| aim.source));
         self.effects.run(&self.frame);
-        self.controllers.vibrate(xr_session, self.haptics.take());
-        [&self.frame.left_controller, &self.frame.right_controller].map(aim_of)
+        let asks = controller_asks(
+            self.haptics.take(),
+            [self.frame.left_pointer, self.frame.right_pointer],
+        );
+        self.controllers.vibrate(xr_session, asks);
+        aims
     }
-}
-
-// Where the controller points and how its trigger and stick lean, for the pointer. A controller
-// that the runtime does not track points nowhere.
-fn aim_of(controller: &Controller) -> Option<Aim> {
-    let aim = controller.aim?;
-    Some(Aim {
-        ray: Ray::of_aim(&aim.pose),
-        pose: aim.pose,
-        trigger: controller.trigger.value,
-        stick: controller.thumbstick.y,
-    })
 }

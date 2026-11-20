@@ -178,18 +178,15 @@ impl DamageBuilder {
         &self.rects
     }
 
-    // The rects, for a change outside the merges: the partners go.
-    pub(crate) fn rects_mut(&mut self) -> &mut DamageRects {
-        self.partners = None;
-        &mut self.rects
-    }
-
     pub(crate) fn clear(&mut self) {
-        self.rects_mut().clear();
+        self.rects.clear();
+        self.start_run();
     }
 
-    pub(crate) fn assign(&mut self, rects: &DamageRects) {
-        self.rects_mut().assign(rects);
+    // Starts a run of adds over the rects held: the partners go, so the
+    // run's merges follow the rects alone.
+    pub(crate) fn start_run(&mut self) {
+        self.partners = None;
     }
 
     // Adds `rect`, grown out to whole pixels, as `Merge::add` merges it.

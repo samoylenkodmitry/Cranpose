@@ -1,5 +1,6 @@
 // A Cranpose app for headsets. In a Meta Quest its panels stand in the room, and a controller's
-// trigger presses the buttons: one counts, the other shows or hides the room around the panels.
+// trigger or a hand's pinch presses the buttons: one counts, the other shows or hides the room
+// around the panels.
 // A lit torus stands beside them in 3D, and a handle under it lets a controller carry it.
 // A strip above them is bent around the viewer. A ball above the left controller shows or hides
 // the strip when the right controller's ray presses it. The counter panel and the video surface
@@ -17,9 +18,9 @@ use cranpose::{CropRect, DecodedFrames, prelude::*};
 use cranpose_ui::text::FontWeight;
 use cranpose_xr::{
     DEFAULT_PANEL_SIZE, FieldOfView, FollowMode, FollowTarget, FollowingSubspace, Hand,
-    OnNotEntitled, Pose, ResizeLimits, ResizePolicy, SpatialCurvedRow, SpatialExternalSurface,
-    SpatialPanel, StereoMode, StreamStats, StreamedScene, StreamedView, StreamedViews, Subspace,
-    SubspaceModifier, local_entitlement_check, local_headset_properties,
+    InputSource, OnNotEntitled, Pose, ResizeLimits, ResizePolicy, SpatialCurvedRow,
+    SpatialExternalSurface, SpatialPanel, StereoMode, StreamStats, StreamedScene, StreamedView,
+    StreamedViews, Subspace, SubspaceModifier, local_entitlement_check, local_headset_properties,
     local_spatial_capabilities, local_spatial_environment,
 };
 #[cfg(not(target_os = "android"))]
@@ -31,6 +32,8 @@ mod decoder_limits;
 mod foveated_player;
 mod headset_readout;
 mod pattern_writer;
+#[cfg(all(feature = "android", target_os = "android"))]
+mod scripted_hand;
 mod torus_volume;
 mod tracking_panel;
 
@@ -377,7 +380,7 @@ fn CurvedStrip() {
 fn PressesPanel(presses: MutableState<u32>, readout: MutableState<Readout>) {
     SpatialPanel(
         SubspaceModifier::new()
-            .size(320.0, 320.0)
+            .size(320.0, 380.0)
             .offset(600.0, 0.0, 100.0)
             .rotate(0.0, -30.0, 0.0),
         move || {
@@ -416,8 +419,15 @@ fn ReadoutLines(readout: MutableState<Readout>) {
     let Readout {
         head_cm,
         trigger_percent,
+        pinch_percent,
+        pointers,
         frames_per_second,
     } = readout.get();
+    let [left, right] = pointers.map(|pointer| match pointer {
+        Some(InputSource::Controller) => "controller",
+        Some(InputSource::Hands) => "hands",
+        _ => "none",
+    });
     let head = head_cm.map_or_else(|| "not tracked".to_owned(), |cm| format!("{cm} cm"));
     let (system, eye) = local_headset_properties().current().map_or_else(
         || (String::new(), String::new()),
@@ -431,6 +441,8 @@ fn ReadoutLines(readout: MutableState<Readout>) {
         eye,
         format!("Head y {head}"),
         format!("Right trigger {trigger_percent}%"),
+        format!("Right pinch {pinch_percent}%"),
+        format!("Pointers L/R: {left} / {right}"),
         format!("Frame effect {frames_per_second} Hz"),
         format!("Lifecycle {:?}", local_lifecycle_state().current()),
     ] {
@@ -605,6 +617,9 @@ fn clip_views(index: u64, base: Duration) -> StreamedViews {
 
 #[cfg(all(feature = "android", target_os = "android"))]
 fn launcher() -> AppLauncher {
+    if let Some(hand) = scripted_hand::from_build(option_env!("XR_DEMO_SCRIPTED_HAND")) {
+        cranpose_xr::script_hand(hand);
+    }
     AppLauncher::new().with_capabilities(&CAPABILITIES)
 }
 
