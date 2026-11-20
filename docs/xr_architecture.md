@@ -531,7 +531,7 @@ image, so it shows again at once. The end of the frame leaves it out of the laye
 ignores it. A panel that rides a controller is `Ride::On(hand)`. The pointer skips it in the ray of
 that hand, for hits and for handles, because a ball above the left controller would stop the left
 ray at the user's own hand. The other hand's ray meets it like any panel. The filter is one function
-of `pointer.rs`. `nearest_hit` and `nearest_handle` both use it, so the cursor, the press, the grab
+of `hit.rs`. `nearest_hit` and `nearest_handle` both use it, so the cursor, the press, the grab
 and the length of the beam agree.
 
 A panel with rounded corners and no background around them takes the shape of its corners. The
@@ -916,10 +916,109 @@ same call), one `xrLocateBodyJointsFB`, one `xrGetFaceExpressionWeights2FB` or `
 and one `xrGetEyeGazesFB`, or a located space for the gaze. The arrays live in the frame or on the
 stack.
 
+### Two pointers, every button
+
+A user holds two controllers, and each works on its own. Before this design the left controller
+could not press or drag on a panel while the right controller carried another panel by its handle.
+Four layers each held the state of one pointer:
+
+1. `pointer.rs` kept one `hand` index, one `press`, one `held` panel and one `over` target.
+   `choose_hand` returned at once while a press or a held panel existed, so the left hand's aim was
+   read and thrown away until the right hand let go.
+2. The frame loop sent the events through `AppShell::set_cursor`, `pointer_pressed` and
+   `pointer_released`, which drive the window's one primary pointer with one cursor, one set of held
+   buttons and one set of hovered nodes. `secondary_pointer_*` takes a second finger, but it routes
+   the finger to the primary pointer's captured nodes, so it cannot press another panel. Every panel
+   with content lives in one atlas, which is one surface of the shell.
+3. `Space::set_cursor` held one dot, `SurfaceInput` held one pressed flag, and the runner kept one
+   pressed surface and one active handle.
+4. The UI nodes that track a gesture, the press and hover interaction sources, the scroll gesture and
+   the long press, skipped every pointer whose id was not `PointerId::PRIMARY`. A pointer that does not
+   share the window's own id would have pressed and then scrolled nothing.
+
+The design gives each layer a pointer of its own:
+
+- `Pointer` (`pointer.rs`) is the state of one hand: its `Reach` (the ray, the panel and the handle
+  that it meets, `reach.rs`), its `Press`, its held panel (`pointer/held.rs`) and its `over` target.
+  `Pointers` (`pointers.rs`) holds the two of them and runs the left hand and then the right hand in
+  each frame, so both read the same panels. The only thing they share is a claim: the panel that one
+  hand holds by a handle has no handle for the other hand. `Gestures` gathers the frame's output: the
+  gestures for the composition, tagged with their hands, the gestures for surfaces and volumes, and the
+  steps of the carries and resizes. The storage lives across frames, so a frame allocates nothing.
+- `Hand::pointer_id` gives each hand its id: 1 for the left hand and 2 for the right hand. The
+  primary id 0 stays with a window's own mouse or finger.
+- `AppShell::independent_pointer_moved`, `_pressed`, `_released`, `_scrolled` and `_exited` (and the
+  same on `SurfaceMut`) drive a pointer with its own place, hovered nodes, held buttons and gesture,
+  keyed by its `PointerId`. The first press hit-tests at the pointer's place and keeps the reached
+  nodes as that pointer's path in the `HitPathTracker`, as `ray_pointer` does for a ray in a 3D scene.
+  The moves and the release reach the path. Without a press, the pointer hovers: exit, enter and move
+  events with its id. The primary pointer's code shares the function that sends the exits and enters.
+  `atlas_input::deliver` sends a frame's atlas gestures to the shell, and the integration tests call
+  the same function.
+- `PressTracker` and `HoverTracker` of `interaction.rs`, and the scroll gesture of
+  `modifier/scroll/drag_gesture.rs`, hold the pointer that went down first and let the others pass by
+  until it lifts, as `clickable` did. A hover lasts while any pointer is over the node. On a phone the
+  first finger is the primary pointer, so the touch behavior stays the same. The long press and the
+  zoom gesture still take only the primary pointer, so a long press with a controller does not fire.
+- `Space::set_cursor(hand, cursor)` shows one dot for each hand on a panel. `SurfaceInput` is kept for
+  each hand, so a surface's callback gets each hand's events under that hand's id. The runner reads
+  `pressed_surfaces` and `handles` as two entries, so each hand highlights its own handle.
+
+Two hands may press one panel. The panel's nodes get a `Down` of each id, as two fingers make, and a
+node that holds a gesture serves the first pointer.
+
+**Buttons.** `Aim` carries the squeeze, the two face buttons, the thumbstick click and the menu
+button next to the trigger. The trigger keeps the pointer's press machine: the press holds the point
+from before the pull, it clicks through a shake, and it drags when the ray turns. The button that the
+press emits comes from `PointerMapping`. The other inputs are extra buttons (`pointer/extras.rs`). Each
+goes down at the pointer's place, to the target of the trigger's press, or else to the target that
+the ray is over, and it comes up at the same target. The shell sees a `ButtonDown` or a `ButtonUp`
+for a button other than the primary one and keeps it in the pointer's held set, so the moves while it
+is down reach the nodes that took it. The thumbstick scrolls the target under the pointer in each
+frame by `scroll_speed` times the frame's time, with a dead zone of 0.15 and no step longer than 100 ms.
+A positive y scrolls up as a wheel does, and a push to the right moves the content to the left.
+A hand that carries a panel gets no extra button and no scroll: the stick pushes the panel.
+
+`Controller::trigger.pressed` and `squeeze.pressed` come from the value with a mark of 0.6 to go down
+and 0.4 to come up (`press_threshold.rs`), which the pointer's own trigger rule uses as well.
+`Controllers::sample` computes them from the frame before. A profile whose trigger is a click gives 0
+or 1, so no `trigger/click` path is bound: a path that one profile does not own makes the runtime
+reject that profile's whole list. The pointer-only fallback list gained the stick's x axis, because
+the scroll needs it.
+
+**Settings.** `PointerSettings` is the handle that `local_pointer_settings()` gives. It is an
+`Arc<Mutex>` of the mapping and a visibility flag, like `Haptics`. The frame loop reads it in each
+frame (`HeadsetInput::pointer_choice`), so an app changes the mapping while it runs, and the tests
+of two apps in one process do not share a global.
+
+**Beams.** A hand's beam exists only while some panel is in reach of that hand (`Reach::in_reach`:
+a panel that is not `Ride::Hidden` and does not ride that hand's own controller) and while the app
+lets the beams show. `RayLayers::layers` makes a layer for each `Some` beam, so a Subspace with no
+visible content submits none.
+
+**The default mapping.** The trigger is the primary button, the thumbstick click is the middle
+button, the first face button (A on the right hand, X on the left) is the secondary button, and the
+stick scrolls at 800 dp each second. The grip is left free: Meta's controller guidance gives it to
+grabbing, and an app that grabs an object with it would also right-click. The thumb is free while the
+fingers hold the controller and point. A developer of the SteamVR desktop overlay XSOverlay said in a
+forum that its lower face button gives the right click. A search for the mappings of other desktop
+apps for headsets, Virtual Desktop, Bigscreen and Immersed among them, found no published mapping.
+
+**Scripted controllers.** `ScriptedController` (feature `scripted-hand`) writes the whole
+`Controller` of a hand after `Controllers::sample`, with the Touch Plus profile, so a hand's
+`pointer_aim` takes the controller path even when the runtime reports the hand interaction profile.
+Steps move the controller and its aim in straight lines, which makes a drag and a carry possible. A
+script for each hand plays at once (the scripted hand has a slot for each hand as well).
+
+**Tests.** `src/tests/two_pointer_tests.rs` runs a real composition in a headless window and the
+frame loop of the headset: two hands drag two lists, press one panel, carry a handle while the other
+presses, right click, scroll, remap the buttons, mix a hand with a controller, and hide the beams.
+`crates/cranpose-testing/tests/independent_pointer_test.rs` tests the shell's calls alone.
+
 ### Hands as pointers
 
-The pointer of `pointer.rs` takes an `Aim` for each side: a ray, a pose, a trigger value and a
-stick. `pointer_aim.rs` chooses the `Aim` of a side in each frame, from that side's `Controller`
+The pointer of each hand (`pointer.rs`) takes an `Aim` for its side: a ray, a pose, a trigger value,
+the stick's lean and the other buttons. `pointer_aim.rs` chooses the `Aim` of a side in each frame, from that side's `Controller`
 and `HandState`:
 
 1. A controller whose aim the runtime tracks, and whose profile is not a hand profile, gives the
@@ -938,7 +1037,7 @@ and `HandState`:
    near 0, so a pointer from it would show two rays from nowhere. The first build of this change
    showed `Pointers L/R: hands / hands` there, with no hand in view, and the gate removed them.
 
-`Hand::update` in `pointer.rs` remembers the source of its last aim. A different source in the next
+`Reach::update` in `reach.rs` remembers the source of its last aim. A different source in the next
 frame resets the side as a lost aim does: the press ends with a `Release`, a carry or a resize
 ends, and the trigger of the new source counts as held from before if it is down. A hand that
 appears with a closed pinch gets the same treatment, so a hand that the cameras lose and find, or
@@ -946,8 +1045,9 @@ that ends the system gesture with its fingers together, does not press by surpri
 that appears with its trigger down still presses, as before.
 
 The ray, the aim filter, the press rules, the handles and the beam are the controller's. The beam
-starts at the hand's aim pose. A hand has no thumbstick, so a carried panel follows the aim pose
-and cannot be pushed or pulled. `Haptics` asks for a side that a hand points for never reach
+starts at the hand's aim pose. A hand has no thumbstick and no button besides the pinch, so a carried
+panel follows the aim pose and cannot be pushed or pulled, and the pinch is the trigger's pointer
+button alone. `Haptics` asks for a side that a hand points for never reach
 `xrApplyHapticFeedback`.
 
 `HeadsetInput::sample` writes the chosen source of each side into `XrFrame::left_pointer` and
@@ -1203,7 +1303,7 @@ the panel's composition: the space derives it each time it reads the panels. It 
 the user carries, or that follows a controller, takes its keyboard along with no composition. The
 keyboard shows nowhere while no panel is known to hold the field.
 
-The frame loop runs three steps for the keyboard after it sent the pointer's events to the shell.
+The frame loop runs three steps for the keyboard after it sent the pointers' events to the shell.
 It asks the shell for the focused field's bounds, and the space names the panel of content whose
 part of the atlas holds the bounds' center. Then it hands the keys that were typed to
 `AppShell::on_key_event`. A key's click runs inside the shell's own pointer dispatch, so a key

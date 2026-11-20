@@ -11,10 +11,7 @@ use cranpose_xr::{
 };
 use player_demo::sized;
 
-use crate::{
-    headset_readout::{ControllerReadout, Readout},
-    ray_target::RayTarget,
-};
+use crate::{headset_readout::Readout, ray_target::RayTarget};
 
 // The panel's size in dp, which are millimeters.
 pub(crate) const SIZE: [f32; 2] = [400.0, 600.0];
@@ -117,8 +114,8 @@ fn ReadoutLines(readout: MutableState<Readout>, target: RayTarget) {
         },
     );
     let [left_buttons, right_buttons] = [
-        ControllerReadout::line(&controllers[0], Hand::Left),
-        ControllerReadout::line(&controllers[1], Hand::Right),
+        controllers[0].line(Hand::Left),
+        controllers[1].line(Hand::Right),
     ];
     for line in [
         system,

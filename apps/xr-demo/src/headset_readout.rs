@@ -62,18 +62,18 @@ pub(crate) struct StreamLogs {
 // in tenths to the right and forward, its click and the menu button.
 #[derive(Clone, Copy, Default, PartialEq)]
 pub(crate) struct ControllerReadout {
-    pub(crate) trigger_percent: u8,
-    pub(crate) squeeze_percent: u8,
+    pub(crate) trigger_percent: f32,
+    pub(crate) squeeze_percent: f32,
     pub(crate) faces: [bool; 2],
-    pub(crate) stick_tenths: [i8; 2],
+    pub(crate) stick_tenths: [f32; 2],
     pub(crate) stick_click: bool,
     pub(crate) menu: bool,
 }
 
 impl ControllerReadout {
     fn of(controller: &Controller) -> Self {
-        let percent = |value: f32| (value.clamp(0.0, 1.0) * 100.0).round() as u8;
-        let tenths = |lean: f32| (lean.clamp(-1.0, 1.0) * 10.0).round() as i8;
+        let percent = |value: f32| (value.clamp(0.0, 1.0) * 100.0).round();
+        let tenths = |lean: f32| (lean.clamp(-1.0, 1.0) * 10.0).round();
         Self {
             trigger_percent: percent(controller.trigger.value),
             squeeze_percent: percent(controller.squeeze.value),
@@ -89,12 +89,12 @@ impl ControllerReadout {
 
     // The line that shows the buttons of the controller in hand `side`: the face buttons are named
     // as the controller prints them, and show only while they are down.
-    pub(crate) fn line(&self, side: Hand) -> String {
+    pub(crate) fn line(self, side: Hand) -> String {
         let (name, faces) = match side {
             Hand::Left => ("L", ["X", "Y"]),
             Hand::Right => ("R", ["A", "B"]),
         };
-        let [lean_x, lean_y] = self.stick_tenths.map(|tenths| f32::from(tenths) / 10.0);
+        let [lean_x, lean_y] = self.stick_tenths.map(|tenths| tenths / 10.0);
         let down = |name: &'static str, down: bool| if down { name } else { "-" };
         format!(
             "{name} trig {} grip {} {}{} {lean_x:+.1},{lean_y:+.1} {}{}",

@@ -1,10 +1,19 @@
 //! Pointers other than the primary one: the fingers that join the primary pointer's gesture, the
 //! rays that point into a 3D scene, and the pointers that act on their own.
 
-use super::*;
+use std::fmt::Debug;
+
+use cranpose_core::{NodeId, enter_event_handler_scope, run_in_mutable_snapshot};
+use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
+use cranpose_render_common::{HitTestTarget, RenderScene, Renderer};
+use cranpose_ui_graphics::Point;
+
+use super::Stop;
+use crate::{AppShell, PointerEventTime, PointerId, SurfaceMut};
 
 // What a pointer's hover knows when it moves: the pointer, the nodes it hovered, where it is now,
 // its held buttons and the time of the move.
+#[derive(Clone, Copy)]
 pub(super) struct Hover<'a> {
     pub(super) pointer: PointerId,
     pub(super) hovered: &'a [NodeId],

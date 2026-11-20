@@ -185,7 +185,11 @@ fn controller(position: [f32; 3], at: [f32; 3], buttons: &ScriptedButtons) -> Co
             x: buttons.thumbstick[0],
             y: buttons.thumbstick[1],
             pressed: buttons.thumbstick_click,
-            touched: buttons.thumbstick != [0.0; 2] || buttons.thumbstick_click,
+            touched: buttons
+                .thumbstick
+                .iter()
+                .any(|lean| lean.abs() > f32::EPSILON)
+                || buttons.thumbstick_click,
         },
         primary: down(buttons.primary),
         secondary: down(buttons.secondary),

@@ -40,7 +40,7 @@ struct Down {
 pub(super) struct Extras([Option<Down>; OTHERS.len()]);
 
 // Whether `input` is down in this frame, given whether it was down in the frame before.
-fn is_down(input: ControllerInput, buttons: &Buttons, was: Was) -> bool {
+fn is_down(input: ControllerInput, buttons: Buttons, was: Was) -> bool {
     match input {
         ControllerInput::Squeeze => pressed(buttons.squeeze, was),
         ControllerInput::Primary => buttons.primary,
@@ -63,7 +63,7 @@ impl Pointer {
     pub(super) fn press_others(&mut self, buttons: Buttons, frame: &Frame<'_>, out: &mut Gestures) {
         for (slot, input) in OTHERS.into_iter().enumerate() {
             let was = self.extras.0[slot];
-            let now = is_down(input, &buttons, Was::from(was.is_some()));
+            let now = is_down(input, buttons, Was::from(was.is_some()));
             match (was, now) {
                 (None, true) => {
                     let Some(button) = frame.mapping.button(input) else {
