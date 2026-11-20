@@ -1138,11 +1138,18 @@ so.
 before the backend connects to the runtime, because Meta asks for the check within 10 seconds of
 the launch and the connection can wait for a permission prompt. The class calls
 `Core.asyncInitialize(appId, activity)` and, when that succeeds, `Entitlements.getIsViewerEntitled()`.
-The SDK answers on the Java main thread. The answer sits in a volatile field. The loop asks for
-it every 100 ms while the check runs (`EntitlementWatch`) and stops asking at the outcome, so a
-frame pays for no JNI call. An exception, an initialization that fails, an error answer, a missing
+The SDK answers on the Java main thread. The answer sits in a volatile field. The app's handle
+(`EntitlementCheck`) lives in the composition, as the state of any composable does, and the loop
+reads it. The loop asks for the answer every 100 ms while the check runs (`EntitlementWatch`) and
+stops asking at the outcome, so a frame pays for no JNI call. An exception, an initialization that fails, an error answer, a missing
 Gradle service and 30 seconds with no answer all end the check as `NotEntitled`, because Meta's
 guide counts each as a failed check and an app must not run unchecked when the platform is silent.
+
+**A quit app keeps its process.** Android caches the process after the activity finishes, and the
+SDK's message pump goes on logging at verbose level. The Java class keeps a running check and an
+entitled answer for the process. A failed check starts again with the next run of the loop in the
+same process, so a failure that came from a busy platform does not lock an owner out until Android
+ends the process.
 
 **What the app does next.** The default is `OnNotEntitled::Quit`: the backend logs the result and
 calls `request_exit`. The loop that already closes an app ends the session and finishes the
@@ -1162,14 +1169,11 @@ Platform SDK says why: the user does not have the app in the library.
 | The feature on and the Gradle service missing | `ClassNotFoundException` for `dev.cranpose.android.CranposeMetaEntitlement`, `the Meta entitlement check cannot start; list the meta-entitlement service in the Gradle build`, then `entitlement check: NotEntitled (the build carries no entitlement service); the app quits` | The app quit at once: a build never runs unchecked |
 | The feature off | No line about the check | The APK holds no `com.meta.horizon.platform` class, no `CranposeMetaEntitlement` and neither `libovrplatformloader.so` nor `libpsdk_jni.so`. The build with the service has all of them |
 
-`scripts/dev/xr_entitlement_check.sh` runs a build through adb and prints these lines. The first
-run of a build that made the `EntitlementCheck` before the composition existed aborted with
-`mutableStateOf requires an active runtime`. The handle now lives in the composition and the loop
-reads it.
+`scripts/dev/xr_entitlement_check.sh` runs a build through adb and prints these lines.
 
-Not run on a device: a store install that the check finds entitled, because it needs an app in
-the Meta Horizon store and a user who owns it, and so a real app id. The success path ran in no
-test of this change beyond the decision logic.
+Not run on a device: a store install that the check finds entitled. It needs an app in the Meta
+Horizon store, a user who owns it and a real app id. The success path has tests of the decision
+logic and of the numbers that Java gives, and no run across JNI.
 
 ## Headsets
 
