@@ -9,7 +9,10 @@ use openxr as xr;
 use crate::{
     RunError,
     entitlement_watch::Answer,
-    openxr::{entitlement_run::EntitlementRun, runner::run_immersive, runtime::Runtime},
+    openxr::{
+        entitlement_run::EntitlementRun, render_models::ModelRequest, runner::run_immersive,
+        runtime::Runtime,
+    },
     session_status::SessionStatus,
     spatial_request::SpatialRequest,
     tracking_permission::PermissionAnswer,
@@ -115,7 +118,8 @@ pub fn run<Fonts: LauncherFonts>(
     let host = Host;
     let request = TrackingRequest::of(launcher.capabilities());
     let spatial_request = SpatialRequest::of(launcher.capabilities());
-    match Runtime::connect(&host, request, spatial_request) {
+    let models = ModelRequest::of(launcher.capabilities());
+    match Runtime::connect(&host, request, spatial_request, models) {
         Ok(runtime) => {
             let settings = launcher.into_settings();
             let entitlement = EntitlementRun::start(&host);

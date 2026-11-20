@@ -1,4 +1,4 @@
-//! The services that track the user's body or read the room in a headset.
+//! The services that track the user's body, read the room or read the runtime's models in a headset.
 
 use crate::Service;
 
@@ -119,6 +119,17 @@ const PLANES: Tracking = Tracking {
     features: &[],
 };
 
+// The runtime's models of the controllers come through `XR_FB_render_model`, which the Horizon OS
+// runtime lists to an app only while the manifest holds the permission and the feature. Both are
+// normal: the system grants the permission at install and asks nobody. Android XR names no such
+// permission. An app on a runtime that offers no model draws Cranpose's own.
+const CONTROLLER_MODELS: Tracking = Tracking {
+    name: "controller-models",
+    permissions: &["com.oculus.permission.RENDER_MODEL"],
+    groups: &[],
+    features: &["com.oculus.feature.RENDER_MODEL"],
+};
+
 // A service that asks nothing of the kind
 const NONE: Tracking = Tracking {
     name: "",
@@ -135,6 +146,7 @@ pub(crate) const fn of(service: Service) -> &'static Tracking {
         Service::EyeTracking => &EYES,
         Service::Anchors => &ANCHORS,
         Service::PlaneTracking => &PLANES,
+        Service::ControllerModels => &CONTROLLER_MODELS,
         _ => &NONE,
     }
 }

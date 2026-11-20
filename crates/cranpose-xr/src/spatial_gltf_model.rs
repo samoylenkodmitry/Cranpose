@@ -5,30 +5,22 @@ use std::rc::Rc;
 use cranpose::{
     Alignment, Box, BoxSpec, Color, ContentScale, GraphicsLayer, Image, LaunchedEffect, Modifier,
     Size, composable,
-    space::{Light, Mat4, Vec3},
 };
 use cranpose_core::key;
 
 use crate::{
     SpatialVolume, SpatialVolumeScope, SubspaceModifier,
+    default_light::DEFAULT_LIGHT,
     gltf_animation::GltfAnimationState,
     gltf_fit::ModelFit,
     gltf_model::LayerContent,
+    gltf_placement::GltfPlacement,
     spatial_gltf_model_state::{LoadedModel, SpatialGltfModelState},
 };
 
 // The longest step that an animation takes in one frame, in seconds, so that a late frame does not
 // jump the animation.
 const LONGEST_STEP: f32 = 0.1;
-
-// The light on a model until the content sets another: from the upper left over the viewer's
-// shoulder, in the volume's axes.
-const DEFAULT_LIGHT: Light = Light {
-    direction: Vec3::new(0.45, 0.6, 0.65),
-    ambient: 0.35,
-    shadows: false,
-    size: 0.0,
-};
 
 /// A glTF 2.0 model in a box of the size that `modifier` gives, centered at the modifier's pose in
 /// its subspace. Jetpack XR's `SpatialGltfModel`. It needs the `gltf` feature.
@@ -124,7 +116,7 @@ fn ModelVolume(
         modifier.size(fit.size[0], fit.size[1]).depth(fit.size[2]),
         move |scope| {
             scope.light(DEFAULT_LIGHT);
-            ModelLayers(Rc::clone(&loaded), fit.root);
+            ModelLayers(Rc::clone(&loaded), GltfPlacement::Fixed(fit.root));
             content(scope);
         },
     );
@@ -167,15 +159,15 @@ fn ModelAnimations(loaded: Rc<LoadedModel>) {
 // One node for each material of the model: the picture of the material, drawn on every mesh that
 // the material covers.
 #[composable]
-fn ModelLayers(loaded: Rc<LoadedModel>, fit: Mat4) {
+pub(crate) fn ModelLayers(loaded: Rc<LoadedModel>, placement: GltfPlacement) {
     for layer in 0..loaded.layers.len() {
-        let loaded = Rc::clone(&loaded);
-        key(layer, move || ModelLayer(loaded, layer, fit));
+        let (loaded, placement) = (Rc::clone(&loaded), placement.clone());
+        key(layer, move || ModelLayer(loaded, layer, placement));
     }
 }
 
 #[composable]
-fn ModelLayer(loaded: Rc<LoadedModel>, layer: usize, fit: Mat4) {
+fn ModelLayer(loaded: Rc<LoadedModel>, layer: usize, placement: GltfPlacement) {
     let noted = Rc::clone(&loaded);
     let picture = loaded.model.layers[layer].clone();
     let size = Size::new(picture.size[0] as f32, picture.size[1] as f32);
@@ -183,10 +175,11 @@ fn ModelLayer(loaded: Rc<LoadedModel>, layer: usize, fit: Mat4) {
         .required_size(size)
         .graphics_layer(move || {
             let draws = &loaded.layers[layer];
+            let fit = placement.map();
             let space = loaded.read_worlds(|worlds| {
                 draws
                     .spaces
-                    .space((&loaded.model, draws), |node| worlds[node].then(&fit))
+                    .space(&draws.meshes, |index| worlds[draws.nodes[index]].then(&fit))
             });
             GraphicsLayer {
                 space: Some(space),

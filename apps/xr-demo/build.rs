@@ -17,6 +17,12 @@ use cranpose_capabilities::{Use, declare};
 // `XR_DEMO_VOLUME=alone` builds the same scene without the panel, as the reference for
 // `scripts/dev/xr_depth_check.py`.
 fn main() {
+    // `XR_DEMO_CONTROLLERS` (`plain`, `off`, `only` or `panel`) builds the controller model
+    // measurements. See `src/controller_models.rs`.
+    println!("cargo::rerun-if-env-changed=XR_DEMO_CONTROLLERS");
+    if let Ok(models) = std::env::var("XR_DEMO_CONTROLLERS") {
+        println!("cargo::rustc-env=XR_DEMO_CONTROLLERS={models}");
+    }
     println!("cargo::rerun-if-env-changed=XR_DEMO_VOLUME");
     if let Ok(place) = std::env::var("XR_DEMO_VOLUME") {
         println!("cargo::rustc-env=XR_DEMO_VOLUME={place}");
@@ -40,7 +46,13 @@ fn main() {
     println!("cargo::rerun-if-env-changed=XR_DEMO_ROOM");
     if let Ok(room) = std::env::var("XR_DEMO_ROOM") {
         println!("cargo::rustc-env=XR_DEMO_ROOM={room}");
-        declare(&[Use::hand_tracking(), Use::anchors(), Use::plane_tracking()]).emit();
+        declare(&[
+            Use::hand_tracking(),
+            Use::controller_models(),
+            Use::anchors(),
+            Use::plane_tracking(),
+        ])
+        .emit();
         return;
     }
     println!("cargo::rerun-if-env-changed=XR_DEMO_TRACKING");
@@ -48,11 +60,12 @@ fn main() {
         Ok("none") => declare(&[]).emit(),
         Ok("all") => declare(&[
             Use::hand_tracking(),
+            Use::controller_models(),
             Use::body_tracking(),
             Use::face_tracking(),
             Use::eye_tracking(),
         ])
         .emit(),
-        _ => declare(&[Use::hand_tracking()]).emit(),
+        _ => declare(&[Use::hand_tracking(), Use::controller_models()]).emit(),
     }
 }

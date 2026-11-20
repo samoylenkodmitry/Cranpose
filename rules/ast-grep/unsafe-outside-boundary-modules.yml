@@ -53,6 +53,7 @@ ignores:
   - crates/cranpose-xr/src/openxr/graphics/vulkan.rs
   - crates/cranpose-xr/src/openxr/host/android.rs
   - crates/cranpose-xr/src/openxr/passthrough.rs
+  - crates/cranpose-xr/src/openxr/render_model_calls.rs
   - crates/cranpose-xr/src/openxr/runtime.rs
   - crates/cranpose-xr/src/openxr/session.rs
   - crates/cranpose-xr/src/openxr/spatial/android_anchors.rs

@@ -14,21 +14,30 @@ use cranpose::{
 };
 use cranpose_core::{key, remember};
 
+#[cfg(feature = "gltf")]
+use crate::controller_loaders::ControllerLoaders;
 use crate::{
     callback_slot::invoke,
+    controller_scene::ControllerNodes,
+    controller_states::ControllerStates,
+    default_light::DEFAULT_LIGHT,
     space::Space,
     volume_transform::scene_from_volume,
     volume_window::VolumeWindow,
     volumes::{VolumeContent, Volumes},
 };
 
-// The window root of the scene, which holds the content of every volume. It holds nothing while
-// no volume exists.
+// The window root of the scene, which holds the content of every volume and the models of the
+// controllers in use. It holds nothing while no volume exists and no controller shows a model. The
+// loads of the controllers' models belong here, because they go on while the scene is empty.
 #[composable]
 pub(crate) fn VolumeScene(space: Space) {
     let volumes = space.volumes();
+    let controllers = space.volumes().controllers();
+    #[cfg(feature = "gltf")]
+    ControllerLoaders(controllers);
     let contents = volumes.contents().get();
-    if contents.is_empty() {
+    if contents.is_empty() && !controllers.any_shown() {
         return;
     }
     let window = remember(|| Rc::new(VolumeWindow::new(space.scene_size()))).with(Rc::clone);
@@ -40,13 +49,14 @@ pub(crate) fn VolumeScene(space: Space) {
             Box(
                 Modifier::empty()
                     .fill_max_size()
-                    .scene3d(move || scene_of(&volumes)),
+                    .scene3d(move || scene_of(&volumes, &controllers)),
                 BoxSpec::default(),
                 move || {
                     for content in &contents {
                         let content = content.clone();
                         key(content.id, move || VolumeNode(content));
                     }
+                    ControllerNodes(controllers);
                 },
             );
         },
@@ -67,21 +77,24 @@ fn VolumeNode(content: VolumeContent) {
 }
 
 // The scene as it draws now: the eye's camera and the first light that a volume sets, turned from
-// the volume's axes into the scene's. A scene has one light, so volumes share it. A draw reads the
-// states, so a camera or a pose that changes draws again without composing. The samples are the
-// ones that the headset's device takes: the renderer stores the layer's depth from a second pass
-// of one sample.
-fn scene_of(volumes: &Volumes) -> Scene3d {
-    let light = volumes.contents().read(|contents| {
-        contents.iter().find_map(|content| {
-            let light = content.light.get()?;
-            let turn = scene_from_volume(&content.pose.get());
-            Some(Light {
-                direction: turn.transform_vector(light.direction),
-                ..light
+// the volume's axes into the scene's. A scene has one light, so volumes share it. Where no volume
+// sets one, the controllers' models stand in the default light. A draw reads the states, so a
+// camera or a pose that changes draws again without composing. The samples are the ones that the
+// headset's device takes: the renderer stores the layer's depth from a second pass of one sample.
+fn scene_of(volumes: &Volumes, controllers: &ControllerStates) -> Scene3d {
+    let light = volumes
+        .contents()
+        .read(|contents| {
+            contents.iter().find_map(|content| {
+                let light = content.light.get()?;
+                let turn = scene_from_volume(&content.pose.get());
+                Some(Light {
+                    direction: turn.transform_vector(light.direction),
+                    ..light
+                })
             })
         })
-    });
+        .or_else(|| controllers.any_shown().then_some(DEFAULT_LIGHT));
     Scene3d {
         camera: volumes.camera().get(),
         light,

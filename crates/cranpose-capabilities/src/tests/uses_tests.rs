@@ -224,3 +224,39 @@ fn an_application_that_declares_neither_asks_for_no_room_permission() {
     assert!(!manifest.contains("USE_SCENE"), "{manifest}");
     assert!(!manifest.contains("SCENE_UNDERSTANDING"), "{manifest}");
 }
+
+const MODELS: [Use; 1] = [Use::controller_models()];
+
+#[test]
+fn controller_models_name_the_quest_permission_and_feature_and_ask_nobody() {
+    let models = Capabilities {
+        uses: &MODELS,
+        demands: &[],
+        opens: &[],
+        links: &[],
+    };
+    assert_eq!(
+        android_permissions(&models),
+        vec!["com.oculus.permission.RENDER_MODEL"]
+    );
+    assert!(
+        Service::ControllerModels
+            .android_permission_groups()
+            .is_empty()
+    );
+    let manifest = android_manifest(&models);
+    assert!(
+        manifest.contains(
+            "<uses-feature android:name=\"com.oculus.feature.RENDER_MODEL\" android:required=\"false\" />"
+        ),
+        "{manifest}"
+    );
+    assert!(json(&models).contains("{ \"name\": \"controller-models\", \"reason\": null }"));
+    assert!(rust_source(&models).contains("Use::controller_models(),"));
+}
+
+#[test]
+fn an_application_that_declares_no_controller_models_names_no_render_model_feature() {
+    let manifest = android_manifest(&NONE);
+    assert!(!manifest.contains("RENDER_MODEL"), "{manifest}");
+}

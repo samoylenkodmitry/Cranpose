@@ -400,6 +400,110 @@ the feature leaves out the demo's crate too. Of the 770 KB, the `zune_jpeg`, `im
 crates take 209 KB, `serde_json` 181 KB, `gltf` and `gltf_json` 58 KB, and `cranpose_xr` 49 KB. The
 shipping `release` profile has other absolute sizes. An app without the feature has none of it.
 
+### Controller models
+
+A headset draws a model at the grip pose of each controller in use. The models are part of the
+volumes' scene. `VolumeScene` composes a node tree for each hand beside the volumes' content, so one
+projection layer and one depth buffer carry both. Where the runtime tests depth, a panel and a model
+hide each other by their distance from the head, as a panel and a volume do. The scene exists while
+a volume exists or a controller shows a model. An app with no volume gets the projection layer, its
+swapchains and the pass only while a controller shows a model. With the models off it gets none of
+them.
+
+**Which controller shows a model.** `controller_grips::shown` takes the frame's two `Controller`s.
+A controller shows a model while the runtime tracks its grip pose and the hand's interaction
+profile is not that of a hand (`InteractionProfile::is_hand`). A runtime keeps the hand profile's
+poses valid with no hand in view, and a tracked hand with no controller holds nothing to draw, so
+the hand profiles show no model. The state of the pointer decides nothing: a controller that lies on
+a desk is in use. `ControllerStates::track` applies the app's switch. With `set_enabled(false)` no
+hand shows a model.
+
+**Which model a hand shows.** `controller_look::look` decides from three inputs: the app's
+`ControllerModel` for the hand, the runtime's `Offer`, and how far the load of the glTF source has
+come. The offer is `Pending` until the backend has asked the runtime. It is `Absent` where the
+runtime has no model for the hand, where the app did not declare `Use::controller_models()` and
+where the build has no `gltf` feature. It is `Bytes` once the backend has copied the runtime's glTF
+binary out.
+
+| App's choice | Runtime's offer | Load | The hand shows |
+| --- | --- | --- | --- |
+| `Plain` | any | any | the plain model |
+| `Runtime` | `Pending` | none | nothing, until the backend has asked |
+| `Runtime` | `Absent` | none | the plain model |
+| `Runtime` | `Bytes` | loading | nothing |
+| `Runtime` | `Bytes` | loaded | the runtime's model |
+| `Runtime` | `Bytes` | failed | the plain model |
+| `Gltf(source)` | any | loading | nothing |
+| `Gltf(source)` | any | loaded | the app's model |
+| `Gltf(source)` | any | failed | the plain model |
+
+A controller in use shows a picture at all times except while its model is on its way.
+
+**The runtime's model.** A Meta Quest hands out glTF binaries through `XR_FB_render_model`. The
+instance enables the extension when the app declared `Use::controller_models()` (the manifest
+feature `com.oculus.feature.RENDER_MODEL` and the permission `com.oculus.permission.RENDER_MODEL`)
+and the runtime lists it. `render_models::RenderModels` asks for each hand before the frame that the
+runtime waits for. It lists the render model paths, picks the path that has a `controller` segment
+and the hand's side (`model_path::controller_path`), reads the model's properties with the glTF 2.0
+subset 1 capability, then with both subsets if the first answer has no model, and loads the bytes.
+The calls that list the paths and read the properties are made in `render_model_calls`, because the
+`openxr` crate's wrappers pass structs that the runtime may leave unwritten. `model_asks::ModelAsks` schedules the questions. A hand
+that the runtime answered with no model asks again when a controller comes into it. The loader of
+`SpatialGltfModel` decodes the bytes on a worker thread. `ControllerLoaders` stays in the
+composition while the scene is empty, so a controller that leaves and returns finds its model
+loaded. The XR session stays on the frame thread, and only bytes cross to the worker.
+
+**Where the model stands.** The runtime's models are glTF files in meters with x to the right, y up
+and z toward the user. The origin of a model lies at the controller's grip pose.
+`controller_placement::scene_from_grip` carries a point of the model to the scene, whose units are
+millimeters with y down and z away. The half turn about x that takes glTF's axes to the content's
+cancels the half turn that `scene_from_volume` makes. A point `p` of the model therefore lies where
+the grip puts `p`. No box fits the model. `ModelFit` centers a model in a volume's box, and a
+controller keeps the file's origin.
+
+**Allocation.** The frame loop writes one `MutableState<Mat4>` for each hand, the map from the model
+to the scene. The hand's `shown` flag changes only when a controller comes or goes. The surfaces of
+a model carry the placement, and each layer's draw closure reads the state. `SurfaceRing` keeps a
+few `LayerSpace`s for each layer and moves their surfaces in place, as the animations of a glTF
+model need, so no draw builds a space or a list after the ring fills. A node with `transform3d`
+would allocate a space in each evaluation, which is why the models carry their placement in the
+surfaces. The plain model's parts share meshes that a process makes once. The write of the state is
+the framework's. A write of a changed value keeps a record, as the pose of a carried volume and the
+eye's camera do. A test of the ring shows that a moving model reuses its spaces. No allocation
+counter has measured a frame.
+
+**The plain model.** `plain_controller` builds seven parts from `Mesh::cuboid` and `Mesh::sphere`:
+a handle along z, a head in front of it, a thumbstick's dome, a trigger, two button domes and a tip
+that marks the front. Each part has one flat color. A part is a node whose content is a flat swatch,
+drawn on a mesh by a graphics layer, as a glTF material is. `Mesh::cylinder` is an open tube, so no
+part uses it.
+
+**The scene's light.** A volume sets the scene's light. Where no volume sets one, the controllers'
+models stand in the default light of the glTF models.
+
+**What no headset has run.** The runtime's listing of the extension under the manifest entries, the
+render model paths, the contents of the runtime's file, the loader on that file, the alignment of
+the file with the grip pose, the depth test against panels and the frame rate of an app with no
+volume are untested. The permission name, the path names and the origin of the models at the grip
+pose follow the extension's documentation and stay assumptions until a headset confirms them. If
+the runtime does not list the extension on its first run, the permission name is the first suspect:
+the other services of `cranpose-capabilities` write a `horizonos` name beside the `com.oculus` one.
+The extension has three calls and none gives the state of a button, so a model moves its buttons
+only if its file holds clips. `scripts/dev/xr_controller_session.sh` and
+`scripts/dev/xr_controller_check.py` are the procedure for the first run. Neither has run on a
+headset. The check script ran on pictures that a script drew.
+
+**The demo.** The counter panel has a button that cycles the choice of both hands: the runtime's
+model, the plain model and none. The environment variable `XR_DEMO_CONTROLLERS` builds the
+measurements. It holds names that a comma separates. `only` shows nothing but the models. `plain`
+and `off` start with that choice. `panel` adds a magenta panel of 40 cm in the vertical plane through
+the left controller's grip, so that the part of the model behind the plane hides and the part in front
+shows. A build with `only` or `panel` logs the eyes' poses and fields of view, the grips and the
+frames of the last second, once a second. `scripts/dev/xr_controller_session.sh` runs one build on a
+Quest and saves the log and the compositor's picture. `scripts/dev/xr_controller_check.py` marks the
+pixels that differ between the picture of the `only` build and that of the `only,off` build, joins
+them into blobs and projects the logged grips into each eye.
+
 ### What it costs
 
 A frame with volumes updates the composition and renders the window root twice. The scene's draw

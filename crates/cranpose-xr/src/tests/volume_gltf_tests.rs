@@ -42,26 +42,6 @@ fn wait_for_the_volume(headset: &mut Headset) {
     }
 }
 
-// The box of the pixels that the scene drew, as the first and last column and row.
-fn drawn_box(pixels: &[u8]) -> Option<[u32; 4]> {
-    let mut found: Option<[u32; 4]> = None;
-    for (at, texel) in pixels.as_chunks::<4>().0.iter().enumerate() {
-        if texel[3] == 0 {
-            continue;
-        }
-        let at = u32::try_from(at).expect("a pixel of the eye");
-        let (x, y) = (at % EYE, at / EYE);
-        let [left, top, right, bottom] = found.get_or_insert([x, y, x, y]);
-        (*left, *top, *right, *bottom) = (
-            (*left).min(x),
-            (*top).min(y),
-            (*right).max(x),
-            (*bottom).max(y),
-        );
-    }
-    found
-}
-
 // The pixel `across` and `down` quarters of the way from the top left corner of `bounds`, which is
 // a box of the first and last column and row.
 fn at_quarter(pixels: &[u8], bounds: [u32; 4], across: u32, down: u32) -> [u8; 3] {

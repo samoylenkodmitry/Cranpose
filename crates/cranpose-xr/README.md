@@ -271,6 +271,75 @@ Jetpack XR's `SpatialGltfModelState` also lists the model's `nodes`. Cranpose ha
 and its `SpatialGltfModelSource` has `from_path` and `from_bytes` where Jetpack XR's has `fromPath`,
 `fromUri` and `fromResource`. The doc comments say where each call differs.
 
+## Controller models
+
+A headset draws a model at the grip pose of each controller in use. The models stand in the 3D layer
+of the volumes, so they share its depth. Where the runtime tests depth (see "3D content"), a panel
+and a model hide each other by their distance from the head. Without the test a panel covers a
+model wherever it stands. A tracked hand with no controller in it shows no model. A controller that
+the runtime does not track shows none either. The models are on by default.
+
+The runtime's own model shows where the runtime has one. A Meta Quest hands out glTF models through
+`XR_FB_render_model`. The app declares `Use::controller_models()` in its build script. That writes
+the manifest entries which make the Horizon OS runtime list the extension. The app also turns on the
+`gltf` feature, which loads the file with the loader of `SpatialGltfModel`. The backend asks the
+runtime for the model of each hand before the first frame that it waits for. It asks again when a
+controller comes back after the runtime had no model for it. It copies the bytes out, and a worker
+thread decodes them, so no frame waits for the file. A hand shows nothing while its model decodes.
+
+```rust,ignore
+// build.rs
+cranpose_capabilities::declare(&[Use::controller_models()]).emit();
+```
+
+The hand shows a plain model that Cranpose builds in code in three cases: the runtime has no model
+(Android XR and most desktop runtimes), the app declared nothing, or the model fails to load. The
+plain model has a handle, a head, a thumbstick, two buttons, a trigger and a tip that marks the
+front. It has no texture and no asset file. It uses the axes of the runtime's models around the
+grip pose: x to the right, y up and z toward the user.
+
+`local_controller_models()` gives the app a `ControllerModels` handle. `set_enabled(false)` turns the
+models off, so no frame draws a scene for them. `set_model(hand, model)` replaces the model of one
+hand with a `ControllerModel`. `Runtime` is the default. `Plain` is the built-in model. `Gltf(source)`
+is a model of the app's own, which needs the `gltf` feature. Its origin lies at the grip pose, and
+its unit is the meter.
+
+```rust,ignore
+use cranpose_xr::{ControllerModel, Hand, SpatialGltfModelSource, local_controller_models};
+
+if let Some(models) = local_controller_models().current() {
+    models.set_model(Hand::Left, ControllerModel::Plain);
+    models.set_model(
+        Hand::Right,
+        ControllerModel::Gltf(SpatialGltfModelSource::from_bytes(MY_CONTROLLER)),
+    );
+    // models.set_enabled(false) shows none
+}
+```
+
+Jetpack XR has no controller models. Its `Entity.setEnabled` and `isEnabled` name the switch. The
+names of the model choices are Cranpose's own.
+
+A model costs the projection layer of the volumes while a controller is in use. An app with no
+volume pays for that layer, its swapchains and its pass only then. With the models off, or with no
+controller in use, no frame draws the scene. Every app gets the models at its next update, since
+they are on by default. An app that draws its own controllers, such as one that streams a scene,
+calls `set_enabled(false)`.
+
+The frame loop moves a model by writing one state that the draw reads. A controller that moves
+composes nothing. The draw reuses the spaces of a model's surfaces, so it builds no list and no
+space. The write of the state is the framework's: it keeps a record for each changed value, as it
+does for a volume that a user carries.
+
+No headset has run this path. The runtime's listing of the extension under the manifest entries, the
+render model paths, the contents of the runtime's file, the loader on that file, the alignment of
+the file with the grip pose, the depth test against panels and the frame rate of an app with no
+volume are untested. The permission name, the path names and the origin of the models at the grip
+pose follow the extension's documentation and stay assumptions until a headset confirms them. The
+extension has three calls and none gives the state of a button, so a model moves its buttons only
+if its file holds clips, which no run has shown. Android XR and the desktop runtimes use the plain
+model.
+
 ## Spatial audio
 
 `SpatialPointSource(modifier, source)` plays a sound from the pose that `modifier` gives in its
