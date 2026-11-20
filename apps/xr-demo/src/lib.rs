@@ -392,9 +392,9 @@ fn PressesPanel(presses: MutableState<u32>, readout: MutableState<Readout>) {
     );
 }
 
-// The lines of the headset's readout, and the app's lifecycle as the headset reports it: resumed
-// with input focus, paused under the system menu and stopped while the session does not run.
-// Outside a headset the frame effect never runs, and the readout stays at its start.
+// The lines of the headset's readout and the app's lifecycle as the headset reports it: resumed
+// with input focus, paused under the system menu, stopped while the session does not run.
+// Outside a headset the frame effect never runs. The readout stays at its start then.
 #[composable]
 fn ReadoutLines(readout: MutableState<Readout>) {
     let Readout {

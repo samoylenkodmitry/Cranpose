@@ -255,18 +255,19 @@ SpatialFrameEffect(move |frame| {
 ## Focus and pause
 
 Meta's Virtual Reality Checks for Quest apps need an immersive app to behave in two ways. An app
-that has lost input focus, as under the Universal Menu, keeps rendering, shows no controllers
+that has lost input focus, as under the Universal Menu, keeps rendering. It shows no controllers
 and takes no input. An app that the system pauses stops its interactive elements. The backend
 keeps the first rule itself. While the session is `VISIBLE` and not `FOCUSED`, the panels, the
-volumes and the surfaces stay on display. The pointer gets no aim, so a press ends, a carried panel
-drops and no ray shows. The backend does not stop the app's own work, because the app knows which
-of its elements are interactive. It tells the app through the lifecycle that Compose uses:
+volumes and the surfaces stay on display. The pointer gets no aim from any source. A press ends,
+a carried panel drops and no ray shows. The backend does not stop the app's own work, because the
+app knows which of its elements are interactive. It tells the app through the lifecycle that
+Compose uses:
 
 | OpenXR session state | `local_lifecycle_state()` | The backend |
 |---|---|---|
 | `FOCUSED` | `Resumed` | composes, draws and takes input |
 | `VISIBLE` | `Paused` | composes and draws, takes no input, shows no ray |
-| `READY`, `SYNCHRONIZED` | `Stopped` | draws nothing and ends frames with no layers |
+| `READY`, `SYNCHRONIZED` | `Created` until the runtime first shows the app, then `Stopped` | draws nothing and ends frames with no layers |
 | `STOPPING`, `IDLE` | `Stopped` | runs no frame until the session begins again |
 | `EXITING`, `LOSS_PENDING`, the activity's end | `Destroyed` | leaves the loop |
 
@@ -287,6 +288,8 @@ fn Game() {
 Jetpack XR Compose has no composition local for the session's state, so an XR app reads the
 lifecycle that an Android app reads. `XrFrame::focused` gives the same answer in a
 `SpatialFrameEffect`. The app keeps its composition and the panels' places through `Stopped`.
+`Paused` runs the durable saves that the app registered. The frame loop waits for them for up to
+`durable_save_deadline()`.
 
 ## Hands, body, face and eyes
 

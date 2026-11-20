@@ -48,6 +48,8 @@ pub(crate) fn run_immersive(
     settings: &AppSettings,
     content: impl FnMut() + 'static,
 ) -> Result<(), String> {
+    // A run that follows another in the same process starts as the first did
+    dispatch_lifecycle_state(LifecycleState::Created);
     let mut immersive = Immersive::new(runtime, settings, content)?;
     let mut status = SessionStatus::Idle;
     let mut rate = FrameRate::new();
@@ -191,7 +193,7 @@ impl Immersive {
 
     // One frame of a running session. The controllers move the pointer, the panels that changed
     // draw and the rays follow the controllers. While the app has no input focus the pointer
-    // gets no aim: it sees the controllers lost, which ends a press, and no ray shows. The panels
+    // gets no aim. It sees the controllers lost, which ends a press. No ray shows. The panels
     // and the volumes keep drawing, as VRC.Quest.Input.4 requires. While the runtime shows none
     // of the app's layers the app draws none and ends the frame empty. The app's state stays as
     // it was.

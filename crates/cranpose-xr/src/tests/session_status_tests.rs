@@ -102,8 +102,9 @@ fn the_watch_reports_each_change_once_with_the_frames_of_the_status_it_leaves() 
             SessionStatus::Idle,
             SessionStatus::Hidden,
             0,
-            LifecycleState::Stopped
-        )
+            LifecycleState::Created
+        ),
+        "a session that begins and is not shown yet leaves the app created"
     );
     watch.change(SessionStatus::Focused).unwrap();
     for _ in 0..3 {
@@ -161,6 +162,38 @@ fn a_session_that_stops_and_begins_again_passes_every_status_in_between() {
             LifecycleState::Resumed,
         ]
     );
+}
+
+#[test]
+fn the_app_stays_created_until_the_runtime_shows_it_and_is_stopped_after() {
+    let mut watch = StatusWatch::default();
+    let lifecycle_of = |watch: &mut StatusWatch, state| {
+        watch
+            .change(SessionStatus::of(state))
+            .map(|change| change.lifecycle)
+    };
+    assert_eq!(
+        lifecycle_of(&mut watch, SessionState::Ready),
+        Some(LifecycleState::Created)
+    );
+    assert_eq!(lifecycle_of(&mut watch, SessionState::Synchronized), None);
+    assert_eq!(
+        lifecycle_of(&mut watch, SessionState::Visible),
+        Some(LifecycleState::Paused)
+    );
+    assert_eq!(
+        lifecycle_of(&mut watch, SessionState::Synchronized),
+        Some(LifecycleState::Stopped),
+        "once shown, a session that is not shown again is stopped"
+    );
+}
+
+#[test]
+fn a_session_that_ends_before_it_shows_destroys_the_app() {
+    let mut watch = StatusWatch::default();
+    watch.change(SessionStatus::Hidden).unwrap();
+    let change = watch.change(SessionStatus::Exit).unwrap();
+    assert_eq!(change.lifecycle, LifecycleState::Destroyed);
 }
 
 #[test]

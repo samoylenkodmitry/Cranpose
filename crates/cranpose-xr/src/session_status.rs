@@ -1,4 +1,4 @@
-//! Where an OpenXR session stands, and what the app does in each place.
+//! Where an OpenXR session stands and what the app does in each place.
 //!
 //! Meta's Virtual Reality Checks (VRC.Quest.Input.4 and VRC.Quest.Functional.2) give two rules.
 //! An immersive app that has lost input focus keeps rendering, hides the user's hands and
@@ -76,8 +76,8 @@ impl SessionStatus {
         }
     }
 
-    // The aims that the app may use: both, with input focus, and none without it. The rule holds in
-    // one place, so that no way of pointing, such as a hand or a controller, can bypass it.
+    // The aims that the app may use: both with input focus, none without it. The rule holds in one
+    // place, so that no way of pointing, such as a hand or a controller, can bypass it.
     pub(crate) fn input<T>(self, aims: [Option<T>; 2]) -> [Option<T>; 2] {
         if self.listens() { aims } else { [None, None] }
     }
@@ -93,12 +93,13 @@ pub(crate) struct StatusChange {
     pub(crate) lifecycle: LifecycleState,
 }
 
-// What the loop keeps to tell the changes of the status: the status of the turn before and the
-// frames run in it.
+// What the loop keeps to tell the changes of the status: the status of the turn before, the
+// frames run in it and whether the runtime has shown the app yet.
 #[derive(Debug)]
 pub(crate) struct StatusWatch {
     status: SessionStatus,
     frames: u32,
+    shown: bool,
 }
 
 impl Default for StatusWatch {
@@ -106,6 +107,7 @@ impl Default for StatusWatch {
         Self {
             status: SessionStatus::Idle,
             frames: 0,
+            shown: false,
         }
     }
 }
@@ -116,16 +118,24 @@ impl StatusWatch {
         self.frames = self.frames.saturating_add(1);
     }
 
-    // The change, if `status` differs from the status of the turn before.
+    // The change, if `status` differs from the status of the turn before. The app stays created
+    // until the runtime shows it for the first time. A session that begins and does not show yet
+    // is no stop, so an observer that collects from the start does not stop and start again.
     pub(crate) fn change(&mut self, status: SessionStatus) -> Option<StatusChange> {
         if status == self.status {
             return None;
         }
+        self.shown |= status.shows();
+        let lifecycle = if self.shown || status == SessionStatus::Exit {
+            status.lifecycle()
+        } else {
+            LifecycleState::Created
+        };
         let change = StatusChange {
             from: self.status,
             to: status,
             frames: std::mem::take(&mut self.frames),
-            lifecycle: status.lifecycle(),
+            lifecycle,
         };
         self.status = status;
         Some(change)
