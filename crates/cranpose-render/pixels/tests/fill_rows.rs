@@ -1,14 +1,15 @@
 // The rows of a fill in every pixel format the renderer draws: a clip that
 // cuts a fill's rows leaves the pixels the fill paints inside it, a fill no
-// pixel wide paints nothing, one a pixel wide paints its one column, and a
-// fill that reaches the last pixel of the buffer paints it.
+// pixel wide paints nothing, one a pixel wide paints its one column, a fill
+// that reaches the last pixel of the buffer paints it, and a rounded fill's
+// rows hold the pixels whose centres it covers.
 
 use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
 use cranpose_macros::composable;
 use cranpose_render_pixels::{Picture, PixelRect, PixelsRenderer, Rgb565Order};
 use cranpose_ui::{Box, BoxSpec, Modifier, Size};
-use cranpose_ui_graphics::{Brush, Color, CornerRadii, Rect};
+use cranpose_ui_graphics::{Brush, Color, CornerRadii, Point, Rect};
 
 const WIDTH: u32 = 64;
 const HEIGHT: u32 = 48;
@@ -146,6 +147,63 @@ fn Narrow() {
     );
 }
 
+// Rounded fills off the pixel grid, with corners of no radius, unequal
+// corners and corners wider than half the fill's height, through each row
+// loop of a fill: opaque, blended, a gradient down the rows, one across the
+// columns and a radial one.
+#[composable]
+fn Corners() {
+    Box(
+        Modifier::empty().fill_max_size().background(BACKGROUND),
+        BoxSpec::default(),
+        || {
+            Box(
+                Modifier::empty().fill_max_size().draw_behind(|scope| {
+                    let unequal = |top_left, top_right, bottom_right, bottom_left| CornerRadii {
+                        top_left,
+                        top_right,
+                        bottom_right,
+                        bottom_left,
+                    };
+                    let shapes = [
+                        (-4.4, 1.6, 21.7, 9.7, CornerRadii::uniform(4.5)),
+                        (19.7, 2.2, 21.1, 7.3, CornerRadii::uniform(6.0)),
+                        (43.5, 1.25, 23.0, 12.5, unequal(0.0, 7.5, 2.25, 5.0)),
+                        (3.75, 15.5, 25.5, 14.25, unequal(11.0, 0.0, 9.0, 1.0)),
+                        (31.2, 16.4, 28.9, 13.3, unequal(6.6, 3.1, 0.0, 13.0)),
+                        (5.5, 33.3, 52.25, 12.6, CornerRadii::uniform(6.3)),
+                    ];
+                    let translucent = Color(SOLID.0, SOLID.1, SOLID.2, 0.5);
+                    let radial =
+                        Brush::radial_gradient(vec![TOP, BOTTOM], Point::new(30.0, 38.0), 24.0);
+                    let brushes = [
+                        Brush::solid(SOLID),
+                        Brush::solid(translucent),
+                        gradient(),
+                        radial.clone(),
+                        Brush::horizontal_gradient(vec![TOP, BOTTOM], 31.0, 60.0),
+                        radial,
+                    ];
+                    for ((x, y, width, height, radii), brush) in shapes.into_iter().zip(brushes) {
+                        scope.draw_round_rect_at(
+                            Rect {
+                                x,
+                                y,
+                                width,
+                                height,
+                            },
+                            brush,
+                            radii,
+                        );
+                    }
+                }),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
 fn shell(content: impl FnMut() + 'static) -> AppShell<PixelsRenderer> {
     let mut shell = AppShell::new_with_size_and_density(
         PixelsRenderer::new(),
@@ -214,6 +272,30 @@ fn pictures(shell: &mut AppShell<PixelsRenderer>, format: Format) -> (Vec<u32>, 
             })
             .collect();
         (whole, by_pixel)
+    })
+}
+
+// The whole picture of `shell` in `format`, drawn a column at a time into
+// the same places: each row of a fill then takes its run within one
+// column, which tests that pixel's centre against the shape.
+fn by_columns(shell: &mut AppShell<PixelsRenderer>, format: Format) -> Vec<u32> {
+    shell.primary().with_renderer(|renderer| {
+        let mut picture = Picture::default();
+        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut Vec::new());
+        let columns: Vec<Vec<u32>> = (0..WIDTH)
+            .map(|x| {
+                let column = PixelRect {
+                    x,
+                    y: 0,
+                    width: 1,
+                    height: HEIGHT,
+                };
+                draw(renderer, &picture, format, column)
+            })
+            .collect();
+        (0..HEIGHT as usize)
+            .flat_map(|y| columns.iter().map(move |column| column[y]))
+            .collect()
     })
 }
 
@@ -370,5 +452,31 @@ fn a_fill_that_ends_at_the_buffer_s_last_pixel_paints_it() {
             whole[whole.len() - WIDTH as usize..],
             "{format:?}: the last row drawn alone"
         );
+    }
+}
+
+#[test]
+fn a_rounded_fill_s_rows_hold_the_pixels_whose_centres_it_covers() {
+    let mut corners = shell(Corners);
+    for format in FORMATS {
+        let (whole, _) = pictures(&mut corners, format);
+        let columns = by_columns(&mut corners, format);
+        let differ: Vec<(usize, usize)> = (0..whole.len())
+            .filter(|&at| whole[at] != columns[at])
+            .map(|at| (at % WIDTH as usize, at / WIDTH as usize))
+            .collect();
+        assert_eq!(
+            differ,
+            [],
+            "{format:?}: the pixels of the rounded fills drawn whole that differ from them drawn a column at a time"
+        );
+        let background = opaque(BACKGROUND_BYTES, format);
+        for (x, y) in [(6, 6), (30, 5), (55, 7), (15, 22), (45, 22), (30, 39)] {
+            assert_ne!(
+                at(&whole, x, y),
+                background,
+                "{format:?}: a rounded fill covers ({x}, {y})"
+            );
+        }
     }
 }
