@@ -277,8 +277,8 @@ pub(crate) struct TargetState {
     // The records the frame's changes leave and what of each they reach,
     // whose new areas the frame adds after its collect.
     changed: Vec<(RecordRef, Scope)>,
-    // The damage of the old areas, and whether one is not known, which each
-    // end of the frame starts from.
+    // The damage of the old areas, and whether one is not known, which the
+    // frame's end starts from.
     begun: (DamageRects, bool),
     // By row, the frame that marked the record and how a culled walk of
     // that frame takes it.
@@ -600,12 +600,35 @@ impl TargetState {
                 self.add(area);
             }
         }
+        self.write_damage(setting, root, damage);
+    }
+
+    // Writes into `damage` the frame's damage again for `root`, a later walk
+    // of the frame. That walk takes in every record an earlier walk took.
+    // The areas and the damage stay as the frame's end worked them out. The
+    // captures of `root`'s backdrops widen the damage.
+    pub(crate) fn end_again(&mut self, root: &LayerScene, damage: &mut Damage) {
+        if let (true, false, Some(setting)) = (self.recording, self.unknown_before, self.setting) {
+            self.write_damage(setting, Some(root), damage);
+        }
+    }
+
+    // Writes into `damage` the damage the frame's end worked out, widened by
+    // the captures of the backdrops of `root`, a walk of the frame.
+    fn write_damage(
+        &mut self,
+        setting: TargetSetting,
+        root: Option<&LayerScene>,
+        damage: &mut Damage,
+    ) {
         if self.whole {
             *damage = Damage::Full;
             return;
         }
-        if let Some(root) =
-            root.filter(|root| !self.damage.as_rects().is_empty() && root.contains_backdrop())
+        damage.assign_part(self.damage.as_rects());
+        if let (Some(root), Damage::Part(rects)) = (root, &mut *damage)
+            && !rects.is_empty()
+            && root.contains_backdrop()
         {
             self.captures.clear();
             let place = (setting.root_scale, setting.viewport);
@@ -613,9 +636,8 @@ impl TargetState {
                 *damage = Damage::Full;
                 return;
             }
-            widen(&self.captures, self.damage.rects_mut());
+            widen(&self.captures, rects);
         }
-        damage.assign_part(self.damage.as_rects());
         damage.settle(setting.viewport);
     }
 

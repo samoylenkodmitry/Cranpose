@@ -341,8 +341,13 @@ impl RendererFrontend {
         let root_layer = store.root_layer().expect("the scene has a root");
         let recycler = &mut self.scene_recyclers[self.returned_scenes];
         let overlay_backdrops = overlay.is_some_and(LayerScene::contains_backdrop);
-        let records = window && self.target.records();
-        let mut widened = false;
+        // Whether the walk records how it draws each record: only the first
+        // walk of a window frame that records does. A later walk takes in
+        // every record the first took. The records it adds did not change
+        // since the target kept their areas.
+        let mut records = window && self.target.records();
+        // Whether a walk of the frame ran before this one.
+        let mut again = false;
         let mut repaint = DamageRects::default();
         let root = loop {
             let culled = cull.as_ref().map(|region| self.target.cull(store, region));
@@ -359,10 +364,17 @@ impl RendererFrontend {
             if !window {
                 break root;
             }
-            self.target.end(store, Some(&root), &mut damage.damage);
-            damage.damage.add(overlay_damage, viewport);
-            if records {
-                self.root_shown = std::mem::take(&mut root.shown);
+            if !again {
+                self.target.end(store, Some(&root), &mut damage.damage);
+                damage.damage.add(overlay_damage, viewport);
+                if records {
+                    self.root_shown = std::mem::take(&mut root.shown);
+                }
+            } else if root.contains_backdrop() {
+                // A later walk takes every backdrop of the first walk. The
+                // captures of its backdrops widen the frame's damage again.
+                self.target.end_again(&root, &mut damage.damage);
+                damage.damage.add(overlay_damage, viewport);
             }
             let Some(region) = cull.as_mut() else {
                 break root;
@@ -375,12 +387,13 @@ impl RendererFrontend {
                 break root;
             }
             recycler.recycle(root);
-            if repainted && !widened {
+            if repainted && !again {
                 region.add_all(&repaint);
             } else {
                 *cull = None;
             }
-            widened = true;
+            again = true;
+            records = false;
         };
         if cull.is_none() {
             self.root_scene_capacity = root.scene.capacity_hint();
