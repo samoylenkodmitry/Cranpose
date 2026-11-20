@@ -1297,6 +1297,12 @@ the missing string for each hidden extension. A runtime that lists both families
 `XR_META_spatial_entity_persistence` is not used: the storage extension of `XR_FB_` keeps and loads
 anchors, and the query extension lists them.
 
+A Quest lists the stored anchors some frames after the start. Until then
+`AnchorCapabilities::persistence` is `AwaitingPermission`, so an app that loads what it kept waits for the
+list. The runtime takes the storage location of a query from the `next` of the query's filter and
+refuses a uuid or a component filter that has none with `ERROR_VALIDATION_FAILURE`. A location filter
+alone fails the same way, so the list of the anchors is a query with no filter.
+
 The prompt for `SCENE_UNDERSTANDING_COARSE` and `USE_SCENE` comes before the session, as the tracking
 prompts do, because the system takes an immersive app off the headset to show it. A feature that the
 user has not answered stays `AwaitingPermission`, and the backend looks at it once a second. A

@@ -24,7 +24,9 @@ impl SpatialSetup {
     //
     // Anchors need no permission: Meta's `USE_ANCHOR_API` is a normal one. Persistence on Android XR
     // and the planes of both runtimes wait for the user's answer to a prompt, so a request for them
-    // starts as `AwaitingPermission`.
+    // starts as `AwaitingPermission`. A Quest's persistence needs no prompt, but the runtime lists the
+    // stored anchors some frames after the start, so it starts as `AwaitingPermission` too, and the
+    // listing turns it `Active`.
     pub(crate) fn from_runtime(
         request: SpatialRequest,
         listed: SpatialOffer,
@@ -47,18 +49,17 @@ impl SpatialSetup {
                 (true, false) => TrackingAvailability::Offered,
                 (true, true) => asked_level,
             };
-        let persistence_level = if provider == Some(SpatialProvider::Android) {
-            TrackingAvailability::AwaitingPermission
-        } else {
-            TrackingAvailability::Active
-        };
         Self {
             request,
             enabled: listed.enabled_for(request),
             provider,
             anchors: AnchorCapabilities {
                 anchors: level(anchors, request.anchors, TrackingAvailability::Active),
-                persistence: level(persistence, request.anchors, persistence_level),
+                persistence: level(
+                    persistence,
+                    request.anchors,
+                    TrackingAvailability::AwaitingPermission,
+                ),
                 max_anchors: support.android_max_anchors.filter(|_| anchors),
             },
             planes: level(
