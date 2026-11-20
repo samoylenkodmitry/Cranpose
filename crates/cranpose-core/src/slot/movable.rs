@@ -6,8 +6,6 @@
 //! attached elsewhere, and a detached subtree can give up the movables
 //! nested inside it so each one is retained under its own identity.
 
-use smallvec::SmallVec;
-
 use super::{
     CheckedU32Delta, DetachedSubtree, GroupKey, GroupRecord, SlotTable, SlotWriteSession,
     checked_u32_delta, checked_usize_to_i64,
@@ -175,7 +173,11 @@ enum SplitMovables {
 const INLINE_OWNED_MOVABLES: usize = 16;
 
 enum SoleOwnedMovables {
-    Inline(SmallVec<[(Key, bool); INLINE_OWNED_MOVABLES]>),
+    Inline {
+        keys: [Key; INLINE_OWNED_MOVABLES],
+        len: u8,
+        kept_mask: u16,
+    },
     Map {
         owned: HashSet<Key>,
         kept: HashSet<Key>,
@@ -184,7 +186,8 @@ enum SoleOwnedMovables {
 
 impl SoleOwnedMovables {
     fn collect(payloads: &[super::PayloadRecord]) -> Self {
-        let mut inline = SmallVec::<[(Key, bool); INLINE_OWNED_MOVABLES]>::new();
+        let mut keys = [Key(0); INLINE_OWNED_MOVABLES];
+        let mut len = 0u8;
         let mut overflow: Option<HashSet<Key>> = None;
         for payload in payloads {
             let Some(id) = sole_owned_movable_id(&*payload.value) else {
@@ -192,10 +195,11 @@ impl SoleOwnedMovables {
             };
             if let Some(owned) = &mut overflow {
                 owned.insert(id);
-            } else if inline.len() < INLINE_OWNED_MOVABLES {
-                inline.push((id, false));
+            } else if usize::from(len) < INLINE_OWNED_MOVABLES {
+                keys[usize::from(len)] = id;
+                len += 1;
             } else {
-                let mut owned: HashSet<Key> = inline.drain(..).map(|(key, _)| key).collect();
+                let mut owned: HashSet<Key> = keys.into_iter().collect();
                 owned.insert(id);
                 overflow = Some(owned);
             }
@@ -205,16 +209,24 @@ impl SoleOwnedMovables {
                 owned,
                 kept: HashSet::default(),
             },
-            None => Self::Inline(inline),
+            None => Self::Inline {
+                keys,
+                len,
+                kept_mask: 0,
+            },
         }
     }
 
     fn mark_kept(&mut self, id: Key) -> bool {
         match self {
-            Self::Inline(entries) => {
-                for (key, kept) in entries.iter_mut() {
-                    if *key == id {
-                        *kept = true;
+            Self::Inline {
+                keys,
+                len,
+                kept_mask,
+            } => {
+                for (index, &key) in keys[..usize::from(*len)].iter().enumerate() {
+                    if key == id {
+                        *kept_mask |= 1u16 << index;
                         return true;
                     }
                 }
@@ -233,14 +245,21 @@ impl SoleOwnedMovables {
 
     fn was_kept(&self, id: Key) -> bool {
         match self {
-            Self::Inline(entries) => entries.iter().any(|&(key, kept)| kept && key == id),
+            Self::Inline {
+                keys,
+                len,
+                kept_mask,
+            } => keys[..usize::from(*len)]
+                .iter()
+                .enumerate()
+                .any(|(index, &key)| (*kept_mask & (1u16 << index)) != 0 && key == id),
             Self::Map { kept, .. } => kept.contains(&id),
         }
     }
 
     fn any_kept(&self) -> bool {
         match self {
-            Self::Inline(entries) => entries.iter().any(|&(_, kept)| kept),
+            Self::Inline { kept_mask, .. } => *kept_mask != 0,
             Self::Map { kept, .. } => !kept.is_empty(),
         }
     }
