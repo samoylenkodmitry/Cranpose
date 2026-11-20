@@ -101,11 +101,7 @@ impl DamageRects {
 
     // Adds `rect`, grown out to whole pixels, as `Merge::add` merges it.
     pub(crate) fn add(&mut self, rect: DeviceRect) {
-        Merge {
-            held: self,
-            partners: &mut None,
-        }
-        .add(rect);
+        self.run().add(rect);
     }
 
     // Adds every rect of `rects`. A list that holds none takes each as it

@@ -738,32 +738,31 @@ impl TargetState {
         setting: TargetSetting,
     ) -> Taken {
         let kept = self.shown(record);
+        let grid = PixelGrid::of(setting);
         let landed = match (moment, scope) {
             (Moment::Kept, _) => None,
             (Moment::Predicted, Scope::Own(within)) => {
-                kept.and_then(|shown| shown.landing(within, PixelGrid::of(setting)))
+                kept.and_then(|shown| shown.landing(within, grid))
             }
             (Moment::Predicted, Scope::Subtree | Scope::Placed) => {
-                self.landed_reach(store, record, PixelGrid::of(setting))
+                self.landed_reach(store, record, grid)
             }
         };
         if let Some(area) = landed {
             return Taken { area, passes: true };
         }
-        let placed = matches!(scope, Scope::Subtree | Scope::Placed);
-        kept.map_or(
-            Taken {
+        match (kept, scope) {
+            (Some(shown), Scope::Own(within)) => shown.own_part(within, grid),
+            (None, Scope::Own(_)) => Taken {
                 area: Area::Hidden,
-                passes: placed,
+                passes: false,
             },
-            |shown| match scope {
-                Scope::Subtree | Scope::Placed => Taken {
-                    area: shown.area,
-                    passes: true,
-                },
-                Scope::Own(within) => shown.own_part(within, PixelGrid::of(setting)),
+            // A moved, new or changed record may land anywhere.
+            (shown, Scope::Subtree | Scope::Placed) => Taken {
+                area: shown.map_or(Area::Hidden, |shown| shown.area),
+                passes: true,
             },
-        )
+        }
     }
 
     // The area of the topmost ancestor of `record` that holds the record's
