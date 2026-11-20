@@ -49,10 +49,11 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
                 {
                     self.fill_uniform_columns(rows);
                 } else {
-                    self.paint(
-                        |y, min_x, max_x| [rows.within(min_x, max_x).run(y), NO_RUN],
-                        |_| Coverage::of(1.0),
-                    );
+                    // `paint` asks for every row's runs within the clip's
+                    // columns.
+                    let bounds = self.clip_bounds;
+                    let mut runs = rows.within(bounds.min_x, bounds.max_x);
+                    self.paint(move |y, _, _| [runs.run(y), NO_RUN], |_| Coverage::of(1.0));
                 }
             }
         }
@@ -208,7 +209,7 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
     #[inline(never)]
     pub(super) fn paint(
         self,
-        runs: impl Fn(f32, i32, i32) -> RowRuns,
+        runs: impl FnMut(f32, i32, i32) -> RowRuns,
         coverage: impl Fn(Point) -> Coverage,
     ) {
         self.paint_rows(runs, coverage, None);
@@ -221,7 +222,7 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
     #[inline(never)]
     pub(super) fn paint_stroke(
         self,
-        runs: impl Fn(f32, i32, i32) -> RowRuns,
+        runs: impl FnMut(f32, i32, i32) -> RowRuns,
         coverage: impl Fn(Point) -> Coverage,
         mirror: Option<i32>,
     ) {
@@ -231,7 +232,7 @@ impl<P: Pixel> ShapeRows<'_, '_, P> {
     #[inline]
     fn paint_rows(
         self,
-        runs: impl Fn(f32, i32, i32) -> RowRuns,
+        mut runs: impl FnMut(f32, i32, i32) -> RowRuns,
         coverage: impl Fn(Point) -> Coverage,
         mirror: Option<i32>,
     ) {
