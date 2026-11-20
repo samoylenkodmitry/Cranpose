@@ -1,6 +1,12 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
-use cranpose::{PointerButton, PointerEventKind};
+use cranpose::{
+    PointerButton, PointerEventKind,
+    prelude::{Box as Layer, BoxSpec, Button, ButtonSpec, Modifier},
+};
 use cranpose_core::{CompositionLocalProvider, remember};
 use cranpose_testing::{
     create_headless_robot_test,
@@ -12,9 +18,10 @@ use crate::{
     Controller, HandAim, HandState, MovePolicy, Pinch, Pose, ResizeLimits, ResizePolicy,
     SpatialExternalSurface, SpatialMoveEvent, SpatialMoveEventType, SpatialPanel,
     SpatialResizeEvent, SpatialResizeEventType, SpatialVolume, StereoMode, SubspaceModifier,
-    TrackedPose, TrackingState,
+    TrackedPose, TrackingState, XrFrame,
     handle::HandleKind,
     pointer_aim::pointer_aim,
+    scripted_hand::{PinchCycle, ScriptedHand, play},
     space::{Mobility, SUBSPACE_ORIGIN, Shape, Space, local_space},
     volume_host::VolumeScene,
 };
@@ -1443,4 +1450,102 @@ fn an_app_that_did_not_ask_for_hand_tracking_gets_no_pointer_from_a_pinch() {
         assert_eq!(cursor, None);
     }
     assert_eq!(frames.pointer.beams(), [None, None]);
+}
+
+// A panel of 500 by 400 dp a meter ahead, as large as the headless window that shows its content.
+const BUTTON_PANEL: PanelSlot = PanelSlot {
+    id: 1,
+    kind: PanelKind::Content,
+    atlas: [0.0, 0.0, 500.0, 400.0],
+    pose: Pose::at([0.0, 0.0, -1.0]),
+    mobility: Mobility::Fixed,
+    shape: Shape::Flat,
+    resize: None,
+    room: [500.0, 400.0],
+    ride: Ride::Free,
+};
+
+// Where the center of the button below lies in the room: 100 dp from the panel's left edge and 50
+// dp from its top.
+const BUTTON_AT: [f32; 3] = [-0.15, 0.15, -1.0];
+
+// A window with a button of 200 by 100 dp at its top left, and the count of its clicks.
+fn counting_button() -> (RobotTestRule<TestRenderer>, Rc<Cell<u32>>) {
+    let clicks = Rc::new(Cell::new(0));
+    let counted = Rc::clone(&clicks);
+    let mut robot = create_headless_robot_test(500, 400, move || {
+        let counted = Rc::clone(&counted);
+        Button(
+            Modifier::empty().size_points(200.0, 100.0),
+            ButtonSpec::default(),
+            move || counted.set(counted.get() + 1),
+            || {
+                Layer(Modifier::empty(), BoxSpec::default(), || {});
+            },
+        );
+    });
+    robot.wait_for_idle();
+    (robot, clicks)
+}
+
+// The clicks that the button counts while the pointer follows `aims` in frames 10 ms apart, with
+// the events sent to the window as the frame loop of the headset sends them.
+fn clicks_of(aims: impl IntoIterator<Item = Option<Aim>>) -> u32 {
+    let (mut robot, clicks) = counting_button();
+    let mut pointer = Pointer::default();
+    for (frame, aim) in (0_u64..).zip(aims) {
+        let (events, _) = pointer.update([None, aim], millis(10 * frame), &[BUTTON_PANEL]);
+        for gesture in events {
+            match *gesture {
+                Gesture::Move { x, y } => robot.mouse_move(x, y),
+                Gesture::Press => robot.mouse_down(),
+                Gesture::Release => robot.mouse_up(),
+                Gesture::Leave => robot.mouse_move(-100_000.0, -100_000.0),
+            }
+        }
+        robot.wait_for_idle();
+    }
+    clicks.get()
+}
+
+fn millis(millis: u64) -> Duration {
+    Duration::from_millis(millis)
+}
+
+#[test]
+fn a_controller_press_on_a_button_counts_one_click() {
+    let trigger = [0.0, 0.0, 0.0, 0.8, 1.0, 1.0, 1.0, 0.6, 0.0, 0.0];
+    let clicks = clicks_of(
+        trigger
+            .into_iter()
+            .map(|trigger| aim_at([0.0, 0.0, 0.0], BUTTON_AT, trigger)),
+    );
+    assert_eq!(clicks, 1);
+}
+
+#[test]
+fn a_controller_trigger_that_never_comes_down_on_the_button_counts_no_click() {
+    let beside = [0.4, 0.15, -1.0];
+    let trigger = [0.0, 0.0, 1.0, 1.0, 0.0, 0.0];
+    let clicks = clicks_of(
+        trigger
+            .into_iter()
+            .map(|trigger| aim_at([0.0, 0.0, 0.0], beside, trigger)),
+    );
+    assert_eq!(clicks, 0);
+}
+
+#[test]
+fn a_pinch_on_a_button_counts_one_click_per_pinch() {
+    // Two cycles of the scripted hand: rest, close, hold and open, twice
+    let script = ScriptedHand::pointing(Side::Right, [0.0; 3], BUTTON_AT, PinchCycle::default());
+    let aims = (0_u64..600).map(|frame| {
+        let mut xr = XrFrame {
+            predicted_display_time: millis(10 * frame),
+            ..XrFrame::default()
+        };
+        play(&script, &mut xr);
+        pointer_aim(&Controller::default(), Some(&xr.right_hand))
+    });
+    assert_eq!(clicks_of(aims), 2);
 }

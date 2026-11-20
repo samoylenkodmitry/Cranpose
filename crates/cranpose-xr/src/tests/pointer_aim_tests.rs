@@ -129,23 +129,33 @@ fn a_hand_that_makes_the_system_gesture_points_at_nothing() {
     }
 }
 
+// A hand that the cameras track and the runtime gives no aim for: it has its joints only.
+fn joints_only() -> HandState {
+    HandState {
+        tracking_state: TrackingState::Tracking,
+        ..HandState::default()
+    }
+}
+
 #[test]
 fn a_runtime_without_the_aim_extension_points_through_the_hand_interaction_profile() {
-    let aim =
-        pointer_aim(&profile_hand(0.3, 0.8), Some(&HandState::default())).expect("the hand points");
+    let aim = pointer_aim(&profile_hand(0.3, 0.8), Some(&joints_only())).expect("the hand points");
     assert_eq!(aim.source, InputSource::Hands);
     assert_eq!(aim.pose, Pose::at([0.3, 0.0, 0.0]));
     assert_eq!(aim.trigger, 0.8);
     assert_eq!(aim.stick, 0.0);
-    // The same runtime tracks the joints of the hand, which add no aim
-    let joints_only = HandState {
-        tracking_state: TrackingState::Tracking,
-        ..HandState::default()
-    };
-    assert_eq!(
-        pointer_aim(&profile_hand(0.3, 0.8), Some(&joints_only)).map(|aim| aim.source),
-        Some(InputSource::Hands)
-    );
+}
+
+#[test]
+fn a_hand_interaction_profile_with_no_hand_tracked_points_at_nothing() {
+    // A Quest keeps the profile's aim valid while no hand is in view of its cameras
+    for tracking_state in [TrackingState::Paused, TrackingState::Stopped] {
+        let state = HandState {
+            tracking_state,
+            ..HandState::default()
+        };
+        assert_eq!(pointer_aim(&profile_hand(0.3, 0.8), Some(&state)), None);
+    }
 }
 
 #[test]
@@ -166,7 +176,7 @@ fn only_a_controllers_thumbstick_pushes() {
         thumbstick: touch.thumbstick,
         ..profile_hand(0.0, 0.0)
     };
-    let aim = pointer_aim(&hand_profile, Some(&HandState::default())).expect("it points");
+    let aim = pointer_aim(&hand_profile, Some(&joints_only())).expect("it points");
     assert_eq!(aim.stick, 0.0);
     assert_eq!(
         pointer_aim(&Controller::default(), Some(&hand(0.0, 0.0))).map(|aim| aim.stick),

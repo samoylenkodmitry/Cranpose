@@ -12,10 +12,14 @@ use crate::{
 // side: the two inputs of a side never mix, so a user can hold a controller in one hand and point
 // with the other.
 //
+// A hand points only while the cameras track it. A runtime keeps the hand interaction profile's
+// aim valid while no hand is in view: a Quest reports it with no hand tracked, and the pointer
+// would show a ray from nowhere.
+//
 // A tracked hand points by its aim from `XR_FB_hand_tracking_aim`, with the pinch of its index
-// finger as the trigger. A runtime without that extension, such as Android XR's, reports the same
-// through the hand interaction profile: the hand's `aim` pose, and a pinch that the profile binds
-// to the trigger. The hand interaction profile never counts as a controller, so a hand that
+// finger as the trigger. A runtime that tracks the joints but lacks that extension reports the
+// same through the hand interaction profile: the hand's `aim` pose, and a pinch that the profile
+// binds to the trigger. The hand interaction profile never counts as a controller, so a hand that
 // points through it is a hand in the rules above.
 pub(crate) fn pointer_aim(controller: &Controller, hand: Option<&HandState>) -> Option<Aim> {
     let by_hands = controller.profile.is_some_and(InteractionProfile::is_hand);
@@ -23,10 +27,10 @@ pub(crate) fn pointer_aim(controller: &Controller, hand: Option<&HandState>) -> 
         return Some(aim);
     }
     let hand = hand?;
-    match hand
-        .aim
-        .filter(|_| hand.tracking_state == TrackingState::Tracking)
-    {
+    if hand.tracking_state != TrackingState::Tracking {
+        return None;
+    }
+    match hand.aim {
         Some(aim) => of_hand(&aim),
         None if by_hands => of_controller(controller, InputSource::Hands),
         None => None,

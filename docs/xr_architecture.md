@@ -731,11 +731,15 @@ and `HandState`:
    and carries a `HandAim` gives the `Aim` of that aim pose, with the pinch strength of the index
    finger as the trigger and source `InputSource::Hands`. `XR_FB_hand_tracking_aim` fills it.
    A hand that makes the system gesture or presses the menu gives none.
-3. Otherwise, when the side's profile is `ExtHand` or `MicrosoftHand`, the controller's actions
-   give the `Aim`: the hand interaction profile binds the hand's `aim` pose and its pinch
-   (`aim_activate_ext/value`) to the same actions as a controller's. A runtime without the FB aim
-   extension reports the hand this way. A hand interaction profile never counts as a controller in
-   rule 1. The declaration gates it as well.
+3. Otherwise, when the side's profile is `ExtHand` or `MicrosoftHand`, the declaration is made and
+   the cameras track the hand (`Tracking`) with no `HandAim`, the controller's actions give the
+   `Aim`: the hand interaction profile binds the hand's `aim` pose and its pinch
+   (`aim_activate_ext/value`) to the same actions as a controller's. A runtime that tracks the
+   joints and lacks the FB aim extension reports the hand this way. A hand interaction profile
+   never counts as a controller in rule 1. It gives no aim while no hand is tracked: a Quest 3
+   reports the profile for both hands at the desk with a valid, active aim pose and a pinch value
+   near 0, so a pointer from it would show two rays from nowhere. The first build of this change
+   showed `Pointers L/R: hands / hands` there, with no hand in view, and the gate removed them.
 
 `Hand::update` in `pointer.rs` remembers the source of its last aim. A different source in the next
 frame resets the side as a lost aim does: the press ends with a `Release`, a carry or a resize
@@ -752,8 +756,10 @@ and cannot be pushed or pulled. `Haptics` asks for a side that a hand points for
 `HeadsetInput::sample` writes the chosen source of each side into `XrFrame::left_pointer` and
 `right_pointer` before the app's frame effects run. The demo's pointer line reads them.
 
-On a Quest 3 and in the Android XR emulator the runtime lists `XR_FB_hand_tracking_aim` and
-`XR_EXT_hand_interaction`. The emulator reports the `ExtHand` profile for both hands at rest.
+On a Quest 3 at the desk with the right Touch Plus controller awake, the demo reports
+`Pointers L/R: none / controller`: the controller points, and the hand interaction profile of the
+left hand gives nothing. On a Quest 3 and in the Android XR emulator the runtime lists
+`XR_FB_hand_tracking_aim` and `XR_EXT_hand_interaction`. The emulator reports the `ExtHand` profile for both hands at rest.
 Neither runtime was shown a hand of its own. No hand is in the Quest's view at the desk. The
 emulator release in use (37.2.13 with system image revision 7) rejects the hand messages that its
 own window sends to the guest ("Received unexpected message type from simulated input client"), so

@@ -356,9 +356,11 @@ as they take a controller, because one pointer serves both.
 - The hand's aim pose casts the ray, and the pinch strength of its index finger is the trigger. The
   controller's rules apply to it: a press starts above 0.6 and ends below 0.4, a press holds its
   point while the hand shakes, and it drags once the ray turns. The beam shows from the aim pose.
-- On a Meta Quest the aim comes from `XR_FB_hand_tracking_aim` (`HandAim`). A runtime without that
-  extension gives the hand's pointer through the hand interaction profile of
-  `XR_EXT_hand_interaction`, whose aim pose and pinch value come as a controller's actions do.
+- On a Meta Quest the aim comes from `XR_FB_hand_tracking_aim` (`HandAim`). A runtime that tracks
+  the joints and lacks that extension gives the hand's pointer through the hand interaction profile
+  of `XR_EXT_hand_interaction`, whose aim pose and pinch value come as a controller's actions do.
+  That profile points only while the cameras track the hand, because a Quest keeps its aim valid
+  with no hand in view.
 - A hand that makes the system's menu gesture, the palm turned up with a pinch, points at nothing.
   A pinch that is closed when a hand appears does not press either. Both press after the fingers
   open and close again.
