@@ -1120,10 +1120,24 @@ presses, right click, scroll, remap the buttons, mix a hand with a controller, a
 `src/tests/scripted_controller_tests.rs` plays two scripted controllers through the pointer: a carry,
 a right click and a scroll at the same time.
 
-Not run: the demo's scripted controllers on a headset or in the Android XR emulator. The emulator's
-system image (`system-images;android-34;google-xr;arm64-v8a`) was not installed on the machine that
-ran the change, and the Quest was off adb. The beams' rule, the buttons of a real controller and the
-feel of two hands at once are untested on a device. The long press and the zoom gesture ignore a
+Run on the Android XR emulator (system image android-34 `google-xr`, runtime "Android XR", system
+"Moohan"), with the demo built with `XR_DEMO_SCRIPTED_CONTROLLERS=two`: the session reaches `FOCUSED`
+(the permission prompt for hand tracking was declined), the log
+reports the `MetaTouchPlus` profile and `Controller` pointers for both hands, and screenshots show the
+following. The counter panel and the readout panel rise and come back together, with both triggers at
+100 percent in the readout, each beam on its own handle and both handles drawn larger. The readout
+panel's pad counts the secondary and the middle press (`Right 4, middle 2` after two script cycles), and
+its list scrolls under the right stick (`scrolled 320 dp` at a lean of 0.3), while the left controller
+presses the counter's button (`Pressed 6 times`). The pad and the list stand between the pattern surface
+and the torus's volume: a ray at the panel's top meets the pattern surface first, and a ray at its
+bottom meets the torus first, and a surface or a volume stops the ray as a panel does.
+
+With the controllers on, the frame has 16 layers of the 16 that the runtime takes, and 3 panels are
+left out. The clip's video surface is gone from the picture, which fits the back-to-front order: it
+stands farthest from the head. The other two layers were not identified. With no controller active, the same frame has 16 layers and none left
+out, because no beam shows. On a Quest 3 the system's "Finding position in room" dialog held the launch of the demo, and a press
+clears that dialog, so no frame ran there. The layer count of a Quest 3 and the buttons of a real
+controller are not measured. The long press and the zoom gesture work with a
 pointer that is not the primary one.
 
 ### Hands as pointers

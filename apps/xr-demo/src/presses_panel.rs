@@ -14,7 +14,7 @@ use player_demo::sized;
 use crate::{headset_readout::Readout, ray_target::RayTarget};
 
 // The panel's size in dp, which are millimeters.
-pub(crate) const SIZE: [f32; 2] = [400.0, 600.0];
+pub(crate) const SIZE: [f32; 2] = [400.0, 820.0];
 
 // The place of the panel in its subspace, which the scripted controllers read to find the handle
 // and the pad.
@@ -27,13 +27,15 @@ pub(crate) fn modifier() -> SubspaceModifier {
 }
 
 // The pad and the list stand at fixed places, so a scripted controller finds them without
-// measuring the text above them: their middles, in dp from the panel's top left corner.
+// measuring the text around them: their middles, in dp from the panel's top left corner. They stand
+// between two things that stop a ray before the panel: the pattern surface, which covers the panel's
+// top 230 dp, and the torus's volume, which stands in front of the panel from 590 dp down.
 const MARGIN: f32 = 24.0;
-const PAD_HEIGHT: f32 = 70.0;
-const LIST_HEIGHT: f32 = 100.0;
-const PAD_TOP: f32 = 400.0;
-const LIST_TOP: f32 = 490.0;
-const ROWS: u32 = 12;
+const PAD_HEIGHT: f32 = 60.0;
+const LIST_HEIGHT: f32 = 90.0;
+const PAD_TOP: f32 = 240.0;
+const LIST_TOP: f32 = 310.0;
+const ROWS: u32 = 40;
 const ROW_HEIGHT: f32 = 32.0;
 
 #[cfg_attr(
@@ -69,7 +71,9 @@ pub(crate) fn PressesPanel(
             BoxSpec::default(),
             move || {
                 Column(
-                    Modifier::empty().padding(MARGIN),
+                    Modifier::empty()
+                        .offset(0.0, LIST_TOP + LIST_HEIGHT)
+                        .padding(MARGIN),
                     ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(6.0)),
                     move || {
                         Text(
@@ -181,7 +185,7 @@ fn ClickPad() {
         BoxSpec::default().content_alignment(Alignment::CENTER),
         move || {
             Text(
-                format!("Right clicks {secondary}, middle {middle}"),
+                format!("Right {secondary}, middle {middle}"),
                 Modifier::empty(),
                 sized(20.0, Some(FontWeight::BOLD)),
             );
