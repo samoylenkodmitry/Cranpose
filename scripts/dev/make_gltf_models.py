@@ -65,7 +65,8 @@ def half_clear(side):
 
 
 def crate_texture(side):
-    """Magenta and lime tiles with a white frame: colors that no other part of the demo has."""
+    """Magenta and lime tiles with a white frame. The `model` build of the xr-demo shows only the crate,
+    so its screenshots hold these hues alone. The full demo's test patterns have them too."""
 
     def pixel(x, y):
         edge = min(x, y, side - 1 - x, side - 1 - y) < side // 16

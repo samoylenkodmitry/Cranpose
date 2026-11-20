@@ -7,7 +7,8 @@
 //!
 //! A [`SpatialVolume`] puts 3D content in a [`Subspace`]: composables whose nodes carry
 //! `mesh_surface`, which a headset draws once for each eye into one projection layer with depth,
-//! and a window shows in a box.
+//! and a window shows in a box. With the `gltf` feature, a `SpatialGltfModel` shows a glTF 2.0
+//! model there, with its textures and animations.
 //!
 //! A [`SpatialExternalSurface`] gives the app a surface that a hardware video decoder or a camera
 //! writes into. The compositor shows its pictures as a layer with no copy. A [`StreamedScene`]

@@ -110,7 +110,9 @@ impl LoadedModel {
 /// `SpatialGltfModelState`, which also lists the model's `nodes`. Cranpose has no counterpart of
 /// `nodes`.
 ///
-/// A copy of the state is a handle to the same state. Jetpack XR's state is `AutoCloseable`,
+/// A state serves one [`SpatialGltfModel`](crate::SpatialGltfModel): two composables on one state
+/// each advance its animations, so a clip runs twice as fast. A copy of the state is a handle to
+/// the same state. Jetpack XR's state is `AutoCloseable`,
 /// because it holds a native model. This one holds none, and it frees the model when the
 /// [`rememberSpatialGltfModelState`] that made it leaves the composition.
 #[derive(Clone, PartialEq)]

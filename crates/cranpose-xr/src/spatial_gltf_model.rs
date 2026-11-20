@@ -52,7 +52,8 @@ const DEFAULT_LIGHT: Light = Light {
 ///
 /// The scene shows the node tree of the file's default scene, each mesh with its node's
 /// transform and its material's base color: the base color texture, multiplied by the base color
-/// factor. Alpha modes `OPAQUE`, `MASK` and `BLEND` work as the format says. A texture wider or
+/// factor. The `OPAQUE` and `MASK` alpha modes work as the format says. `BLEND` keeps the alpha of
+/// the base color and leaves the blending to the scene. A texture wider or
 /// higher than 2048 pixels is halved until it fits. Everything else in a glTF material is left
 /// out: metallic, roughness, normal, occlusion and emissive values, texture transforms, and the
 /// sampler, so a texture clamps at its edges and never repeats. The scene draws every surface

@@ -277,9 +277,11 @@ nothing.
 
 ### glTF models on a Quest 3
 
-Measured on a Quest 3 (Horizon OS, runtime "Oculus" 210.137.0) from the compositor's screenshots
-(`adb exec-out screencap -p`) and `scripts/dev/xr_model_check.py`. The crate's texture has magenta
-and lime tiles in a white frame, and nothing else in the demo has those hues.
+Measured on a Quest 3 from the compositor's screenshots (`adb exec-out screencap -p`) and
+`scripts/dev/xr_model_check.py`. The crate's texture has magenta and lime tiles in a white frame. The
+`XR_DEMO_VOLUME=model` build shows the crate alone, so its screenshots hold those hues only in the
+crate. The full demo's test patterns have the same hues, so the numbers of the full demo come from
+the crate's region (`--region 3500,1500,4100,2000`, in the screenshot's pixels).
 
 | Build | Left eye | Right eye |
 | --- | --- | --- |
@@ -287,14 +289,15 @@ and lime tiles in a white frame, and nothing else in the demo has those hues.
 | the same, lime pixels | 99,682 | 99,116 |
 
 Three screenshots of one run differ by 0.1 percent. The two eyes see the crate from their own places,
-so their counts differ by about 1 percent. The picture shows three faces in each eye with the
-tiles upright. The full demo shows the crate beside the torus at 120 frames a second. At the
-demo's first head pose the right eye sees the crate at its lower right, and the left eye's view ends
-before it. In the crate's region, 33,000 magenta and 32,000 lime pixels show in the right eye, and
-63,000 pixels change their class between two screenshots a second apart, so the animation runs in
-the headset's frame loop. The crate adds no layer: the demo asks for 18 layers as before, the runtime takes 16, and
-two panels leave the frame (see "The layer limit"). The log has no `glTF model:` failure and no
-`the 3D content ends`.
+so their counts differ by about 1 percent. The picture shows three faces in each eye with the tiles
+upright. The full demo shows the crate beside the torus at 120 frames a second. At the demo's first
+head pose the right eye sees the crate at its lower right, and the left eye's view ends before it. In
+the crate's region of the right eye, 33,137 magenta and 32,355 lime pixels show, and 63,423 pixels
+change their class between two screenshots a second apart, so the animation runs in the headset's
+frame loop. The crate shares the projection layer of the torus's volume, so it adds no layer. The
+log shows the layer count that the earlier measurement of the depth test gave (18 asked, 16 taken,
+two panels left out; see "The layer limit"), with no change after the model loads. It has no
+`glTF model:` failure and no `the 3D content ends`.
 
 The `gltf` feature adds 770 KB to the stripped arm64 library of the demo, which is 11,835 KB without
 the feature and 12,605 KB with it. Both come from a local `release-fast` build. The build without

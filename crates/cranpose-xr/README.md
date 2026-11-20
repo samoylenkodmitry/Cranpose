@@ -226,8 +226,9 @@ glTF unit.
 
 The scene shows the node tree of the file's default scene with each node's transform. Each mesh
 carries its material's base color, which is the base color texture times the base color factor. The
-`OPAQUE`, `MASK` and `BLEND` alpha modes work. The scene has one directional light for all volumes.
-The model sets a default light, and the `content` callback may set another with `scope.light`.
+`OPAQUE` and `MASK` alpha modes work, and `BLEND` keeps the alpha of the base color. The scene has
+one directional light for all volumes. The model sets a default light, and the `content` callback
+may set another with `scope.light`.
 
 `GltfAnimation` (Jetpack XR's `GltfAnimation`) plays the translation, rotation and scale channels
 of a node, with the `LINEAR`, `STEP` and `CUBICSPLINE` interpolations: `start`, `stop`, `pause` and
