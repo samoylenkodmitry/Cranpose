@@ -223,7 +223,15 @@ impl<A: Applier + 'static> ApplierHost for ConcreteApplierHost<A> {
         }
     }
 
-    fn dispose_nodes(&self, disposal: NodeDisposal) -> Result<(), NodeError> {
+    fn dispose_nodes(&self, mut disposal: NodeDisposal) -> Result<(), NodeError> {
+        if !self.disposals.pending.get()
+            && disposal.nodes.is_empty()
+            && disposal.slot_hosts.is_empty()
+        {
+            let _teardown = crate::runtime::enter_state_teardown_scope();
+            disposal.lifecycle.flush_pending_drops();
+            return Ok(());
+        }
         self.disposals.enqueue(disposal);
         if let Ok(mut applier) = self.inner.try_borrow_mut() {
             return self.disposals.flush(&mut *applier, |applier, node| {
