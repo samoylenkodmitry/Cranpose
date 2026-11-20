@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 use crate::{
     TrackingFeature,
     extension_offer::ExtensionOffer,
-    openxr::{host::Host, session::SessionStatus},
+    openxr::host::Host,
+    session_status::SessionStatus,
     tracking_permission::{PermissionAnswer, PermissionStep, permission_step},
     tracking_request::service_of,
 };

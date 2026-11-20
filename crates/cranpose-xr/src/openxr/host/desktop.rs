@@ -8,7 +8,8 @@ use openxr as xr;
 
 use crate::{
     RunError,
-    openxr::{runner::run_immersive, runtime::Runtime, session::SessionStatus},
+    openxr::{runner::run_immersive, runtime::Runtime},
+    session_status::SessionStatus,
     tracking_permission::PermissionAnswer,
     tracking_request::TrackingRequest,
 };

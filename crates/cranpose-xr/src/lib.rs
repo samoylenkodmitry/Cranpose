@@ -98,6 +98,8 @@ mod render_viewpoint;
 mod resize;
 mod resize_limits;
 mod resize_policy;
+#[cfg(any(test, headset))]
+mod session_status;
 mod space;
 mod spatial_capabilities;
 mod spatial_curved_row;
