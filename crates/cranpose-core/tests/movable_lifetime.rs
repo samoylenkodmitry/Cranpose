@@ -798,7 +798,7 @@ fn fresh_remember_movable_shown_in_two_hosts_in_same_pass_keeps_single_instance(
                 let body_creations = Rc::clone(&body_creations);
                 let probe = Rc::clone(probe);
                 let content = rememberMovableContentOf(move || {
-                    let _ = remember(|| {
+                    let _initialized = remember(|| {
                         body_creations.set(body_creations.get() + 1);
                     });
                     probe.emit_movable_body(Vec::new(), None);
@@ -821,7 +821,10 @@ fn fresh_remember_movable_shown_in_two_hosts_in_same_pass_keeps_single_instance(
     // Pass 2: host_a releases the movable; host_b takes over the same instance.
     show_in_a.set_value(false);
     render(&mut rig);
-    let _ = rig.composition.process_invalid_scopes();
+    let _recomposed = rig
+        .composition
+        .process_invalid_scopes()
+        .expect("recompose pending movable");
     assert_eq!(body_creations.get(), 1);
     assert_eq!(rig.probe.unmounts.get(), 0);
 
