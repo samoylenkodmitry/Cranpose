@@ -90,7 +90,7 @@ pub(crate) fn controller_asks(
 ///
 /// A vibration reaches the controller in the next frame. A newer one replaces the one that still
 /// runs on the same hand, as in OpenXR's `xrApplyHapticFeedback`. The runtime drops a request that
-/// it rejects, such as one made while the session has no input focus. A hand that a tracked hand
+/// it rejects, such as one made while the session has no input focus. A side that a tracked hand
 /// points for, with no controller in it, has no motor: the backend drops the ask.
 #[derive(Clone)]
 pub struct Haptics {
