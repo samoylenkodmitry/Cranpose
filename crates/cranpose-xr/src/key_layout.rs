@@ -51,8 +51,8 @@ pub(crate) enum KeyKind {
 
 impl KeyKind {
     // The text on the key's cap. A letter shows in capitals while shift is on.
-    pub(crate) fn label(&self, capitals: bool) -> String {
-        match *self {
+    pub(crate) fn label(self, capitals: bool) -> String {
+        match self {
             Self::Char { ch, .. } if capitals => ch.to_ascii_uppercase().to_string(),
             Self::Char { ch, .. } => ch.to_string(),
             Self::Shift => "Shift".to_owned(),

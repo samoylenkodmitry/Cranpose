@@ -13,8 +13,8 @@ use cranpose_testing::{
 
 use super::*;
 use crate::{
-    Controller, Hand, InputSource, MovePolicy, Pose, Ray, SpatialMoveEventType, SpatialPanel,
-    SubspaceModifier, XrFrame,
+    Controller, Hand, InputSource, Pose, Ray, SpatialMoveEventType, SpatialPanel, SubspaceModifier,
+    XrFrame,
     key_layout::{self, KeyKind, Page},
     keyboard_panel::SoftKeyboardPanel,
     pointer::{Aim, Pointer},
@@ -360,8 +360,6 @@ fn the_keyboard_follows_the_panel_that_the_user_carries() {
         panels[2].pose,
         below(&carried, FIELD_PANEL, key_layout::SIZE)
     );
-    // The policy that leaves the pose to the app is not a carry of the keyboard either
-    let _ = MovePolicy::custom(|_| {});
 }
 
 #[test]

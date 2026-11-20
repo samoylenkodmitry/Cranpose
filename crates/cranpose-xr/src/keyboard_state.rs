@@ -35,7 +35,7 @@ pub(crate) struct KeyboardState {
 
 impl KeyboardState {
     // Whether the letters on the caps show in capitals.
-    pub(crate) fn capitals(&self) -> bool {
+    pub(crate) fn capitals(self) -> bool {
         self.shift != Shift::Off
     }
 
