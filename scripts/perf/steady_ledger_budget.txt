@@ -23,9 +23,9 @@
 # The rows of wall-t20, patchwork-t17, gauntlet-t16, gauntlet-t12, feed,
 # ticker, layers and dashboard come from one run at the head of #2406, the
 # text cache that keeps returning texts, on main 268b97781; spreads as before.
-# The copied rows of grid-layer and deep-layer come from one run at
-# f23698aa8 (A22 of #2247, one culled walk a frame) on main ffe937570, which
-# four runs of the branch's heads gave alike; spreads as before.
+# The copied rows of grid-layer and deep-layer and the malloc and realloc
+# rows of patchwork-t17 come from six runs at the heads of #2430, one culled
+# walk a frame, on main ffe937570: the highest of them; spreads as before.
 # The ticker's copied spread holds both modes of the scene store's shape
 # chunk compaction (`keep_live_runs`), whose copies differ by 2,920 B from
 # run to run of one binary for a reason not yet known (#2247).
@@ -47,8 +47,8 @@ wall-t20-start   group:modifiers              4.40       0.00
 wall-t20-start   group:text                   1.05       0.01
 wall-t20-start   group:app                    0.40       0.00
 wall-t20-start   group:other                  0.31       0.00
-patchwork-t17    malloc                    8751.95       3.58
-patchwork-t17    realloc                     32.17       0.20
+patchwork-t17    malloc                    8747.90       3.58
+patchwork-t17    realloc                     30.22       0.20
 patchwork-t17    live                       206.17       6.27
 patchwork-t17    copied                     676837      28084
 patchwork-t17    realloc_bytes               36077       6256
