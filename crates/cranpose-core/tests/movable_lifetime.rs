@@ -955,3 +955,229 @@ fn leaving_owner_with_live_handle_allows_same_pass_sibling_takeover() {
     render(&mut composition);
     probe.assert_disposed(&mut composition, node);
 }
+
+#[derive(Clone)]
+struct TakeoverProbe(Rc<LifecycleProbe>);
+
+impl PartialEq for TakeoverProbe {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+#[derive(Clone)]
+struct TakeoverHandle(Rc<RefCell<Option<MovableContent>>>);
+
+impl PartialEq for TakeoverHandle {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+#[cranpose_macros::composable]
+fn TakeoverOwnerBranch(probe: TakeoverProbe, shared: TakeoverHandle) {
+    let probe = Rc::clone(&probe.0);
+    let content = rememberMovableContentOf(move || probe.emit_movable_body(Vec::new(), None));
+    *shared.0.borrow_mut() = Some(content.clone());
+    emit_wrapper(|| content.show());
+}
+
+#[derive(Clone)]
+struct TakeoverCalls(Rc<Cell<usize>>);
+
+impl PartialEq for TakeoverCalls {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+#[cranpose_macros::composable]
+fn TakeoverTakerBranch(shared: TakeoverHandle, calls: TakeoverCalls, decline_on_wake: bool) {
+    let count = calls.0.get() + 1;
+    calls.0.set(count);
+    if (!decline_on_wake || count == 1)
+        && let Some(content) = shared.0.borrow().clone()
+    {
+        emit_wrapper(|| content.show());
+    }
+}
+
+struct TakeoverRig {
+    composition: Composition<MemoryApplier>,
+    show_a: MutableState<bool>,
+    show_b: MutableState<bool>,
+    shared: TakeoverHandle,
+    probe: TakeoverProbe,
+    taker_calls: TakeoverCalls,
+    decline_on_wake: bool,
+    root_key: Key,
+}
+
+impl TakeoverRig {
+    fn new(root_key: Key, decline_on_wake: bool) -> Self {
+        let composition = Composition::new(MemoryApplier::new());
+        let runtime = composition.runtime_handle();
+        Self {
+            show_a: MutableState::with_runtime(true, runtime.clone()),
+            show_b: MutableState::with_runtime(false, runtime),
+            shared: TakeoverHandle(Rc::new(RefCell::new(None))),
+            probe: TakeoverProbe(Rc::new(LifecycleProbe::default())),
+            taker_calls: TakeoverCalls(Rc::new(Cell::new(0))),
+            decline_on_wake,
+            composition,
+            root_key,
+        }
+    }
+
+    fn render(&mut self) {
+        let show_a = self.show_a;
+        let show_b = self.show_b;
+        let shared = self.shared.clone();
+        let probe = self.probe.clone();
+        let calls = self.taker_calls.clone();
+        let decline_on_wake = self.decline_on_wake;
+        self.composition
+            .render(self.root_key, move || {
+                if show_a.value() {
+                    TakeoverOwnerBranch(probe.clone(), shared.clone());
+                }
+                if show_b.value() {
+                    TakeoverTakerBranch(shared.clone(), calls.clone(), decline_on_wake);
+                }
+            })
+            .expect("render composition");
+    }
+    fn start_and_switch(&mut self) -> NodeId {
+        self.render();
+        let node = self
+            .probe
+            .0
+            .node
+            .get()
+            .expect("movable composed in the owner group");
+        self.show_a.set_value(false);
+        self.show_b.set_value(true);
+        self.render();
+        node
+    }
+}
+
+#[test]
+fn owner_group_leaves_while_another_group_takes_live_content() {
+    let mut rig = TakeoverRig::new(location_key(file!(), line!(), column!()), false);
+    let node = rig.start_and_switch();
+    assert_eq!(
+        rig.probe.0.node.get(),
+        Some(node),
+        "the other group takes the live content"
+    );
+    assert_eq!(
+        rig.probe.0.unmounts.get(),
+        0,
+        "the content survives the takeover"
+    );
+    assert!(
+        rig.composition
+            .applier_mut()
+            .get_mut(node)
+            .expect("node stays attached in taker")
+            .parent()
+            .is_some(),
+        "taken-over node is attached in the taker group"
+    );
+
+    rig.show_b.set_value(false);
+    rig.render();
+    rig.probe.0.assert_disposed(&mut rig.composition, node);
+}
+
+#[test]
+fn woken_taker_that_declines_content_still_disposes_orphaned_movable() {
+    let mut rig = TakeoverRig::new(location_key(file!(), line!(), column!()), true);
+    let node = rig.start_and_switch();
+    assert_eq!(rig.taker_calls.0.get(), 2, "taker recomposed after waking");
+    rig.probe.0.assert_disposed(&mut rig.composition, node);
+}
+
+#[test]
+fn owner_group_leaves_across_hosts_while_second_host_takes_live_content() {
+    let mut rig = TwoHostRig::new(location_key(file!(), line!(), column!()));
+    let runtime = rig.composition.runtime_handle();
+    let show_in_a = MutableState::with_runtime(true, runtime);
+    rig.show_in_b.set_value(false);
+
+    let render = |rig: &mut TwoHostRig| {
+        rig.render(move |shared_movable, probe| {
+            if show_in_a.value() {
+                let probe = Rc::clone(probe);
+                let content = rememberMovableContentOf(move || {
+                    probe.emit_movable_body(Vec::new(), None);
+                });
+                *shared_movable.borrow_mut() = Some(content.clone());
+                emit_wrapper(|| content.show());
+            }
+        });
+    };
+
+    render(&mut rig);
+    let node = rig.probe.node.get().expect("movable composed in host A");
+
+    // Host A leaves and drops the owner while host B takes the live handle
+    // later in the same outer pass.
+    show_in_a.set_value(false);
+    rig.show_in_b.set_value(true);
+    render(&mut rig);
+    assert_eq!(rig.probe.node.get(), Some(node));
+    assert_eq!(rig.probe.unmounts.get(), 0);
+    assert!(
+        rig.composition
+            .applier_mut()
+            .get_mut(node)
+            .expect("node stays attached in host B")
+            .parent()
+            .is_some(),
+        "taken-over node is attached in host B"
+    );
+
+    // Once host B hides it, it disposes because its owner left in host A.
+    rig.show_in_b.set_value(false);
+    render(&mut rig);
+    rig.probe.assert_disposed(&mut rig.composition, node);
+}
+
+#[test]
+fn sole_owned_movables_past_inline_limit_dispose_inline() {
+    const COUNT: usize = 20;
+    let mut composition = Composition::new(MemoryApplier::new());
+    let show = MutableState::with_runtime(true, composition.runtime_handle());
+    let drops = Rc::new(Cell::new(0usize));
+    let root_key = location_key(file!(), line!(), column!());
+
+    let render = |composition: &mut Composition<MemoryApplier>| {
+        let drops = Rc::clone(&drops);
+        composition
+            .render(root_key, move || {
+                if show.value() {
+                    for index in 0..COUNT {
+                        let drops = Rc::clone(&drops);
+                        with_current_composer(|composer| {
+                            composer.with_key(&index, |_| {
+                                let content = rememberMovableContentOf(move || {
+                                    let _drop = remember(|| DropCounter(Rc::clone(&drops)));
+                                });
+                                content.show();
+                            });
+                        });
+                    }
+                }
+            })
+            .expect("render composition");
+    };
+
+    render(&mut composition);
+    assert_eq!(drops.get(), 0);
+
+    show.set_value(false);
+    render(&mut composition);
+    assert_eq!(drops.get(), COUNT);
+}

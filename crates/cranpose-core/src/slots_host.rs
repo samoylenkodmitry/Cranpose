@@ -71,7 +71,6 @@ fn recycle_write_state(state: Box<slot::SlotWriteSessionState>) {
 
 impl Drop for SlotsHost {
     fn drop(&mut self) {
-        let _teardown = crate::runtime::enter_state_teardown_scope();
         let storage_key = self.storage_key.get();
         let inner = self.inner.get_mut();
         if let Some(state) = inner.runtime_state.clone() {

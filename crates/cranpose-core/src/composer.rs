@@ -14,13 +14,12 @@ use crate::{
     LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned, ProvidedValue, RecomposeOptions,
     RecomposeScope, RecomposeScopeInner, RecycledNode, RuntimeHandle, ScopeId, SlotId,
     SlotPassOutcome, SlotTable, SlotsHost, SnapshotStateList, SnapshotStateMap,
-    StaticCompositionLocal, SubcomposeState, composer_context,
-    retention::RetainKey,
-    runtime,
+    StaticCompositionLocal, SubcomposeState, composer_context, runtime,
     slot::{FinishGroupResult, GroupStartKind, PayloadKind, RootNodeIds, ValueSlotId},
 };
 
 mod composable_group;
+mod detach;
 mod movable;
 mod movable_owners;
 mod parent_frame;
@@ -110,16 +109,15 @@ struct GroupScopeEntry<'a> {
     parent_hint: Option<NodeId>,
 }
 
-struct SlotHostPassGuard<'a> {
+struct SlotHostPassGuard {
     core: Rc<ComposerCore>,
     host: Rc<SlotsHost>,
     /// The branch fold depth the pass began at.
     fold_base: usize,
-    movable_pass: Option<movable_owners::PassGuard<'a>>,
     active: bool,
 }
 
-impl SlotHostPassGuard<'_> {
+impl SlotHostPassGuard {
     fn close(&mut self) {
         if !self.active {
             return;
@@ -137,12 +135,12 @@ impl SlotHostPassGuard<'_> {
             }
         }
         self.core.branch_folds.end_pass(self.fold_base);
-        self.movable_pass = None;
+        self.core.shared_state.movable_owners.leave_pass_depth();
         self.active = false;
     }
 }
 
-impl Drop for SlotHostPassGuard<'_> {
+impl Drop for SlotHostPassGuard {
     fn drop(&mut self) {
         self.close();
     }
@@ -851,9 +849,9 @@ impl Composer {
         &self,
         slots: &Rc<SlotsHost>,
         mode: crate::slot::SlotPassMode,
-    ) -> SlotHostPassGuard<'_> {
+    ) -> SlotHostPassGuard {
         let slots = bind_slots_host_to_runtime_state(&self.core.shared_state, slots);
-        let movable_pass = self.core.shared_state.movable_owners.enter_pass();
+        self.core.shared_state.movable_owners.enter_pass_depth();
         let fold_base = self.core.branch_folds.len();
         slots.begin_pass(mode, &self.core.branch_folds);
         {
@@ -869,7 +867,6 @@ impl Composer {
             core: self.clone_core(),
             host: slots,
             fold_base,
-            movable_pass: Some(movable_pass),
             active: true,
         }
     }
@@ -879,8 +876,9 @@ impl Composer {
             let mut applier = self.core.applier.borrow_dyn();
             slots.finish_pass(&mut *applier)
         }?;
-        self.handle_detached_children_in_host(slots, None, finished.detached_root_children)?;
-        self.evict_retained_subtrees_for_host(slots)?;
+        self.core
+            .handle_detached_children_in_host(slots, None, finished.detached_root_children)?;
+        self.core.evict_retained_subtrees_for_host(slots)?;
         self.settle_pass_movables(slots)?;
         slots.complete_pass_cleanup(&finished.outcome);
         Ok(finished.outcome)
@@ -1110,91 +1108,6 @@ impl Composer {
         }
     }
 
-    fn dispose_detached_nodes(&self, nodes: &[NodeId]) {
-        if nodes.is_empty() {
-            return;
-        }
-        let mut commands = self.commands_mut();
-        for &id in nodes {
-            commands.push(Command::DisposeDetachedNode { id });
-        }
-    }
-
-    pub(super) fn retain_detached_subtree_in_host(
-        &self,
-        slots_host: &Rc<SlotsHost>,
-        parent_scope: Option<ScopeId>,
-        subtree: crate::slot::DetachedSubtree,
-    ) -> Result<(), NodeError> {
-        let Some(root_key) = subtree.root_key_checked() else {
-            log::error!("retention rejected detached subtree without a root group");
-            self.dispose_detached_subtree_in_host(slots_host, subtree)?;
-            return Ok(());
-        };
-        let root_nodes = subtree.collect_checked_root_nodes("retention");
-        let mut detaches = SmallVec::<[(NodeId, NodeId); 4]>::new();
-        {
-            let mut applier = self.borrow_applier();
-            for &root in &root_nodes {
-                if let Some(parent_id) = applier.get_mut(root)?.parent() {
-                    detaches.push((parent_id, root));
-                }
-            }
-        }
-        subtree.scopes().for_each(RecomposeScope::deactivate);
-        if !detaches.is_empty() {
-            let mut commands = self.commands_mut();
-            for (parent_id, child_id) in detaches {
-                commands.push(Command::DetachChild {
-                    parent_id,
-                    child_id,
-                });
-            }
-        }
-        let evicted = self.core.shared_state.insert_retained(
-            slots_host,
-            RetainKey::for_group(parent_scope, root_key),
-            subtree,
-            root_key.is_movable(),
-        );
-        for subtree in evicted {
-            self.dispose_detached_subtree_in_host(slots_host, subtree)?;
-        }
-        Ok(())
-    }
-
-    fn evict_retained_subtrees_for_host(
-        &self,
-        slots_host: &Rc<SlotsHost>,
-    ) -> Result<(), NodeError> {
-        let evicted = self.core.shared_state.advance_retention_pass(slots_host);
-        for subtree in evicted {
-            self.dispose_detached_subtree_in_host(slots_host, subtree)?;
-        }
-        Ok(())
-    }
-
-    pub(super) fn dispose_detached_subtree_in_host(
-        &self,
-        slots_host: &Rc<SlotsHost>,
-        subtree: crate::slot::DetachedSubtree,
-    ) -> Result<(), NodeError> {
-        let root_nodes = subtree.collect_checked_root_nodes("disposal");
-        {
-            let mut applier = self.borrow_applier();
-            for &root in &root_nodes {
-                applier.get_mut(root)?;
-            }
-        }
-        subtree.scopes().for_each(RecomposeScope::deactivate);
-        self.dispose_detached_nodes(&root_nodes);
-        slots_host.with_table_and_lifecycle_mut(|table, lifecycle| {
-            table.invalidate_detached_subtree_anchors(&subtree);
-            lifecycle.queue_subtree_disposal(subtree);
-        });
-        Ok(())
-    }
-
     fn handle_finished_group_result(
         &self,
         host: &Rc<SlotsHost>,
@@ -1214,11 +1127,12 @@ impl Composer {
         // retained or movable children detach from a leaving parent node first.
         if !detached_children.is_empty()
             && let Err(err) =
-                self.handle_detached_children_in_host(host, parent_scope, detached_children)
+                self.core
+                    .handle_detached_children_in_host(host, parent_scope, detached_children)
         {
             log::error!("detached subtree handling failed while closing a group: {err}");
         }
-        self.dispose_detached_nodes(&direct_nodes);
+        self.core.dispose_detached_nodes(&direct_nodes);
     }
 
     pub(crate) fn close_current_group_body_for_scope(&self, scope: &RecomposeScope) {

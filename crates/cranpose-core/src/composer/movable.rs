@@ -2,10 +2,12 @@
 
 use std::rc::{Rc, Weak};
 
-use super::ComposerRuntimeState;
+use smallvec::SmallVec;
+
+use super::{ComposerRuntimeState, DroppedMovable};
 use crate::{
-    AnchorId, Composer, Key, NodeError, RecomposeScope, RecomposeScopeInner, RetentionMode,
-    ScopeId, SlotsHost, retention::RetainKey,
+    AnchorId, Composer, ComposerCore, Key, NodeError, RecomposeScope, RecomposeScopeInner,
+    SlotsHost, retention::RetainKey,
 };
 
 pub(super) struct GroupEntry {
@@ -26,6 +28,7 @@ pub(crate) struct PendingMovable {
     pub(crate) key: crate::slot::GroupKey,
     pub(crate) placeholder: AnchorId,
     pub(crate) parent_scope: Option<Weak<RecomposeScopeInner>>,
+    pub(crate) woken: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -61,20 +64,28 @@ impl Composer {
             return;
         }
         let mut waiting = Vec::new();
-        for site in pending {
+        for mut site in pending {
             if !slots.borrow().group_is_active(site.placeholder) {
                 continue;
             }
             let retain_key = RetainKey::for_group(None, site.key);
             if !self.core.shared_state.movable_retained_anywhere(retain_key) {
+                site.woken = false;
                 waiting.push(site);
                 continue;
             }
             match site.parent_scope.as_ref().and_then(RecomposeScope::upgrade) {
-                Some(scope) => {
-                    scope.force_recompose();
-                    scope.invalidate();
+                Some(scope) if scope.is_effectively_active() => {
+                    if !site.woken {
+                        scope.force_recompose();
+                        scope.invalidate();
+                        site.woken = true;
+                        waiting.push(site);
+                    } else if scope.is_invalid() || self.core.root_render_requested.get() {
+                        waiting.push(site);
+                    }
                 }
+                Some(_) => {}
                 None => log::error!(
                     "movable content {:?} arrived for a site whose scope is gone",
                     site.key
@@ -90,93 +101,21 @@ impl Composer {
             let Some((host, subtree)) = self.core.shared_state.take_retained_movable(*id) else {
                 continue;
             };
-            self.dispose_movable_subtree_in_host(&host, subtree)?;
+            self.core.dispose_movable_subtree_in_host(&host, subtree)?;
             host.flush_pending_drops();
         }
-        self.dispose_dropped_movable_owners()
-    }
-
-    pub(super) fn handle_detached_children_in_host(
-        &self,
-        slots_host: &Rc<SlotsHost>,
-        parent_scope: Option<ScopeId>,
-        detached: Vec<crate::slot::DetachedSubtree>,
-    ) -> Result<(), NodeError> {
-        for mut subtree in detached {
-            let is_movable_root = subtree
-                .root_key_checked()
-                .is_some_and(crate::slot::GroupKey::is_movable);
-            let retention_mode = if is_movable_root {
-                RetentionMode::RetainWhenInactive
-            } else {
-                subtree
-                    .root_scope()
-                    .map_or_default(RecomposeScope::retention_mode)
-            };
-            let nested_movables =
-                if !is_movable_root && retention_mode == RetentionMode::DisposeWhenInactive {
-                    subtree.split_off_unowned_nested_movables()
-                } else {
-                    subtree.split_off_nested_movables()
-                };
-            for movable in nested_movables {
-                self.handle_detached_movable_in_host(slots_host, movable)?;
-            }
-            if is_movable_root {
-                self.handle_detached_movable_in_host(slots_host, subtree)?;
-                continue;
-            }
-            match retention_mode {
-                RetentionMode::DisposeWhenInactive => {
-                    self.dispose_detached_subtree_in_host(slots_host, subtree)?;
-                }
-                RetentionMode::RetainWhenInactive => {
-                    self.retain_detached_subtree_in_host(slots_host, parent_scope, subtree)?;
-                }
-            }
+        if !self.core.shared_state.movable_owners.in_nested_pass() {
+            self.dispose_dropped_movable_owners()?;
         }
         Ok(())
     }
 
-    pub(super) fn handle_detached_movable_in_host(
-        &self,
-        host: &Rc<SlotsHost>,
-        subtree: crate::slot::DetachedSubtree,
-    ) -> Result<(), NodeError> {
-        if self.should_dispose_detached_movable(&subtree) {
-            self.dispose_movable_subtree_in_host(host, subtree)
-        } else {
-            self.retain_detached_subtree_in_host(host, None, subtree)
-        }
-    }
-
-    fn should_dispose_detached_movable(&self, subtree: &crate::slot::DetachedSubtree) -> bool {
-        subtree
-            .root_key_checked()
-            .and_then(crate::slot::GroupKey::movable_id)
-            .is_some_and(|id| {
-                self.core
-                    .shared_state
-                    .movable_owners
-                    .take_disposed_attached(id)
-            })
-    }
-
-    fn dispose_movable_subtree_in_host(
-        &self,
-        host: &Rc<SlotsHost>,
-        mut subtree: crate::slot::DetachedSubtree,
-    ) -> Result<(), NodeError> {
-        for nested in subtree.split_off_unowned_nested_movables() {
-            self.handle_detached_movable_in_host(host, nested)?;
-        }
-        self.dispose_detached_subtree_in_host(host, subtree)
-    }
-
     pub(super) fn settle_pass_movables(&self, slots: &Rc<SlotsHost>) -> Result<(), NodeError> {
         slots.flush_pending_drops();
-        self.dispose_dropped_movable_owners()?;
         self.wake_sites_whose_movable_arrived();
+        if !self.core.shared_state.movable_owners.in_nested_pass() {
+            self.dispose_dropped_movable_owners()?;
+        }
         Ok(())
     }
 
@@ -190,13 +129,23 @@ impl Composer {
     #[cold]
     #[inline(never)]
     fn dispose_dropped_movable_owners_slow(&self) -> Result<(), NodeError> {
+        let mut deferred = SmallVec::<[DroppedMovable; 4]>::new();
         while let Some(dropped) = self.core.shared_state.movable_owners.pop_dropped() {
+            if self.core.shared_state.has_pending_movable(dropped.id)
+                && self
+                    .core
+                    .shared_state
+                    .movable_retained_anywhere(movable_retain_key(dropped.id))
+            {
+                deferred.push(dropped);
+                continue;
+            }
             if let Some((host, subtree)) = self
                 .core
                 .shared_state
                 .take_retained_movable_in(dropped.id, dropped.owner_host)
             {
-                self.dispose_movable_subtree_in_host(&host, subtree)?;
+                self.core.dispose_movable_subtree_in_host(&host, subtree)?;
                 host.flush_pending_drops();
             } else if self
                 .core
@@ -210,24 +159,22 @@ impl Composer {
                     .note_disposed_attached(dropped.id);
             }
         }
+        if !deferred.is_empty() {
+            self.core
+                .shared_state
+                .movable_owners
+                .requeue_dropped(deferred);
+        }
         Ok(())
     }
 
-    pub(super) fn resolve_group_entry(
+    pub(super) fn resolve_movable_group_entry(
         &self,
         host: &Rc<SlotsHost>,
         key: crate::slot::GroupKey,
-        parent_scope_id: Option<ScopeId>,
         lookup: MovableLookup,
     ) -> GroupEntry {
-        if lookup == MovableLookup::FreshUnshown {
-            return GroupEntry {
-                key,
-                restored: None,
-                placeholder_for: None,
-            };
-        }
-        let retain_key = RetainKey::for_group(parent_scope_id, key);
+        let retain_key = RetainKey::for_group(None, key);
         let restored = self
             .core
             .shared_state
@@ -240,7 +187,7 @@ impl Composer {
                     .flatten()
             })
             .map(Box::new);
-        if restored.is_some() || !key.is_movable() {
+        if restored.is_some() {
             return GroupEntry {
                 key,
                 restored,
@@ -292,7 +239,7 @@ impl Composer {
         log::error!(
             "movable content {key:?} could not be taken over by the slot table that asked for it"
         );
-        if let Err(error) = self.dispose_detached_subtree_in_host(host, subtree) {
+        if let Err(error) = self.core.dispose_detached_subtree_in_host(host, subtree) {
             log::error!("disposing movable content that could not move failed: {error}");
         }
         None
@@ -322,5 +269,53 @@ impl Composer {
                     .is_some_and(|holder| !Rc::ptr_eq(&holder, host))
             }
         }
+    }
+}
+
+#[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
+impl ComposerCore {
+    pub(super) fn handle_detached_movable_in_host(
+        &self,
+        host: &Rc<SlotsHost>,
+        subtree: crate::slot::DetachedSubtree,
+    ) -> Result<(), NodeError> {
+        if self.should_dispose_detached_movable(&subtree) {
+            self.dispose_movable_subtree_in_host(host, subtree)
+        } else {
+            self.retain_detached_subtree_in_host(host, None, subtree)
+        }
+    }
+
+    fn should_dispose_detached_movable(&self, subtree: &crate::slot::DetachedSubtree) -> bool {
+        let Some(id) = subtree
+            .root_key_checked()
+            .and_then(crate::slot::GroupKey::movable_id)
+        else {
+            return false;
+        };
+        if !self.shared_state.movable_owners.take_disposed_attached(id) {
+            return false;
+        }
+        if self.shared_state.has_pending_movable(id) {
+            self.shared_state
+                .movable_owners
+                .requeue_dropped([DroppedMovable {
+                    id,
+                    owner_host: None,
+                }]);
+            return false;
+        }
+        true
+    }
+
+    pub(super) fn dispose_movable_subtree_in_host(
+        &self,
+        host: &Rc<SlotsHost>,
+        mut subtree: crate::slot::DetachedSubtree,
+    ) -> Result<(), NodeError> {
+        for nested in subtree.split_off_unowned_nested_movables() {
+            self.handle_detached_movable_in_host(host, nested)?;
+        }
+        self.dispose_detached_subtree_in_host(host, subtree)
     }
 }

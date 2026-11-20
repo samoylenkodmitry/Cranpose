@@ -12,21 +12,29 @@ use crate::{
     with_current_composer,
 };
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MovableOwnerState {
+    NeverShown,
+    ShownInOwnerHost,
+    ShownOutsideOwnerHost,
+    DisposedWithSubtree,
+}
+
 struct RememberedMovable {
     id: Key,
     shared_state: Weak<ComposerRuntimeState>,
     owner_host_key: usize,
-    ever_shown: Cell<bool>,
-    shown_outside_owner_host: Cell<bool>,
+    state: Cell<MovableOwnerState>,
 }
 
 impl Drop for RememberedMovable {
     fn drop(&mut self) {
-        if !self.ever_shown.get() {
-            return;
-        }
+        let owner_host = match self.state.get() {
+            MovableOwnerState::NeverShown | MovableOwnerState::DisposedWithSubtree => return,
+            MovableOwnerState::ShownInOwnerHost => Some(self.owner_host_key),
+            MovableOwnerState::ShownOutsideOwnerHost => None,
+        };
         if let Some(state) = self.shared_state.upgrade() {
-            let owner_host = (!self.shown_outside_owner_host.get()).then_some(self.owner_host_key);
             state.on_movable_owner_dropped(self.id, owner_host);
         }
     }
@@ -43,7 +51,7 @@ pub(crate) fn sole_owned_movable_id(payload: &dyn std::any::Any) -> Option<Key> 
 // with its owning subtree, so dropping the owner performs no redundant lookup.
 pub(crate) fn disarm_remembered_movable(payload: &dyn std::any::Any) {
     if let Some(owned) = payload.downcast_ref::<crate::Owned<RememberedMovable>>() {
-        owned.with(|owner| owner.ever_shown.set(false));
+        owned.with(|owner| owner.state.set(MovableOwnerState::DisposedWithSubtree));
     }
 }
 
@@ -115,8 +123,7 @@ pub fn rememberMovableContentOf(content: impl Fn() + 'static) -> MovableContent 
             id: composer.runtime_handle().next_movable_content_id(),
             shared_state: composer.shared_state_weak(),
             owner_host_key: composer.active_slots_host_storage_key(),
-            ever_shown: Cell::new(false),
-            shown_outside_owner_host: Cell::new(false),
+            state: Cell::new(MovableOwnerState::NeverShown),
         });
         let id = owned.with(|owner| owner.id);
         (id, owned.downgrade())
@@ -165,17 +172,45 @@ impl MovableContent {
                 .as_ref()
                 .and_then(|owner| {
                     owner.with(|owner| {
-                        let first_show = !owner.ever_shown.replace(true);
-                        if composer.active_slots_host_storage_key() != owner.owner_host_key {
-                            owner.shown_outside_owner_host.set(true);
-                        }
-                        if first_show {
-                            MovableLookup::FreshUnshown
-                        } else if owner.shown_outside_owner_host.get() {
-                            MovableLookup::AnyHost
-                        } else {
-                            MovableLookup::OwnerHostOnly
-                        }
+                        let outside =
+                            composer.active_slots_host_storage_key() != owner.owner_host_key;
+                        let (next, lookup) = match owner.state.get() {
+                            MovableOwnerState::NeverShown => (
+                                if outside {
+                                    MovableOwnerState::ShownOutsideOwnerHost
+                                } else {
+                                    MovableOwnerState::ShownInOwnerHost
+                                },
+                                MovableLookup::FreshUnshown,
+                            ),
+                            MovableOwnerState::ShownInOwnerHost => {
+                                if outside {
+                                    (
+                                        MovableOwnerState::ShownOutsideOwnerHost,
+                                        MovableLookup::AnyHost,
+                                    )
+                                } else {
+                                    (
+                                        MovableOwnerState::ShownInOwnerHost,
+                                        MovableLookup::OwnerHostOnly,
+                                    )
+                                }
+                            }
+                            MovableOwnerState::ShownOutsideOwnerHost => (
+                                MovableOwnerState::ShownOutsideOwnerHost,
+                                MovableLookup::AnyHost,
+                            ),
+                            MovableOwnerState::DisposedWithSubtree => (
+                                if outside {
+                                    MovableOwnerState::ShownOutsideOwnerHost
+                                } else {
+                                    MovableOwnerState::ShownInOwnerHost
+                                },
+                                MovableLookup::AnyHost,
+                            ),
+                        };
+                        owner.state.set(next);
+                        lookup
                     })
                 })
                 .unwrap_or(MovableLookup::AnyHost);

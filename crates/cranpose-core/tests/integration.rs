@@ -3,6 +3,7 @@ mod blocking_work;
 mod callback_parameters;
 mod computed_locals;
 mod computed_state;
+mod deferred_parent_retention;
 mod derived_state_closure;
 mod derived_state_return;
 mod effect_cancellation;

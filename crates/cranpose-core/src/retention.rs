@@ -158,7 +158,7 @@ impl Default for RetentionManager {
 }
 
 #[derive(Clone, Copy)]
-enum RestoreRecord {
+pub(crate) enum RestoreRecord {
     Keep,
     ClearForDisposal,
 }
@@ -183,11 +183,11 @@ impl RetentionManager {
         self.take_with_mode(key, RestoreRecord::Keep)
     }
 
-    pub(crate) fn take_for_disposal(&mut self, key: RetainKey) -> Option<DetachedSubtree> {
-        self.take_with_mode(key, RestoreRecord::ClearForDisposal)
-    }
-
-    fn take_with_mode(&mut self, key: RetainKey, record: RestoreRecord) -> Option<DetachedSubtree> {
+    pub(crate) fn take_with_mode(
+        &mut self,
+        key: RetainKey,
+        record: RestoreRecord,
+    ) -> Option<DetachedSubtree> {
         let retained = self.groups.get(&key)?;
         if !retained_subtree_matches_key(&retained.subtree, key, "restore") {
             return None;
@@ -216,13 +216,8 @@ impl RetentionManager {
         Some(retained.subtree)
     }
 
-    pub(crate) fn reset_for_reuse(&mut self, policy: RetentionPolicy) {
-        self.groups.clear();
-        self.restored_at_by_key.clear();
-        self.policy = policy;
-        self.pass_clock = 0;
-        self.operation_clock = 0;
-        self.evictions_total = 0;
+    pub(crate) fn len(&self) -> usize {
+        self.groups.len()
     }
 
     pub(crate) fn is_small_for_reuse(&self) -> bool {

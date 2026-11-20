@@ -2,8 +2,8 @@ use std::{cell::Cell, hash::Hash, rc::Rc};
 
 use super::{GroupScopeEntry, PendingMovable, SlotHostPassGuard, scope_frame};
 use crate::{
-    BodyRun, Composer, Key, NodeId, RecomposeOptions, RecomposeScope, RetentionMode, SlotsHost,
-    explicit_group_key_seed, slot::GroupStart,
+    BodyRun, Composer, Key, NodeId, RecomposeOptions, RecomposeScope, RetentionMode, ScopeId,
+    SlotsHost, explicit_group_key_seed, retention::RetainKey, slot::GroupStart,
 };
 
 /// A group a composable call opened; [`ComposableGroup::close`] ends it
@@ -15,7 +15,7 @@ pub struct ComposableGroup<'a> {
     // The group's scope when it opened with one; `None` for a group whose
     // body makes its scope when it first needs one.
     scope: Option<RecomposeScope>,
-    pass: Option<SlotHostPassGuard<'a>>,
+    pass: Option<SlotHostPassGuard>,
     runs_body: bool,
     // Whether the group composes reused content, under which every group
     // runs its body.
@@ -178,6 +178,12 @@ impl Drop for ComposableGroup<'_> {
     }
 }
 
+enum RetentionParent {
+    Root,
+    Scope(ScopeId),
+    Deferred,
+}
+
 #[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
 impl Composer {
     fn scope_for_started_group(
@@ -197,69 +203,124 @@ impl Composer {
         scope
     }
 
+    fn retention_parent(&self) -> RetentionParent {
+        match self.core.scope_stack.borrow().last() {
+            None => RetentionParent::Root,
+            Some(frame) => match frame.scope() {
+                Some(scope) => RetentionParent::Scope(scope.id()),
+                None => RetentionParent::Deferred,
+            },
+        }
+    }
+
+    fn begin_fresh_group(
+        host: &Rc<SlotsHost>,
+        seed: crate::slot::GroupKeySeed,
+        parent_node: Option<NodeId>,
+    ) -> GroupStart<crate::slot::ActiveGroupId> {
+        host.with_write_session(|slots| {
+            let key = slots.reserve_group_key(seed);
+            slots.begin_group(key, None, parent_node)
+        })
+    }
+
     fn start_group(
         &self,
         host: &Rc<SlotsHost>,
         seed: crate::slot::GroupKeySeed,
+        parent_node: Option<NodeId>,
+    ) -> GroupStart<crate::slot::ActiveGroupId> {
+        if !self.core.shared_state.retains_any() {
+            return Self::begin_fresh_group(host, seed, parent_node);
+        }
+        let parent_scope_id = match self.retention_parent() {
+            RetentionParent::Root => None,
+            RetentionParent::Scope(id) => Some(id),
+            // A deferred parent has never held a scope id, so no retained
+            // group can be keyed under it.
+            RetentionParent::Deferred => return Self::begin_fresh_group(host, seed, parent_node),
+        };
+        let key = host.with_write_session(|slots| slots.reserve_group_key(seed));
+        let retain_key = RetainKey::for_group(parent_scope_id, key);
+        let restored = self
+            .core
+            .shared_state
+            .take_retained(host, retain_key, |subtree| {
+                host.with_write_session(|slots| slots.retained_restore_ready(key, subtree))
+            })
+            .map(Box::new);
+        host.with_write_session(|slots| slots.begin_group(key, restored, parent_node))
+    }
+
+    fn start_movable_group(
+        &self,
+        host: &Rc<SlotsHost>,
+        id: Key,
         parent_node: Option<NodeId>,
         lookup: super::MovableLookup,
     ) -> (
         GroupStart<crate::slot::ActiveGroupId>,
         Option<crate::slot::GroupKey>,
     ) {
+        let seed = crate::slot::GroupKeySeed::movable(id);
         if lookup == super::MovableLookup::FreshUnshown {
-            let started = host.with_write_session(|slots| {
-                let key = slots.reserve_group_key(seed);
-                slots.begin_group(key, None, parent_node)
-            });
-            return (started, None);
+            return (Self::begin_fresh_group(host, seed, parent_node), None);
         }
-        let key = if !self.core.shared_state.retains_any() {
-            match host.with_write_session(|slots| {
-                let key = slots.reserve_group_key(seed);
-                if key.is_movable() {
-                    Err(key)
-                } else {
-                    Ok(slots.begin_group(key, None, parent_node))
-                }
-            }) {
-                Ok(started) => return (started, None),
-                Err(key) => key,
-            }
-        } else {
-            host.with_write_session(|slots| slots.reserve_group_key(seed))
-        };
-        // Retained non-movable content is keyed by its parent's scope id; a
-        // deferred parent has never held a scope id, and movable content keys
-        // by its movable id alone.
-        let parent_scope_id = (!key.is_movable())
-            .then(|| {
-                self.core
-                    .scope_stack
-                    .borrow()
-                    .last()
-                    .and_then(super::ScopeFrame::scope)
-                    .map(RecomposeScope::id)
-            })
-            .flatten();
+        let key = host.with_write_session(|slots| slots.reserve_group_key(seed));
         let super::GroupEntry {
             key,
             restored,
             placeholder_for,
-        } = self.resolve_group_entry(host, key, parent_scope_id, lookup);
+        } = self.resolve_movable_group_entry(host, key, lookup);
         let started =
             host.with_write_session(|slots| slots.begin_group(key, restored, parent_node));
         (started, placeholder_for)
     }
 
     // Opens a group; returns its scope, `None` for one whose body makes it
-    // when it first needs one, whether its body runs and whether it forces
-    // the groups below it to run theirs.
+    // when it first needs one, and whether it forces the groups below it to
+    // run theirs.
     #[inline(never)]
     fn open_group_in_active_pass(
         &self,
         host: &Rc<SlotsHost>,
         key: crate::slot::GroupKeySeed,
+    ) -> (Option<RecomposeScope>, bool) {
+        let options = self.core.pending_scope_options.take().unwrap_or_default();
+        let parent_node = self.current_parent_hint();
+        let GroupStart {
+            group,
+            anchor,
+            scope,
+            kind,
+        } = self.start_group(host, key, parent_node);
+        if scope.is_none()
+            && !key.exact
+            && scope_frame::may_defer(options, kind)
+            && self.defers_scopes_here()
+        {
+            self.push_deferred_scope((group, anchor), kind, parent_node);
+            return (None, false);
+        }
+        let scope_ref = self.scope_for_started_group(host, group, scope);
+        let forces_content = self.enter_group_scope(
+            &scope_ref,
+            &GroupScopeEntry {
+                options,
+                start_kind: kind,
+                host,
+                group,
+                parent_hint: parent_node,
+            },
+        );
+        (Some(scope_ref), forces_content)
+    }
+
+    #[inline(never)]
+    fn open_movable_group_in_active_pass(
+        &self,
+        host: &Rc<SlotsHost>,
+        id: Key,
         lookup: super::MovableLookup,
     ) -> (Option<RecomposeScope>, bool, bool) {
         let options = self.core.pending_scope_options.take().unwrap_or_default();
@@ -272,18 +333,7 @@ impl Composer {
                 kind,
             },
             placeholder_for,
-        ) = self.start_group(host, key, parent_node, lookup);
-        // Movable content keeps its scope, which a move reparents its
-        // scopes from.
-        if scope.is_none()
-            && !key.exact
-            && placeholder_for.is_none()
-            && scope_frame::may_defer(options, kind)
-            && self.defers_scopes_here()
-        {
-            self.push_deferred_scope((group, anchor), kind, parent_node);
-            return (None, true, false);
-        }
+        ) = self.start_movable_group(host, id, parent_node, lookup);
         let scope_ref = self.scope_for_started_group(host, group, scope);
         if let Some(movable_key) = placeholder_for {
             let parent_scope = {
@@ -297,6 +347,7 @@ impl Composer {
                     key: movable_key,
                     placeholder: anchor,
                     parent_scope,
+                    woken: false,
                 },
             );
         }
@@ -358,24 +409,26 @@ impl Composer {
         }
     }
 
-    #[inline(never)]
-    fn open_group(&self, key: crate::slot::GroupKeySeed) -> ComposableGroup<'_> {
-        self.open_group_with_lookup(key, super::MovableLookup::AnyHost)
-    }
-
-    fn open_group_with_lookup(
-        &self,
-        key: crate::slot::GroupKeySeed,
-        lookup: super::MovableLookup,
-    ) -> ComposableGroup<'_> {
+    #[inline]
+    fn acquire_pass_host(&self) -> (Rc<SlotsHost>, Option<SlotHostPassGuard>) {
         let host = self.active_slots_host();
-        let (host, pass) = if host.has_active_pass() {
+        if host.has_active_pass() {
             (host, None)
         } else {
             let pass = self.begin_slot_host_pass(&host, crate::slot::SlotPassMode::Compose);
             (self.active_slots_host(), Some(pass))
-        };
-        let (scope, runs_body, forces_content) = self.open_group_in_active_pass(&host, key, lookup);
+        }
+    }
+
+    #[inline]
+    fn finish_open_group(
+        &self,
+        host: Rc<SlotsHost>,
+        pass: Option<SlotHostPassGuard>,
+        scope: Option<RecomposeScope>,
+        runs_body: bool,
+        forces_content: bool,
+    ) -> ComposableGroup<'_> {
         if let Some(scope) = &scope {
             scope.begin_reads();
         }
@@ -389,6 +442,20 @@ impl Composer {
             completed: false,
             body: Cell::new(Body::Runs),
         }
+    }
+
+    #[inline(never)]
+    fn open_group(&self, key: crate::slot::GroupKeySeed) -> ComposableGroup<'_> {
+        let (host, pass) = self.acquire_pass_host();
+        let (scope, forces_content) = self.open_group_in_active_pass(&host, key);
+        self.finish_open_group(host, pass, scope, true, forces_content)
+    }
+
+    fn open_movable_group(&self, id: Key, lookup: super::MovableLookup) -> ComposableGroup<'_> {
+        let (host, pass) = self.acquire_pass_host();
+        let (scope, runs_body, forces_content) =
+            self.open_movable_group_in_active_pass(&host, id, lookup);
+        self.finish_open_group(host, pass, scope, runs_body, forces_content)
     }
 
     #[doc(hidden)]
@@ -431,7 +498,7 @@ impl Composer {
         lookup: super::MovableLookup,
         f: impl FnOnce(&Self),
     ) {
-        let group = self.open_group_with_lookup(crate::slot::GroupKeySeed::movable(id), lookup);
+        let group = self.open_movable_group(id, lookup);
         if group.runs_body {
             f(self);
         }

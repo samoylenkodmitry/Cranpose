@@ -131,9 +131,6 @@ pub(crate) enum Command {
     RemoveNode {
         id: NodeId,
     },
-    DisposeDetachedNode {
-        id: NodeId,
-    },
     AttachChild {
         parent_id: NodeId,
         child_id: NodeId,
@@ -256,7 +253,6 @@ impl Command {
                     Err(err) => Err(err),
                 }
             }
-            Self::DisposeDetachedNode { id } => crate::slot::dispose_detached_node_now(applier, id),
             Self::AttachChild {
                 parent_id,
                 child_id,

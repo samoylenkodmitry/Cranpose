@@ -405,14 +405,23 @@ impl DetachedSubtree {
         collect_root_node_ids_from_records_into(&self.nodes, root_nodes);
     }
 
-    #[cfg(test)]
-    pub(crate) fn collect_root_nodes_checked_into(
+    fn append_checked_roots<T>(
         &self,
-        root_nodes: &mut Vec<NodeId>,
+        out: &mut impl Extend<T>,
         context: &'static str,
+        mut map: impl FnMut(&NodeRecord) -> T,
     ) {
-        root_nodes.clear();
-        root_nodes.extend(self.collect_checked_root_nodes(context));
+        let mut found = false;
+        out.extend(root_node_records(&self.nodes).map(|node| {
+            found = true;
+            map(node)
+        }));
+        if !found && !self.nodes.is_empty() {
+            log::error!(
+                "detached subtree nodes did not expose root metadata during {context}; falling back to every detached node"
+            );
+            out.extend(self.nodes.iter().map(map));
+        }
     }
 
     pub(crate) fn collect_checked_root_nodes(
@@ -420,25 +429,12 @@ impl DetachedSubtree {
         context: &'static str,
     ) -> SmallVec<[NodeId; 4]> {
         let mut roots = SmallVec::new();
-        roots.extend(root_node_records(&self.nodes).map(|node| node.id));
-        if roots.is_empty() && !self.nodes.is_empty() {
-            log::error!(
-                "detached subtree nodes did not expose root metadata during {context}; falling back to every detached node"
-            );
-            roots.extend(self.nodes.iter().map(|node| node.id));
-        }
+        self.append_checked_roots(&mut roots, context, |node| node.id);
         roots
     }
 
     pub(crate) fn append_disposal_roots(&self, roots: &mut Vec<(NodeId, u32)>) {
-        let original_len = roots.len();
-        roots.extend(root_node_records(&self.nodes).map(|node| (node.id, node.generation)));
-        if roots.len() == original_len && !self.nodes.is_empty() {
-            log::error!(
-                "detached subtree nodes did not expose root metadata during host disposal; falling back to every detached node"
-            );
-            roots.extend(self.nodes.iter().map(|node| (node.id, node.generation)));
-        }
+        self.append_checked_roots(roots, "host disposal", |node| (node.id, node.generation));
     }
 
     pub(crate) fn group_count(&self) -> usize {

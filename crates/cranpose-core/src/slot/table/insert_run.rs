@@ -25,11 +25,23 @@ const PARK_AFTER_INSERTS: u32 = 16;
 // avoids three allocations per parked insert run without per-host memory.
 const SPARE_PARKED_TAILS: usize = 2;
 
+// The most records a kept tail buffer has room for. A larger one grew during a
+// large table shift, and keeping it would hold its memory on this thread.
+const SPARE_PARKED_TAIL_CAPACITY: usize = 1024;
+
 #[derive(Default)]
 pub(crate) struct ParkedTailStorage {
     groups: Vec<GroupRecord>,
     nodes: Vec<NodeRecord>,
     payload_order: Vec<u32>,
+}
+
+impl ParkedTailStorage {
+    fn is_small_for_reuse(&self) -> bool {
+        self.groups.capacity() <= SPARE_PARKED_TAIL_CAPACITY
+            && self.nodes.capacity() <= SPARE_PARKED_TAIL_CAPACITY
+            && self.payload_order.capacity() <= SPARE_PARKED_TAIL_CAPACITY
+    }
 }
 
 fn spare_parked_tail() -> ParkedTailStorage {
@@ -39,6 +51,9 @@ fn spare_parked_tail() -> ParkedTailStorage {
 }
 
 fn recycle_parked_tail(mut storage: ParkedTailStorage) {
+    if !storage.is_small_for_reuse() {
+        return;
+    }
     storage.groups.clear();
     storage.nodes.clear();
     storage.payload_order.clear();
@@ -173,8 +188,12 @@ impl SlotTable {
             return;
         };
         let mut storage = spare_parked_tail();
-        storage.groups.clear();
-        storage.nodes.clear();
+        debug_assert!(
+            storage.groups.is_empty()
+                && storage.nodes.is_empty()
+                && storage.payload_order.is_empty(),
+            "spare parked tail must be cleared before reuse"
+        );
         storage.groups.extend(self.groups.drain(tail_start..));
         storage.nodes.extend(self.nodes.drain(node_start..));
         self.payloads
@@ -225,4 +244,36 @@ impl SlotTable {
 // of the run's records.
 fn start_delta(run_end: usize, parked_start: usize, field: &'static str) -> i64 {
     checked_usize_to_i64(run_end, field) - checked_usize_to_i64(parked_start, field)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oversized_parked_tail_is_dropped_instead_of_recycled() {
+        // Drain any existing thread-local spares so we inspect only this test's.
+        crate::thread_state::runtimes(|state| {
+            state.spare_parked_tails.borrow_mut().clear();
+        });
+
+        let oversized = ParkedTailStorage {
+            groups: Vec::with_capacity(SPARE_PARKED_TAIL_CAPACITY + 1),
+            nodes: Vec::new(),
+            payload_order: Vec::new(),
+        };
+        recycle_parked_tail(oversized);
+        let kept = crate::thread_state::runtimes(|state| state.spare_parked_tails.borrow().len());
+        assert_eq!(kept, 0, "tail buffer past capacity bound must not be kept");
+
+        let small = ParkedTailStorage {
+            groups: Vec::with_capacity(16),
+            nodes: Vec::with_capacity(16),
+            payload_order: Vec::with_capacity(16),
+        };
+        recycle_parked_tail(small);
+        let kept = crate::thread_state::runtimes(|state| state.spare_parked_tails.borrow().len());
+        assert_eq!(kept, 1, "small tail buffer is kept for reuse");
+        drop(spare_parked_tail());
+    }
 }

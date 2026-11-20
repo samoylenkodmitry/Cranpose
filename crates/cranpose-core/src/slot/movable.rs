@@ -6,6 +6,8 @@
 //! attached elsewhere, and a detached subtree can give up the movables
 //! nested inside it so each one is retained under its own identity.
 
+use smallvec::SmallVec;
+
 use super::{
     CheckedU32Delta, DetachedSubtree, GroupKey, GroupRecord, SlotTable, SlotWriteSession,
     checked_u32_delta, checked_usize_to_i64,
@@ -13,7 +15,7 @@ use super::{
 };
 use crate::{
     AnchorId, Key,
-    collections::map::{HashMap, HashSet},
+    collections::map::HashMap,
     movable_content::{disarm_remembered_movable, sole_owned_movable_id},
     slot::PayloadAnchor,
 };
@@ -172,96 +174,55 @@ enum SplitMovables {
 
 const INLINE_OWNED_MOVABLES: usize = 16;
 
-enum SoleOwnedMovables {
-    Inline {
-        keys: [Key; INLINE_OWNED_MOVABLES],
-        len: u8,
-        kept_mask: u16,
-    },
-    Map {
-        owned: HashSet<Key>,
-        kept: HashSet<Key>,
-    },
+#[derive(Default)]
+struct SoleOwnedMovables {
+    entries: SmallVec<[(Key, bool); INLINE_OWNED_MOVABLES]>,
+    collected: bool,
+    sorted: bool,
+    kept_any: bool,
 }
 
 impl SoleOwnedMovables {
-    fn collect(payloads: &[super::PayloadRecord]) -> Self {
-        let mut keys = [Key(0); INLINE_OWNED_MOVABLES];
-        let mut len = 0u8;
-        let mut overflow: Option<HashSet<Key>> = None;
+    fn ensure_collected(&mut self, payloads: &[super::PayloadRecord]) {
+        if self.collected {
+            return;
+        }
+        self.collected = true;
         for payload in payloads {
-            let Some(id) = sole_owned_movable_id(&*payload.value) else {
-                continue;
-            };
-            if let Some(owned) = &mut overflow {
-                owned.insert(id);
-            } else if usize::from(len) < INLINE_OWNED_MOVABLES {
-                keys[usize::from(len)] = id;
-                len += 1;
-            } else {
-                let mut owned: HashSet<Key> = keys.into_iter().collect();
-                owned.insert(id);
-                overflow = Some(owned);
+            if let Some(id) = sole_owned_movable_id(&*payload.value) {
+                self.entries.push((id, false));
             }
         }
-        match overflow {
-            Some(owned) => Self::Map {
-                owned,
-                kept: HashSet::default(),
-            },
-            None => Self::Inline {
-                keys,
-                len,
-                kept_mask: 0,
-            },
+        if self.entries.len() > INLINE_OWNED_MOVABLES {
+            self.entries.sort_unstable_by_key(|&(id, _)| id);
+            self.sorted = true;
+        }
+    }
+
+    fn find_index(&self, id: Key) -> Option<usize> {
+        if self.sorted {
+            self.entries.binary_search_by_key(&id, |&(key, _)| key).ok()
+        } else {
+            self.entries.iter().position(|&(key, _)| key == id)
         }
     }
 
     fn mark_kept(&mut self, id: Key) -> bool {
-        match self {
-            Self::Inline {
-                keys,
-                len,
-                kept_mask,
-            } => {
-                for (index, &key) in keys[..usize::from(*len)].iter().enumerate() {
-                    if key == id {
-                        *kept_mask |= 1u16 << index;
-                        return true;
-                    }
-                }
-                false
-            }
-            Self::Map { owned, kept } => {
-                if owned.contains(&id) {
-                    kept.insert(id);
-                    true
-                } else {
-                    false
-                }
-            }
-        }
+        let Some(index) = self.find_index(id) else {
+            return false;
+        };
+        self.entries[index].1 = true;
+        self.kept_any = true;
+        true
     }
 
     fn was_kept(&self, id: Key) -> bool {
-        match self {
-            Self::Inline {
-                keys,
-                len,
-                kept_mask,
-            } => keys[..usize::from(*len)]
-                .iter()
-                .enumerate()
-                .any(|(index, &key)| (*kept_mask & (1u16 << index)) != 0 && key == id),
-            Self::Map { kept, .. } => kept.contains(&id),
-        }
+        self.find_index(id)
+            .is_some_and(|index| self.entries[index].1)
     }
 
     fn any_kept(&self) -> bool {
-        match self {
-            Self::Inline { kept_mask, .. } => *kept_mask != 0,
-            Self::Map { kept, .. } => !kept.is_empty(),
-        }
+        self.kept_any
     }
 }
 
@@ -280,7 +241,7 @@ impl DetachedSubtree {
 
     fn split_off_nested_movables_with(&mut self, mode: SplitMovables) -> Vec<Self> {
         let mut split = Vec::new();
-        let mut owned: Option<SoleOwnedMovables> = None;
+        let mut owned = SoleOwnedMovables::default();
         let mut index = 1;
         while index < self.groups.len() {
             let group = &self.groups[index];
@@ -288,15 +249,14 @@ impl DetachedSubtree {
                 index += 1;
                 continue;
             };
-            if mode == SplitMovables::SkipSoleOwnedInSubtree
-                && owned
-                    .get_or_insert_with(|| SoleOwnedMovables::collect(&self.payloads))
-                    .mark_kept(movable_id)
-            {
-                // Keep this movable inside the disposed subtree, but continue
-                // scanning inside it so any nested unowned movables still split.
-                index += 1;
-                continue;
+            if mode == SplitMovables::SkipSoleOwnedInSubtree {
+                owned.ensure_collected(&self.payloads);
+                if owned.mark_kept(movable_id) {
+                    // Keep this movable inside the disposed subtree, but continue
+                    // scanning inside it so any nested unowned movables still split.
+                    index += 1;
+                    continue;
+                }
             }
             let len = group.subtree_len as usize;
             let Some(end) = index
@@ -316,9 +276,7 @@ impl DetachedSubtree {
             }
             split.push(self.split_range(index, end));
         }
-        if let Some(owned) = owned
-            && owned.any_kept()
-        {
+        if owned.any_kept() {
             for payload in &self.payloads {
                 if let Some(id) = sole_owned_movable_id(&*payload.value)
                     && owned.was_kept(id)

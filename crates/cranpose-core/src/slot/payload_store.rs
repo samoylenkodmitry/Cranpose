@@ -68,7 +68,10 @@ impl PayloadStore {
     }
 
     pub(in crate::slot) fn split_off_order_into(&mut self, index: usize, out: &mut Vec<u32>) {
-        out.clear();
+        debug_assert!(
+            out.is_empty(),
+            "split_off_order_into expects an empty buffer"
+        );
         out.extend(self.order.drain(index..));
         self.note_shift(out.len());
     }

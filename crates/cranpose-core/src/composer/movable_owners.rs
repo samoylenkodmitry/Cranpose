@@ -10,13 +10,7 @@ pub(crate) struct PassGuard<'a> {
 
 impl Drop for PassGuard<'_> {
     fn drop(&mut self) {
-        let depth = self
-            .owners
-            .active_passes
-            .get()
-            .checked_sub(1)
-            .expect("movable compose pass guard unbalanced");
-        self.owners.active_passes.set(depth);
+        self.owners.leave_pass_depth();
     }
 }
 
@@ -36,14 +30,27 @@ pub(crate) struct MovableOwners {
 }
 
 impl MovableOwners {
+    #[inline]
+    pub(crate) fn enter_pass_depth(&self) {
+        let depth = self.active_passes.get();
+        debug_assert!(depth < usize::MAX, "movable compose pass depth overflow");
+        self.active_passes.set(depth.saturating_add(1));
+    }
+
+    #[inline]
+    pub(crate) fn leave_pass_depth(&self) {
+        let depth = self.active_passes.get();
+        debug_assert!(depth > 0, "movable compose pass guard unbalanced");
+        self.active_passes.set(depth.saturating_sub(1));
+    }
+
     pub(crate) fn enter_pass(&self) -> PassGuard<'_> {
-        let depth = self
-            .active_passes
-            .get()
-            .checked_add(1)
-            .expect("movable compose pass depth overflow");
-        self.active_passes.set(depth);
+        self.enter_pass_depth();
         PassGuard { owners: self }
+    }
+
+    pub(crate) fn in_nested_pass(&self) -> bool {
+        self.active_passes.get() > 1
     }
 
     pub(crate) fn record_dropped_in_pass(&self, dropped: DroppedMovable) -> bool {
@@ -52,6 +59,21 @@ impl MovableOwners {
         }
         self.dropped.borrow_mut().push(dropped);
         true
+    }
+
+    pub(crate) fn requeue_dropped(&self, deferred: impl IntoIterator<Item = DroppedMovable>) {
+        self.dropped.borrow_mut().extend(deferred);
+    }
+
+    pub(crate) fn clear_dropped_owner_host(&self, id: Key) {
+        if self.dropped.borrow().is_empty() {
+            return;
+        }
+        for dropped in self.dropped.borrow_mut().iter_mut() {
+            if dropped.id == id {
+                dropped.owner_host = None;
+            }
+        }
     }
 
     pub(crate) fn has_dropped(&self) -> bool {

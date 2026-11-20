@@ -10,7 +10,7 @@ use super::{DroppedMovable, MovableOwners, PendingMovable, movable_retain_key, s
 use crate::{
     ApplierHost, Key, RecomposeScope, RetentionPolicy, SlotTable, SlotsHost,
     collections::map::HashMap,
-    retention::{RetainKey, RetentionManager},
+    retention::{RestoreRecord, RetainKey, RetentionManager},
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -19,15 +19,9 @@ pub(crate) enum HostTableDisposal {
     DisposeWithRetained,
 }
 
-#[derive(Clone, Copy)]
-enum RetainedTakeMode {
-    Restore,
-    Dispose,
-}
-
 pub(crate) struct ComposerRuntimeState {
     retention_by_host: RefCell<HashMap<usize, RetentionManager>>,
-    spare_retention: RefCell<Option<RetentionManager>>,
+    retained_groups: Cell<usize>,
     pending_movables_by_host: RefCell<HashMap<usize, Vec<PendingMovable>>>,
     retention_policy: Cell<RetentionPolicy>,
     live_hosts: RefCell<HashMap<usize, Weak<SlotsHost>>>,
@@ -41,7 +35,7 @@ impl Default for ComposerRuntimeState {
     fn default() -> Self {
         Self {
             retention_by_host: RefCell::new(HashMap::default()),
-            spare_retention: RefCell::new(None),
+            retained_groups: Cell::new(0),
             pending_movables_by_host: RefCell::new(HashMap::default()),
             retention_policy: Cell::new(RetentionPolicy::default()),
             live_hosts: RefCell::new(HashMap::default()),
@@ -54,8 +48,24 @@ impl Default for ComposerRuntimeState {
 }
 
 impl ComposerRuntimeState {
+    fn add_retained_groups(&self, count: usize) {
+        self.retained_groups
+            .set(self.retained_groups.get().saturating_add(count));
+    }
+
+    fn sub_retained_groups(&self, count: usize) {
+        let current = self.retained_groups.get();
+        debug_assert!(
+            current >= count,
+            "retained group count underflow: {current} < {count}"
+        );
+        self.retained_groups.set(current.saturating_sub(count));
+    }
+
     pub(crate) fn clear_host_storage_key(&self, host_key: usize, table: &mut SlotTable) {
-        self.retention_by_host.borrow_mut().remove(&host_key);
+        if let Some(removed) = self.retention_by_host.borrow_mut().remove(&host_key) {
+            self.sub_retained_groups(removed.len());
+        }
         self.pending_movables_by_host.borrow_mut().remove(&host_key);
         self.live_hosts.borrow_mut().remove(&host_key);
         self.movable_owners.forget_host(table);
@@ -92,8 +102,9 @@ impl ComposerRuntimeState {
             .insert(host.storage_key(), Rc::downgrade(host));
     }
 
+    #[inline]
     pub(crate) fn retains_any(&self) -> bool {
-        !self.retention_by_host.borrow().is_empty()
+        self.retained_groups.get() > 0
     }
 
     pub(crate) fn set_retention_policy(&self, policy: RetentionPolicy) {
@@ -110,12 +121,18 @@ impl ComposerRuntimeState {
         key: RetainKey,
         preflight: impl FnOnce(&mut crate::slot::DetachedSubtree) -> bool,
     ) -> Option<crate::slot::DetachedSubtree> {
+        if !self.retains_any() {
+            return None;
+        }
         let host_key = slots_storage_key(host);
         let mut retention = self.retention_by_host.borrow_mut();
         let subtree = retention
             .get_mut(&host_key)?
             .take_after_restore_preflight(key, preflight);
-        self.remove_empty_retention_host(&mut retention, host_key);
+        if subtree.is_some() {
+            self.sub_retained_groups(1);
+        }
+        self.drop_oversized_empty_retention_host(&mut retention, host_key);
         subtree
     }
 
@@ -130,19 +147,21 @@ impl ComposerRuntimeState {
         let mut retention_by_host = self.retention_by_host.borrow_mut();
         let manager = retention_by_host
             .entry(slots_storage_key(host))
-            .or_insert_with(|| match self.spare_retention.borrow_mut().take() {
-                Some(mut spare) => {
-                    spare.reset_for_reuse(policy);
-                    spare
-                }
-                None => RetentionManager::new(policy),
-            });
+            .or_insert_with(|| RetentionManager::new(policy));
         manager.set_policy(policy);
-        if pinned {
+        let before = manager.len();
+        let evicted = if pinned {
             manager.insert_pinned(key, subtree)
         } else {
             manager.insert(key, subtree)
+        };
+        let after = manager.len();
+        if after >= before {
+            self.add_retained_groups(after - before);
+        } else {
+            self.sub_retained_groups(before - after);
         }
+        evicted
     }
 
     pub(crate) fn take_retained_movable(
@@ -157,6 +176,9 @@ impl ComposerRuntimeState {
         id: Key,
         owner_host: Option<usize>,
     ) -> Option<(Rc<SlotsHost>, crate::slot::DetachedSubtree)> {
+        if !self.retains_any() {
+            return None;
+        }
         let Some(host_key) = owner_host else {
             return self.take_retained_movable(id);
         };
@@ -165,7 +187,7 @@ impl ComposerRuntimeState {
             &mut retention_by_host,
             host_key,
             movable_retain_key(id),
-            RetainedTakeMode::Dispose,
+            RestoreRecord::ClearForDisposal,
         )
     }
 
@@ -173,6 +195,9 @@ impl ComposerRuntimeState {
         &self,
         key: RetainKey,
     ) -> Option<(Rc<SlotsHost>, crate::slot::DetachedSubtree)> {
+        if !self.retains_any() {
+            return None;
+        }
         let mut retention_by_host = self.retention_by_host.borrow_mut();
         let host_key = retention_by_host
             .iter()
@@ -181,7 +206,7 @@ impl ComposerRuntimeState {
             &mut retention_by_host,
             host_key,
             key,
-            RetainedTakeMode::Dispose,
+            RestoreRecord::ClearForDisposal,
         )
     }
 
@@ -192,17 +217,26 @@ impl ComposerRuntimeState {
         besides: &Rc<SlotsHost>,
         key: RetainKey,
     ) -> Option<(Rc<SlotsHost>, crate::slot::DetachedSubtree)> {
+        if !self.retains_any() {
+            return None;
+        }
         let besides_key = slots_storage_key(besides);
-        let mut retention_by_host = self.retention_by_host.borrow_mut();
-        let host_key = retention_by_host.iter().find_map(|(&host_key, manager)| {
-            (host_key != besides_key && manager.contains(key)).then_some(host_key)
-        })?;
-        self.take_retained_movable_from_host(
-            &mut retention_by_host,
-            host_key,
-            key,
-            RetainedTakeMode::Restore,
-        )
+        let taken = {
+            let mut retention_by_host = self.retention_by_host.borrow_mut();
+            let host_key = retention_by_host.iter().find_map(|(&host_key, manager)| {
+                (host_key != besides_key && manager.contains(key)).then_some(host_key)
+            })?;
+            self.take_retained_movable_from_host(
+                &mut retention_by_host,
+                host_key,
+                key,
+                RestoreRecord::Keep,
+            )?
+        };
+        if let Some(id) = key.key.movable_id() {
+            self.movable_owners.clear_dropped_owner_host(id);
+        }
+        Some(taken)
     }
 
     fn take_retained_movable_from_host(
@@ -210,36 +244,28 @@ impl ComposerRuntimeState {
         retention_by_host: &mut HashMap<usize, RetentionManager>,
         host_key: usize,
         key: RetainKey,
-        mode: RetainedTakeMode,
+        record: RestoreRecord,
     ) -> Option<(Rc<SlotsHost>, crate::slot::DetachedSubtree)> {
         let manager = retention_by_host.get_mut(&host_key)?;
         if !manager.contains(key) {
             return None;
         }
         let host = self.host_for_storage_key(host_key)?;
-        let subtree = match mode {
-            RetainedTakeMode::Restore => manager.take(key)?,
-            RetainedTakeMode::Dispose => manager.take_for_disposal(key)?,
-        };
-        self.remove_empty_retention_host(retention_by_host, host_key);
+        let subtree = manager.take_with_mode(key, record)?;
+        self.sub_retained_groups(1);
+        self.drop_oversized_empty_retention_host(retention_by_host, host_key);
         Some((host, subtree))
     }
 
-    fn remove_empty_retention_host(
+    fn drop_oversized_empty_retention_host(
         &self,
         retention_by_host: &mut HashMap<usize, RetentionManager>,
         host_key: usize,
     ) {
-        if retention_by_host
-            .get(&host_key)
-            .is_some_and(|manager| manager.is_empty() && manager.evictions_total() == 0)
-            && let Some(manager) = retention_by_host.remove(&host_key)
-            && manager.is_small_for_reuse()
-        {
-            let mut spare = self.spare_retention.borrow_mut();
-            if spare.is_none() {
-                *spare = Some(manager);
-            }
+        if retention_by_host.get(&host_key).is_some_and(|manager| {
+            manager.is_empty() && manager.evictions_total() == 0 && !manager.is_small_for_reuse()
+        }) {
+            retention_by_host.remove(&host_key);
         }
     }
 
@@ -295,6 +321,9 @@ impl ComposerRuntimeState {
     /// what a site waiting for it has to know: the content may have been let
     /// go by a parent composed in another host, such as a subcomposition.
     pub(crate) fn movable_retained_anywhere(&self, key: RetainKey) -> bool {
+        if !self.retains_any() {
+            return false;
+        }
         self.retention_by_host
             .borrow()
             .values()
@@ -359,6 +388,16 @@ impl ComposerRuntimeState {
             .collect()
     }
 
+    pub(crate) fn has_pending_movable(&self, id: Key) -> bool {
+        let by_host = self.pending_movables_by_host.borrow();
+        if by_host.is_empty() {
+            return false;
+        }
+        by_host
+            .values()
+            .any(|sites| sites.iter().any(|site| site.key.movable_id() == Some(id)))
+    }
+
     pub(crate) fn keep_pending_movables(&self, host: &Rc<SlotsHost>, sites: Vec<PendingMovable>) {
         if sites.is_empty() {
             return;
@@ -372,17 +411,19 @@ impl ComposerRuntimeState {
         &self,
         host: &Rc<SlotsHost>,
     ) -> Vec<crate::slot::DetachedSubtree> {
-        let mut retention_by_host = self.retention_by_host.borrow_mut();
-        if retention_by_host.is_empty() {
+        if !self.retains_any() {
             return Vec::new();
         }
+        let mut retention_by_host = self.retention_by_host.borrow_mut();
         let host_key = slots_storage_key(host);
         let policy = self.retention_policy();
         let Some(manager) = retention_by_host.get_mut(&host_key) else {
             return Vec::new();
         };
         manager.set_policy(policy);
-        manager.advance_pass()
+        let evicted = manager.advance_pass();
+        self.sub_retained_groups(evicted.len());
+        evicted
     }
 
     pub(crate) fn fill_slot_debug_snapshot(
@@ -477,6 +518,9 @@ impl ComposerRuntimeState {
         table_disposal: HostTableDisposal,
     ) -> Option<(Rc<dyn ApplierHost>, crate::NodeDisposal)> {
         let retention = self.retention_by_host.borrow_mut().remove(&host_key);
+        if let Some(retention) = &retention {
+            self.sub_retained_groups(retention.len());
+        }
         let applier_host = self.applier_host.borrow().as_ref().and_then(Weak::upgrade);
         let Some(applier_host) = applier_host else {
             if let Some(retention) = retention {
@@ -486,19 +530,22 @@ impl ComposerRuntimeState {
         };
         let retained_subtrees: Vec<_> = retention.map_or_default(RetentionManager::into_subtrees);
         let mut disposal = crate::NodeDisposal::default();
-        if !retained_subtrees.is_empty() {
-            if table_disposal == HostTableDisposal::DisposeWithRetained {
-                // Queue the host's own slot payloads underneath the retained subtrees
-                // in the same NodeDisposal so every retained node unmounts before any
-                // remembered state or resource in this host drops.
-                disposal.append_drops(table.take_all_drops());
-                disposal.append_lifecycle(std::mem::take(lifecycle));
-            }
-            for subtree in retained_subtrees {
-                subtree.scopes().for_each(RecomposeScope::deactivate);
-                table.invalidate_detached_subtree_anchors(&subtree);
-                disposal.retain_subtree(subtree);
-            }
+        for subtree in &retained_subtrees {
+            subtree.scopes().for_each(RecomposeScope::deactivate);
+            table.invalidate_detached_subtree_anchors(subtree);
+        }
+        if table_disposal == HostTableDisposal::DisposeWithRetained {
+            // Deactivate scopes and forget attached movables before draining
+            // table storage, and queue the host's own slot payloads underneath
+            // any retained subtrees so retained nodes unmount first and the
+            // host's slot drops run inside the applier host's teardown scope.
+            self.movable_owners.forget_host(table);
+            table.release_scopes();
+            disposal.append_drops(table.take_all_drops());
+            disposal.append_lifecycle(std::mem::take(lifecycle));
+        }
+        for subtree in retained_subtrees {
+            disposal.retain_subtree(subtree);
         }
         Some((applier_host, disposal))
     }
@@ -538,6 +585,7 @@ impl ComposerRuntimeState {
             self.clear_host_storage_key(host_key, table);
             return;
         };
+        self.sub_retained_groups(retention.len());
         self.deactivate_and_queue_subtrees(retention, table, lifecycle);
         self.clear_host_storage_key(host_key, table);
     }
@@ -551,7 +599,14 @@ impl ComposerRuntimeState {
 
     #[cfg(any(test, debug_assertions))]
     pub(crate) fn debug_verify_host(&self, host: &SlotsHost, table: &SlotTable) {
-        if let Some(retention) = self.retention_by_host.borrow().get(&host.storage_key()) {
+        let retention_by_host = self.retention_by_host.borrow();
+        let total: usize = retention_by_host.values().map(RetentionManager::len).sum();
+        debug_assert_eq!(
+            self.retained_groups.get(),
+            total,
+            "retained_groups counter diverged from retention_by_host"
+        );
+        if let Some(retention) = retention_by_host.get(&host.storage_key()) {
             retention.debug_verify(table);
         }
     }
