@@ -17,8 +17,13 @@ least `--least` pixels lies within `--tolerance` of the eye's width from the pro
 grip that the log shows, and the left controller's blob lies left of the right controller's. It
 prints each blob's box and its distance from the projection, and exits with 1 when a check fails. A grip
 that projects outside an eye's picture is not checked in that eye.
-It uses the Python standard library only. It has run on pictures that a script drew and on the
-screenshots of a Meta Quest 3 that shows the demo's scripted controllers.
+It uses the Python standard library only. It has run on pictures that a script drew. It does not fit
+the screenshots of a Meta Quest 3. The compositor's picture of each eye is turned by about 21 degrees
+(the left eye one way, the right eye the other) and shows a larger field of view than the app's, so
+the projection of a grip lands far from its model there. On a Quest 3 the runtime's model and the plain
+model both lie 200 to 280 pixels from the projection of the grip in one eye of each controller, and
+they lie within 55 pixels of each other in every view. Judge a Quest capture by the two models' blobs
+against each other, or by eye.
 """
 
 import argparse
