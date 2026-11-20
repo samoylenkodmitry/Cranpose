@@ -328,8 +328,9 @@ fn a_damaged_ktx2_image_fails_as_an_image() {
         .find(|part| part.starts_with("data:image/ktx2;base64,"))
         .expect("the ktx2 file");
     // The file keeps its identifier and loses the rest
-    let cut = &uri[..uri.len() - 40];
-    let result = parse(text.replace(uri, cut).as_bytes(), None);
+    let mut cut = uri.to_owned();
+    cut.truncate(uri.len() - 40);
+    let result = parse(text.replace(uri, &cut).as_bytes(), None);
     assert!(matches!(result, Err(GltfError::Image { .. })), "{result:?}");
 }
 
