@@ -16,7 +16,8 @@ projects each grip's origin into each eye from the logged poses. An eye passes w
 least `--least` pixels lies within `--tolerance` of the eye's width from the projected point of each
 grip that the log shows, and the left controller's blob lies left of the right controller's. It
 prints each blob's box and its distance from the projection, and exits with 1 when a check fails.
-It uses the Python standard library only.
+It uses the Python standard library only. It has run on pictures that a script drew, and on no
+headset yet.
 """
 
 import argparse

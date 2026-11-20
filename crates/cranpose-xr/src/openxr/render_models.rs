@@ -10,7 +10,7 @@ use std::sync::Arc;
 use cranpose::capabilities::{Capabilities, Service};
 use openxr as xr;
 
-use super::session::XrSession;
+use super::{render_model_calls, session::XrSession};
 use crate::{
     Hand, InteractionProfile, controller_look::Offer, controller_states::ControllerStates,
     model_asks::ModelAsks, model_path::controller_path,
@@ -100,9 +100,7 @@ impl RenderModels {
 fn ask(xr_session: &XrSession, hand: Hand) -> Result<Option<Arc<[u8]>>, String> {
     let session = &xr_session.session;
     let instance = xr_session.instance();
-    let listed = session
-        .enumerate_render_model_paths_fb()
-        .map_err(|error| format!("render model paths: {error}"))?;
+    let listed = render_model_calls::paths(session, instance)?;
     let paths: Vec<String> = listed
         .iter()
         .map(|path| instance.path_to_string(*path).unwrap_or_default())
@@ -116,116 +114,25 @@ fn ask(xr_session: &XrSession, hand: Hand) -> Result<Option<Arc<[u8]>>, String> 
     let plain = xr::RenderModelFlagsFB::SUPPORTS_GLTF_2_0_SUBSET_1;
     let both = plain | xr::RenderModelFlagsFB::SUPPORTS_GLTF_2_0_SUBSET_2;
     for flags in [plain, both] {
-        let properties = session
-            .get_render_model_properties_fb(listed[chosen], flags)
-            .map_err(|error| format!("render model properties: {error}"))?;
-        if properties.model_key == xr::RenderModelKeyFB::NULL {
+        let found = render_model_calls::properties(session, instance, listed[chosen], flags)?;
+        if found.key == xr::RenderModelKeyFB::NULL {
             continue;
         }
         let bytes = session
-            .load_render_model_fb(properties.model_key)
+            .load_render_model_fb(found.key)
             .map_err(|error| format!("loading the render model: {error}"))?;
         if bytes.is_empty() {
             continue;
         }
         log::info!(
             "cranpose xr: the {hand:?} controller's model \"{}\", vendor {:#x}, version {}, flags {:?} for {flags:?}, {} bytes",
-            properties.model_name,
-            properties.vendor_id,
-            properties.model_version,
-            properties.flags,
+            found.name,
+            found.vendor,
+            found.version,
+            found.flags,
             bytes.len()
         );
-        #[cfg(feature = "gltf")]
-        log_summary(hand, &bytes);
         return Ok(Some(Arc::from(bytes)));
     }
     Ok(None)
-}
-
-// TEMPORARY: what a runtime's model holds, for the first report from a headset.
-#[cfg(feature = "gltf")]
-fn log_summary(hand: Hand, bytes: &[u8]) {
-    let gltf = match gltf::Gltf::from_slice(bytes) {
-        Ok(gltf) => gltf,
-        Err(error) => {
-            log::warn!("cranpose xr: model {hand:?} does not parse: {error}");
-            let head = String::from_utf8_lossy(&bytes[..bytes.len().min(2000)]).into_owned();
-            log::info!("cranpose xr: model {hand:?} head: {head:?}");
-            return;
-        }
-    };
-    let document = &gltf.document;
-    log::info!(
-        "cranpose xr: model {hand:?}: {} nodes, {} meshes, {} materials, {} images, {} skins, {} animations, {} textures, extensions used {:?}, required {:?}",
-        document.nodes().count(),
-        document.meshes().count(),
-        document.materials().count(),
-        document.images().count(),
-        document.skins().count(),
-        document.animations().count(),
-        document.textures().count(),
-        document.extensions_used().collect::<Vec<_>>(),
-        document.extensions_required().collect::<Vec<_>>(),
-    );
-    for node in document.nodes() {
-        log::info!(
-            "cranpose xr: model {hand:?} node {} {:?} mesh {:?} skin {} children {:?} t {:?}",
-            node.index(),
-            node.name(),
-            node.mesh().map(|mesh| mesh.index()),
-            node.skin().is_some(),
-            node.children()
-                .map(|child| child.index())
-                .collect::<Vec<_>>(),
-            node.transform().decomposed().0,
-        );
-    }
-    for animation in document.animations() {
-        log::info!(
-            "cranpose xr: model {hand:?} animation {:?}: {} channels",
-            animation.name(),
-            animation.channels().count()
-        );
-    }
-    for image in document.images() {
-        match image.source() {
-            gltf::image::Source::View { mime_type, .. } => {
-                log::info!(
-                    "cranpose xr: model {hand:?} image {} {mime_type}",
-                    image.index()
-                );
-            }
-            gltf::image::Source::Uri { uri, mime_type } => {
-                log::info!(
-                    "cranpose xr: model {hand:?} image {} {mime_type:?} uri {}",
-                    image.index(),
-                    &uri[..uri.len().min(40)]
-                );
-            }
-        }
-    }
-    for material in document.materials() {
-        let pbr = material.pbr_metallic_roughness();
-        log::info!(
-            "cranpose xr: model {hand:?} material {:?} color {:?} texture {}",
-            material.name(),
-            pbr.base_color_factor(),
-            pbr.base_color_texture().is_some()
-        );
-    }
-    for mesh in document.meshes() {
-        for primitive in mesh.primitives() {
-            let (low, high) = (primitive.bounding_box().min, primitive.bounding_box().max);
-            log::info!(
-                "cranpose xr: model {hand:?} mesh {} primitive {} box {low:?} {high:?} attributes {:?}",
-                mesh.index(),
-                primitive.index(),
-                primitive
-                    .attributes()
-                    .map(|(semantic, _)| format!("{semantic:?}"))
-                    .collect::<Vec<_>>(),
-            );
-        }
-    }
 }

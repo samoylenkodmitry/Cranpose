@@ -322,8 +322,23 @@ names of the model choices are Cranpose's own.
 
 A model costs the projection layer of the volumes while a controller is in use. An app with no
 volume pays for that layer, its swapchains and its pass only then. With the models off, or with no
-controller in use, no frame draws the scene. The frame loop moves a model by writing one state that
-the draw reads. A controller that moves composes nothing and allocates nothing.
+controller in use, no frame draws the scene. Every app gets the models at its next update, since
+they are on by default. An app that draws its own controllers, such as one that streams a scene,
+calls `set_enabled(false)`.
+
+The frame loop moves a model by writing one state that the draw reads. A controller that moves
+composes nothing. The draw reuses the spaces of a model's surfaces, so it builds no list and no
+space. The write of the state is the framework's: it keeps a record for each changed value, as it
+does for a volume that a user carries.
+
+No headset has run this path. The runtime's listing of the extension under the manifest entries, the
+render model paths, the contents of the runtime's file, the loader on that file, the alignment of
+the file with the grip pose, the depth test against panels and the frame rate of an app with no
+volume are untested. The permission name, the path names and the origin of the models at the grip
+pose follow the extension's documentation and stay assumptions until a headset confirms them. The
+extension has three calls and none gives the state of a button, so a model moves its buttons only
+if its file holds clips, which no run has shown. Android XR and the desktop runtimes use the plain
+model.
 
 ## Spatial audio
 

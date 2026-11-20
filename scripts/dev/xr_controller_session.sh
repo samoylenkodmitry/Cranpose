@@ -3,10 +3,11 @@
 # check needs: the app's log with the runtime's answers about the controllers' models, the frame
 # counts that the demo logs once a second, and the compositor's stereo picture.
 #
-# The caller holds the device lock and puts the headset on its wearer's face with
-# `adb shell am broadcast -a com.oculus.vrpowermanager.prox_close`. The script sets no property
-# and no setting. It installs the APK, starts the app, saves `--seconds` of log and one screenshot
-# taken `--shot-after` seconds after the session has focus, and stops the app.
+# The script has not run on a headset yet. The caller holds the device lock and puts the headset
+# on its wearer's face with `adb shell am broadcast -a com.oculus.vrpowermanager.prox_close`. The
+# script sets no property and no setting. It installs the APK and starts the app. It saves the log
+# of the first `seconds` seconds and one screenshot taken `shot-after` seconds after the session has
+# focus. Then it stops the app.
 #
 # Usage: scripts/dev/xr_controller_session.sh <adb-serial> <apk> <output-dir> [seconds] [shot-after]
 #
@@ -33,7 +34,7 @@ adb_ shell am start -n "$component" >/dev/null
 wait_for() {
   local pattern="$1" limit="$2" i
   for ((i = 0; i < limit * 4; i++)); do
-    if adb_ logcat -d -v time | grep -q -E "$pattern"; then
+    if (($(adb_ logcat -d -v time | grep -c -E "$pattern" || true) >= 1)); then
       return 0
     fi
     sleep 0.25
