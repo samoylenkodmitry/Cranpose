@@ -704,6 +704,12 @@ at the dot at its fingertip. The build script asks for hand tracking, which need
 Quest. `XR_DEMO_TRACKING=none` asks for nothing, and `XR_DEMO_TRACKING=all` adds the body, the face
 and the eyes, which the system asks the user to allow.
 
+`XR_DEMO_VOLUME=through` puts the demo's torus in the plane of the counter panel, so that a part of
+it lies in front of the panel and a part behind. A compositor that tests depth shows the front part
+over the panel and hides the rest. One that does not shows the panel over all of it. The log
+names, once for each change, whether the volumes' layer carries depth and how many of the frame's
+layers test it.
+
 ### Measured on a Quest 3
 
 On a Quest 3 (Horizon OS, runtime "Oculus" 210.137.0) at the desk, with no hand in view of the

@@ -188,6 +188,11 @@ impl FrameLayers {
         &self.headers
     }
 
+    // How many layers of the list test against the depth of the projection layer.
+    pub(crate) fn tested(&self) -> usize {
+        self.layers.iter().filter(|raw| raw.depth_tested).count()
+    }
+
     // Empties the list. The raw layers name swapchains. The pointers name the list's own
     // structs. None of them outlives the frame.
     pub(crate) fn clear(&mut self) {

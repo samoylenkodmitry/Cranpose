@@ -89,11 +89,7 @@ pub fn XrDemo() {
         );
         // A volume takes two of the compositor's layers, one for the 3D content and one for its
         // handle. A Quest takes 16, which the demo's other panels and surfaces leave free.
-        TorusVolume(
-            SubspaceModifier::new()
-                .offset(600.0, -330.0, 100.0)
-                .rotate(0.0, -30.0, 0.0),
-        );
+        TorusVolume(torus_place());
         CounterPanel(presses, tracking);
         if strip_shown.get() {
             CurvedStrip();
@@ -101,6 +97,18 @@ pub fn XrDemo() {
         PressesPanel(presses, readout);
     });
     ControllerBall(strip_shown);
+}
+
+// Where the torus stands: beside the panels, or in the plane of the counter panel when the build
+// has `XR_DEMO_VOLUME=through`, so that a part of it lies in front of the panel and a part behind.
+fn torus_place() -> SubspaceModifier {
+    if option_env!("XR_DEMO_VOLUME") == Some("through") {
+        SubspaceModifier::new().offset(0.0, -100.0, 0.0)
+    } else {
+        SubspaceModifier::new()
+            .offset(600.0, -330.0, 100.0)
+            .rotate(0.0, -30.0, 0.0)
+    }
 }
 
 // A ball of 4 cm that floats 10 cm above the left controller, upright wherever the hand tilts.
