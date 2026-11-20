@@ -65,6 +65,7 @@ jobs:
         # A re-run is someone asking for the work again, so only a first
         # attempt may skip it.
         if: github.run_attempt == 1
+        shell: bash --noprofile --norc -eo pipefail {0}
         run: scripts/ci/tree_memo.sh check "${{ github.workflow }}/${{ github.job }}"
 
       - name: Detect a docs-only change
@@ -127,6 +128,7 @@ jobs:
 
       - name: Remember that this tree passed
         if: ${{ success() && steps.memo.outputs.passed != 'true' }}
+        shell: bash --noprofile --norc -eo pipefail {0}
         run: scripts/ci/tree_memo.sh record "${{ github.workflow }}/${{ github.job }}"
 
   ios-build:
@@ -149,6 +151,7 @@ jobs:
         # A re-run is someone asking for the work again, so only a first
         # attempt may skip it.
         if: github.run_attempt == 1
+        shell: bash --noprofile --norc -eo pipefail {0}
         run: scripts/ci/tree_memo.sh check "${{ github.workflow }}/${{ github.job }}"
 
       - name: Detect a docs-only change
@@ -184,6 +187,7 @@ jobs:
 
       - name: Remember that this tree passed
         if: ${{ success() && steps.memo.outputs.passed != 'true' }}
+        shell: bash --noprofile --norc -eo pipefail {0}
         run: scripts/ci/tree_memo.sh record "${{ github.workflow }}/${{ github.job }}"
 
   watchos-build:
@@ -233,6 +237,7 @@ jobs:
         # A re-run is someone asking for the work again, so only a first
         # attempt may skip it.
         if: github.run_attempt == 1
+        shell: bash --noprofile --norc -eo pipefail {0}
         run: scripts/ci/tree_memo.sh check "${{ github.workflow }}/${{ github.job }}"
 
       - name: Detect a docs-only change
@@ -305,6 +310,7 @@ jobs:
 
       - name: Remember that this tree passed
         if: ${{ success() && steps.memo.outputs.passed != 'true' }}
+        shell: bash --noprofile --norc -eo pipefail {0}
         run: scripts/ci/tree_memo.sh record "${{ github.workflow }}/${{ github.job }}"
 
   architecture-budget:
@@ -322,6 +328,7 @@ jobs:
         # A re-run is someone asking for the work again, so only a first
         # attempt may skip it.
         if: github.run_attempt == 1
+        shell: bash --noprofile --norc -eo pipefail {0}
         run: scripts/ci/tree_memo.sh check "${{ github.workflow }}/${{ github.job }}"
 
       - name: Provision toolchain
@@ -343,6 +350,7 @@ jobs:
 
       - name: Remember that this tree passed
         if: ${{ success() && steps.memo.outputs.passed != 'true' }}
+        shell: bash --noprofile --norc -eo pipefail {0}
         run: scripts/ci/tree_memo.sh record "${{ github.workflow }}/${{ github.job }}"
 
   android-apk:
@@ -358,6 +366,7 @@ jobs:
         # A re-run is someone asking for the work again, so only a first
         # attempt may skip it.
         if: github.run_attempt == 1
+        shell: bash --noprofile --norc -eo pipefail {0}
         run: scripts/ci/tree_memo.sh check "${{ github.workflow }}/${{ github.job }}"
 
       - name: Configure machine-local SDK and cache paths
@@ -388,4 +397,5 @@ jobs:
 
       - name: Remember that this tree passed
         if: ${{ success() && steps.memo.outputs.passed != 'true' }}
+        shell: bash --noprofile --norc -eo pipefail {0}
         run: scripts/ci/tree_memo.sh record "${{ github.workflow }}/${{ github.job }}"
