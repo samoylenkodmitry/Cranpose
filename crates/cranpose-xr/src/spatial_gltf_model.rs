@@ -32,7 +32,7 @@ const DEFAULT_LIGHT: Light = Light {
 /// A glTF 2.0 model in a box of the size that `modifier` gives, centered at the modifier's pose in
 /// its subspace. Jetpack XR's `SpatialGltfModel`. It needs the `gltf` feature.
 ///
-/// The model loads on a worker thread, as `state` says (see [`rememberSpatialGltfModelState`]).
+/// The model loads on a worker thread, as `state` says (see [`rememberSpatialGltfModelState`](crate::rememberSpatialGltfModelState)).
 /// While it loads, and if it fails, the composable shows nothing, as Jetpack XR's does. The
 /// [`SpatialGltfModelState::status`] tells which. Once the model has loaded the composable is a
 /// [`SpatialVolume`] whose content is the model.
