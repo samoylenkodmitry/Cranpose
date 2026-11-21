@@ -423,8 +423,8 @@ A controller shows a model while the runtime tracks its grip pose and the hand's
 profile is not that of a hand (`InteractionProfile::is_hand`). A runtime keeps the hand profile's
 poses valid with no hand in view, and a tracked hand with no controller holds nothing to draw, so
 the hand profiles show no model. The state of the pointer decides nothing: a controller that lies on
-a desk is in use. `ControllerStates::track` applies the app's switch. With `set_enabled(false)` no
-hand shows a model.
+a desk is in use. `ControllerStates::track` applies the app's switch, which each hand has apart
+(`HandModel::set_enabled`). A hand whose model the app turned off shows none.
 
 **Which model a hand shows.** `controller_look::look` decides from three inputs: the app's
 `ControllerModel` for the hand, the runtime's `Offer`, and how far the load of the glTF source has
@@ -461,6 +461,35 @@ that the runtime answered with no model asks again when a controller comes into 
 composition while the scene is empty, so a controller that leaves and returns finds its model
 loaded. The XR session stays on the frame thread, and only bytes cross to the worker.
 
+**Moving parts.** A Meta Quest 3's runtime model of a Touch Plus controller (about 508 KB, the same
+bytes for the glTF subsets 1 and 2) is one mesh of 3529 vertices with a skin of seven joints: the
+controller's body and `b_button_x` or `b_button_a`, `b_button_y` or `b_button_b`, `b_button_oculus`,
+`b_trigger_front`, `b_trigger_grip` and `b_thumbstick`. Every vertex has its whole weight on one
+joint, and no triangle spans two joints. `gltf_skin::rigid_pieces` cuts such a primitive into a mesh
+for each joint, moves the vertices into the joint's space through its inverse bind matrix and hangs
+the piece on the joint's node. A part then moves with its node, and no vertex is skinned in a frame.
+A skin that weighs a vertex between joints keeps its bind pose at the mesh's node, as before.
+
+The file's one animation, "All Animations", has 121 keys for each part. It is no clip to play: each
+key holds a pose for an input. `controller_parts::ControllerParts` finds the parts by the words in the
+nodes' names (`trigger_front`, `trigger_grip`, `button_a` or `button_x`, `button_b` or `button_y`,
+`button_oculus`, `thumbstick`) and takes their poses at fixed keys of the first animation: 16 for the
+trigger pulled, 21 for the grip squeezed, 5 and 8 for the face buttons down, 24 for the menu button
+down, and 29, 39, 34, 40, 31, 36, 32 and 37 for the thumbstick leaned forward, forward right, right,
+back right, back, back left, left and forward left. Meta's Unity SDK reads the same names and keys
+(`OVRGLTFAnimatinonNode`), and a check of both hands' files shows the stick's cap at each key on the
+side that its point of the compass names. The node's own transform is the rest. A part counts only
+where the file has its node and a pose at its key that differs from the rest. The trigger and the
+grip mix from the rest to their key by their value. A button takes its key while it is down. The
+thumbstick mixes the keys of the two nearest points by the angle of its lean, then mixes from the
+rest by the lean's length.
+
+`ControllerStates::track` hands each shown model its controller, and `LoadedModel::follow` poses the
+nodes when the inputs changed since the last frame. It writes the part nodes' transforms between the
+clips and the world transforms, so the frame allocates nothing, and it bumps the revision that the
+draws read. On the right controller `b_button_oculus` is the Meta button, which a controller reports
+to no app, so it stays at rest. The files hold no pose for a press of the thumbstick.
+
 **Where the model stands.** The runtime's models are glTF files in meters with x to the right, y up
 and z toward the user. The origin of a model lies at the controller's grip pose.
 `controller_placement::scene_from_grip` carries a point of the model to the scene, whose units are
@@ -489,17 +518,29 @@ part uses it.
 **The scene's light.** A volume sets the scene's light. Where no volume sets one, the controllers'
 models stand in the default light of the glTF models.
 
-**What no headset has run.** The runtime's listing of the extension under the manifest entries, the
-render model paths, the contents of the runtime's file, the loader on that file, the alignment of
-the file with the grip pose, the depth test against panels and the frame rate of an app with no
-volume are untested. The permission name, the path names and the origin of the models at the grip
-pose follow the extension's documentation and stay assumptions until a headset confirms them. If
-the runtime does not list the extension on its first run, the permission name is the first suspect:
-the other services of `cranpose-capabilities` write a `horizonos` name beside the `com.oculus` one.
-The extension has three calls and none gives the state of a button, so a model moves its buttons
-only if its file holds clips. `scripts/dev/xr_controller_session.sh` and
-`scripts/dev/xr_controller_check.py` are the procedure for the first run. Neither has run on a
-headset. The check script ran on pictures that a script drew.
+**On a Quest 3.** The runtime (Horizon OS runtime 210) lists the extension under the manifest
+entries and lists the paths `/model_fb/controller/left`, `/model_fb/controller/right`,
+`/model_fb/keyboard/local` and `/model_fb/keyboard/remote`. The models are "Meta Quest Touch Plus
+Controller Left" and "Right", 508,088 and 507,568 bytes, with the flag of subset 1. A question with
+both subsets gives the same key and the same bytes. Each model loads with six parts and draws in
+eight pieces: the battery quad and the body on the body's joint, and one piece for each part. The
+file is in meters with no scale on the nodes that draw. The model's longest span is 126.5 mm, and
+its smallest box over turns about its x axis is 124.7 by 67.7 by 52.0 mm. A Touch Plus measures
+about 126 by 67 by 43 mm by third-party figures. The root of the file is the grip pose, and
+its node `grip` turns the model 60 degrees about x and moves it 46 mm forward and 20 mm down.
+
+A build with scripted controllers held the right controller still a quarter meter ahead of the eyes
+and pressed one input at a time. Raw screen captures stayed in memory, each press against the rest
+captures before and after it, in cells of 32 by 32 pixels: the fullest cell's change past the change
+between the two rests. A pulled trigger scored 944 to 967 of 1024 in 14 cells, the thumbstick 657 to
+722 forward and 303 to 378 to the right, and the A button 196 to 236 in the same cell each time. A
+rest between two rests scored 4 to 113 in 18 runs. The grip faces away from the eyes in that view
+and scored 23 to 36.
+
+Untested: the alignment of the file with a real controller's grip (the controllers on the desk
+slept and gave no pose), the depth test against panels, the ray against a model and the frame rate
+of an app with no volume. `scripts/dev/xr_controller_session.sh` and
+`scripts/dev/xr_controller_check.py` do not fit the screenshots of a Quest 3 (see the script).
 
 **The demo.** The counter panel has a button that cycles the choice of both hands: the runtime's
 model, the plain model and none. The environment variable `XR_DEMO_CONTROLLERS` builds the
