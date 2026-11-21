@@ -31,6 +31,8 @@
 # values.
 # The charts rows come from three runs of that row alone on main 0edf9547e
 # with the layout added.
+# The gauntlet-t16 realloc row comes from five runs (`--repeats 5`) at 53ebad4ad
+# of #2403 on main 8341807fa.
 # The ticker's copied spread holds both modes of the scene store's shape
 # chunk compaction (`keep_live_runs`), whose copies differ by 2,920 B from
 # run to run of one binary for a reason not yet known (#2247).
@@ -58,7 +60,7 @@ patchwork-t17    live                       206.17       6.27
 patchwork-t17    copied                     676837      28084
 patchwork-t17    realloc_bytes               36077       6256
 gauntlet-t16     malloc                    1436.80       0.55
-gauntlet-t16     realloc                     37.70       0.02
+gauntlet-t16     realloc                     37.63       0.02
 gauntlet-t16     live                         2.77       0.67
 gauntlet-t16     copied                     514336        374
 gauntlet-t16     realloc_bytes               61047          3
