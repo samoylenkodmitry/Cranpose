@@ -904,6 +904,21 @@ pub fn spark_value(card: usize, point: usize, frame: u32) -> f32 {
         + 0.08 * (point as f32 * 1.7 + card as f32).sin()
 }
 
+/// The height of series `series` of chart `chart` at `point` on `frame`, as
+/// a fraction of the chart from its top: 0.1 to 0.9, a wave with a fixed
+/// jitter a point. A chart's two series cross as they move.
+pub fn chart_value(chart: usize, series: usize, point: usize, frame: u32) -> f32 {
+    let phase = (frame as f32 + chart as f32 * 5.0) * 0.07 + series as f32 * 1.9;
+    let jitter = ((point * 37 + chart * 11 + series * 5) % 13) as f32 / 6.0 - 1.0;
+    0.5 + 0.32 * (point as f32 * 0.09 + phase).sin() + 0.08 * jitter
+}
+
+/// The share of a full turn that chart `chart`'s gauge sweeps on `frame`:
+/// 0.15 to 0.95.
+pub fn chart_gauge(chart: usize, frame: u32) -> f32 {
+    0.55 + 0.4 * (frame as f32 * 0.05 + chart as f32).sin()
+}
+
 /// The two ends of each avatar's gradient, as RGB bytes.
 const AVATAR_COLORS: [[u8; 6]; AVATAR_COUNT] = [
     [0xEF, 0x44, 0x44, 0x7F, 0x1D, 0x1D],

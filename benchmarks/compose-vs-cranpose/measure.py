@@ -131,6 +131,9 @@ HEAVY = {
     'grid_layer': '--ei rows 30 --ei cols 12',
     'deep': '--ei depth 40 --ei chips 6',
     'deep_layer': '--ei depth 40 --ei chips 6',
+    # The default scenarios leave it out, as the Cranpose and Compose apps
+    # alone hold it; `--scenarios charts` runs it.
+    'charts': '--ei charts 28 --ei points 200',
     # gpui-fast's trading workspace, 16 quotes every 16 ms.
     'workspace': '--es mode quotes',
     # Every stage at once; the tier is calibrated per device (README).

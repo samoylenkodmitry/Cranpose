@@ -250,6 +250,20 @@ fun sparkValue(card: Int, point: Int, frame: Int): Float {
         0.08f * sin(point.toFloat() * 1.7f + card.toFloat())
 }
 
+/**
+ * The height of series [series] of chart [chart] at [point] on [frame], as a
+ * fraction of the chart from its top: 0.1 to 0.9, a wave with a fixed jitter
+ * a point. A chart's two series cross as they move.
+ */
+fun chartValue(chart: Int, series: Int, point: Int, frame: Int): Float {
+    val phase = (frame.toFloat() + chart.toFloat() * 5f) * 0.07f + series.toFloat() * 1.9f
+    val jitter = ((point * 37 + chart * 11 + series * 5) % 13).toFloat() / 6f - 1f
+    return 0.5f + 0.32f * sin(point.toFloat() * 0.09f + phase) + 0.08f * jitter
+}
+
+/** The share of a full turn that chart [chart]'s gauge sweeps on [frame]: 0.15 to 0.95. */
+fun chartGauge(chart: Int, frame: Int): Float = 0.55f + 0.4f * sin(frame.toFloat() * 0.05f + chart.toFloat())
+
 /** The two ends of each avatar's gradient, as RGB bytes. */
 private val AVATAR_COLORS = arrayOf(
     intArrayOf(0xEF, 0x44, 0x44, 0x7F, 0x1D, 0x1D),
