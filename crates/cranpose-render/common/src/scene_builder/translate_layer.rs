@@ -8,16 +8,16 @@ use std::{
 };
 
 use cranpose_core::{MemoryApplier, NodeId, RecordId, collections::map::HashMap};
-use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size};
+use cranpose_ui::{ModifierNodeSlices, Point, Rect, Size, widgets::LayoutState};
 
 use super::{
     DrawTarget, GraphChanges, GroupPaint, Inherited, KeptChild, LowerContext, OwnDraws,
-    PlacedGeometry, SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, Wrapping,
-    child_identity, content_layer, forget_dirty_node, hit_test_from_slices, layer_and_node_bounds,
-    layer_identity, lower_child, modifier_slices_have_origin_sinks, move_kept_child,
-    outer_commands, outer_draws, placed_child_geometry, placing_transform, read_node_data,
-    set_bounds, shaped_graphics_layer, take_wrapped_layer, text_node, translate_unwrapped,
-    write_node_content, write_wrapper,
+    ParentOrigin, PlacedGeometry, SnapshotNodeData, TranslateAncestorContext, TranslateGeometry,
+    Wrapping, child_identity, content_layer, forget_dirty_node, hit_test_from_slices,
+    layer_and_node_bounds, layer_identity, lower_child, modifier_slices_have_origin_sinks,
+    move_kept_child, outer_commands, outer_draws, placed_child_geometry, placing_transform,
+    read_node_data, set_bounds, shaped_graphics_layer, take_wrapped_layer, text_node,
+    translate_unwrapped, write_node_content, write_wrapper,
 };
 use crate::{
     NodeUpdate,
@@ -30,7 +30,7 @@ pub(super) fn translate_tracking_hits(
     store: &mut SceneStore,
     layer: RecordId,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
-    ancestors: TranslateAncestorContext,
+    ancestors: TranslateAncestorContext<'_>,
 ) -> Option<GraphChanges> {
     let held = holds_hit_geometry(store.layer(layer));
     try_translate_scrolled_layer(applier, store, layer, dirty_nodes, ancestors)
@@ -48,7 +48,7 @@ fn try_translate_scrolled_layer(
     store: &mut SceneStore,
     container: RecordId,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
-    ancestors: TranslateAncestorContext,
+    ancestors: TranslateAncestorContext<'_>,
 ) -> bool {
     let Some(node_id) = layer_identity(store.layer(container)) else {
         return false;
@@ -106,7 +106,7 @@ pub(super) struct TranslatedContainer {
 pub(super) fn translated_container(
     store: &mut SceneStore,
     container: RecordId,
-    layout_state: &cranpose_ui::widgets::LayoutState,
+    layout_state: &LayoutState,
     modifier_slices: &ModifierNodeSlices,
     inherited: Inherited,
     wrapping: Wrapping,
@@ -159,6 +159,9 @@ pub(super) fn translated_container(
 #[derive(Default)]
 pub(crate) struct TranslateScratch {
     placed_fresh: Vec<PlacedChild>,
+    // Whether a child of `placed_fresh` enters or is a kept label that takes
+    // its text again: slices the store has not seen.
+    fresh_slices: bool,
     old_ids: Vec<NodeId>,
     old_index_by_id: HashMap<NodeId, usize>,
     retained: Vec<Option<Item>>,
@@ -232,7 +235,8 @@ fn translated_children(
             &mut scratch.old_index_by_id,
         )
     };
-    check_retained_children(store, children, dirty_nodes, placed_fresh).map(|()| order)
+    scratch.fresh_slices = check_retained_children(store, children, dirty_nodes, placed_fresh)?;
+    Some(order)
 }
 
 const MATCH_SEARCHES: usize = 16;
@@ -290,14 +294,19 @@ fn match_old_children(
     }
 }
 
+// Sets how the step keeps each child of `placed_fresh` that `children`
+// held. `None` when a child that is not dirty no longer fits its layer; else
+// whether a child enters or is a kept label that takes its text again.
 fn check_retained_children(
     store: &SceneStore,
     children: &[Item],
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     placed_fresh: &mut [PlacedChild],
-) -> Option<()> {
+) -> Option<bool> {
+    let mut fresh_slices = false;
     for placed in placed_fresh {
         let Some(old_index) = placed.old_index else {
+            fresh_slices = true;
             continue;
         };
         let child = children[old_index].as_child()?;
@@ -326,8 +335,9 @@ fn check_retained_children(
             Some(NodeUpdate::Content) if text_alone() => KeptChild::Retexted,
             Some(_) => KeptChild::Left,
         };
+        fresh_slices |= matches!(placed.kept, KeptChild::Retexted);
     }
-    Some(())
+    Some(fresh_slices)
 }
 
 // The items of a container a translate step parts: the children its own
@@ -444,11 +454,11 @@ fn build_entering_children(
     container: RecordId,
     scratch: &mut TranslateScratch,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
-    children: TranslateAncestorContext,
+    children: TranslateAncestorContext<'_>,
 ) {
     let entering = &mut scratch.entering;
     entering.clear();
-    let context = LowerContext::beneath(children);
+    let context = LowerContext::beneath(children, store);
     for placed in &scratch.placed_fresh {
         if placed.old_index.is_some() {
             continue;
@@ -497,9 +507,9 @@ pub(super) fn apply_translated_container_state(
     store: &mut SceneStore,
     container: RecordId,
     modifier_slices: &ModifierNodeSlices,
-    layout_state: &cranpose_ui::widgets::LayoutState,
+    layout_state: &LayoutState,
     parent_content_offset: Point,
-    geometry: TranslateGeometry,
+    geometry: &TranslateGeometry,
 ) {
     let position = layout_state.position();
     let transform = placing_transform(
@@ -509,11 +519,7 @@ pub(super) fn apply_translated_container_state(
         parent_content_offset,
     );
     store.set_placement(container, position, transform);
-    modifier_slices.publish_window_geometry(
-        geometry.top_left,
-        geometry.window_transform,
-        layout_state.size(),
-    );
+    geometry.publish(modifier_slices, layout_state.size());
 }
 
 fn reconcile_translated_children(
@@ -523,7 +529,7 @@ fn reconcile_translated_children(
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     scratch: &mut TranslateScratch,
     order: ChildOrder,
-    children: TranslateAncestorContext,
+    children: TranslateAncestorContext<'_>,
 ) {
     if let ChildOrder::Shifted {
         entering_before, ..
@@ -560,7 +566,7 @@ fn reconcile_shifted_children(
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     scratch: &mut TranslateScratch,
     entering_before: usize,
-    children: TranslateAncestorContext,
+    children: TranslateAncestorContext<'_>,
 ) {
     let TranslateScratch {
         placed_fresh,
@@ -588,6 +594,47 @@ fn reconcile_shifted_children(
     list.extend(entering.drain(..).map(|(_, item)| item));
 }
 
+// Whether a translate step of `container`, a layer of a node with `slices`
+// that places the children of `scratch`, reads where the layer lies in the
+// window: the node publishes window origins, a record beneath it does, or a
+// child that enters or takes its text again may, with slices the store has
+// not seen.
+fn reads_window_origin(
+    slices: &ModifierNodeSlices,
+    container: LayerRef<'_>,
+    scratch: &TranslateScratch,
+) -> bool {
+    modifier_slices_have_origin_sinks(slices)
+        || container.has_origin_sinks()
+        || scratch.fresh_slices
+}
+
+// The geometry of `container`, the layer a translate step places the
+// children of `scratch` in, laid out as `layout_state` by a node with
+// `slices`: where it lies in the window, worked out from `parent_abs`, only
+// when the step reads it.
+fn translated_geometry(
+    store: &SceneStore,
+    container: RecordId,
+    scratch: &TranslateScratch,
+    layout_state: &LayoutState,
+    slices: &ModifierNodeSlices,
+    parent_abs: ParentOrigin<'_>,
+) -> TranslateGeometry {
+    let layer = store.layer(container);
+    let parent_abs = if reads_window_origin(slices, layer, scratch) {
+        parent_abs.resolve(store)
+    } else {
+        None
+    };
+    TranslateGeometry::new(
+        layout_state,
+        layer.graphics_layer(),
+        layer.local_bounds(),
+        parent_abs,
+    )
+}
+
 fn with_translate_scratch<R>(f: impl FnOnce(&mut TranslateScratch) -> R) -> R {
     crate::thread_state::with(|state| match state.translate_scratch.try_borrow_mut() {
         Ok(mut scratch) => f(&mut scratch),
@@ -600,14 +647,11 @@ pub(super) fn translate_layer_from_data(
     store: &mut SceneStore,
     container: RecordId,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
-    ancestors: TranslateAncestorContext,
+    ancestors: TranslateAncestorContext<'_>,
     data: SnapshotNodeData<'_>,
     wrapping: Wrapping,
 ) -> bool {
-    let TranslateAncestorContext {
-        inherited,
-        parent_abs,
-    } = ancestors;
+    let inherited = ancestors.inherited;
     let SnapshotNodeData {
         layout_state,
         modifier_slices,
@@ -645,14 +689,15 @@ pub(super) fn translate_layer_from_data(
             fresh_children,
             scratch,
         )?;
-        let layer = store.layer(container);
-        let geometry = TranslateGeometry::new(
+        let geometry = translated_geometry(
+            store,
+            container,
+            scratch,
             &layout_state,
-            layer.graphics_layer(),
-            layer.local_bounds(),
-            parent_abs,
+            &modifier_slices,
+            ancestors.parent_abs,
         );
-        let children = geometry.children_context(layer, ancestors);
+        let children = geometry.children_context(store.layer(container), ancestors);
         match &order {
             ChildOrder::Shifted { kept, .. } => {
                 parts.keep_range(store, kept.clone(), &mut list, dirty_nodes);
@@ -668,7 +713,7 @@ pub(super) fn translate_layer_from_data(
             &modifier_slices,
             &layout_state,
             inherited.parent_content_offset,
-            geometry,
+            &geometry,
         );
         reconcile_translated_children(
             applier,

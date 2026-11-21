@@ -86,7 +86,7 @@
   *(.literal._RNvM*NtCs*_22cranpose_render_pixels5sceneNt*11RasterScene6counts* .text._RNvM*NtCs*_22cranpose_render_pixels5sceneNt*11RasterScene6counts*)
   *(.literal._RNvNtNtCs*_22cranpose_render_pixels8pipeline10draw_child17render_draw_child* .text._RNvNtNtCs*_22cranpose_render_pixels8pipeline10draw_child17render_draw_child*)
   *(.literal._RNvNtCs*_11cranpose_ui12render_state17app_context_by_id* .text._RNvNtCs*_11cranpose_ui12render_state17app_context_by_id*)
-  *(.literal._RNvNtNtCs*_22cranpose_render_common13scene_builder13dirty_records15children_origin* .text._RNvNtNtCs*_22cranpose_render_common13scene_builder13dirty_records15children_origin*)
+  *(.literal._RNvNtNtCs*_22cranpose_render_common13scene_builder13parent_origin15children_origin* .text._RNvNtNtCs*_22cranpose_render_common13scene_builder13parent_origin15children_origin*)
   *(.literal._RNvM*NtCs*_13cranpose_core7runtimeNt*12RuntimeInner16poll_async_tasks* .text._RNvM*NtCs*_13cranpose_core7runtimeNt*12RuntimeInner16poll_async_tasks*)
   *(.literal._RNvNtCs*_22cranpose_render_pixels6damage8add_area* .text._RNvNtCs*_22cranpose_render_pixels6damage8add_area*)
   *(.literal._RNvM*NtNtCs*_13cranpose_core7runtime7ui_taskNt*13RuntimeHandle22enqueue_shared_ui_task* .text._RNvM*NtNtCs*_13cranpose_core7runtime7ui_taskNt*13RuntimeHandle22enqueue_shared_ui_task*)

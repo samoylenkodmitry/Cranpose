@@ -8,7 +8,7 @@ use cranpose_ui::{
 
 use super::{
     SnapshotNodeData, TranslateAncestorContext, TranslateGeometry, TranslatedContainer, Wrapping,
-    read_node_data,
+    modifier_slices_have_origin_sinks, read_node_data,
     translate_layer::{
         apply_translated_container_state, translate_layer_from_data, translated_write,
     },
@@ -53,7 +53,7 @@ pub(super) fn translate_unwrapped(
     store: &mut SceneStore,
     container: RecordId,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
-    ancestors: TranslateAncestorContext,
+    ancestors: TranslateAncestorContext<'_>,
     data: SnapshotNodeData<'_>,
 ) -> bool {
     if draws_text_alone(store, container)
@@ -81,7 +81,7 @@ pub(super) fn translate_leaf_text(
     store: &mut SceneStore,
     container: RecordId,
     data: &SnapshotNodeData<'_>,
-    ancestors: TranslateAncestorContext,
+    ancestors: TranslateAncestorContext<'_>,
 ) -> Option<bool> {
     let slices = &data.modifier_slices;
     let leaf = data.children.is_empty() && !data.window_root && slices.draw_commands().is_empty();
@@ -103,16 +103,22 @@ pub(super) fn translate_leaf_text(
     if !refresh_text_node(drawn_text(store, container)?, &parts) {
         return None;
     }
+    // A label holds no records beneath it, so only its own slices publish.
+    let parent_abs = if modifier_slices_have_origin_sinks(slices) {
+        ancestors.parent_abs.resolve(store)
+    } else {
+        None
+    };
     let layer = store.layer(container);
     let geometry = TranslateGeometry::new(
         layout_state,
         layer.graphics_layer(),
         layer.local_bounds(),
-        ancestors.parent_abs,
+        parent_abs,
     );
     store.set_content_offset(container, geometry.content_offset);
     let offset = ancestors.inherited.parent_content_offset;
-    apply_translated_container_state(store, container, slices, layout_state, offset, geometry);
+    apply_translated_container_state(store, container, slices, layout_state, offset, &geometry);
     let write = translated_write(store, container, slices, None);
     store.write_translated(container, write);
     Some(true)
@@ -126,7 +132,7 @@ pub(super) fn retext_kept_leaf(
     applier: &MemoryApplier,
     store: &mut SceneStore,
     layer: RecordId,
-    children: TranslateAncestorContext,
+    children: TranslateAncestorContext<'_>,
 ) -> Option<bool> {
     let node_id = store.layer(layer).node_id()?;
     read_node_data(applier, node_id, |data| {
