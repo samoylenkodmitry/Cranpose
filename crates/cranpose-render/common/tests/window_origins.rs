@@ -347,10 +347,22 @@ fn sinks_that_enter_under_a_kept_box_publish_where_they_lie() {
     holder.update();
     let sinks = holder.sinks.clone();
     holder.assert_where_they_lie(&[("entering", &sinks.entering)], true, "enter");
+    // The sinks entered through a scoped update; the window then resizes
+    // the box above them and composes nothing.
+    holder.widen(260.0);
+    holder.update();
+    holder.assert_where_they_lie(&[("entering", &sinks.entering)], true, "resize after enter");
 
     holder.knobs.reporting.set(true);
     holder.update();
     holder.assert_where_they_lie(&[("taken", &sinks.toggled)], false, "take a reporter");
+    holder.widen(230.0);
+    holder.update();
+    holder.assert_where_they_lie(
+        &[("taken", &sinks.toggled), ("entering", &sinks.entering)],
+        true,
+        "resize after take",
+    );
 }
 
 #[test]
@@ -406,6 +418,13 @@ fn a_reporter_that_leaves_and_comes_back_publishes_where_it_now_lies() {
         &[("returned", &sinks.toggled), ("entered", &sinks.entering)],
         true,
         "come back",
+    );
+    holder.widen(300.0);
+    holder.update();
+    holder.assert_where_they_lie(
+        &[("returned", &sinks.toggled), ("entered", &sinks.entering)],
+        true,
+        "resize after come back",
     );
 }
 
@@ -491,9 +510,11 @@ fn a_row_that_reports_enters_a_lazy_list_where_it_lies() {
 }
 
 // The width of the boxes before and after what enters a row that scrolls,
-// and how far the row scrolls.
+// how far the row scrolls before the sinks enter, and how far it scrolls
+// on after.
 const ROW_PAD: f32 = 300.0;
 const SCROLLED: f32 = 100.0;
+const SCROLLED_ON: f32 = 160.0;
 
 #[test]
 fn sinks_that_enter_a_scrolled_row_publish_where_they_lie() {
@@ -524,24 +545,33 @@ fn sinks_that_enter_a_scrolled_row_publish_where_they_lie() {
 
     entered.set(true);
     update_scene(&mut composition, root, VIEWPORT, &mut scene);
-    let at = |x: f32, size: Size| Rect {
-        x: x - SCROLLED,
-        y: 0.0,
-        width: size.width,
-        height: size.height,
-    };
-    let lies = at(ROW_PAD, REPORTER);
-    assert_eq!(
-        sink.get(),
-        lies,
-        "the reporter that entered publishes where it lies"
-    );
-    let field = field.get().expect("the field entered");
-    assert_eq!(
-        field_rect(&mut composition, field),
-        at(ROW_PAD + REPORTER.width, FIELD),
-        "the field that entered reports where it lies"
-    );
+    // The sinks entered through a scoped update; the row then scrolls on
+    // and composes nothing.
+    for (step, scroll_on) in [("enter", None), ("scroll on", Some(SCROLLED_ON))] {
+        if let Some(position) = scroll_on {
+            scroll.scroll_to(position);
+            update_scene(&mut composition, root, VIEWPORT, &mut scene);
+        }
+        let scrolled = scroll_on.unwrap_or(SCROLLED);
+        let at = |x: f32, size: Size| Rect {
+            x: x - scrolled,
+            y: 0.0,
+            width: size.width,
+            height: size.height,
+        };
+        assert_eq!(
+            sink.get(),
+            at(ROW_PAD, REPORTER),
+            "{step}: the reporter publishes where it lies"
+        );
+        let field = field.get().expect("the field entered");
+        assert_eq!(
+            field_rect(&mut composition, field),
+            at(ROW_PAD + REPORTER.width, FIELD),
+            "{step}: the field reports where it lies"
+        );
+    }
+    let lies = sink.get();
     let _fresh = fresh_graph(&mut composition, root);
     assert_eq!(sink.get(), lies, "a fresh scene publishes the same");
 }
