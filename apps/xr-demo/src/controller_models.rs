@@ -45,7 +45,9 @@ pub(crate) fn StartingChoice() {
             set_both(&models, ControllerModel::Plain);
         }
         if built("off") {
-            models.set_enabled(false);
+            for hand in [Hand::Left, Hand::Right] {
+                models.hand(hand).set_enabled(false);
+            }
         }
     });
 }
@@ -146,7 +148,7 @@ fn LogFrames() {
 
 // The state of the choice, in the words of the button.
 fn label(models: &ControllerModels) -> &'static str {
-    if !models.is_enabled() {
+    if !models.hand(Hand::Left).is_enabled() {
         return "Controller models: none";
     }
     match models.model(Hand::Left) {
@@ -168,13 +170,15 @@ pub(crate) fn ControllerModelsButton() {
             .padding_symmetric(32.0, 18.0),
         ButtonSpec::default(),
         move || {
-            if !models.is_enabled() {
-                models.set_enabled(true);
+            let shown = models.hand(Hand::Left).is_enabled();
+            if !shown {
                 set_both(&models, ControllerModel::Runtime);
             } else if models.model(Hand::Left) == ControllerModel::Runtime {
                 set_both(&models, ControllerModel::Plain);
-            } else {
-                models.set_enabled(false);
+                return;
+            }
+            for hand in [Hand::Left, Hand::Right] {
+                models.hand(hand).set_enabled(!shown);
             }
         },
         move || {

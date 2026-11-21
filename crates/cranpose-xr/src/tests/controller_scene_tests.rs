@@ -239,18 +239,40 @@ fn turned_off_no_model_shows_and_turned_on_again_it_comes_back() {
     states.track([&controller, &controller]);
     settle(&mut headset, |headset| scene_count(&headset.space) == 2);
 
-    states.handle().set_enabled(false);
+    for hand in Hand::BOTH {
+        states.handle().hand(hand).set_enabled(false);
+    }
     states.track([&controller, &controller]);
     settle(&mut headset, |headset| scene_count(&headset.space) == 0);
     let mut pass = VolumePass::default();
     let image = Eye::new(&headset.gpu);
     assert!(!draw(&mut headset, &mut pass, &eye(0.0), &image));
-    assert!(!states.handle().is_enabled());
+    assert!(!states.handle().hand(Hand::Left).is_enabled());
 
-    states.handle().set_enabled(true);
+    for hand in Hand::BOTH {
+        states.handle().hand(hand).set_enabled(true);
+    }
     states.track([&controller, &controller]);
     settle(&mut headset, |headset| scene_count(&headset.space) == 2);
     assert!(shown_in(&mut headset, &eye(0.0), &image).is_some());
+}
+
+#[test]
+fn a_hand_whose_model_is_off_shows_none_while_the_other_hand_shows_its_own() {
+    let mut headset = headset_without_volumes();
+    let states = headset.space.volumes().controllers();
+    let controller = held([0.0, 0.0, -0.5]);
+    states.handle().hand(Hand::Left).set_enabled(false);
+    states.track([&controller, &controller]);
+    settle(&mut headset, |headset| scene_count(&headset.space) == 1);
+    assert!(!states.handle().hand(Hand::Left).is_enabled());
+    assert!(states.handle().hand(Hand::Right).is_enabled());
+    assert!(!states.is_shown(Hand::Left) && states.is_shown(Hand::Right));
+
+    // The left hand points at a panel again
+    states.handle().hand(Hand::Left).set_enabled(true);
+    states.track([&controller, &controller]);
+    settle(&mut headset, |headset| scene_count(&headset.space) == 2);
 }
 
 #[test]
@@ -290,7 +312,7 @@ fn the_state_of_the_models_is_one_per_composition_and_the_app_reads_it() {
     let one: ControllerStates = headset.space.volumes().controllers();
     let handle = one.handle();
     assert!(handle == headset.space.volumes().controllers().handle());
-    assert!(handle.is_enabled());
+    assert!(handle.hand(Hand::Left).is_enabled() && handle.hand(Hand::Right).is_enabled());
     assert_eq!(handle.model(Hand::Left), ControllerModel::Runtime);
     handle.set_model(Hand::Right, ControllerModel::Plain);
     assert_eq!(handle.model(Hand::Right), ControllerModel::Plain);

@@ -110,6 +110,11 @@ impl<const N: usize> Track<N> {
         }
     }
 
+    // The value of key `key`, or `None` past the last key.
+    fn key(&self, key: usize) -> Option<[f32; N]> {
+        (key < self.times.len()).then(|| self.value(key))
+    }
+
     // The value at `time`. `blend` mixes two values: `fraction` of the way from the first to the
     // second.
     fn sample(&self, time: f32, blend: fn(&[f32; N], &[f32; N], f32) -> [f32; N]) -> [f32; N] {
@@ -139,12 +144,12 @@ impl<const N: usize> Track<N> {
     }
 }
 
-fn lerp<const N: usize>(from: &[f32; N], to: &[f32; N], fraction: f32) -> [f32; N] {
+pub(crate) fn lerp<const N: usize>(from: &[f32; N], to: &[f32; N], fraction: f32) -> [f32; N] {
     std::array::from_fn(|i| from[i] + (to[i] - from[i]) * fraction)
 }
 
 // The turn that lies `fraction` of the way from `from` to `to` along the shorter arc.
-fn slerp(from: &[f32; 4], to: &[f32; 4], fraction: f32) -> [f32; 4] {
+pub(crate) fn slerp(from: &[f32; 4], to: &[f32; 4], fraction: f32) -> [f32; 4] {
     let mut dot: f32 = (0..4).map(|i| from[i] * to[i]).sum();
     let sign = if dot < 0.0 { -1.0 } else { 1.0 };
     dot *= sign;
@@ -215,6 +220,17 @@ impl Channel {
             Self::Scale(track) => node.scale = track.sample(time, lerp),
         }
     }
+
+    // Sets the keyed part of `node` to its value at key `key`, or returns `None` when the track has
+    // fewer keys.
+    fn apply_key(&self, key: usize, node: &mut Trs) -> Option<()> {
+        match self {
+            Self::Translation(track) => node.translation = track.key(key)?,
+            Self::Rotation(track) => node.rotation = normalized_rotation(track.key(key)?),
+            Self::Scale(track) => node.scale = track.key(key)?,
+        }
+        Some(())
+    }
 }
 
 // The animation of a model: what each of its channels does to its node.
@@ -237,6 +253,22 @@ impl Clip {
             duration,
             channels,
         }
+    }
+
+    // The transform of `node` at key `key` of each channel that keys it, over `rest` for the parts
+    // that no channel keys. A key is a place in a channel's list of keys, not a time: a model can
+    // keep a pose for each input of a device at a fixed key. `None` when no channel keys the node,
+    // or when a channel that keys it has no such key.
+    pub(crate) fn pose_at_key(&self, node: usize, key: usize, rest: Trs) -> Option<Trs> {
+        let mut pose = rest;
+        let mut keyed = false;
+        for (target, channel) in &self.channels {
+            if *target == node {
+                channel.apply_key(key, &mut pose)?;
+                keyed = true;
+            }
+        }
+        keyed.then_some(pose)
     }
 
     // Sets the keyed parts of the nodes' transforms to their values `time` seconds into the clip.

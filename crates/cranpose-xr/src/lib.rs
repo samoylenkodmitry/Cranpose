@@ -14,8 +14,9 @@
 //! the volumes. The runtime's own model of the controller shows where the app declared
 //! `Use::controller_models()` in its build and the runtime has one. A Meta Quest has one through
 //! `XR_FB_render_model`, and the `gltf` feature loads it. Elsewhere a plain model that Cranpose builds
-//! shows. [`ControllerModels`], which [`local_controller_models`] gives, turns the models off or
-//! replaces them. A tracked hand with no controller in it shows no model.
+//! shows. [`ControllerModels`], which [`local_controller_models`] gives, turns each hand's model off
+//! or replaces it. A tracked hand with no controller in it shows no model. The trigger, the grip,
+//! the buttons and the thumbstick of a runtime's model move with the inputs.
 //!
 //! A [`SpatialExternalSurface`] gives the app a surface that a hardware video decoder or a camera
 //! writes into. The compositor shows its pictures as a layer with no copy. A [`StreamedScene`]
@@ -93,6 +94,8 @@ mod controller_loaders;
 mod controller_look;
 mod controller_model;
 mod controller_models;
+#[cfg(feature = "gltf")]
+mod controller_parts;
 #[cfg(any(test, headset))]
 mod controller_placement;
 #[cfg(any(test, headset))]
@@ -158,10 +161,13 @@ mod gltf_model;
 mod gltf_model_node;
 #[cfg(feature = "gltf")]
 mod gltf_placement;
+#[cfg(feature = "gltf")]
+mod gltf_skin;
 mod hand;
 mod hand_aim;
 mod hand_joint;
 mod hand_joint_type;
+mod hand_model;
 mod hand_state;
 #[cfg(any(test, headset))]
 mod handle;
@@ -380,6 +386,7 @@ pub use hand::Hand;
 pub use hand_aim::HandAim;
 pub use hand_joint::HandJoint;
 pub use hand_joint_type::HandJointType;
+pub use hand_model::HandModel;
 pub use hand_state::HandState;
 pub use haptics::{Haptics, Vibration, local_haptics};
 pub use headset_properties::{EyeImageSize, HeadsetProperties, local_headset_properties};
