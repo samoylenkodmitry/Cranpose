@@ -43,14 +43,15 @@ pub(crate) struct SlotsHostInner {
     pub(crate) pass_state: Option<Box<slot::SlotWriteSessionState>>,
 }
 
-// Passes of more hosts at once are rare; they take new states.
-const SPARE_WRITE_STATES: usize = 2;
-
 // A writer state for a pass under `folds`: one of the thread's spare states
-// when it has one.
+// when it has one. Up to two spare states chain through `next_spare`.
 fn spare_write_state(folds: &Rc<slot::BranchFolds>) -> Box<slot::SlotWriteSessionState> {
-    match crate::thread_state::try_runtimes(|state| state.spare_write_states.borrow_mut().pop())
-        .flatten()
+    match crate::thread_state::try_runtimes(|state| {
+        let mut head = state.spare_write_states.take()?;
+        state.spare_write_states.set(head.next_spare.take());
+        Some(head)
+    })
+    .flatten()
     {
         Some(mut state) => {
             state.set_folds(Rc::clone(folds));
@@ -60,11 +61,14 @@ fn spare_write_state(folds: &Rc<slot::BranchFolds>) -> Box<slot::SlotWriteSessio
     }
 }
 
-fn recycle_write_state(state: Box<slot::SlotWriteSessionState>) {
+fn recycle_write_state(mut state: Box<slot::SlotWriteSessionState>) {
     crate::thread_state::try_runtimes(|threads| {
-        let mut spare = threads.spare_write_states.borrow_mut();
-        if spare.len() < SPARE_WRITE_STATES {
-            spare.push(state);
+        let head = threads.spare_write_states.take();
+        if head.as_ref().is_none_or(|first| first.next_spare.is_none()) {
+            state.next_spare = head;
+            threads.spare_write_states.set(Some(state));
+        } else {
+            threads.spare_write_states.set(head);
         }
     });
 }
@@ -74,24 +78,10 @@ impl Drop for SlotsHost {
         let storage_key = self.storage_key.get();
         let inner = self.inner.get_mut();
         if let Some(state) = inner.runtime_state.clone() {
-            if let Err(err) = state.dispose_retained_subtrees_for_host(
-                storage_key,
-                &mut inner.table,
-                &mut inner.lifecycle,
-            ) {
-                log::error!(
-                    "retained subtree disposal failed while dropping SlotsHost {storage_key}: {err}"
-                );
-                state.abandon_retained_subtrees_for_host(
-                    storage_key,
-                    &mut inner.table,
-                    &mut inner.lifecycle,
-                );
-            } else {
-                state.clear_host_storage_key(storage_key, &mut inner.table);
-            }
+            state.dispose_host_on_drop(storage_key, &mut inner.table, &mut inner.lifecycle);
+        } else {
+            inner.lifecycle.dispose_slot_table(&mut inner.table);
         }
-        inner.lifecycle.dispose_slot_table(&mut inner.table);
     }
 }
 
@@ -195,33 +185,37 @@ impl SlotsHost {
         }
         drop(inner);
 
-        let mut inner = self.inner.borrow_mut();
-        let Some(bound_state) = inner.runtime_state.as_ref() else {
-            inner.runtime_state = Some(Rc::clone(state));
-            return true;
-        };
-        if Rc::ptr_eq(bound_state, state) {
-            return true;
-        }
-        if bound_state.has_live_applier_host() {
-            return false;
-        }
+        self.flush_pending_drops();
+        let mut lifecycle = {
+            let mut inner = self.inner.borrow_mut();
+            if inner.active_pass.is_some() {
+                log::error!("cannot rebind SlotsHost during an active pass");
+                return false;
+            }
+            let Some(bound_state) = inner.runtime_state.as_ref() else {
+                inner.runtime_state = Some(Rc::clone(state));
+                return true;
+            };
+            if Rc::ptr_eq(bound_state, state) {
+                return true;
+            }
+            if bound_state.has_live_applier_host() {
+                return false;
+            }
 
-        let previous_state = Rc::clone(bound_state);
-        let mut lifecycle = std::mem::take(&mut inner.lifecycle);
+            let previous_state = Rc::clone(bound_state);
+            let host_key = self.storage_key();
+            let SlotsHostInner {
+                table,
+                lifecycle,
+                runtime_state,
+                ..
+            } = &mut *inner;
+            previous_state.abandon_retained_subtrees_for_host(host_key, table, lifecycle);
+            *runtime_state = Some(Rc::clone(state));
+            std::mem::take(lifecycle)
+        };
         lifecycle.flush_pending_drops();
-        let host_key = self.storage_key();
-        if previous_state
-            .dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)
-            .is_err()
-        {
-            inner.lifecycle = lifecycle;
-            return false;
-        }
-        previous_state.clear_host(self, &mut inner.table);
-        lifecycle.flush_pending_drops();
-        inner.runtime_state = Some(Rc::clone(state));
-        inner.lifecycle = lifecycle;
         true
     }
 
@@ -254,68 +248,83 @@ impl SlotsHost {
     }
 
     fn take_table_for_transfer(&self) -> Result<SlotTable, NodeError> {
-        let inner = self.inner.borrow();
-        if inner.active_pass.is_some() {
+        self.take_table_detached("SlotsHost::into_table", composer::HostTableDisposal::Keep)
+    }
+
+    fn take_table_detached(
+        &self,
+        operation: &'static str,
+        table_disposal: composer::HostTableDisposal,
+    ) -> Result<SlotTable, NodeError> {
+        let _teardown = crate::runtime::enter_state_teardown_scope();
+        if self.inner.borrow().active_pass.is_some() {
             return Err(NodeError::SlotHostUnavailable {
-                operation: "SlotsHost::into_table",
+                operation,
                 reason: "slot pass is active",
             });
         }
-        drop(inner);
-        let mut inner = self.inner.borrow_mut();
-        let mut lifecycle = std::mem::take(&mut inner.lifecycle);
-        lifecycle.flush_pending_drops();
-        if let Some(state) = inner.runtime_state.clone() {
-            let host_key = self.storage_key();
-            if let Err(error) =
-                state.dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)
-            {
-                inner.lifecycle = lifecycle;
-                return Err(error);
+        self.flush_pending_drops();
+        let prepared = {
+            let mut inner = self.inner.borrow_mut();
+            if inner.active_pass.is_some() {
+                return Err(NodeError::SlotHostUnavailable {
+                    operation,
+                    reason: "slot pass is active",
+                });
             }
-            state.clear_host(self, &mut inner.table);
-            lifecycle.flush_pending_drops();
+            let host_key = self.storage_key();
+            let SlotsHostInner {
+                table,
+                lifecycle,
+                runtime_state,
+                ..
+            } = &mut *inner;
+            runtime_state.as_ref().and_then(|state| {
+                state.prepare_retained_disposal_for_host(host_key, table, lifecycle, table_disposal)
+            })
+        };
+        if let Some(prepared) = prepared {
+            prepared.dispose()?;
         }
-        let taken = std::mem::take(&mut inner.table);
-        self.storage_key.set(inner.table.storage_id());
-        inner.runtime_state = None;
-        inner.lifecycle = lifecycle;
+        let (taken, mut lifecycle) = {
+            let mut inner = self.inner.borrow_mut();
+            if inner.active_pass.is_some() {
+                return Err(NodeError::SlotHostUnavailable {
+                    operation,
+                    reason: "slot pass is active",
+                });
+            }
+            let SlotsHostInner {
+                table,
+                lifecycle,
+                runtime_state,
+                ..
+            } = &mut *inner;
+            if let Some(state) = runtime_state.take() {
+                state.clear_host(self, table);
+            }
+            let taken = std::mem::take(table);
+            self.storage_key.set(table.storage_id());
+            (taken, std::mem::take(lifecycle))
+        };
+        lifecycle.flush_pending_drops();
         Ok(taken)
     }
 
     /// Disposes the content of the slot table and replaces it with an empty one. Fails while a slot
     /// pass is active.
     pub fn reset(&self) -> Result<(), NodeError> {
-        let inner = self.inner.borrow();
-        if inner.active_pass.is_some() {
-            return Err(NodeError::SlotHostUnavailable {
-                operation: "SlotsHost::reset",
-                reason: "slot pass is active",
-            });
-        }
-        let runtime_state = inner.runtime_state.clone();
-        drop(inner);
-        let mut inner = self.inner.borrow_mut();
-        let mut lifecycle = std::mem::take(&mut inner.lifecycle);
-        if let Some(state) = runtime_state {
-            let host_key = self.storage_key();
-            if let Err(error) =
-                state.dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)
-            {
-                inner.lifecycle = lifecycle;
-                return Err(error);
-            }
-            state.clear_host(self, &mut inner.table);
-        }
-        lifecycle.dispose_slot_table(&mut inner.table);
-        inner.table = SlotTable::default();
-        self.storage_key.set(inner.table.storage_id());
-        inner.runtime_state = None;
-        inner.lifecycle = slot::SlotLifecycleCoordinator::default();
+        let _teardown = crate::runtime::enter_state_teardown_scope();
+        let mut old_table = self.take_table_detached(
+            "SlotsHost::reset",
+            composer::HostTableDisposal::DisposeWithRetained,
+        )?;
+        slot::SlotLifecycleCoordinator::default().dispose_slot_table(&mut old_table);
         Ok(())
     }
 
     pub(crate) fn abandon_after_apply_failure(&self) {
+        let _teardown = crate::runtime::enter_state_teardown_scope();
         let inner = self.inner.borrow();
         if inner.active_pass.is_some() {
             log::error!("cannot abandon SlotsHost during an active pass");
@@ -329,11 +338,12 @@ impl SlotsHost {
             let host_key = self.storage_key();
             state.abandon_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle);
         }
-        lifecycle.dispose_slot_table(&mut inner.table);
-        inner.table = SlotTable::default();
+        let mut old_table = std::mem::take(&mut inner.table);
         self.storage_key.set(inner.table.storage_id());
         inner.runtime_state = None;
         inner.lifecycle = slot::SlotLifecycleCoordinator::default();
+        drop(inner);
+        lifecycle.dispose_slot_table(&mut old_table);
     }
 
     pub(crate) fn debug_stats(&self) -> SlotTableDebugStats {
@@ -474,7 +484,20 @@ impl SlotsHost {
     }
 
     pub(crate) fn flush_pending_drops(&self) {
-        self.inner.borrow_mut().lifecycle.flush_pending_drops();
+        if self.inner.borrow().lifecycle.pending_drops_len() == 0 {
+            return;
+        }
+        self.flush_pending_drops_slow();
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn flush_pending_drops_slow(&self) {
+        loop {
+            let item = self.inner.borrow_mut().lifecycle.pop_pending_drop();
+            let Some(item) = item else { break };
+            item.dispose();
+        }
     }
 
     pub(crate) fn complete_pass_cleanup(&self, outcome: &SlotPassOutcome) {
@@ -485,7 +508,11 @@ impl SlotsHost {
             runtime_state,
             ..
         } = &mut *inner;
-        lifecycle.flush_pending_drops();
+        debug_assert_eq!(
+            lifecycle.pending_drops_len(),
+            0,
+            "pending drops must be flushed before pass cleanup"
+        );
         if outcome.compacted {
             table.compact_storage();
             lifecycle.compact_storage();

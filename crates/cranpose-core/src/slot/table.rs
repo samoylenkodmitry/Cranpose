@@ -10,6 +10,7 @@ mod metadata;
 mod mutation;
 mod values;
 
+pub(crate) use insert_run::ParkedTailStorage;
 #[cfg(test)]
 pub(crate) use values::ValueSlotError;
 

@@ -859,8 +859,12 @@ impl MemoryApplier {
 
         let mut root_children = SmallVec::<[NodeId; 8]>::new();
         self.collect_owned_children(id, &mut root_children)?;
+        if root_children.is_empty() {
+            self.remove_node_storage(id)?;
+            return Ok(1);
+        }
 
-        let mut stack = Vec::new();
+        let mut stack = SmallVec::<[RemovalFrame; 4]>::new();
         stack.push(RemovalFrame {
             node_id: id,
             children: root_children,

@@ -6,12 +6,18 @@
 //! attached elsewhere, and a detached subtree can give up the movables
 //! nested inside it so each one is retained under its own identity.
 
+use smallvec::SmallVec;
+
 use super::{
-    CheckedU32Delta, DetachedSubtree, GroupKey, GroupRecord, SlotTable, SlotWriteSession,
-    checked_u32_delta, checked_usize_to_i64,
+    DetachedSubtree, GroupKey, GroupRecord, SlotTable, SlotWriteSession,
     segments::{NodeSegment, PayloadSegment, extract_subtree_segment},
 };
-use crate::{AnchorId, Key, collections::map::HashMap, slot::PayloadAnchor};
+use crate::{
+    AnchorId, Key,
+    collections::map::HashMap,
+    movable_content::{disarm_remembered_movable, sole_owned_movable_id},
+    slot::PayloadAnchor,
+};
 
 pub(crate) const MOVABLE_STATIC_KEY: Key = Key(0x6d6f_7661_626c_6521);
 
@@ -135,28 +141,168 @@ impl SlotTable {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MovableAttachment {
+    AttachedHere,
+    AttachedElsewhereInHost,
+    NotAttachedHere,
+}
+
 impl SlotWriteSession<'_> {
-    pub(crate) fn movable_attached_elsewhere(&mut self, key: GroupKey) -> bool {
+    pub(crate) fn movable_attachment(&mut self, key: GroupKey) -> MovableAttachment {
         let Some(id) = key.movable_id() else {
-            return false;
+            return MovableAttachment::NotAttachedHere;
         };
         // The content may sit among the groups an insert run holds aside.
         self.table.settle_insert_run();
-        self.table
-            .movable_parent_anchor(id)
-            .is_some_and(|parent| parent != self.state.current_parent_anchor())
+        match self.table.movable_parent_anchor(id) {
+            Some(parent) if parent == self.state.current_parent_anchor() => {
+                MovableAttachment::AttachedHere
+            }
+            Some(_) => MovableAttachment::AttachedElsewhereInHost,
+            None => MovableAttachment::NotAttachedHere,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SplitMovables {
+    All,
+    SkipSoleOwnedInSubtree,
+}
+
+const INLINE_OWNED_MOVABLES: usize = 16;
+
+// In-place O(n log n) heapsort avoids pulling std's multi-kilobyte driftsort /
+// sort8_stable / quicksort instantiations for `(Key, bool)` into embedded images.
+#[cold]
+#[inline(never)]
+fn sort_owned_movables(entries: &mut [(Key, bool)]) {
+    fn sift_down(entries: &mut [(Key, bool)], mut root: usize, end: usize) {
+        while let Some(mut child) = root.checked_mul(2).and_then(|c| c.checked_add(1)) {
+            if child >= end {
+                break;
+            }
+            if child + 1 < end && entries[child].0 < entries[child + 1].0 {
+                child += 1;
+            }
+            if entries[root].0 >= entries[child].0 {
+                break;
+            }
+            entries.swap(root, child);
+            root = child;
+        }
+    }
+
+    let len = entries.len();
+    for start in (0..len / 2).rev() {
+        sift_down(entries, start, len);
+    }
+    for end in (1..len).rev() {
+        entries.swap(0, end);
+        sift_down(entries, 0, end);
+    }
+}
+
+#[derive(Default)]
+struct SoleOwnedMovables {
+    entries: SmallVec<[(Key, bool); INLINE_OWNED_MOVABLES]>,
+    collected: bool,
+    sorted: bool,
+    kept_any: bool,
+}
+
+impl SoleOwnedMovables {
+    #[cold]
+    #[inline(never)]
+    fn ensure_collected(&mut self, payloads: &[super::PayloadRecord]) {
+        if self.collected {
+            return;
+        }
+        self.collected = true;
+        for payload in payloads {
+            if let Some(id) = sole_owned_movable_id(&*payload.value) {
+                self.entries.push((id, false));
+            }
+        }
+        if self.entries.len() > INLINE_OWNED_MOVABLES {
+            sort_owned_movables(&mut self.entries);
+            self.sorted = true;
+        }
+    }
+
+    #[inline(never)]
+    fn find_index(&self, id: Key) -> Option<usize> {
+        if self.sorted {
+            self.entries.binary_search_by_key(&id, |&(key, _)| key).ok()
+        } else {
+            self.entries.iter().position(|&(key, _)| key == id)
+        }
+    }
+
+    fn mark_kept(&mut self, id: Key) -> bool {
+        let Some(index) = self.find_index(id) else {
+            return false;
+        };
+        self.entries[index].1 = true;
+        self.kept_any = true;
+        true
+    }
+
+    fn was_kept(&self, id: Key) -> bool {
+        self.find_index(id)
+            .is_some_and(|index| self.entries[index].1)
+    }
+
+    fn any_kept(&self) -> bool {
+        self.kept_any
     }
 }
 
 impl DetachedSubtree {
     pub(crate) fn split_off_nested_movables(&mut self) -> Vec<Self> {
+        self.split_off_nested_movables_with(SplitMovables::All)
+    }
+
+    // Splits off nested movables that may still outlive this disposed subtree.
+    // Movables whose sole owner lives in this subtree with no external handles
+    // stay in place and dispose directly with the subtree, avoiding a split,
+    // retain, and re-disposal round-trip.
+    pub(crate) fn split_off_unowned_nested_movables(&mut self) -> Vec<Self> {
+        self.split_off_nested_movables_with(SplitMovables::SkipSoleOwnedInSubtree)
+    }
+
+    fn split_off_nested_movables_with(&mut self, mode: SplitMovables) -> Vec<Self> {
+        let Some(offset) = self
+            .groups
+            .get(1..)
+            .and_then(|rest| rest.iter().position(|group| group.key.is_movable()))
+        else {
+            return Vec::new();
+        };
+        self.split_off_nested_movables_from(offset + 1, mode)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn split_off_nested_movables_from(&mut self, start: usize, mode: SplitMovables) -> Vec<Self> {
         let mut split = Vec::new();
-        let mut index = 1;
+        let mut owned = SoleOwnedMovables::default();
+        let mut index = start;
         while index < self.groups.len() {
             let group = &self.groups[index];
-            if !group.key.is_movable() {
+            let Some(movable_id) = group.key.movable_id() else {
                 index += 1;
                 continue;
+            };
+            if mode == SplitMovables::SkipSoleOwnedInSubtree {
+                owned.ensure_collected(&self.payloads);
+                if owned.mark_kept(movable_id) {
+                    // Keep this movable inside the disposed subtree, but continue
+                    // scanning inside it so any nested unowned movables still split.
+                    index += 1;
+                    continue;
+                }
             }
             let len = group.subtree_len as usize;
             let Some(end) = index
@@ -176,9 +322,20 @@ impl DetachedSubtree {
             }
             split.push(self.split_range(index, end));
         }
+        if owned.any_kept() {
+            for payload in &self.payloads {
+                if let Some(id) = sole_owned_movable_id(&*payload.value)
+                    && owned.was_kept(id)
+                {
+                    disarm_remembered_movable(&*payload.value);
+                }
+            }
+        }
         split
     }
 
+    #[cold]
+    #[inline(never)]
     fn split_range(&mut self, index: usize, end: usize) -> Self {
         let mut groups = self.groups.drain(index..end).collect::<Vec<_>>();
         let payloads = extract_subtree_segment::<PayloadSegment, _>(
@@ -194,17 +351,16 @@ impl DetachedSubtree {
             &mut groups,
         );
         let root_depth = groups[0].depth;
-        let depth_delta = CheckedU32Delta::from_i64(-i64::from(root_depth), "group depth");
         for group in &mut groups {
-            group.depth = checked_u32_delta(group.depth, depth_delta, 0, "group depth");
+            group.depth = group
+                .depth
+                .checked_sub(root_depth)
+                .expect("group depth underflow");
         }
         groups[0].parent_anchor = AnchorId::INVALID;
-        self.shrink_ancestors_before(
-            index,
-            root_depth,
-            checked_usize_to_i64(groups.len(), "split movable span"),
-            checked_usize_to_i64(nodes.len(), "split movable node count"),
-        );
+        let span = u32::try_from(groups.len()).expect("split movable span overflow");
+        let node_count = u32::try_from(nodes.len()).expect("split movable node count overflow");
+        self.shrink_ancestors_before(index, root_depth, span, node_count);
         let subtree = Self {
             groups,
             payloads,
@@ -217,9 +373,7 @@ impl DetachedSubtree {
         subtree
     }
 
-    fn shrink_ancestors_before(&mut self, index: usize, depth: u32, span: i64, nodes: i64) {
-        let span = CheckedU32Delta::from_i64(-span, "detached group subtree span");
-        let nodes = CheckedU32Delta::from_i64(-nodes, "detached group subtree node count");
+    fn shrink_ancestors_before(&mut self, index: usize, depth: u32, span: u32, nodes: u32) {
         let mut want = depth;
         for group in self.groups[..index].iter_mut().rev() {
             if want == 0 {
@@ -228,14 +382,15 @@ impl DetachedSubtree {
             if group.depth != want - 1 {
                 continue;
             }
-            group.subtree_len =
-                checked_u32_delta(group.subtree_len, span, 1, "detached group subtree span");
-            group.subtree_node_count = checked_u32_delta(
-                group.subtree_node_count,
-                nodes,
-                0,
-                "detached group subtree node count",
-            );
+            group.subtree_len = group
+                .subtree_len
+                .checked_sub(span)
+                .filter(|&len| len >= 1)
+                .expect("detached group subtree span underflow");
+            group.subtree_node_count = group
+                .subtree_node_count
+                .checked_sub(nodes)
+                .expect("detached group subtree node count underflow");
             want -= 1;
         }
     }

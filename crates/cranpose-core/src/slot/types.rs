@@ -405,33 +405,39 @@ impl DetachedSubtree {
         collect_root_node_ids_from_records_into(&self.nodes, root_nodes);
     }
 
-    pub(crate) fn collect_root_nodes_checked_into(
+    fn for_each_checked_root_record(
         &self,
-        root_nodes: &mut Vec<NodeId>,
         context: &'static str,
+        visit: &mut dyn FnMut(&NodeRecord),
     ) {
-        root_nodes.clear();
-        self.append_checked_roots(root_nodes, |node| node.id, context);
-    }
-
-    pub(crate) fn append_disposal_roots(&self, roots: &mut Vec<(NodeId, u32)>) {
-        self.append_checked_roots(roots, |node| (node.id, node.generation), "host disposal");
-    }
-
-    fn append_checked_roots<T>(
-        &self,
-        roots: &mut Vec<T>,
-        map: impl Fn(&NodeRecord) -> T,
-        context: &'static str,
-    ) {
-        let original_len = roots.len();
-        roots.extend(root_node_records(&self.nodes).map(&map));
-        if roots.len() == original_len && !self.nodes.is_empty() {
+        let mut found = false;
+        for node in root_node_records(&self.nodes) {
+            found = true;
+            visit(node);
+        }
+        if !found && !self.nodes.is_empty() {
             log::error!(
                 "detached subtree nodes did not expose root metadata during {context}; falling back to every detached node"
             );
-            roots.extend(self.nodes.iter().map(map));
+            for node in &self.nodes {
+                visit(node);
+            }
         }
+    }
+
+    pub(crate) fn collect_checked_root_nodes(
+        &self,
+        context: &'static str,
+    ) -> SmallVec<[NodeId; 8]> {
+        let mut roots = SmallVec::new();
+        self.for_each_checked_root_record(context, &mut |node| roots.push(node.id));
+        roots
+    }
+
+    pub(crate) fn append_disposal_roots(&self, roots: &mut Vec<(NodeId, u32)>) {
+        self.for_each_checked_root_record("host disposal", &mut |node| {
+            roots.push((node.id, node.generation));
+        });
     }
 
     pub(crate) fn group_count(&self) -> usize {
@@ -496,12 +502,11 @@ impl DetachedSubtree {
         }
     }
 
-    pub(crate) fn into_payload_drops_rev(self) -> Vec<DeferredDrop> {
+    pub(crate) fn into_payload_drops_rev(self) -> impl Iterator<Item = DeferredDrop> {
         self.payloads
             .into_iter()
             .rev()
             .map(PayloadRecord::into_deferred_drop)
-            .collect()
     }
 }
 
@@ -531,7 +536,7 @@ impl PayloadRecord {
 
 /// Records this many or fewer find a node's parent among them by scanning
 /// them, which costs less than hashing their ids into a set.
-const ROOT_SCAN_LIMIT: usize = 16;
+const ROOT_SCAN_LIMIT: usize = 32;
 
 /// The ids of the records in `nodes` whose parent is not among them, in
 /// order.

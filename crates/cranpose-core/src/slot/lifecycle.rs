@@ -11,7 +11,7 @@ impl DeferredDrop {
         Self { value }
     }
 
-    fn dispose(self) {
+    pub(crate) fn dispose(self) {
         drop(self.value);
     }
 }
@@ -26,10 +26,16 @@ impl SlotLifecycleCoordinator {
         self.pending_drops.push(drop);
     }
 
+    pub(crate) fn queue_drops(&mut self, drops: impl IntoIterator<Item = DeferredDrop>) {
+        self.pending_drops.extend(drops);
+    }
+
+    pub(crate) fn append(&mut self, other: &mut Self) {
+        self.pending_drops.append(&mut other.pending_drops);
+    }
+
     pub(crate) fn queue_subtree_disposal(&mut self, subtree: DetachedSubtree) {
-        for drop in subtree.into_payload_drops_rev() {
-            self.queue_drop(drop);
-        }
+        self.pending_drops.extend(subtree.into_payload_drops_rev());
     }
 
     pub(crate) fn pop_pending_drop(&mut self) -> Option<DeferredDrop> {

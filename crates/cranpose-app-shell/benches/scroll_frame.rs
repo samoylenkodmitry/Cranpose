@@ -6,17 +6,17 @@ use std::{
 };
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::{MemoryApplier, NodeId, location_key};
-use cranpose_render_common::{
-    NodeUpdate, Renderer, SceneUpdates,
-    graph_scene::Scene,
-    scene_store::{ItemRef, LayerRef},
-};
+use cranpose_core::location_key;
+use cranpose_render_common::scene_store::{ItemRef, LayerRef};
 use cranpose_ui::{
     Box, BoxSpec, Color, LazyColumn, LazyColumnSpec, LazyItems, LazyListScope, LazyListState,
-    Modifier, Size, composable, rememberLazyListState,
+    Modifier, composable, rememberLazyListState,
 };
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
+
+#[path = "support/graph_renderer.rs"]
+mod graph_renderer;
+use graph_renderer::GraphRenderer;
 
 #[global_allocator]
 static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
@@ -24,56 +24,6 @@ static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 const WARMUP: usize = 32;
 const FRAMES: usize = 512;
 const ROW_HEIGHT: f32 = 36.0;
-
-#[derive(Default)]
-struct GraphRenderer {
-    scene: Scene,
-    rebuilds: usize,
-    updates: usize,
-    dirty_ids: usize,
-}
-
-impl Renderer for GraphRenderer {
-    type Scene = Scene;
-    type Error = ();
-
-    fn scene(&self) -> &Scene {
-        &self.scene
-    }
-
-    fn scene_mut(&mut self) -> &mut Scene {
-        &mut self.scene
-    }
-
-    fn rebuild_scene_from_applier(
-        &mut self,
-        applier: &mut MemoryApplier,
-        root: NodeId,
-        _: Size,
-    ) -> Result<(), ()> {
-        self.rebuilds += 1;
-        self.scene.rebuild_from_applier(applier, root);
-        self.scene.root_layer().map(|_| ()).ok_or(())
-    }
-
-    fn update_scene_from_applier(
-        &mut self,
-        applier: &mut MemoryApplier,
-        root: NodeId,
-        _: Size,
-        updates: SceneUpdates<'_>,
-    ) -> Result<(), ()> {
-        self.updates += 1;
-        self.dirty_ids += updates
-            .iter()
-            .filter(|&&(_, update)| update != NodeUpdate::Moved)
-            .count();
-        if !self.scene.update_from_applier(applier, root, updates) {
-            self.rebuilds += 1;
-        }
-        self.scene.root_layer().map(|_| ()).ok_or(())
-    }
-}
 
 #[composable]
 fn ScrollContent(capture: Rc<RefCell<Option<LazyListState>>>, roots: usize) {
