@@ -89,6 +89,7 @@ mod projective_layer_clip;
 mod queued_surface_frames;
 mod raster_cache;
 mod record_path_goldens;
+mod recorded_paths;
 mod render_contract;
 mod rotate_scale_pixels;
 mod rotated_grid_relayout;

@@ -212,6 +212,19 @@ impl ShapeRecords {
         }
     }
 
+    // A row with no line or arc arguments to keep, as every row of a run is.
+    // Each column makes its part of the row in place: `extend` takes the
+    // room first, so no row waits on the stack while its column grows.
+    #[inline]
+    pub(crate) fn push_row_with(
+        &mut self,
+        body: impl FnOnce() -> ShapeRecordBody,
+        curve: impl FnOnce() -> ShapeRecordCurve,
+    ) {
+        self.bodies.extend(std::iter::once_with(body));
+        self.curves.extend(std::iter::once_with(curve));
+    }
+
     pub(crate) fn push(
         &mut self,
         body: ShapeRecordBody,
