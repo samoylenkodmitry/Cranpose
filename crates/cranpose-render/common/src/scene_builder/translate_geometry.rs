@@ -35,7 +35,7 @@ impl TranslateGeometry {
         layout_state: &cranpose_ui::widgets::LayoutState,
         graphics_layer: &GraphicsLayer,
         local_bounds: Rect,
-        parent_abs: Option<AbsOrigin>,
+        parent_abs: Option<&AbsOrigin>,
     ) -> Self {
         let window = parent_abs.map(|parent_abs| {
             let top_left = Point {
@@ -70,12 +70,14 @@ impl TranslateGeometry {
     }
 
     // What the children of `container`, the layer laid out here beneath
-    // `ancestors`, take from it.
-    pub(super) fn children_context(
+    // `ancestors`, take from it; `child_abs` is where they lie, as
+    // `child_abs` works it out.
+    pub(super) fn children_context<'a>(
         self,
         container: LayerRef<'_>,
-        ancestors: TranslateAncestorContext,
-    ) -> TranslateAncestorContext {
+        ancestors: TranslateAncestorContext<'_>,
+        child_abs: Option<&'a AbsOrigin>,
+    ) -> TranslateAncestorContext<'a> {
         TranslateAncestorContext {
             inherited: Inherited {
                 motion_context_animated: container.motion_context_animated(),
@@ -83,9 +85,7 @@ impl TranslateGeometry {
                     || container.translated_content_context(),
                 parent_content_offset: self.content_offset,
             },
-            parent_abs: self
-                .child_abs()
-                .map_or(ParentOrigin::Unread, ParentOrigin::Known),
+            parent_abs: child_abs.map_or(ParentOrigin::Unread, ParentOrigin::Known),
         }
     }
 
@@ -140,7 +140,7 @@ pub(super) fn move_kept_child(
     store: &mut SceneStore,
     record: RecordId,
     placed: &PlacedChild,
-    children: TranslateAncestorContext,
+    children: TranslateAncestorContext<'_>,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
 ) {
     let position = placed.geometry.position;
@@ -164,7 +164,7 @@ fn move_kept_layer(
     store: &mut SceneStore,
     record: RecordId,
     position: Point,
-    children: TranslateAncestorContext,
+    children: TranslateAncestorContext<'_>,
 ) {
     translate_retained_child(
         store,
@@ -187,7 +187,7 @@ fn write_kept_label(
     store: &mut SceneStore,
     record: RecordId,
     placed: &PlacedChild,
-    children: TranslateAncestorContext,
+    children: TranslateAncestorContext<'_>,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
 ) {
     let written = match store.layer(record).kind() {

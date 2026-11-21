@@ -30,7 +30,7 @@ pub(super) fn translate_tracking_hits(
     store: &mut SceneStore,
     layer: RecordId,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
-    ancestors: TranslateAncestorContext,
+    ancestors: TranslateAncestorContext<'_>,
 ) -> Option<GraphChanges> {
     let held = holds_hit_geometry(store.layer(layer));
     try_translate_scrolled_layer(applier, store, layer, dirty_nodes, ancestors)
@@ -48,7 +48,7 @@ fn try_translate_scrolled_layer(
     store: &mut SceneStore,
     container: RecordId,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
-    ancestors: TranslateAncestorContext,
+    ancestors: TranslateAncestorContext<'_>,
 ) -> bool {
     let Some(node_id) = layer_identity(store.layer(container)) else {
         return false;
@@ -454,7 +454,7 @@ fn build_entering_children(
     container: RecordId,
     scratch: &mut TranslateScratch,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
-    children: TranslateAncestorContext,
+    children: TranslateAncestorContext<'_>,
 ) {
     let entering = &mut scratch.entering;
     entering.clear();
@@ -529,7 +529,7 @@ fn reconcile_translated_children(
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     scratch: &mut TranslateScratch,
     order: ChildOrder,
-    children: TranslateAncestorContext,
+    children: TranslateAncestorContext<'_>,
 ) {
     if let ChildOrder::Shifted {
         entering_before, ..
@@ -566,7 +566,7 @@ fn reconcile_shifted_children(
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     scratch: &mut TranslateScratch,
     entering_before: usize,
-    children: TranslateAncestorContext,
+    children: TranslateAncestorContext<'_>,
 ) {
     let TranslateScratch {
         placed_fresh,
@@ -619,7 +619,7 @@ fn translated_geometry(
     scratch: &TranslateScratch,
     layout_state: &LayoutState,
     slices: &ModifierNodeSlices,
-    parent_abs: ParentOrigin,
+    parent_abs: ParentOrigin<'_>,
 ) -> TranslateGeometry {
     let layer = store.layer(container);
     let parent_abs = if reads_window_origin(slices, layer, scratch) {
@@ -647,14 +647,11 @@ pub(super) fn translate_layer_from_data(
     store: &mut SceneStore,
     container: RecordId,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
-    ancestors: TranslateAncestorContext,
+    ancestors: TranslateAncestorContext<'_>,
     data: SnapshotNodeData<'_>,
     wrapping: Wrapping,
 ) -> bool {
-    let TranslateAncestorContext {
-        inherited,
-        parent_abs,
-    } = ancestors;
+    let inherited = ancestors.inherited;
     let SnapshotNodeData {
         layout_state,
         modifier_slices,
@@ -698,9 +695,11 @@ pub(super) fn translate_layer_from_data(
             scratch,
             &layout_state,
             &modifier_slices,
-            parent_abs,
+            ancestors.parent_abs,
         );
-        let children = geometry.children_context(store.layer(container), ancestors);
+        let child_abs = geometry.child_abs();
+        let children =
+            geometry.children_context(store.layer(container), ancestors, child_abs.as_ref());
         match &order {
             ChildOrder::Shifted { kept, .. } => {
                 parts.keep_range(store, kept.clone(), &mut list, dirty_nodes);

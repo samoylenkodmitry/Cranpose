@@ -39,10 +39,10 @@ impl LowerContext {
     };
 
     // What a child lowers with beneath `ancestors`.
-    pub(super) fn beneath(ancestors: TranslateAncestorContext, store: &SceneStore) -> Self {
+    pub(super) fn beneath(ancestors: TranslateAncestorContext<'_>, store: &SceneStore) -> Self {
         Self {
             inherited: ancestors.inherited,
-            parent_abs: ancestors.parent_abs.resolve(store),
+            parent_abs: ancestors.parent_abs.resolve(store).copied(),
         }
     }
 
@@ -366,7 +366,7 @@ impl AbsOrigin {
         window_transform: Some(ProjectiveTransform::identity()),
     };
 
-    pub(super) fn children_of(self, layer: LayerRef<'_>) -> Self {
+    pub(super) fn children_of(&self, layer: LayerRef<'_>) -> Self {
         let origin = layer.origin_in_parent();
         let content_offset = layer.content_offset();
         let top_left = Point {
@@ -462,7 +462,7 @@ pub(super) fn with_node_layer<R>(
         layout_state,
         graphics_layer.unwrap_or(&GraphicsLayer::DEFAULT),
         local_bounds,
-        context.parent_abs,
+        context.parent_abs.as_ref(),
     );
     geometry.publish(slices, size);
     let content_offset = layout_state.content_offset();

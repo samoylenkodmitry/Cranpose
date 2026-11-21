@@ -53,7 +53,7 @@ pub(super) fn translate_unwrapped(
     store: &mut SceneStore,
     container: RecordId,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
-    ancestors: TranslateAncestorContext,
+    ancestors: TranslateAncestorContext<'_>,
     data: SnapshotNodeData<'_>,
 ) -> bool {
     if draws_text_alone(store, container)
@@ -81,7 +81,7 @@ pub(super) fn translate_leaf_text(
     store: &mut SceneStore,
     container: RecordId,
     data: &SnapshotNodeData<'_>,
-    ancestors: TranslateAncestorContext,
+    ancestors: TranslateAncestorContext<'_>,
 ) -> Option<bool> {
     let slices = &data.modifier_slices;
     let leaf = data.children.is_empty() && !data.window_root && slices.draw_commands().is_empty();
@@ -132,7 +132,7 @@ pub(super) fn retext_kept_leaf(
     applier: &MemoryApplier,
     store: &mut SceneStore,
     layer: RecordId,
-    children: TranslateAncestorContext,
+    children: TranslateAncestorContext<'_>,
 ) -> Option<bool> {
     let node_id = store.layer(layer).node_id()?;
     read_node_data(applier, node_id, |data| {

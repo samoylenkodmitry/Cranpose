@@ -326,7 +326,7 @@ fn update_dirty_root(
 ) -> Result<GraphChanges, GraphRebuildReason> {
     let ancestors = TranslateAncestorContext {
         inherited: Inherited::default(),
-        parent_abs: ParentOrigin::Known(AbsOrigin::ROOT),
+        parent_abs: ParentOrigin::Known(&AbsOrigin::ROOT),
     };
     if kind == NodeUpdate::Draws
         && redraw_retained_layer(applier, store, root, Level::Root, ancestors.inherited)
@@ -435,9 +435,9 @@ struct Inherited {
 }
 
 #[derive(Clone, Copy)]
-struct TranslateAncestorContext {
+struct TranslateAncestorContext<'a> {
     inherited: Inherited,
-    parent_abs: ParentOrigin,
+    parent_abs: ParentOrigin<'a>,
 }
 
 // Whether a node lowers as the graph's root, the one node that may be a
@@ -470,7 +470,7 @@ fn try_update_retained_layer(
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     kind: NodeUpdate,
     level: Level,
-    ancestors: TranslateAncestorContext,
+    ancestors: TranslateAncestorContext<'_>,
 ) -> Option<GraphChanges> {
     match kind {
         NodeUpdate::Moved if level == Level::Child => {
@@ -554,7 +554,7 @@ fn move_retained_layer(
     applier: &MemoryApplier,
     store: &mut SceneStore,
     layer: RecordId,
-    ancestors: TranslateAncestorContext,
+    ancestors: TranslateAncestorContext<'_>,
 ) -> Option<GraphChanges> {
     let placed = placed_child_geometry(applier, layer_identity(store.layer(layer))?)?;
     if Rect::from_size(placed.size) != store.layer(layer).node_rect() {
@@ -609,7 +609,7 @@ fn update_layer_properties(
     container: RecordId,
     level: Level,
     position: Position,
-    ancestors: TranslateAncestorContext,
+    ancestors: TranslateAncestorContext<'_>,
 ) -> Option<GraphChanges> {
     let layer = store.layer(container);
     let node_id = layer_identity(layer)?;
@@ -641,7 +641,7 @@ fn update_layer_properties(
         let context = LowerContext {
             inherited: ancestors.inherited,
             parent_abs: if reads {
-                ancestors.parent_abs.resolve(store)
+                ancestors.parent_abs.resolve(store).copied()
             } else {
                 None
             },
@@ -662,7 +662,7 @@ fn update_layer_properties(
         }
         let layer = store.layer(target);
         if layer.has_origin_sinks()
-            && let Some(child_abs) = child_context.parent_abs
+            && let Some(child_abs) = &child_context.parent_abs
         {
             for child in layer.children() {
                 publish_retained_window_geometry(applier, child, child_abs);
@@ -731,7 +731,7 @@ fn publish_content_geometry(
 fn publish_retained_window_geometry(
     applier: &MemoryApplier,
     layer: LayerRef<'_>,
-    parent_abs: AbsOrigin,
+    parent_abs: &AbsOrigin,
 ) {
     if !layer.has_origin_sinks() {
         return;
@@ -751,7 +751,7 @@ fn publish_retained_window_geometry(
         });
     }
     for child in layer.children() {
-        publish_retained_window_geometry(applier, child, child_abs);
+        publish_retained_window_geometry(applier, child, &child_abs);
     }
 }
 
