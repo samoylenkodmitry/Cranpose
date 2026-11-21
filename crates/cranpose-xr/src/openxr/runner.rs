@@ -14,7 +14,7 @@ use super::{
     frame_layers::{Layer, Stages},
     frame_rate::FrameRate,
     graphics::Graphics,
-    handle_layers::HandleLayers,
+    handle_layers::{self, Handle, HandleLayers},
     headset_input::HeadsetInput,
     host::{Host, SystemKeyboard},
     panel_layers::{DENSITY, PanelLayers},
@@ -25,18 +25,21 @@ use super::{
     spatial::{Frame as RoomFrame, Room, SpatialEvent},
     stream_layers::StreamLayers,
     surface_layers::SurfaceLayers,
-    volume_layers::VolumeLayers,
+    trial_layer::TrialLayer,
+    volume_layers::{ProjectionFrame, VolumeLayers},
 };
 use crate::{
     Anchors, EntitlementCheck, Hand, Planes, SpatialCapabilities, SpatialEnvironment, atlas_input,
-    depth_order::sort_back_to_front,
+    depth_order::{plane_distance, sort_back_to_front},
     exit_request::{ExitRequest, ExitStep, leave},
     frame_effects::local_frame_effects,
     keyboard_panel::SoftKeyboardPanel,
+    layer_budget::{FixedLayers, LayerBudget, PanelNeed, Place, Projection},
     local_anchors, local_controller_models, local_entitlement_check, local_haptics,
     local_headset_properties, local_planes, local_pointer_settings, local_spatial_capabilities,
     local_spatial_environment, local_tracking_capabilities,
     pointers::Pointers,
+    projected_pass::ProjectedLayer,
     session_status::{SessionStatus, StatusWatch},
     soft_keyboard::SoftKeyboard,
     sound_stage::SoundStage,
@@ -44,7 +47,16 @@ use crate::{
     spatial_store::SpatialStore,
     volume_host::VolumeScene,
     volume_pick::PickMeshes,
+    volumes::scene_count,
 };
+
+// Which pictures of a frame keep a layer of their own, and the pictures that the projection layer
+// draws instead, back to front. Both keep their storage from frame to frame.
+#[derive(Default)]
+struct FramePlan {
+    budget: LayerBudget,
+    projected: Vec<ProjectedLayer>,
+}
 
 // Runs `content` on the headset of `runtime` until the headset or the host ends it.
 pub(crate) fn run_immersive(
@@ -154,6 +166,9 @@ struct Immersive {
     _graphics: Graphics,
     // The panels of the frame, read anew at each frame into the same storage
     panels: Vec<PanelSlot>,
+    plan: FramePlan,
+    // The empty layer that the first shown frame repeats, until that frame has tried the limit
+    trial: Option<TrialLayer>,
 }
 
 impl Immersive {
@@ -179,6 +194,7 @@ impl Immersive {
         let scene_size = [width as f32, height as f32];
         let rays = RayLayers::new(&xr_session, &gpu, format)?;
         let handles = HandleLayers::new(&xr_session, &gpu, format)?;
+        let trial = TrialLayer::new(&xr_session, &gpu, format)?;
         let sounds = SoundStage::new(default_audio());
         let capabilities =
             SpatialCapabilities::in_headset(xr_session.passthrough.is_controllable())
@@ -255,6 +271,8 @@ impl Immersive {
             gpu,
             _graphics: graphics,
             panels: Vec::new(),
+            plan: FramePlan::default(),
+            trial,
         })
     }
 
@@ -365,33 +383,14 @@ impl Immersive {
         shown: bool,
         panels: &mut Vec<PanelSlot>,
     ) -> Result<(), String> {
-        if shown {
-            self.layers.draw(
-                &mut self.guest,
-                &self.gpu,
-                &self.xr_session,
-                &self.space,
-                panels,
-            )?;
-            self.streams
-                .update(&self.xr_session, &self.space, self.headset.display_time());
-            self.volumes.draw(
-                &mut self.guest,
-                &self.gpu,
-                &self.xr_session,
-                &self.space,
-                self.headset.eyes(),
-                self.headset.eye_image_size(),
-            );
-        } else {
+        if !self.xr_session.layer_trial_due() {
+            self.trial = None;
+        }
+        if !shown {
             self.space.panels_into(panels);
             self.streams.skip(&self.space);
-        }
-        self.surfaces.sync(&self.xr_session, &self.space, panels);
-        if shown {
-            self.end_with_layers(display_time, panels)
-        } else {
-            self.xr_session.end_frame(
+            self.surfaces.sync(&self.xr_session, &self.space, panels);
+            return self.xr_session.end_frame(
                 display_time,
                 Stages {
                     streams: std::iter::empty::<ProjectionLayer<'_>>(),
@@ -400,39 +399,139 @@ impl Immersive {
                     overlay: std::iter::empty::<QuadLayer<'_>>(),
                 },
                 None,
-            )
+                None,
+            );
+        }
+        self.layers.draw(
+            &mut self.guest,
+            &self.gpu,
+            &self.xr_session,
+            &self.space,
+            panels,
+        )?;
+        self.streams
+            .update(&self.xr_session, &self.space, self.headset.display_time());
+        self.surfaces.sync(&self.xr_session, &self.space, panels);
+        // The compositor draws layers in list order, so the panels go back to front
+        let head = self.headset.device_pose().map(|head| head.position);
+        if let Some(head) = head {
+            sort_back_to_front(panels, head, |slot| &slot.pose);
+        }
+        self.plan_layers(panels, head);
+        self.volumes.draw(
+            &mut self.guest,
+            &self.gpu,
+            &self.xr_session,
+            &self.space,
+            &ProjectionFrame {
+                views: self.headset.eyes(),
+                size: self.headset.eye_image_size(),
+                layers: &self.plan.projected,
+                atlas: self.layers.atlas(),
+            },
+        );
+        self.end_with_layers(display_time, panels, head)
+    }
+
+    // Decides which pictures of the frame keep a layer of their own in the runtime's limit, and
+    // lists the pictures that the projection layer draws instead, back to front as `panels` stand.
+    // A frame within the limit lists none and draws nothing more.
+    fn plan_layers(&mut self, panels: &[PanelSlot], head: Option<[f32; 3]>) {
+        let active = self.pointers.handles();
+        let cursors = self.pointers.cursors();
+        let pressed = self.pointers.pressed_surfaces();
+        let pointed = |id: u64| {
+            cursors.iter().flatten().any(|cursor| cursor.panel == id)
+                || active.iter().flatten().any(|(panel, _)| *panel == id)
+                || pressed.contains(&Some(id))
+        };
+        self.plan.budget.clear();
+        for slot in panels {
+            self.plan.budget.push(if slot.ride == Ride::Hidden {
+                PanelNeed::default()
+            } else {
+                PanelNeed {
+                    id: slot.id,
+                    distance: head.map_or(0.0, |head| plane_distance(head, &slot.pose)),
+                    priority: slot.priority,
+                    pointed: pointed(slot.id),
+                    content: self.layers.layer(slot).is_some(),
+                    surfaces: self.surfaces.layers(slot).count(),
+                    handles: handle_layers::placed(slot, active, head).count(),
+                }
+            });
+        }
+        let beams = self.pointers.beams();
+        let rays = head.map_or(0, |head| self.rays.layers(&beams, head).count());
+        let projection = if !self.volumes.available() {
+            Projection::Unavailable
+        } else if scene_count(&self.space) > 0 {
+            Projection::Present
+        } else {
+            Projection::Absent
+        };
+        let fixed = FixedLayers {
+            layers: self.xr_session.bottom_layers() + self.streams.layers().count() + rays,
+            projection,
+        };
+        let budget = self.plan.budget.plan(self.xr_session.layer_limit(), fixed);
+        self.plan.projected.clear();
+        if budget.projected == 0 {
+            return;
+        }
+        for (index, slot) in panels.iter().enumerate() {
+            let placement = self.plan.budget.placement(index);
+            if placement.content == Place::Projected {
+                self.plan.projected.extend(self.layers.projected(slot));
+            }
+            if placement.handles == Place::Projected {
+                self.plan
+                    .projected
+                    .extend(handle_layers::placed(slot, active, head).map(Handle::projected));
+            }
         }
     }
 
-    // Ends the frame with the layers of the streamed scenes, the panels and the surfaces. The
-    // rays go over them. The compositor draws layers in list order, so `panels` go back to front.
-    // The flat panels, the curved panels and the surfaces share that order: a panel in front of a
-    // surface shows over it. The handles of a panel come right after the panel's own
-    // layers, so a panel in front of a handle shows over it.
+    // Ends the frame with the layers of the streamed scenes, the panels and the surfaces that keep
+    // a layer of their own. The rays go over them. `panels` stand back to front. The flat panels,
+    // the curved panels and the surfaces share that order: a panel in front of a surface shows over
+    // it. The handles of a panel come right after the panel's own layers, so a panel in front of a
+    // handle shows over it.
     fn end_with_layers(
         &mut self,
         display_time: xr::Time,
-        panels: &mut [PanelSlot],
+        panels: &[PanelSlot],
+        head: Option<[f32; 3]>,
     ) -> Result<(), String> {
-        let head = self.headset.device_pose();
-        if let Some(head) = &head {
-            sort_back_to_front(panels, head.position, |slot| &slot.pose);
-        }
         let beams = self.pointers.beams();
         let active = self.pointers.handles();
-        let head_position = head.as_ref().map(|head| head.position);
-        let (layers, surfaces, handles) = (&self.layers, &self.surfaces, &self.handles);
+        let (layers, surfaces, handles, budget) = (
+            &self.layers,
+            &self.surfaces,
+            &self.handles,
+            &self.plan.budget,
+        );
         let shown = panels
             .iter()
-            .filter(|slot| slot.ride != Ride::Hidden)
-            .flat_map(|slot| {
-                layers
+            .enumerate()
+            .filter(|(_, slot)| slot.ride != Ride::Hidden)
+            .flat_map(|(index, slot)| {
+                let placement = budget.placement(index);
+                let content = layers
                     .layer(slot)
+                    .filter(|_| placement.content == Place::Own);
+                let surfaces = surfaces
+                    .layers(slot)
+                    .filter(move |_| placement.surfaces == Place::Own);
+                let handles = handles
+                    .layers(slot, active, head)
+                    .filter(move |_| placement.handles == Place::Own);
+                content
                     .into_iter()
-                    .chain(surfaces.layers(slot).map(Layer::Quad))
-                    .chain(handles.layers(slot, active, head_position).map(Layer::Quad))
+                    .chain(surfaces.map(Layer::Quad))
+                    .chain(handles.map(Layer::Quad))
             });
-        let rays = head_position
+        let rays = head
             .into_iter()
             .flat_map(|head| self.rays.layers(&beams, head));
         self.xr_session.end_frame(
@@ -444,6 +543,7 @@ impl Immersive {
                 overlay: rays,
             },
             self.volumes.plan(),
+            self.trial.as_ref().map(TrialLayer::layer),
         )
     }
 

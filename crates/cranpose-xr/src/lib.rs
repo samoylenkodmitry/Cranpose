@@ -184,6 +184,8 @@ mod keyboard_panel;
 #[cfg(any(test, headset))]
 mod keyboard_state;
 #[cfg(any(test, headset))]
+mod layer_budget;
+#[cfg(any(test, headset))]
 mod layer_limit;
 mod locals;
 mod mesh_ref;
@@ -224,6 +226,8 @@ mod pointers;
 mod pose;
 #[cfg(any(test, headset))]
 mod press_threshold;
+#[cfg(any(test, headset))]
+mod projected_pass;
 mod ray;
 #[cfg(any(test, headset))]
 mod reach;

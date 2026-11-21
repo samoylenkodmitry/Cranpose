@@ -50,7 +50,7 @@ fn a_panel_in_front_of_a_surface_draws_after_it() {
 fn put(space: &Space, shape: Shape, size: [f32; 2], position: [f32; 3]) -> u64 {
     let panel = space.new_panel();
     space.place(panel, size, Pose::IDENTITY, Pose::at(position));
-    space.set_shape(panel.id, shape);
+    space.set_layer(panel.id, shape, 0);
     panel.id
 }
 
