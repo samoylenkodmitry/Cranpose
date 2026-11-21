@@ -314,10 +314,7 @@ fn detaching_unvisited_siblings_batches_group_index_refresh() {
             )
         });
     harness.finish_pass();
-    assert_eq!(
-        u64::try_from(detached_children.len()).ok(),
-        Some(CHILD_COUNT)
-    );
+    assert_eq!(detached_children.len(), CHILD_COUNT as usize);
     for subtree in detached_children {
         harness.table.invalidate_detached_subtree_anchors(&subtree);
         harness.lifecycle.queue_subtree_disposal(subtree);

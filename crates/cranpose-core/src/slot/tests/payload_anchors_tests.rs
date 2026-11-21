@@ -146,9 +146,11 @@ fn payload_anchor_disposal_keeps_dense_storage_for_hot_path_reuse() {
     table.anchors.set_active(owner, 0);
 
     let mut payloads = Vec::new();
-    for (index, value) in (0..32_i32).enumerate() {
+    for value in 0..32_i32 {
         let anchor = table.payload_anchors.allocate();
-        table.payload_anchors.set_active(anchor, owner, index);
+        table
+            .payload_anchors
+            .set_active(anchor, owner, value as usize);
         payloads.push(PayloadRecord {
             anchor,
             payload_type: crate::slot::PayloadType::of::<i32>(),
