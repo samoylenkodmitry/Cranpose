@@ -106,7 +106,7 @@ pub(super) struct TranslatedContainer {
 pub(super) fn translated_container(
     store: &mut SceneStore,
     container: RecordId,
-    layout_state: &cranpose_ui::widgets::LayoutState,
+    layout_state: &LayoutState,
     modifier_slices: &ModifierNodeSlices,
     inherited: Inherited,
     wrapping: Wrapping,
@@ -497,7 +497,7 @@ pub(super) fn apply_translated_container_state(
     store: &mut SceneStore,
     container: RecordId,
     modifier_slices: &ModifierNodeSlices,
-    layout_state: &cranpose_ui::widgets::LayoutState,
+    layout_state: &LayoutState,
     parent_content_offset: Point,
     geometry: TranslateGeometry,
 ) {
