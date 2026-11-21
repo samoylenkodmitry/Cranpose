@@ -1,10 +1,9 @@
 // Disposition of detached subtrees: retain reusable groups, split nested
 // movables out of leaving groups, and dispose the rest.
 
-use smallvec::SmallVec;
-
+use super::movable_owners::movable_hooks;
 use crate::{
-    Command, ComposerCore, NodeError, NodeId, RecomposeScope, RetentionMode, ScopeId, SlotsHost,
+    ComposerCore, NodeError, NodeId, RecomposeScope, RetentionMode, ScopeId, SlotsHost,
     retention::RetainKey,
 };
 
@@ -26,29 +25,18 @@ impl ComposerCore {
         parent_scope: Option<ScopeId>,
         detached: Vec<crate::slot::DetachedSubtree>,
     ) -> Result<(), NodeError> {
+        let hooks = movable_hooks();
         for mut subtree in detached {
-            let is_movable_root = subtree
-                .root_key_checked()
-                .is_some_and(crate::slot::GroupKey::is_movable);
-            let retention_mode = if is_movable_root {
-                RetentionMode::RetainWhenInactive
-            } else {
-                subtree
-                    .root_scope()
-                    .map_or_default(RecomposeScope::retention_mode)
-            };
-            let nested_movables =
-                if !is_movable_root && retention_mode == RetentionMode::DisposeWhenInactive {
-                    subtree.split_off_unowned_nested_movables()
-                } else {
-                    subtree.split_off_nested_movables()
+            let retention_mode = subtree
+                .root_scope()
+                .map_or_default(RecomposeScope::retention_mode);
+            if let Some(hooks) = hooks {
+                let Some(rest) =
+                    (hooks.handle_detached_child)(self, slots_host, subtree, retention_mode)?
+                else {
+                    continue;
                 };
-            for movable in nested_movables {
-                self.handle_detached_movable_in_host(slots_host, movable)?;
-            }
-            if is_movable_root {
-                self.handle_detached_movable_in_host(slots_host, subtree)?;
-                continue;
+                subtree = rest;
             }
             match retention_mode {
                 RetentionMode::DisposeWhenInactive => {
@@ -74,30 +62,37 @@ impl ComposerCore {
             return Ok(());
         };
         let root_nodes = subtree.collect_checked_root_nodes("retention");
-        let mut detaches = SmallVec::<[(NodeId, NodeId); 4]>::new();
+        let mut first_detach = None;
+        let mut extra_detaches = Vec::new();
         {
             let mut applier = self.applier.borrow_dyn();
             for &root in &root_nodes {
                 if let Some(parent_id) = applier.get_mut(root)?.parent() {
-                    detaches.push((parent_id, root));
+                    if first_detach.is_none() {
+                        first_detach = Some((parent_id, root));
+                    } else {
+                        extra_detaches.push((parent_id, root));
+                    }
                 }
             }
         }
         subtree.scopes().for_each(RecomposeScope::deactivate);
-        if !detaches.is_empty() {
+        if first_detach.is_some() {
             let mut commands = self.commands.borrow_mut();
-            for (parent_id, child_id) in detaches {
-                commands.push(Command::DetachChild {
-                    parent_id,
-                    child_id,
-                });
+            for (parent_id, child_id) in first_detach.into_iter().chain(extra_detaches) {
+                commands.push_detach_child(parent_id, child_id);
             }
         }
+        let pin = if root_key.is_movable() {
+            crate::retention::RetentionPin::Pinned
+        } else {
+            crate::retention::RetentionPin::Unpinned
+        };
         let evicted = self.shared_state.insert_retained(
             slots_host,
             RetainKey::for_group(parent_scope, root_key),
             subtree,
-            root_key.is_movable(),
+            pin,
         );
         for subtree in evicted {
             self.dispose_detached_subtree_in_host(slots_host, subtree)?;

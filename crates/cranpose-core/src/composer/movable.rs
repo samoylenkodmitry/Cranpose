@@ -2,13 +2,26 @@
 
 use std::rc::{Rc, Weak};
 
-use smallvec::SmallVec;
-
-use super::{ComposerRuntimeState, DroppedMovable};
+use super::{
+    ComposerRuntimeState, DroppedMovable,
+    movable_owners::{MovableHooks, MovableOwners, install_movable_hooks, movable_hooks},
+};
 use crate::{
     AnchorId, Composer, ComposerCore, Key, NodeError, RecomposeScope, RecomposeScopeInner,
-    SlotsHost, retention::RetainKey,
+    RetentionMode, SlotsHost, retention::RetainKey,
 };
+
+static MOVABLE_HOOKS: MovableHooks = MovableHooks {
+    handle_detached_child: ComposerCore::handle_detached_child_movables,
+    settle_pass: Composer::settle_pass_movables_slow,
+    forget_movables: Composer::forget_movables_slow,
+    forget_host: MovableOwners::forget_disposed_in_table,
+    clear_host: MovableOwners::clear_host_slow,
+};
+
+pub(crate) fn enable_movable_hooks() {
+    install_movable_hooks(&MOVABLE_HOOKS);
+}
 
 pub(super) struct GroupEntry {
     pub(super) key: crate::slot::GroupKey,
@@ -53,25 +66,31 @@ impl Composer {
     }
 
     pub(super) fn wake_sites_whose_movable_arrived(&self) {
-        for host in self.core.shared_state.hosts_awaiting_movables() {
-            self.wake_sites_in_host(&host);
+        if !self.core.shared_state.movable_owners.has_pending_any() {
+            return;
         }
+        self.wake_sites_whose_movable_arrived_slow();
     }
 
-    fn wake_sites_in_host(&self, slots: &Rc<SlotsHost>) {
-        let pending = self.core.shared_state.take_pending_movables(slots);
+    #[cold]
+    #[inline(never)]
+    fn wake_sites_whose_movable_arrived_slow(&self) {
+        let pending = self.core.shared_state.movable_owners.take_all_pending();
         if pending.is_empty() {
             return;
         }
         let mut waiting = Vec::new();
-        for mut site in pending {
+        for (host_key, mut site) in pending {
+            let Some(slots) = self.core.shared_state.host_for_storage_key(host_key) else {
+                continue;
+            };
             if !slots.borrow().group_is_active(site.placeholder) {
                 continue;
             }
             let retain_key = RetainKey::for_group(None, site.key);
             if !self.core.shared_state.movable_retained_anywhere(retain_key) {
                 site.woken = false;
-                waiting.push(site);
+                waiting.push((host_key, site));
                 continue;
             }
             match site.parent_scope.as_ref().and_then(RecomposeScope::upgrade) {
@@ -80,9 +99,9 @@ impl Composer {
                         scope.force_recompose();
                         scope.invalidate();
                         site.woken = true;
-                        waiting.push(site);
+                        waiting.push((host_key, site));
                     } else if scope.is_invalid() || self.core.root_render_requested.get() {
-                        waiting.push(site);
+                        waiting.push((host_key, site));
                     }
                 }
                 Some(_) => {}
@@ -92,10 +111,20 @@ impl Composer {
                 ),
             }
         }
-        self.core.shared_state.keep_pending_movables(slots, waiting);
+        self.core
+            .shared_state
+            .movable_owners
+            .restore_pending(waiting);
     }
 
     pub(crate) fn forget_movables(&self, ids: &[Key]) -> Result<(), NodeError> {
+        if let Some(hooks) = movable_hooks() {
+            (hooks.forget_movables)(self, ids)?;
+        }
+        Ok(())
+    }
+
+    fn forget_movables_slow(&self, ids: &[Key]) -> Result<(), NodeError> {
         let _pass = self.core.shared_state.movable_owners.enter_pass();
         for id in ids {
             let Some((host, subtree)) = self.core.shared_state.take_retained_movable(*id) else {
@@ -112,6 +141,13 @@ impl Composer {
 
     pub(super) fn settle_pass_movables(&self, slots: &SlotsHost) -> Result<(), NodeError> {
         slots.flush_pending_drops();
+        if let Some(hooks) = movable_hooks() {
+            (hooks.settle_pass)(self)?;
+        }
+        Ok(())
+    }
+
+    fn settle_pass_movables_slow(&self) -> Result<(), NodeError> {
         self.wake_sites_whose_movable_arrived();
         if !self.core.shared_state.movable_owners.in_nested_pass() {
             self.dispose_dropped_movable_owners()?;
@@ -129,7 +165,7 @@ impl Composer {
     #[cold]
     #[inline(never)]
     fn dispose_dropped_movable_owners_slow(&self) -> Result<(), NodeError> {
-        let mut deferred = SmallVec::<[DroppedMovable; 4]>::new();
+        let mut deferred = Vec::new();
         while let Some(dropped) = self.core.shared_state.movable_owners.pop_dropped() {
             if self.core.shared_state.has_pending_movable(dropped.id)
                 && self
@@ -178,9 +214,7 @@ impl Composer {
         let restored = self
             .core
             .shared_state
-            .take_retained(host, retain_key, |subtree| {
-                host.with_write_session(|slots| slots.retained_restore_ready(key, subtree))
-            })
+            .take_retained(host, retain_key, key)
             .or_else(|| {
                 (lookup == MovableLookup::AnyHost)
                     .then(|| self.take_movable_from_another_table(host, retain_key, key))
@@ -274,6 +308,31 @@ impl Composer {
 
 #[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
 impl ComposerCore {
+    pub(super) fn handle_detached_child_movables(
+        &self,
+        slots_host: &SlotsHost,
+        mut subtree: crate::slot::DetachedSubtree,
+        retention_mode: RetentionMode,
+    ) -> Result<Option<crate::slot::DetachedSubtree>, NodeError> {
+        let is_movable_root = subtree
+            .root_key_checked()
+            .is_some_and(crate::slot::GroupKey::is_movable);
+        let nested_movables =
+            if !is_movable_root && retention_mode == RetentionMode::DisposeWhenInactive {
+                subtree.split_off_unowned_nested_movables()
+            } else {
+                subtree.split_off_nested_movables()
+            };
+        for movable in nested_movables {
+            self.handle_detached_movable_in_host(slots_host, movable)?;
+        }
+        if is_movable_root {
+            self.handle_detached_movable_in_host(slots_host, subtree)?;
+            return Ok(None);
+        }
+        Ok(Some(subtree))
+    }
+
     pub(super) fn handle_detached_movable_in_host(
         &self,
         host: &SlotsHost,
@@ -286,6 +345,8 @@ impl ComposerCore {
         }
     }
 
+    #[cold]
+    #[inline(never)]
     fn should_dispose_detached_movable(&self, subtree: &crate::slot::DetachedSubtree) -> bool {
         let Some(id) = subtree
             .root_key_checked()
@@ -299,15 +360,17 @@ impl ComposerCore {
         if self.shared_state.has_pending_movable(id) {
             self.shared_state
                 .movable_owners
-                .requeue_dropped([DroppedMovable {
+                .push_dropped(DroppedMovable {
                     id,
                     owner_host: None,
-                }]);
+                });
             return false;
         }
         true
     }
 
+    #[cold]
+    #[inline(never)]
     pub(super) fn dispose_movable_subtree_in_host(
         &self,
         host: &SlotsHost,

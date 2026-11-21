@@ -243,9 +243,7 @@ impl Composer {
         let restored = self
             .core
             .shared_state
-            .take_retained(host, retain_key, |subtree| {
-                host.with_write_session(|slots| slots.retained_restore_ready(key, subtree))
-            })
+            .take_retained(host, retain_key, key)
             .map(Box::new);
         host.with_write_session(|slots| slots.begin_group(key, restored, parent_node))
     }
@@ -450,6 +448,7 @@ impl Composer {
     }
 
     fn open_movable_group(&self, id: Key, lookup: super::MovableLookup) -> ComposableGroup<'_> {
+        super::movable::enable_movable_hooks();
         let (host, pass) = self.acquire_pass_host();
         let (scope, runs_body, forces_content) =
             self.open_movable_group_in_active_pass(&host, id, lookup);

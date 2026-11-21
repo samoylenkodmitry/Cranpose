@@ -129,6 +129,14 @@ impl CommandQueue {
         self.push_remove_node(RemoveNodeCommand::DisposeDetached(id));
     }
 
+    pub(crate) fn push_detach_child(&mut self, parent_id: NodeId, child_id: NodeId) {
+        self.detach_children.push(DetachChildCommand {
+            parent_id,
+            child_id,
+        });
+        self.push_tag(CommandTag::DetachChild);
+    }
+
     pub(crate) fn push(&mut self, command: Command) {
         match command {
             Command::BubbleDirty { node_id, bubble } => {

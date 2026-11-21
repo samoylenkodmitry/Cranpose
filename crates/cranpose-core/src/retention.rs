@@ -163,6 +163,12 @@ pub(crate) enum RestoreRecord {
     ClearForDisposal,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RetentionPin {
+    Unpinned,
+    Pinned,
+}
+
 impl RetentionManager {
     pub(crate) fn new(policy: RetentionPolicy) -> Self {
         Self {
@@ -244,27 +250,21 @@ impl RetentionManager {
         self.groups.contains_key(&key)
     }
 
+    #[cfg(test)]
     pub(crate) fn insert(
         &mut self,
         key: RetainKey,
         subtree: DetachedSubtree,
     ) -> Vec<DetachedSubtree> {
-        self.insert_with_pin(key, subtree, false)
+        self.insert_with_pin(key, subtree, RetentionPin::Unpinned)
     }
 
-    pub(crate) fn insert_pinned(
-        &mut self,
-        key: RetainKey,
-        subtree: DetachedSubtree,
-    ) -> Vec<DetachedSubtree> {
-        self.insert_with_pin(key, subtree, true)
-    }
-
-    fn insert_with_pin(
+    #[inline(never)]
+    pub(crate) fn insert_with_pin(
         &mut self,
         key: RetainKey,
         mut subtree: DetachedSubtree,
-        pinned: bool,
+        pin: RetentionPin,
     ) -> Vec<DetachedSubtree> {
         if self.groups.contains_key(&key) {
             log::error!(
@@ -290,7 +290,7 @@ impl RetentionManager {
                 detached_pass: self.pass_clock,
                 detached_order,
                 last_restored_order,
-                pinned,
+                pinned: pin == RetentionPin::Pinned,
             },
         );
         self.evict_to_budget()

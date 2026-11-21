@@ -29,7 +29,7 @@ mod subcompose_slot;
 mod subcompose_stack;
 pub use composable_group::{ComposableGroup, ParameterChange};
 use movable::{GroupEntry, movable_retain_key};
-pub(crate) use movable::{MovableLookup, PendingMovable};
+pub(crate) use movable::{MovableLookup, PendingMovable, enable_movable_hooks};
 use movable_owners::{DroppedMovable, MovableOwners};
 use parent_frame::{InitialParentFrame, push_root_frame};
 pub(crate) use parent_frame::{ParentAttachMode, ParentFrame};
@@ -822,13 +822,12 @@ impl Composer {
     ) -> (R, SlotPassOutcome) {
         let guard = self.begin_slot_host_pass(&slots, mode);
         let result = f(self);
-        let outcome = match self.finish_slot_host_pass(&guard.host) {
-            Ok(outcome) => outcome,
-            Err(err) => {
+        let outcome = self
+            .finish_slot_host_pass(&guard.host)
+            .unwrap_or_else(|err| {
                 log::error!("slot host pass finalization failed: {err}");
                 SlotPassOutcome::default()
-            }
-        };
+            });
         drop(guard);
         (result, outcome)
     }
@@ -841,6 +840,7 @@ impl Composer {
         self.with_slot_host_pass(slots, crate::slot::SlotPassMode::Compose, f)
     }
 
+    #[inline(never)]
     fn begin_slot_host_pass(
         &self,
         slots: &Rc<SlotsHost>,

@@ -21,10 +21,6 @@ use crate::AnchorId;
 // keeps them in place and pays nothing more than before.
 const PARK_AFTER_INSERTS: u32 = 16;
 
-// Nested parked runs are rare; keeping two cleared buffers on the thread
-// avoids three allocations per parked insert run without per-host memory.
-const SPARE_PARKED_TAILS: usize = 2;
-
 // The most records a kept tail buffer has room for. A larger one grew during a
 // large table shift, and keeping it would hold its memory on this thread.
 const SPARE_PARKED_TAIL_CAPACITY: usize = 1024;
@@ -34,6 +30,8 @@ pub(crate) struct ParkedTailStorage {
     groups: Vec<GroupRecord>,
     nodes: Vec<NodeRecord>,
     payload_order: Vec<u32>,
+    // Up to two spare tails chain here in a single Cell on the thread state.
+    next: Option<Box<Self>>,
 }
 
 impl ParkedTailStorage {
@@ -44,13 +42,21 @@ impl ParkedTailStorage {
     }
 }
 
-fn spare_parked_tail() -> ParkedTailStorage {
-    crate::thread_state::try_runtimes(|state| state.spare_parked_tails.borrow_mut().pop())
-        .flatten()
-        .unwrap_or_default()
+#[cold]
+#[inline(never)]
+fn spare_parked_tail() -> Box<ParkedTailStorage> {
+    crate::thread_state::try_runtimes(|state| {
+        let mut head = state.spare_parked_tails.take()?;
+        state.spare_parked_tails.set(head.next.take());
+        Some(head)
+    })
+    .flatten()
+    .unwrap_or_default()
 }
 
-fn recycle_parked_tail(mut storage: ParkedTailStorage) {
+#[cold]
+#[inline(never)]
+fn recycle_parked_tail(mut storage: Box<ParkedTailStorage>) {
     if !storage.is_small_for_reuse() {
         return;
     }
@@ -58,9 +64,12 @@ fn recycle_parked_tail(mut storage: ParkedTailStorage) {
     storage.nodes.clear();
     storage.payload_order.clear();
     crate::thread_state::try_runtimes(|state| {
-        let mut spare = state.spare_parked_tails.borrow_mut();
-        if spare.len() < SPARE_PARKED_TAILS {
-            spare.push(storage);
+        let head = state.spare_parked_tails.take();
+        if head.as_ref().is_none_or(|first| first.next.is_none()) {
+            storage.next = head;
+            state.spare_parked_tails.set(Some(storage));
+        } else {
+            state.spare_parked_tails.set(head);
         }
     });
 }
@@ -80,7 +89,7 @@ enum RunTail {
 }
 
 struct ParkedTail {
-    storage: ParkedTailStorage,
+    storage: Box<ParkedTailStorage>,
     // Where the parked groups, nodes and payloads began in the table.
     group_start: usize,
     node_start: usize,

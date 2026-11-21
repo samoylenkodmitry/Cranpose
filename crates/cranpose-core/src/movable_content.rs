@@ -117,6 +117,7 @@ pub fn movable<K: Hash>(key: K, content: impl FnOnce()) {
 #[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberMovableContentOf(content: impl Fn() + 'static) -> MovableContent {
+    crate::composer::enable_movable_hooks();
     let source = crate::caller_location_key();
     let (id, owner) = with_current_composer(|composer| {
         let owned = composer.remember_at(source, || RememberedMovable {
