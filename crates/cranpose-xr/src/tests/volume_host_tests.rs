@@ -509,6 +509,44 @@ fn a_frame_with_no_volume_draws_no_scene() {
     assert!(draw(&mut headset, &mut pass, &eye(-0.032), &eyes.0));
 
     // The app removes its volume. The next frames compose that, and the scene has no window root
+    remove_volume(&mut headset);
+    assert!(
+        !draw_once(&mut headset, &mut pass, &eyes.0),
+        "the scene drew with no volume"
+    );
+}
+
+#[test]
+fn a_held_scene_keeps_its_window_with_no_volume_and_lets_it_go_when_the_hold_ends() {
+    let mut headset = headset();
+    let mut pass = VolumePass::default();
+    let image = Eye::new(&headset.gpu);
+    assert!(draw(&mut headset, &mut pass, &eye(0.0), &image));
+    let root = pass.root().expect("the scene's window root");
+
+    // The frames hold the scene, as a headset's frames do a while after its last content went
+    headset.space.volumes().held().set(true);
+    remove_volume(&mut headset);
+    assert!(
+        draw_once(&mut headset, &mut pass, &image),
+        "the held scene lost its window"
+    );
+    assert_eq!(
+        pass.root(),
+        Some(root),
+        "the held scene made its window again"
+    );
+
+    headset.space.volumes().held().set(false);
+    headset.guest.shell().update();
+    assert!(
+        !draw_once(&mut headset, &mut pass, &image),
+        "the scene kept its window after the hold"
+    );
+}
+
+// The app removes its volume, and the frames compose that.
+fn remove_volume(headset: &mut Headset) {
     headset.shown.set(false);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while headset.space.volume_count() > 0 {
@@ -516,11 +554,13 @@ fn a_frame_with_no_volume_draws_no_scene() {
         headset.guest.shell().update();
     }
     headset.guest.shell().update();
+}
+
+// Draws the scene once from the middle of the head. Returns whether the pass found a scene.
+fn draw_once(headset: &mut Headset, pass: &mut VolumePass, image: &Eye) -> bool {
     let camera = EyeCamera::of(&eye(0.0), (EYE, EYE), FirstRow::Top).expect("a camera");
-    let drew = pass
-        .draw(&mut headset.guest, &headset.space, &camera, &eyes.0.image())
-        .expect("a frame");
-    assert!(!drew, "the scene drew with no volume");
+    pass.draw(&mut headset.guest, &headset.space, &camera, &image.image())
+        .expect("a frame")
 }
 
 #[test]

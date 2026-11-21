@@ -28,8 +28,9 @@ use crate::{
 };
 
 // The window root of the scene, which holds the content of every volume and the models of the
-// controllers in use. It holds nothing while no volume exists and no controller shows a model. The
-// loads of the controllers' models belong here, because they go on while the scene is empty.
+// controllers in use. It holds nothing while no volume exists, no controller shows a model and the
+// frames no longer hold the scene. The loads of the controllers' models belong here, because they
+// go on while the scene is empty.
 #[composable]
 pub(crate) fn VolumeScene(space: Space) {
     let volumes = space.volumes();
@@ -37,7 +38,7 @@ pub(crate) fn VolumeScene(space: Space) {
     #[cfg(feature = "gltf")]
     ControllerLoaders(controllers);
     let contents = volumes.contents().get();
-    if contents.is_empty() && !controllers.any_shown() {
+    if contents.is_empty() && !controllers.any_shown() && !volumes.held().get() {
         return;
     }
     let window = remember(|| Rc::new(VolumeWindow::new(space.scene_size()))).with(Rc::clone);

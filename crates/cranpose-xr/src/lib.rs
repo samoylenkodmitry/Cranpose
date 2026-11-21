@@ -237,6 +237,8 @@ mod render_viewpoint;
 mod resize;
 mod resize_limits;
 mod resize_policy;
+#[cfg(any(test, headset))]
+mod scene_hold;
 #[cfg(any(test, all(feature = "scripted-hand", headset)))]
 #[cfg_attr(
     not(all(feature = "scripted-hand", headset)),

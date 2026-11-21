@@ -5,8 +5,10 @@
 //! pose and field of view, once for each eye in each frame. The scene draws against the depth
 //! image, so the compositor receives the depth of what it shows. A frame with more layers than the
 //! runtime takes draws the pictures of some layers over the scene, against the same depth. With no
-//! volume in the composition, no controller that shows a model and no such picture, no swapchain
-//! exists and no pass runs.
+//! volume in the composition, no controller that shows a model and no such picture, no pass runs.
+//! The swapchains and the scene's window stay a short while after the last of them goes.
+
+use std::time::Instant;
 
 use cranpose::{GpuContext, GuestView};
 use openxr as xr;
@@ -20,6 +22,7 @@ use crate::{
     Pose, RenderViewpoint,
     eye_camera::{EyeCamera, FirstRow},
     projected_pass::{EyeTarget, ProjectedLayer, ProjectedPass},
+    scene_hold::SceneHold,
     space::Space,
     volume_pass::{EyeImage, VolumePass},
     volume_plan::{DepthSupport, VolumePlan, plan},
@@ -68,6 +71,8 @@ pub(crate) struct VolumeLayers {
     // the layers over it test against it
     extensions: (bool, bool),
     eyes: Option<[EyeSwapchains; 2]>,
+    // How long the swapchains and the scene's window stay with nothing to draw
+    hold: SceneHold,
     drawn: Option<Drawn>,
     // Whether the scene's samples are set: the first frame with a volume sets them
     sampled: bool,
@@ -89,6 +94,7 @@ impl VolumeLayers {
             depth_format,
             extensions: xr_session.depth_extensions(),
             eyes: None,
+            hold: SceneHold::default(),
             drawn: None,
             sampled: false,
             logged: None,
@@ -123,8 +129,9 @@ impl VolumeLayers {
 
     // Draws the scene of the volumes and the pictures of `frame` once for each eye, if the app has
     // a volume or the frame has a picture and the runtime located both eyes. A frame with neither
-    // makes no layer and frees the swapchains. A call of the runtime or of the renderer that fails
-    // ends the 3D content, with one line in the log, and leaves the panels running.
+    // makes no layer. Such frames free the swapchains and the scene's window once the hold ends. A
+    // call of the runtime or of the renderer that fails ends the 3D content, with one line in the
+    // log, and leaves the panels running.
     pub(crate) fn draw(
         &mut self,
         guest: &mut GuestView,
@@ -141,6 +148,7 @@ impl VolumeLayers {
             self.failed = true;
             self.eyes = None;
             self.drawn = None;
+            space.volumes().held().set(false);
         }
     }
 
@@ -160,11 +168,15 @@ impl VolumeLayers {
             atlas,
         } = *frame;
         // The swapchains stay through a frame that cannot draw, such as one in which the runtime
-        // loses the eyes, and go with the last volume, the last controller model and the last
-        // picture of another layer
+        // loses the eyes. They go with the scene's window when the hold after the last volume, the
+        // last controller model and the last picture of another layer ends.
         let contents = scene_count(space) + layers.len();
-        if contents == 0 {
+        let held = space.volumes().held();
+        if self.hold.frame(contents, Instant::now()) {
             self.eyes = None;
+            held.set(false);
+        } else if contents > 0 && !held.get_non_reactive() {
+            held.set(true);
         }
         let Some(frame_plan) = plan(contents, views.map(|view| view.is_some()), self.support())
         else {
