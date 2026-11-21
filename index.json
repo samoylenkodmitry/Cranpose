@@ -173331,6 +173331,117 @@
      }
     }
    }
+  },
+  {
+   "file": "runs/2026-11-21-nightly-0edf9547e-EVR-AL00.json",
+   "kind": "nightly",
+   "started_at": "2026-11-21T02:48:29+00:00",
+   "device": "EVR-AL00",
+   "main": "0edf9547e119ba95bc2030ccd79b843938eac51c",
+   "release": "v0.27.0",
+   "subjects": [
+    {
+     "name": "cranpose-release",
+     "label": "v0.27.0"
+    },
+    {
+     "name": "cranpose",
+     "label": "0edf9547e"
+    }
+   ],
+   "duration_s": 231,
+   "protocol": {
+    "run_s": 10.0,
+    "starts": [
+     "first",
+     "second"
+    ],
+    "max_pairs": 4,
+    "stop_below_fps": 10,
+    "stop_seconds_in_a_row": 5,
+    "deciding": {
+     "fps": 0.03,
+     "cpu_ms_per_frame": 0.03,
+     "desired_to_present_p50_ms": 2.0
+    }
+   },
+   "scenarios": {
+    "gauntlet": {
+     "legs": 16,
+     "starts": {
+      "first": {
+       "summary": {
+        "cranpose-release": {
+         "fps": 57.81392484184636,
+         "first_frame_s": 0.23915104201296344,
+         "cpu_ms_per_frame": 25.375705752393422,
+         "cpu_cores": 1.4661267413280774,
+         "desired_to_present_p50_ms": 36.070052000000004,
+         "janky_pct": 0.8271304252640796,
+         "ram_mb": 162.39990234375,
+         "gpu_ram_mb": 53.767578125,
+         "cpu_mhz": 1913.375,
+         "gpu_mhz": 310.5
+        },
+        "cranpose": {
+         "fps": 57.9980182031581,
+         "first_frame_s": 0.22010807400511112,
+         "cpu_ms_per_frame": 25.64064005166827,
+         "cpu_cores": 1.4897137770500726,
+         "desired_to_present_p50_ms": 35.3906255,
+         "janky_pct": 0.9925728078289282,
+         "ram_mb": 162.205078125,
+         "gpu_ram_mb": 53.00390625,
+         "cpu_mhz": 1863.0625,
+         "gpu_mhz": 307.0625
+        }
+       },
+       "verdicts": {
+        "fps": "same",
+        "cpu_ms_per_frame": "same",
+        "desired_to_present_p50_ms": "same"
+       },
+       "failures": {},
+       "confirmed": []
+      },
+      "second": {
+       "summary": {
+        "cranpose-release": {
+         "fps": 58.20968303723034,
+         "first_frame_s": 0.2253684909810545,
+         "cpu_ms_per_frame": 24.322065940713856,
+         "cpu_cores": 1.4155880512463466,
+         "desired_to_present_p50_ms": 31.450521,
+         "janky_pct": 0.8237232289950577,
+         "ram_mb": 151.671875,
+         "gpu_ram_mb": 50.6015625,
+         "cpu_mhz": 1868.90625,
+         "gpu_mhz": 341.34375
+        },
+        "cranpose": {
+         "fps": 58.20968303739254,
+         "first_frame_s": 0.2187382824922679,
+         "cpu_ms_per_frame": 24.037641130763284,
+         "cpu_cores": 1.4002799794231975,
+         "desired_to_present_p50_ms": 36.953646000000006,
+         "janky_pct": 0.6589785831960461,
+         "ram_mb": 151.95654296875,
+         "gpu_ram_mb": 51.1484375,
+         "cpu_mhz": 1838.15625,
+         "gpu_mhz": 308.78125
+        }
+       },
+       "verdicts": {
+        "fps": "same",
+        "cpu_ms_per_frame": "same",
+        "desired_to_present_p50_ms": "inconclusive"
+       },
+       "failures": {},
+       "confirmed": []
+      }
+     }
+    }
+   }
   }
  ]
 }
