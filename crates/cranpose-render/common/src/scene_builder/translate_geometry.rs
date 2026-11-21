@@ -62,8 +62,8 @@ impl TranslateGeometry {
     // window when the update worked it out, else its pointer input size
     // alone: a node whose slices hold a window origin sink always has it
     // worked out.
-    pub(super) fn publish(self, slices: &ModifierNodeSlices, size: Size) {
-        match self.window {
+    pub(super) fn publish(&self, slices: &ModifierNodeSlices, size: Size) {
+        match &self.window {
             Some(window) => slices.publish_window_geometry(window.top_left, window.transform, size),
             None => slices.publish_pointer_input_size(size),
         }
@@ -73,7 +73,7 @@ impl TranslateGeometry {
     // `ancestors`, take from it; `child_abs` is where they lie, as
     // `child_abs` works it out.
     pub(super) fn children_context<'a>(
-        self,
+        &self,
         container: LayerRef<'_>,
         ancestors: TranslateAncestorContext<'_>,
         child_abs: Option<&'a AbsOrigin>,
@@ -89,8 +89,8 @@ impl TranslateGeometry {
         }
     }
 
-    pub(super) fn child_abs(self) -> Option<AbsOrigin> {
-        self.window.map(|window| AbsOrigin {
+    pub(super) fn child_abs(&self) -> Option<AbsOrigin> {
+        self.window.as_ref().map(|window| AbsOrigin {
             content_origin: Point {
                 x: window.top_left.x + self.content_offset.x,
                 y: window.top_left.y + self.content_offset.y,

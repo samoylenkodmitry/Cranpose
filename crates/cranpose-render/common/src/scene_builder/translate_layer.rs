@@ -509,7 +509,7 @@ pub(super) fn apply_translated_container_state(
     modifier_slices: &ModifierNodeSlices,
     layout_state: &LayoutState,
     parent_content_offset: Point,
-    geometry: TranslateGeometry,
+    geometry: &TranslateGeometry,
 ) {
     let position = layout_state.position();
     let transform = placing_transform(
@@ -715,7 +715,7 @@ pub(super) fn translate_layer_from_data(
             &modifier_slices,
             &layout_state,
             inherited.parent_content_offset,
-            geometry,
+            &geometry,
         );
         reconcile_translated_children(
             applier,

@@ -118,7 +118,7 @@ pub(super) fn translate_leaf_text(
     );
     store.set_content_offset(container, geometry.content_offset);
     let offset = ancestors.inherited.parent_content_offset;
-    apply_translated_container_state(store, container, slices, layout_state, offset, geometry);
+    apply_translated_container_state(store, container, slices, layout_state, offset, &geometry);
     let write = translated_write(store, container, slices, None);
     store.write_translated(container, write);
     Some(true)
