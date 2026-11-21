@@ -91,40 +91,68 @@ SpatialPanel(
 A panel inside a `SpatialCurvedRow` has no corner handle.
 
 A `Subspace` stands a meter ahead of where the head was when the app started. A
-`FollowingSubspace(FollowTarget::View(FollowMode::Snap), ...)` stands a meter ahead of the head as
-it is when the subspace first composes, and again after the user recenters. Its panels stay
-movable. Jetpack XR spells this `Subspace(follow = FollowTarget.view(FollowMode.snap()))`. Rust has
-no overloads, so the composable has its own name.
+`FollowingSubspace(FollowTarget::View(FollowMode::Snap(TrackedDimensions::TranslationAndYaw)), ...)`
+stands a meter ahead of the head as it is when the subspace first composes, and again after the
+user recenters. Its panels stay movable. Jetpack XR spells this
+`Subspace(follow = FollowTarget.view(FollowMode.snap(dimensions)))`. Rust has no overloads, so the
+composable has its own name.
 
 `FollowMode::Tight` follows the target in every frame with no lag, as Jetpack XR's
 `FollowMode.tight` does. The follow moves the panels' poses in the frame loop and composes nothing.
-Jetpack XR's `TrackedDimensions` chooses the tracked axes and tracks all six by default. Here the
-subspace tracks the target's place and its turn about the vertical axis, so the panels stand
-upright. `FollowMode.soft` is not available.
+Each mode takes a `TrackedDimensions`, as in Jetpack XR. `TrackedDimensions::All` tracks all six
+dimensions, so the panels turn with the target about every axis. `TrackedDimensions::TranslationAndYaw`
+tracks the target's place and its turn about the vertical axis, so the panels stand upright. Jetpack
+XR's other sets of flags and `FollowMode.soft` are not available.
 
 `FollowTarget::Controller(hand, mode)` follows the controller in a hand. Jetpack XR has no such
-target. The origin is where the controller's grip pose is. It turns about the vertical axis with
-the heading of the controller's aim pose, which is the direction of its ray seen from above. A ball
-10 cm above the controller stays straight above it when the hand tilts. A ray that points straight
-up keeps the heading that it had. While the runtime does not track the controller, the subspace's
-panels do not show and take no hits. A controller's own ray ignores the panels that ride on it. The
-other hand's ray presses them. The user can show or hide the app's panels with a ball above the
-left controller that the right ray presses:
+target. The origin is where the controller's grip pose is, turned as its aim pose is turned. The
+aim's forward axis is the ray, so a panel with no turn of its own faces back along the ray, toward
+the user. While the runtime does not track the controller, the subspace's panels do not show and
+take no hits. A controller's own ray ignores the panels that ride on it. The other hand's ray
+presses them and carries them by their handle. A carry sets the panel's offset from the
+controller, and the panel follows the hand at that offset after it.
+
+With `FollowMode::Tight(TrackedDimensions::All)` a panel holds its place against the controller as
+the hand tilts and rolls. The headset hands the panel's layers to the compositor in the space of
+the controller's aim pose, at the panel's pose relative to it. The compositor places them with
+the newest pose of the controller at the time the frame shows, so the panel shows no lag behind the
+hand. A head-locked subspace of `FollowTarget::View(FollowMode::Tight(TrackedDimensions::All))`
+rides in the head's space the same way. A menu that the left hand holds:
 
 ```rust
-FollowingSubspace(FollowTarget::Controller(Hand::Left, FollowMode::Tight), move || {
-    SpatialPanel(SubspaceModifier::new().size(40.0, 40.0).offset(0.0, 100.0, 0.0), move || {
-        Box(
-            Modifier::empty()
-                .fill_max_size()
-                .background(Color(0.2, 0.6, 0.45, 1.0))
-                .rounded_corners(20.0)
-                .clickable(move |_| panels_shown.set(!panels_shown.get())),
-            BoxSpec::default(),
-            || {},
+FollowingSubspace(
+    FollowTarget::Controller(Hand::Left, FollowMode::Tight(TrackedDimensions::All)),
+    move || {
+        SpatialPanel(
+            SubspaceModifier::new().size(400.0, 300.0).offset(200.0, 250.0, 50.0).movable(),
+            move || Menu(),
         );
-    });
-});
+    },
+);
+```
+
+With `TrackedDimensions::TranslationAndYaw` the origin turns about the vertical axis with the
+heading of the controller's ray seen from above. A ball 10 cm above the controller stays straight
+above it when the hand tilts. A ray that points straight up keeps the heading that it had. The user
+can show or hide the app's panels with a ball above the left controller that the right ray presses:
+
+```rust
+FollowingSubspace(
+    FollowTarget::Controller(Hand::Left, FollowMode::Tight(TrackedDimensions::TranslationAndYaw)),
+    move || {
+        SpatialPanel(SubspaceModifier::new().size(40.0, 40.0).offset(0.0, 100.0, 0.0), move || {
+            Box(
+                Modifier::empty()
+                    .fill_max_size()
+                    .background(Color(0.2, 0.6, 0.45, 1.0))
+                    .rounded_corners(20.0)
+                    .clickable(move |_| panels_shown.set(!panels_shown.get())),
+                BoxSpec::default(),
+                || {},
+            );
+        });
+    },
+);
 ```
 
 A panel that has rounded corners and no background around them shows as that shape. The headset
@@ -827,7 +855,7 @@ fn Notes() {
         DisposableEffectResult::new(|| {})
     });
     match placed.get() {
-        Some(anchor) => FollowingSubspace(FollowTarget::Anchor(anchor, FollowMode::Tight), move || {
+        Some(anchor) => FollowingSubspace(FollowTarget::Anchor(anchor, FollowMode::Tight(TrackedDimensions::All)), move || {
             SpatialPanel(SubspaceModifier::new().movable_with(policy.clone()), || {});
         }),
         None => Subspace(move || {

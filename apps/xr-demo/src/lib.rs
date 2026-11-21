@@ -23,7 +23,7 @@ use cranpose_xr::{
     DEFAULT_PANEL_SIZE, FieldOfView, FollowMode, FollowTarget, FollowingSubspace, Hand,
     OnNotEntitled, Pose, ResizeLimits, ResizePolicy, SpatialCurvedRow, SpatialExternalSurface,
     SpatialPanel, StereoMode, StreamStats, StreamedScene, StreamedView, StreamedViews, Subspace,
-    SubspaceModifier, local_entitlement_check, local_spatial_capabilities,
+    SubspaceModifier, TrackedDimensions, local_entitlement_check, local_spatial_capabilities,
     local_spatial_environment,
 };
 #[cfg(not(target_os = "android"))]
@@ -209,42 +209,48 @@ fn depth_test_build() -> bool {
 #[composable]
 fn DepthTest() {
     if VOLUME_BUILD == Some("model") {
-        FollowingSubspace(FollowTarget::View(FollowMode::Snap), || {
-            CrateModel(
-                SubspaceModifier::new().rotate(20.0, 30.0, 0.0),
-                false,
-                rememberRayTarget(),
-            );
-        });
+        FollowingSubspace(
+            FollowTarget::View(FollowMode::Snap(TrackedDimensions::TranslationAndYaw)),
+            || {
+                CrateModel(
+                    SubspaceModifier::new().rotate(20.0, 30.0, 0.0),
+                    false,
+                    rememberRayTarget(),
+                );
+            },
+        );
         return;
     }
-    FollowingSubspace(FollowTarget::View(FollowMode::Snap), || {
-        if VOLUME_BUILD != Some("alone") {
-            SpatialPanel(SubspaceModifier::new().size(600.0, 600.0), || {
-                Box(
-                    Modifier::empty()
-                        .fill_max_size()
-                        .background(Color(0.85, 0.2, 0.5, 1.0))
-                        .rounded_corners(24.0)
-                        .padding(24.0),
-                    BoxSpec::default(),
-                    || {
-                        Text(
-                            "This panel stands at z = 0",
-                            Modifier::empty(),
-                            sized(28.0, Some(FontWeight::BOLD)),
-                        );
-                    },
-                );
-            });
-        }
-        TorusVolume(
-            SubspaceModifier::new().rotate(0.0, 45.0, 0.0),
-            false,
-            rememberRayTarget(),
-            None,
-        );
-    });
+    FollowingSubspace(
+        FollowTarget::View(FollowMode::Snap(TrackedDimensions::TranslationAndYaw)),
+        || {
+            if VOLUME_BUILD != Some("alone") {
+                SpatialPanel(SubspaceModifier::new().size(600.0, 600.0), || {
+                    Box(
+                        Modifier::empty()
+                            .fill_max_size()
+                            .background(Color(0.85, 0.2, 0.5, 1.0))
+                            .rounded_corners(24.0)
+                            .padding(24.0),
+                        BoxSpec::default(),
+                        || {
+                            Text(
+                                "This panel stands at z = 0",
+                                Modifier::empty(),
+                                sized(28.0, Some(FontWeight::BOLD)),
+                            );
+                        },
+                    );
+                });
+            }
+            TorusVolume(
+                SubspaceModifier::new().rotate(0.0, 45.0, 0.0),
+                false,
+                rememberRayTarget(),
+                None,
+            );
+        },
+    );
 }
 
 // A ball of 4 cm that floats 10 cm above the left controller, upright wherever the hand tilts.
@@ -260,7 +266,10 @@ fn ControllerBall(strip_shown: MutableState<bool>) {
         return;
     }
     FollowingSubspace(
-        FollowTarget::Controller(Hand::Left, FollowMode::Tight),
+        FollowTarget::Controller(
+            Hand::Left,
+            FollowMode::Tight(TrackedDimensions::TranslationAndYaw),
+        ),
         move || {
             SpatialPanel(
                 SubspaceModifier::new()

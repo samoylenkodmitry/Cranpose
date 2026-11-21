@@ -19,8 +19,8 @@ use cranpose_ui::text::FontWeight;
 use cranpose_xr::{
     Anchor, AnchorPersistence, Anchors, FollowMode, FollowTarget, FollowingSubspace, MovePolicy,
     Plane, PlaneLabel, PlaneType, Planes, Pose, SpatialFrameEffect, SpatialMoveEventType,
-    SpatialPanel, Subspace, SubspaceModifier, TrackingAvailability, TrackingState, Uuid,
-    local_anchors, local_planes,
+    SpatialPanel, Subspace, SubspaceModifier, TrackedDimensions, TrackingAvailability,
+    TrackingState, Uuid, local_anchors, local_planes,
 };
 use player_demo::sized;
 
@@ -68,7 +68,7 @@ pub(crate) fn RoomDemo(script: bool) {
         Some(anchor) => {
             AnchorLog(anchor.clone());
             FollowingSubspace(
-                FollowTarget::Anchor(anchor.clone(), FollowMode::Tight),
+                FollowTarget::Anchor(anchor.clone(), FollowMode::Tight(TrackedDimensions::All)),
                 move || {
                     RoomPanel(
                         on_anchors.clone(),

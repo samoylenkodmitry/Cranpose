@@ -23,7 +23,7 @@ use cranpose_testing::{
 use super::*;
 use crate::{
     FollowMode, FollowTarget, MovePolicy, PointSourceParams, SpatialMoveEventType, SpatialPanel,
-    SpatialPointSource, SpatialVolume, SubspaceModifier,
+    SpatialPointSource, SpatialVolume, SubspaceModifier, TrackedDimensions,
     sound_sources::SoundPlace,
     space::{Origin, PanelMove, local_space},
 };
@@ -335,7 +335,9 @@ fn a_following_subspace_carries_its_sound_with_the_head() {
     with_space(|space| {
         let player = RecordingPlayer::new();
         let mut stage = stage(&player);
-        let follow = space.new_follow_origin(FollowTarget::View(FollowMode::Tight));
+        let follow = space.new_follow_origin(FollowTarget::View(FollowMode::Tight(
+            TrackedDimensions::TranslationAndYaw,
+        )));
         // A subspace of this kind stands a meter ahead of the head, so 1 m toward the viewer and
         // 0.8 m to the left puts the source level with the head, at its left
         space.place_point_source(

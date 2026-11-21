@@ -3,9 +3,9 @@
 use std::time::Duration;
 
 use crate::{
-    FollowMode, FollowTarget, Hand, Pose, Recenter,
+    FollowMode, FollowTarget, Hand, Pose, Recenter, TrackedDimensions,
     pose::{heading_degrees, turn_degrees},
-    space::SUBSPACE_ORIGIN,
+    space::{SUBSPACE_ORIGIN, TrackedSpace},
 };
 
 // The origin of one following subspace.
@@ -47,48 +47,70 @@ impl Follower {
         }
     }
 
+    fn dimensions(&self) -> TrackedDimensions {
+        match self.mode() {
+            FollowMode::Snap(dimensions) | FollowMode::Tight(dimensions) => dimensions,
+        }
+    }
+
+    // The space in which the compositor places the subspace's panels with the target's newest
+    // pose: the head's or the controller's aim, for a subspace that follows every move of it. A
+    // `Snap` subspace stands still in the room, and an upright one does not turn with every move.
+    // An anchor holds still in the room, so the room's space places it exactly.
+    fn tracked_space(&self) -> Option<TrackedSpace> {
+        if self.mode() != FollowMode::Tight(TrackedDimensions::All) {
+            return None;
+        }
+        match &self.target {
+            FollowTarget::View(_) => Some(TrackedSpace::View),
+            FollowTarget::Controller(hand, _) => Some(TrackedSpace::Aim(*hand)),
+            FollowTarget::Anchor(..) => None,
+        }
+    }
+
     // Where the origin stands when the target is at `head`, at the pose that `controllers` holds
     // for its hand or at its anchor's pose, or `None` while the runtime does not track the target.
-    // The origin of a view or a controller has the target's place and its turn about the vertical
-    // axis, so the content stands upright. The origin of an anchor is the anchor's pose.
+    // The origin has the target's pose in the tracked dimensions. An upright origin has the
+    // target's place and its turn about the vertical axis.
     fn aligned(&mut self, head: Option<&Pose>, controllers: &[Option<Pose>; 2]) -> Option<Pose> {
         let (pose, offset) = match &self.target {
-            FollowTarget::View(_) => (head?, SUBSPACE_ORIGIN),
-            FollowTarget::Controller(hand, _) => {
-                (controllers[hand.index()].as_ref()?, Pose::IDENTITY)
-            }
+            FollowTarget::View(_) => (*head?, SUBSPACE_ORIGIN),
+            FollowTarget::Controller(hand, _) => (controllers[hand.index()]?, Pose::IDENTITY),
             FollowTarget::Anchor(anchor, _) => {
-                return anchor.is_located().then(|| anchor.pose());
+                (anchor.is_located().then(|| anchor.pose())?, Pose::IDENTITY)
             }
         };
-        if let Some(heading) = heading_degrees(pose) {
-            self.heading = heading;
-        }
-        Some(
-            Pose {
-                position: pose.position,
-                orientation: turn_degrees(0.0, self.heading, 0.0),
+        let base = match self.dimensions() {
+            TrackedDimensions::All => pose,
+            TrackedDimensions::TranslationAndYaw => {
+                if let Some(heading) = heading_degrees(&pose) {
+                    self.heading = heading;
+                }
+                Pose {
+                    position: pose.position,
+                    orientation: turn_degrees(0.0, self.heading, 0.0),
+                }
             }
-            .then(&offset),
-        )
+        };
+        Some(base.then(&offset))
     }
 
     // Moves the origin to where the target puts it now. A `Tight` subspace follows in every
     // frame. A `Snap` subspace takes a place once, then again after each recenter.
     fn follow(&mut self, head: Option<&Pose>, controllers: &[Option<Pose>; 2]) {
         let at = match self.mode() {
-            FollowMode::Tight => match (self.aligned(head, controllers), &self.target) {
+            FollowMode::Tight(_) => match (self.aligned(head, controllers), &self.target) {
                 // A head that the headset lost, and an anchor that the runtime does not place now,
                 // leave the content where it was
                 (None, FollowTarget::View(_) | FollowTarget::Anchor(..)) => self.at,
                 (aligned, _) => aligned,
             },
-            FollowMode::Snap if self.owes => {
+            FollowMode::Snap(_) if self.owes => {
                 let aligned = self.aligned(head, controllers);
                 self.owes = aligned.is_none();
                 aligned.or(self.at)
             }
-            FollowMode::Snap => self.at,
+            FollowMode::Snap(_) => self.at,
         };
         self.moved = at != self.at;
         self.at = at;
@@ -99,7 +121,11 @@ impl Follower {
             FollowTarget::View(_) | FollowTarget::Anchor(..) => None,
             FollowTarget::Controller(hand, _) => Some(*hand),
         };
-        Standing { at: self.at, hand }
+        Standing {
+            at: self.at,
+            hand,
+            tracked: self.tracked_space(),
+        }
     }
 }
 
@@ -110,6 +136,8 @@ pub(crate) struct Standing {
     pub(crate) at: Option<Pose>,
     // The hand whose controller the subspace follows
     pub(crate) hand: Option<Hand>,
+    // The space in which the compositor places the subspace's panels, or `None` for the room's
+    pub(crate) tracked: Option<TrackedSpace>,
 }
 
 // The following subspaces of an app, and what places them.

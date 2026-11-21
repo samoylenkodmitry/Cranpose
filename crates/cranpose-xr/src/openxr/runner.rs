@@ -505,6 +505,7 @@ impl Immersive {
     ) -> Result<(), String> {
         let beams = self.pointers.beams();
         let active = self.pointers.handles();
+        let spaces = self.headset.tracked_spaces(&self.xr_session);
         let (layers, surfaces, handles, budget) = (
             &self.layers,
             &self.surfaces,
@@ -515,8 +516,11 @@ impl Immersive {
             .iter()
             .enumerate()
             .filter(|(_, slot)| slot.ride != Ride::Hidden)
-            .flat_map(|(index, slot)| {
+            .flat_map(move |(index, slot)| {
                 let placement = budget.placement(index);
+                // A panel that follows every move of the head or a controller rides in its space,
+                // with its handles, so the compositor places them with the newest pose of it
+                let place = slot.tracked.and_then(|tracked| spaces.located(tracked));
                 let content = layers
                     .layer(slot)
                     .filter(|_| placement.content == Place::Own);
@@ -530,6 +534,7 @@ impl Immersive {
                     .into_iter()
                     .chain(surfaces.map(Layer::Quad))
                     .chain(handles.map(Layer::Quad))
+                    .map(move |layer| layer.in_space(place))
             });
         let rays = head
             .into_iter()

@@ -42,6 +42,7 @@ impl TrialLayer {
             source: LayerSource::Drawn((SIDE, SIDE)),
             pose: Pose::IDENTITY,
             size: [0.001, 0.001],
+            space: None,
         }
     }
 }

@@ -13,6 +13,7 @@ use super::{
     cylinder_layers::CylinderLayer,
     graphics::Api,
     session::{ProjectionLayer, QuadLayer, RawProjection},
+    tracked_spaces::LocatedSpace,
 };
 use crate::volume_plan::{STAGES, Stage, VolumePlan, tests_depth, writes_depth};
 
@@ -20,6 +21,23 @@ use crate::volume_plan::{STAGES, Stage, VolumePlan, tests_depth, writes_depth};
 pub(crate) enum Layer<'a> {
     Quad(QuadLayer<'a>),
     Cylinder(CylinderLayer<'a>),
+}
+
+impl Layer<'_> {
+    // The layer in the space of `place`, at its pose relative to that space. A layer with no place
+    // stays in the room.
+    pub(crate) fn in_space(mut self, place: Option<LocatedSpace>) -> Self {
+        let Some(place) = place else {
+            return self;
+        };
+        let (pose, space) = match &mut self {
+            Layer::Quad(quad) => (&mut quad.pose, &mut quad.space),
+            Layer::Cylinder(cylinder) => (&mut cylinder.pose, &mut cylinder.space),
+        };
+        *pose = place.relative(pose);
+        *space = Some(place.space);
+        self
+    }
 }
 
 // The layers of a frame in the stages that the compositor draws, from the bottom to the top. The
@@ -67,6 +85,8 @@ pub(crate) struct Counts {
     pub(crate) tested: usize,
     // How many write their depth into the compositor's buffer
     pub(crate) written: usize,
+    // How many ride in a tracked space: the head's or a controller's aim
+    pub(crate) tracked: usize,
 }
 
 // The structs that the `next` pointer of a quad or a cylinder names, by what the layer is.
@@ -248,10 +268,20 @@ impl FrameLayers {
     // What the frame holds, when the runtime gets `layers` layers.
     pub(crate) fn counts(&self, layers: usize) -> Counts {
         let count = |wanted| self.layers.iter().filter(|raw| raw.depth == wanted).count();
+        let tracked = self
+            .layers
+            .iter()
+            .filter(|raw| match raw.layer {
+                RawLayer::Projection(_) => false,
+                RawLayer::Quad(quad) => quad.space != self.space,
+                RawLayer::Cylinder(cylinder) => cylinder.space != self.space,
+            })
+            .count();
         Counts {
             layers,
             tested: count(Depth::Tested),
             written: count(Depth::Written),
+            tracked,
         }
     }
 

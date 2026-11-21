@@ -367,7 +367,7 @@ pub use face_tracking_provider::FaceTrackingProvider;
 pub use field_of_view::FieldOfView;
 #[cfg(all(desktop_run, not(headset)))]
 pub use flat_run::run;
-pub use follow_mode::{FollowMode, FollowTarget};
+pub use follow_mode::{FollowMode, FollowTarget, TrackedDimensions};
 pub use following_subspace::FollowingSubspace;
 pub use foveated_encoding::FoveatedEncoding;
 #[cfg(feature = "gltf")]
