@@ -148,6 +148,7 @@ impl VolumeLayers {
             self.failed = true;
             self.eyes = None;
             self.drawn = None;
+            self.pass.release(guest);
             space.volumes().held().set(false);
         }
     }
@@ -174,6 +175,7 @@ impl VolumeLayers {
         let held = space.volumes().held();
         if self.hold.frame(contents, Instant::now()) {
             self.eyes = None;
+            self.pass.release(guest);
             held.set(false);
         } else if contents > 0 && !held.get_non_reactive() {
             held.set(true);

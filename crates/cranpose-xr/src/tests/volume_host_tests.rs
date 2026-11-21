@@ -509,7 +509,8 @@ fn a_frame_with_no_volume_draws_no_scene() {
     assert!(draw(&mut headset, &mut pass, &eye(-0.032), &eyes.0));
 
     // The app removes its volume. The next frames compose that, and the scene has no window root
-    remove_volume(&mut headset);
+    headset.shown.set(false);
+    settle_volumes(&mut headset, 0);
     assert!(
         !draw_once(&mut headset, &mut pass, &eyes.0),
         "the scene drew with no volume"
@@ -526,7 +527,8 @@ fn a_held_scene_keeps_its_window_with_no_volume_and_lets_it_go_when_the_hold_end
 
     // The frames hold the scene, as a headset's frames do a while after its last content went
     headset.space.volumes().held().set(true);
-    remove_volume(&mut headset);
+    headset.shown.set(false);
+    settle_volumes(&mut headset, 0);
     assert!(
         draw_once(&mut headset, &mut pass, &image),
         "the held scene lost its window"
@@ -537,20 +539,39 @@ fn a_held_scene_keeps_its_window_with_no_volume_and_lets_it_go_when_the_hold_end
         "the held scene made its window again"
     );
 
+    assert!(
+        headset.guest.visit_window_meshes((root, root), &mut |_| {}),
+        "the held scene's window lost its view"
+    );
+
+    // The hold ends: the frames release the pass, whose view goes at once
     headset.space.volumes().held().set(false);
+    pass.release(&mut headset.guest);
+    assert!(
+        !headset.guest.visit_window_meshes((root, root), &mut |_| {}),
+        "the view stayed after the hold"
+    );
     headset.guest.shell().update();
     assert!(
         !draw_once(&mut headset, &mut pass, &image),
         "the scene kept its window after the hold"
     );
+
+    // A volume that comes back after the hold draws in a window of its own
+    headset.shown.set(true);
+    settle_volumes(&mut headset, 1);
+    assert!(draw(&mut headset, &mut pass, &eye(0.0), &image));
+    assert!(shows_something(&headset.gpu, &image.color));
 }
 
-// The app removes its volume, and the frames compose that.
-fn remove_volume(headset: &mut Headset) {
-    headset.shown.set(false);
+// The frames compose until the space has `count` volumes, and once more for the scene.
+fn settle_volumes(headset: &mut Headset, count: usize) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while headset.space.volume_count() > 0 {
-        assert!(std::time::Instant::now() < deadline, "the volume stayed");
+    while headset.space.volume_count() != count {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the volumes stayed as they were"
+        );
         headset.guest.shell().update();
     }
     headset.guest.shell().update();
