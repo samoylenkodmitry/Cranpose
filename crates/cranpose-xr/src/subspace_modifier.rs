@@ -173,9 +173,9 @@ impl SubspaceModifier {
     /// every panel still shows. The text of those panels shows softer. The handles go there
     /// first. Then a panel of a lower priority goes there before a panel of a higher one. Among
     /// panels of one priority, a panel that a hand points at keeps its layer before one that no
-    /// hand points at. Then a nearer panel keeps its layer before a farther one. A surface always
-    /// keeps its layers, because only the compositor shows what its producer writes. So this
-    /// modifier does nothing to a surface or a volume.
+    /// hand points at. Then a nearer panel keeps its layer before a farther one. A surface keeps
+    /// its layers before every panel, because only the compositor shows what its producer writes.
+    /// So this modifier does nothing to a surface or a volume.
     ///
     /// Jetpack XR has no counterpart: Android XR gives each panel a layer of its own.
     pub const fn layer_priority(mut self, priority: i32) -> Self {

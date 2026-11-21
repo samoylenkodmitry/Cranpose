@@ -31,8 +31,9 @@ A runtime takes a limited number of layers in a frame: a Quest 3 takes 16. When 
 more, the projection layer of the 3D content draws some pictures in place of their own layers, so
 every panel still shows. The handles go there first, then the panels of the lowest rank, whose text
 then shows softer. A panel ranks by its `SubspaceModifier::layer_priority(priority)` (0 by default,
-higher first), then by whether a hand points at it, then by its nearness to the head. Surfaces,
-streamed scenes and the rays always keep their layers. A frame within the limit costs nothing more.
+higher first), then by whether a hand points at it, then by its nearness to the head. Streamed
+scenes and the rays keep their layers. Surfaces keep theirs before every panel. A frame within the
+limit costs nothing more.
 `docs/xr_architecture.md` ("The layer limit") has the details.
 
 A panel or a surface with `SubspaceModifier::movable()` has a handle under it: a sphere that shows

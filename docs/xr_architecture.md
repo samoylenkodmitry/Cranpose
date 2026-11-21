@@ -394,7 +394,8 @@ the crate's region of the right eye, 33,137 magenta and 32,355 lime pixels show,
 change their class between two screenshots a second apart, so the animation runs in the headset's
 frame loop. The crate shares the projection layer of the torus's volume, so it adds no layer. The
 log shows the layer count that the earlier measurement of the depth test gave (18 asked, 16 taken,
-two panels left out; see "The layer limit"), with no change after the model loads. It has no
+two panels left out by the code of that time, which had no layer budget), with no change after the
+model loads. It has no
 `glTF model:` failure and no `the 3D content ends`.
 
 The `gltf` feature adds 770 KB to the stripped arm64 library of the demo, which is 11,835 KB without
@@ -1185,9 +1186,10 @@ presses the counter's button (`Pressed 6 times`). The pad and the list stand bet
 and the torus's volume: a ray at the panel's top meets the pattern surface first, and a ray at its
 bottom meets the torus first, and a surface or a volume stops the ray as a panel does.
 
-With the controllers on, the frame has 16 layers of the 16 that the runtime takes, and 3 panels are
-left out. The clip's video surface is gone from the picture, which fits the back-to-front order: it
-stands farthest from the head. The other two layers were not identified. With no controller active, the same frame has 16 layers and none left
+With the controllers on, the frame has 16 layers of the 16 that the runtime takes, and the code of
+that time, which had no layer budget, left 3 panels out. The clip's video surface is gone from the
+picture, which fits the back-to-front order: it stands farthest from the head. The layer budget of
+"The layer limit" shows every panel of that frame. The other two layers were not identified. With no controller active, the same frame has 16 layers and none left
 out, because no beam shows. On a Quest 3 the system's "Finding position in room" dialog held the launch of the demo, and a press
 clears that dialog, so no frame ran there. The layer count of a Quest 3 and the buttons of a real
 controller are not measured. The long press and the zoom gesture work with a
