@@ -8,7 +8,7 @@ use crate::{
     keyboard_state::KeyboardState,
     pose::turn_of_axes,
     space::field_dock::{below, point_on},
-    vector::{cross, normalize, sub},
+    vector::{cross, dot, normalize, sub},
 };
 
 // A pinch above this counts as made, as the runtime's own flag does.
@@ -173,7 +173,13 @@ impl ScriptedHand {
 // The aim pose at `from` that points at `at`. It points along its -z, and its x axis stays level.
 pub(crate) fn aim_pose(from: [f32; 3], at: [f32; 3]) -> Pose {
     let z = normalize(sub(from, at));
-    let x = normalize(cross([0.0, 1.0, 0.0], z));
+    let across = cross([0.0, 1.0, 0.0], z);
+    // A ray straight up or down has no side to the vertical: the room's x axis stands in for it
+    let x = if dot(across, across) > 1e-12 {
+        normalize(across)
+    } else {
+        [1.0, 0.0, 0.0]
+    };
     let y = cross(z, x);
     Pose {
         position: from,

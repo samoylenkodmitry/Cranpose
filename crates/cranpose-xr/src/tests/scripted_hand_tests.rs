@@ -82,6 +82,19 @@ fn the_aim_pose_points_at_the_place() {
 }
 
 #[test]
+fn an_aim_straight_down_or_up_is_a_whole_pose_along_the_ray() {
+    for (at, along) in [([0.0, -1.0, 0.0], -1.0), ([0.0, 1.0, 0.0], 1.0)] {
+        let pose = aim_pose([0.0; 3], at);
+        assert!(
+            pose.orientation.iter().all(|part| part.is_finite()),
+            "{pose:?}"
+        );
+        let ray = Ray::of_aim(&pose);
+        assert!((ray.direction[1] - along).abs() < 1e-5, "{ray:?}");
+    }
+}
+
+#[test]
 fn a_pose_straight_ahead_has_no_turn() {
     let script = ScriptedHand::pointing(
         Hand::Right,
