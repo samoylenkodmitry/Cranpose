@@ -9,7 +9,6 @@ use super::{
 };
 use crate::{
     NodeUpdate,
-    graph::ProjectiveTransform,
     layer_transform::laid_out_transform_to_window,
     scene_store::{LayerRef, RecordKind, SceneStore},
 };
@@ -25,7 +24,9 @@ pub(super) struct TranslateGeometry {
 #[derive(Clone, Copy)]
 struct WindowPlace {
     top_left: Point,
-    transform: Option<ProjectiveTransform>,
+    // Where the node's children lie: its top left moved by its content
+    // offset, with the node's own window transform.
+    children: AbsOrigin,
 }
 
 impl TranslateGeometry {
@@ -37,6 +38,7 @@ impl TranslateGeometry {
         local_bounds: Rect,
         parent_abs: Option<&AbsOrigin>,
     ) -> Self {
+        let content_offset = layout_state.content_offset();
         let window = parent_abs.map(|parent_abs| {
             let top_left = Point {
                 x: parent_abs.content_origin.x + layout_state.position().x,
@@ -44,16 +46,22 @@ impl TranslateGeometry {
             };
             WindowPlace {
                 top_left,
-                transform: laid_out_transform_to_window(
-                    parent_abs.window_transform,
-                    top_left,
-                    local_bounds,
-                    graphics_layer,
-                ),
+                children: AbsOrigin {
+                    content_origin: Point {
+                        x: top_left.x + content_offset.x,
+                        y: top_left.y + content_offset.y,
+                    },
+                    window_transform: laid_out_transform_to_window(
+                        parent_abs.window_transform,
+                        top_left,
+                        local_bounds,
+                        graphics_layer,
+                    ),
+                },
             }
         });
         Self {
-            content_offset: layout_state.content_offset(),
+            content_offset,
             window,
         }
     }
@@ -64,19 +72,21 @@ impl TranslateGeometry {
     // worked out.
     pub(super) fn publish(&self, slices: &ModifierNodeSlices, size: Size) {
         match &self.window {
-            Some(window) => slices.publish_window_geometry(window.top_left, window.transform, size),
+            Some(window) => slices.publish_window_geometry(
+                window.top_left,
+                window.children.window_transform,
+                size,
+            ),
             None => slices.publish_pointer_input_size(size),
         }
     }
 
     // What the children of `container`, the layer laid out here beneath
-    // `ancestors`, take from it; `child_abs` is where they lie, as
-    // `child_abs` works it out.
+    // `ancestors`, take from it.
     pub(super) fn children_context<'a>(
-        &self,
+        &'a self,
         container: LayerRef<'_>,
         ancestors: TranslateAncestorContext<'_>,
-        child_abs: Option<&'a AbsOrigin>,
     ) -> TranslateAncestorContext<'a> {
         TranslateAncestorContext {
             inherited: Inherited {
@@ -85,18 +95,14 @@ impl TranslateGeometry {
                     || container.translated_content_context(),
                 parent_content_offset: self.content_offset,
             },
-            parent_abs: child_abs.map_or(ParentOrigin::Unread, ParentOrigin::Known),
+            parent_abs: self
+                .child_abs()
+                .map_or(ParentOrigin::Unread, ParentOrigin::Known),
         }
     }
 
-    pub(super) fn child_abs(&self) -> Option<AbsOrigin> {
-        self.window.as_ref().map(|window| AbsOrigin {
-            content_origin: Point {
-                x: window.top_left.x + self.content_offset.x,
-                y: window.top_left.y + self.content_offset.y,
-            },
-            window_transform: window.transform,
-        })
+    pub(super) fn child_abs(&self) -> Option<&AbsOrigin> {
+        self.window.as_ref().map(|window| &window.children)
     }
 }
 

@@ -697,9 +697,7 @@ pub(super) fn translate_layer_from_data(
             &modifier_slices,
             ancestors.parent_abs,
         );
-        let child_abs = geometry.child_abs();
-        let children =
-            geometry.children_context(store.layer(container), ancestors, child_abs.as_ref());
+        let children = geometry.children_context(store.layer(container), ancestors);
         match &order {
             ChildOrder::Shifted { kept, .. } => {
                 parts.keep_range(store, kept.clone(), &mut list, dirty_nodes);

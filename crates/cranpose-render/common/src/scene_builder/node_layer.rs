@@ -466,7 +466,7 @@ pub(super) fn with_node_layer<R>(
     );
     geometry.publish(slices, size);
     let content_offset = layout_state.content_offset();
-    let child_context = context.for_children(slices, content_offset, geometry.child_abs());
+    let child_context = context.for_children(slices, content_offset, geometry.child_abs().copied());
     let head = node_layer_head(
         node_id,
         slices,
