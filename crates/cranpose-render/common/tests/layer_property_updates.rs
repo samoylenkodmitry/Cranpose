@@ -3,7 +3,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{MutableState, NodeId};
+use cranpose_core::{MutableState, NodeId, mutableStateOf};
 use cranpose_render_common::{
     SceneUpdates,
     graph::ProjectiveTransform,
@@ -292,6 +292,59 @@ fn parent_layer_update_republishes_child_text_viewport_geometry() {
         graph_output_owned(fresh.root_layer().expect("a scene")),
         "child text and viewport match fresh lowering"
     );
+}
+
+// A node takes a reporter of its window rect and a new rotation in one
+// update, which names it for its layer alone: the scene reads the slices the
+// node has now, not the note of its old ones.
+#[test]
+fn a_layer_update_publishes_a_sink_the_node_takes_with_it() {
+    let rotation = Rc::new(Cell::new(0.0_f32));
+    let parent_id = Rc::new(Cell::new(None::<NodeId>));
+    let reporting = Rc::new(Cell::new(None::<MutableState<bool>>));
+    let sink = Rc::new(Cell::new(Rect::from_size(Size::ZERO)));
+    let (draw_rotation, draw_parent_id, draw_reporting, draw_sink) = (
+        Rc::clone(&rotation),
+        Rc::clone(&parent_id),
+        Rc::clone(&reporting),
+        Rc::clone(&sink),
+    );
+    let mut composition = run_test_composition(move || {
+        let on = cranpose_core::remember(|| mutableStateOf(false)).with(|state| *state);
+        draw_reporting.set(Some(on));
+        let rotation = Rc::clone(&draw_rotation);
+        let modifier = Modifier::empty()
+            .size(Size::new(120.0, 80.0))
+            .graphics_layer(move || GraphicsLayer {
+                rotation_z: rotation.get(),
+                ..GraphicsLayer::default()
+            });
+        let modifier = if on.get() {
+            modifier.report_window_rect(Rc::clone(&draw_sink))
+        } else {
+            modifier
+        };
+        draw_parent_id.set(Some(Box(modifier, BoxSpec::default(), || {})));
+    });
+
+    let (root, mut graph) = initial_root_graph(&mut composition);
+    let parent = parent_id.get().expect("the Box");
+    rotation.set(90.0);
+    reporting.get().expect("the state").set(true);
+    crate::scene_probe::relayout(&mut composition, root, VIEWPORT);
+    apply_updates(
+        &mut composition,
+        &mut graph,
+        &[(parent, cranpose_render_common::NodeUpdate::Layer)],
+    );
+    let published = sink.get();
+    assert_ne!(
+        published,
+        Rect::from_size(Size::ZERO),
+        "the node publishes the sink it took"
+    );
+    let _fresh = crate::scene_probe::fresh_graph(&mut composition, root);
+    assert_eq!(sink.get(), published, "a fresh scene publishes the same");
 }
 
 #[test]

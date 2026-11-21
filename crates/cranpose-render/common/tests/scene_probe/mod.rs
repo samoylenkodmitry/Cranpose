@@ -60,15 +60,10 @@ pub(crate) fn with_applier<R>(
     result
 }
 
-// Lays out as the app shell does, building neither the semantics tree nor
-// the layout tree: the layout tree publishes every window origin itself, so
-// a test of what the scene publishes needs it gone.
-pub(crate) fn update_scene(
-    composition: &mut TestComposition,
-    root: NodeId,
-    viewport: Size,
-    scene: &mut Scene,
-) -> Vec<NodeId> {
+// Composes and lays out as the app shell does, building neither the
+// semantics tree nor the layout tree: the layout tree publishes every window
+// origin itself, so a test of what the scene publishes needs it gone.
+pub(crate) fn relayout(composition: &mut TestComposition, root: NodeId, viewport: Size) {
     while composition.process_invalid_scopes().expect("recompose") {}
     with_applier(composition, |applier| {
         let options = MeasureLayoutOptions {
@@ -76,6 +71,17 @@ pub(crate) fn update_scene(
             build_layout_tree: false,
         };
         measure_layout_with_options(applier, root, viewport, options).expect("relayout");
+    });
+}
+
+pub(crate) fn update_scene(
+    composition: &mut TestComposition,
+    root: NodeId,
+    viewport: Size,
+    scene: &mut Scene,
+) -> Vec<NodeId> {
+    relayout(composition, root, viewport);
+    with_applier(composition, |applier| {
         let geometry = cranpose_ui::take_geometry_scene_nodes();
         let mut content = geometry.reshaped;
         for &node in &geometry.unplaced {
