@@ -2,7 +2,8 @@
 // rect, the sink a scroll viewport reports through, where they lie in the
 // window: when a box above them that reports nothing moves or takes a new
 // size, when they enter under a box the update keeps, when a reporter leaves
-// and comes back, and when a row that reports enters a lazy list. Each
+// and comes back, when a row that reports enters a lazy list, and when they
+// enter a row scrolled sideways. Each
 // update is the scoped one; a fresh scene then publishes the same. A window
 // that takes a new width resizes the holder of the sinks and composes
 // nothing, so only the records above the sinks change.
@@ -14,8 +15,8 @@ use cranpose_render_common::graph_scene::Scene;
 use cranpose_ui::{
     Alignment, BasicTextField, Box, BoxSpec, Column, ColumnSpec, GraphicsLayer, LayoutNode,
     LazyColumn, LazyColumnSpec, LazyItems, LazyListScope, LazyListState, Modifier, Point, Rect,
-    Size, TestComposition, Text, TextFieldState, TextStyle, rememberLazyListState,
-    run_test_composition,
+    Row, RowSpec, ScrollState, Size, TestComposition, Text, TextFieldState, TextStyle,
+    rememberLazyListState, run_test_composition,
 };
 
 use crate::scene_probe::{fresh_graph, initial_graph, update_scene, with_applier};
@@ -295,10 +296,13 @@ impl Holder {
     }
 }
 
+// A change a test step makes to the holder.
+type Change = fn(&mut Holder);
+
 #[test]
 fn sinks_follow_a_box_above_them_that_moves_and_takes_a_new_size() {
     let mut holder = Holder::new();
-    let changes: [(&str, fn(&mut Holder)); 4] = [
+    let changes: [(&str, Change); 4] = [
         ("move", |holder| holder.knobs.spacer.set(50.0)),
         ("resize", |holder| holder.widen(260.0)),
         ("move and resize", |holder| {
@@ -306,7 +310,7 @@ fn sinks_follow_a_box_above_them_that_moves_and_takes_a_new_size() {
             holder.widen(230.0);
         }),
         ("label text", |holder| {
-            holder.knobs.label.set("a longer label")
+            holder.knobs.label.set("a longer label");
         }),
     ];
     for (step, change) in changes {
@@ -484,4 +488,86 @@ fn a_row_that_reports_enters_a_lazy_list_where_it_lies() {
         row_at(REPORTING_ROW),
         "a fresh scene publishes the same"
     );
+}
+
+// The width of the boxes before and after what enters a row that scrolls,
+// and how far the row scrolls.
+const ROW_PAD: f32 = 300.0;
+const SCROLLED: f32 = 100.0;
+
+#[test]
+fn sinks_that_enter_a_scrolled_row_publish_where_they_lie() {
+    let knobs = Rc::new(Cell::new(None::<(ScrollState, MutableState<bool>)>));
+    let sink = Rc::new(Cell::new(unreported()));
+    let field = Rc::new(Cell::new(None::<NodeId>));
+    let (content_knobs, content_sink, content_field) =
+        (Rc::clone(&knobs), Rc::clone(&sink), Rc::clone(&field));
+    let mut composition = run_test_composition(move || {
+        let scroll = cranpose_ui::rememberScrollState!(0.0);
+        let entered = cranpose_core::remember(|| mutableStateOf(false)).with(|state| *state);
+        content_knobs.set(Some((scroll, entered)));
+        let sink = Rc::clone(&content_sink);
+        let field = Rc::clone(&content_field);
+        Row(
+            Modifier::empty()
+                .fill_max_size()
+                .horizontal_scroll(scroll, false),
+            RowSpec::default(),
+            move || scrolled_row_content(entered, &sink, &field),
+        );
+    });
+    let root = composition.root().expect("root");
+    let mut scene = initial_graph(&mut composition, root, VIEWPORT);
+    let (scroll, entered) = knobs.get().expect("the row composed");
+    scroll.scroll_to(SCROLLED);
+    update_scene(&mut composition, root, VIEWPORT, &mut scene);
+
+    entered.set(true);
+    update_scene(&mut composition, root, VIEWPORT, &mut scene);
+    let at = |x: f32, size: Size| Rect {
+        x: x - SCROLLED,
+        y: 0.0,
+        width: size.width,
+        height: size.height,
+    };
+    let lies = at(ROW_PAD, REPORTER);
+    assert_eq!(
+        sink.get(),
+        lies,
+        "the reporter that entered publishes where it lies"
+    );
+    let field = field.get().expect("the field entered");
+    assert_eq!(
+        field_rect(&mut composition, field),
+        at(ROW_PAD + REPORTER.width, FIELD),
+        "the field that entered reports where it lies"
+    );
+    let _fresh = fresh_graph(&mut composition, root);
+    assert_eq!(sink.get(), lies, "a fresh scene publishes the same");
+}
+
+// A box, the reporter and the text field while `entered` holds, then a box.
+fn scrolled_row_content(
+    entered: MutableState<bool>,
+    sink: &Rc<Cell<Rect>>,
+    field: &Rc<Cell<Option<NodeId>>>,
+) {
+    let pad = Size::new(ROW_PAD, REPORTER.height);
+    Box(Modifier::empty().size(pad), BoxSpec::default(), || {});
+    if entered.get() {
+        Box(
+            Modifier::empty()
+                .size(REPORTER)
+                .report_window_rect(Rc::clone(sink)),
+            BoxSpec::default(),
+            || {},
+        );
+        let state = cranpose_core::remember(|| TextFieldState::new("row")).with(|state| *state);
+        field.set(Some(BasicTextField(
+            state,
+            Modifier::empty().size(FIELD),
+            TextStyle::default(),
+        )));
+    }
+    Box(Modifier::empty().size(pad), BoxSpec::default(), || {});
 }
