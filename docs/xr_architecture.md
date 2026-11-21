@@ -256,8 +256,13 @@ list. The order is the same on every runtime. The depth test corrects it where i
 `volume_plan` holds the rule as a function of the number of volumes, the
 eyes the runtime located and the extensions, and its tests cover it.
 
-A frame with no volume has no projection layer, no swapchain and no draw. The first frame with a
-volume makes the swapchains. The frame after the last volume leaves frees them.
+A frame with no volume has no projection layer and no draw. The first frame with a volume makes the
+swapchains. The scene's window makes its renderer in that frame. Both stay 5 seconds after the last
+volume, controller model and picture of another layer go. `scene_hold` holds that rule. A pointer that
+crosses the gap between two panels can hide a controller's model and show it again within a second.
+On a Quest 3 a scene made again held one frame for about 36 ms: 15 ms for the four swapchains of
+1680 by 1760 and 15 ms for the new renderer's first draw. The swapchains hold about 143 MB during
+the hold. After it no swapchain exists.
 
 ### Pointer
 

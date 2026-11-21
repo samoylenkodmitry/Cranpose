@@ -61,6 +61,16 @@ impl VolumePass {
         Ok(true)
     }
 
+    // Closes the view of the scene's window root: its renderer, which holds the scene's pipelines
+    // and targets, goes. The next draw finds the window root again.
+    pub(crate) fn release(&mut self, guest: &mut GuestView) {
+        if let Some(root) = self.root.take() {
+            guest.close_window(root);
+        }
+        self.opened = None;
+        self.seen = None;
+    }
+
     // The scene's window root, found again when the composition's window roots changed. A window
     // root that left drops its view.
     fn find(&mut self, guest: &mut GuestView) -> Option<NodeId> {

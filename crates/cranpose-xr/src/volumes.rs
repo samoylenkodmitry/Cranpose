@@ -45,6 +45,9 @@ pub(crate) struct Volumes {
     contents: MutableState<Vec<VolumeContent>>,
     #[cfg(any(test, headset))]
     controllers: ControllerStates,
+    // Whether the scene keeps its window while it has nothing to draw, which the frames set
+    #[cfg(any(test, headset))]
+    held: MutableState<bool>,
     #[cfg_attr(
         not(any(test, headset)),
         expect(dead_code, reason = "the headset's scene reads it")
@@ -64,6 +67,8 @@ impl Volumes {
             contents: mutableStateOf(Vec::new()),
             #[cfg(any(test, headset))]
             controllers: ControllerStates::new(),
+            #[cfg(any(test, headset))]
+            held: mutableStateOf(false),
             camera: mutableStateOf(Camera {
                 view: Mat4::IDENTITY,
                 focal_length: 1.0,
@@ -86,6 +91,13 @@ impl Volumes {
     // The states of the controllers' models, which the scene draws.
     pub(crate) fn controllers(&self) -> ControllerStates {
         self.controllers
+    }
+
+    #[cfg(any(test, headset))]
+    // Whether the scene keeps its window with nothing to draw. The frames hold it a short while
+    // after its last content went. A composable that reads it composes again when that changes.
+    pub(crate) fn held(&self) -> MutableState<bool> {
+        self.held
     }
 
     // The scene forgets the volume `id`.
