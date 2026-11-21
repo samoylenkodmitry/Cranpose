@@ -575,6 +575,19 @@ textures of the handles exist from the first frame that draws a picture. The log
 of the plan (`the frame needs 19 layers and gets 16 of the 16 that the runtime takes: the projection
 layer draws 4 of them, 0 are left out`) and of the submitted count.
 
+A Quest 3 (runtime "Oculus" 210.137.0) refuses the trial frame of 32 layers. The same frame then
+ends with its 16 layers, so no frame is lost. The runtime logs one warning for the trial
+(`optimized layer count 32 exceeds compositor resource limit 16`). The build `XR_DEMO_PANELS=19`
+needs 21 layers: 19 panels and two rays. It gets 16: 13 panels, the rays and a projection layer
+that draws the other 6 panels. All 19 panels show in both eyes of the compositor's screenshot
+(`scripts/dev/xr_layer_budget_check.py`). The frame rate is 120 in every second after the start.
+The app's GPU time is 0.82 ms, the GPU's share 35.3 percent and the compositor's time 1.89 ms. A
+build of 14 panels fills the 16 layers with nothing in the projection layer: 0.14 ms, 10.5 percent
+and 0.65 ms. The same 14-panel build of the code before the budget gives the same three numbers, so
+a frame within the limit costs nothing that the runtime measures. The full demo with both scripted
+controllers needs 19 layers. Its projection layer draws 3 handles, and every panel and surface keeps
+its own layer, the clip's video surface included.
+
 ### Measured
 
 On the Android XR emulator (runtime "Android XR" 1.0.0, system "Moohan", GLES) the demo's torus
