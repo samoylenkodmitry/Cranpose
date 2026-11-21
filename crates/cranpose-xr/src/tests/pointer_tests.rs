@@ -50,6 +50,7 @@ pub(super) const PANEL: PanelSlot = PanelSlot {
     room: [800.0, 500.0],
     priority: 0,
     ride: Ride::Free,
+    tracked: None,
 };
 
 // A panel of 200 by 100 dp behind the first one and below it in the atlas.
@@ -64,6 +65,7 @@ const BEHIND: PanelSlot = PanelSlot {
     room: [200.0, 100.0],
     priority: 0,
     ride: Ride::Free,
+    tracked: None,
 };
 
 // A controller at `x` meters that points straight ahead, turned right by `yaw` degrees.
@@ -749,6 +751,7 @@ fn a_surface_stops_the_ray_and_takes_no_pointer_events() {
         room: [400.0, 300.0],
         priority: 0,
         ride: Ride::Free,
+        tracked: None,
     };
     let mut frames = Frames::default();
     let panels = [PANEL, video];
@@ -1181,6 +1184,7 @@ fn square_volume() -> (PanelSlot, PickMeshes) {
         room: [960.0, 540.0],
         priority: 0,
         ride: Ride::Free,
+        tracked: None,
     };
     let square = std::sync::Arc::new(cranpose::space::Mesh::plane());
     let mut picks = PickMeshes::default();
@@ -1582,6 +1586,7 @@ const BUTTON_PANEL: PanelSlot = PanelSlot {
     room: [500.0, 400.0],
     priority: 0,
     ride: Ride::Free,
+    tracked: None,
 };
 
 // Where the center of the button below lies in the room: 100 dp from the panel's left edge and 50

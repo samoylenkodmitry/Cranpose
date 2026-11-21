@@ -18,7 +18,7 @@ use cranpose_ui::text::FontWeight;
 use cranpose_xr::{
     ControllerModel, ControllerModels, FollowMode, FollowTarget, FollowingSubspace, Hand, Pose,
     RenderViewpoint, SpatialFrameEffect, SpatialPanel, Subspace, SubspaceModifier,
-    local_controller_models,
+    TrackedDimensions, local_controller_models,
 };
 use player_demo::sized;
 
@@ -67,7 +67,10 @@ pub(crate) fn ModelsOnly() {
         return;
     }
     FollowingSubspace(
-        FollowTarget::Controller(Hand::Left, FollowMode::Tight),
+        FollowTarget::Controller(
+            Hand::Left,
+            FollowMode::Tight(TrackedDimensions::TranslationAndYaw),
+        ),
         || {
             SpatialPanel(
                 SubspaceModifier::new()

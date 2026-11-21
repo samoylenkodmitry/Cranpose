@@ -112,6 +112,7 @@ impl PanelLayers {
                 source: LayerSource::Drawn(image.content),
                 pose: slot.pose,
                 size,
+                space: None,
             }),
             Shape::Curved { radius } => Layer::Cylinder(CylinderLayer {
                 swapchain: &image.swapchain,
@@ -119,6 +120,7 @@ impl PanelLayers {
                 pose: slot.pose,
                 radius,
                 size,
+                space: None,
             }),
         })
     }

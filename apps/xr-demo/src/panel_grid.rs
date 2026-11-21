@@ -5,7 +5,9 @@
 
 use cranpose::prelude::*;
 use cranpose_ui::text::FontWeight;
-use cranpose_xr::{FollowMode, FollowTarget, FollowingSubspace, SpatialPanel, SubspaceModifier};
+use cranpose_xr::{
+    FollowMode, FollowTarget, FollowingSubspace, SpatialPanel, SubspaceModifier, TrackedDimensions,
+};
 use player_demo::sized;
 
 // `XR_DEMO_PANELS=<count>` builds the grid of `count` panels.
@@ -40,34 +42,37 @@ fn grid_color(index: usize, count: usize) -> Color {
 // projection layer.
 #[composable]
 pub(crate) fn PanelGrid(count: usize) {
-    FollowingSubspace(FollowTarget::View(FollowMode::Snap), move || {
-        let rows = count.div_ceil(COLUMNS);
-        for index in 0..count {
-            let (column, row) = (index % COLUMNS, index / COLUMNS);
-            let x = (column as f32 - (COLUMNS - 1) as f32 / 2.0) * STEP;
-            let y = ((rows - 1) as f32 / 2.0 - row as f32) * STEP;
-            let priority = i32::from(index + 1 == count);
-            SpatialPanel(
-                SubspaceModifier::new()
-                    .size(SIDE, SIDE)
-                    .offset(x, y, -DEPTH_STEP * index as f32)
-                    .layer_priority(priority),
-                move || {
-                    Box(
-                        Modifier::empty()
-                            .fill_max_size()
-                            .background(grid_color(index, count)),
-                        BoxSpec::default().content_alignment(Alignment::CENTER),
-                        move || {
-                            Text(
-                                format!("{}", index + 1),
-                                Modifier::empty(),
-                                sized(40.0, Some(FontWeight::BOLD)),
-                            );
-                        },
-                    );
-                },
-            );
-        }
-    });
+    FollowingSubspace(
+        FollowTarget::View(FollowMode::Snap(TrackedDimensions::TranslationAndYaw)),
+        move || {
+            let rows = count.div_ceil(COLUMNS);
+            for index in 0..count {
+                let (column, row) = (index % COLUMNS, index / COLUMNS);
+                let x = (column as f32 - (COLUMNS - 1) as f32 / 2.0) * STEP;
+                let y = ((rows - 1) as f32 / 2.0 - row as f32) * STEP;
+                let priority = i32::from(index + 1 == count);
+                SpatialPanel(
+                    SubspaceModifier::new()
+                        .size(SIDE, SIDE)
+                        .offset(x, y, -DEPTH_STEP * index as f32)
+                        .layer_priority(priority),
+                    move || {
+                        Box(
+                            Modifier::empty()
+                                .fill_max_size()
+                                .background(grid_color(index, count)),
+                            BoxSpec::default().content_alignment(Alignment::CENTER),
+                            move || {
+                                Text(
+                                    format!("{}", index + 1),
+                                    Modifier::empty(),
+                                    sized(40.0, Some(FontWeight::BOLD)),
+                                );
+                            },
+                        );
+                    },
+                );
+            }
+        },
+    );
 }

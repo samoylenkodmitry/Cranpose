@@ -181,11 +181,14 @@ pub(crate) struct QuadLayer<'a> {
     pub(crate) pose: Pose,
     // The panel's width and height in meters.
     pub(crate) size: [f32; 2],
+    // The tracked space that `pose` is in, or `None` for the frame's space: the room
+    pub(crate) space: Option<xr::sys::Space>,
 }
 
 impl QuadLayer<'_> {
-    // The compositor's struct for the layer in `space`. It names the swapchain by its handle, so
-    // the struct is valid for as long as the swapchain lives.
+    // The compositor's struct for the layer in its own space, or in `space` for a layer in the
+    // room. It names the swapchain by its handle, so the struct is valid for as long as the
+    // swapchain lives.
     pub(crate) fn to_raw(&self, space: xr::sys::Space) -> xr::sys::CompositionLayerQuad {
         let (eye_visibility, offset, extent, blends) = match self.source {
             LayerSource::Drawn((width, height)) => {
@@ -204,7 +207,7 @@ impl QuadLayer<'_> {
             } else {
                 xr::CompositionLayerFlags::EMPTY
             },
-            space,
+            space: self.space.unwrap_or(space),
             eye_visibility,
             sub_image: xr::sys::SwapchainSubImage {
                 swapchain: self.swapchain.as_raw(),
@@ -240,7 +243,7 @@ pub(crate) struct XrSession {
     pub(crate) spatial_events: SpatialEvents,
     // The room as the app sees it: its origin is where the head was when the app started
     pub(crate) local: xr::Space,
-    // The head's own space, which the runtime locates for each frame
+    // The head's own space, which the runtime locates for each frame. Head-locked panels ride in it.
     view: xr::Space,
     // The floor: the runtime's STAGE space, when it has one
     stage: Option<xr::Space>,
@@ -351,6 +354,11 @@ impl XrSession {
     // the first row is the bottom one.
     pub(crate) fn top_row_first(&self) -> bool {
         Graphics::TOP_ROW_FIRST || self.flips_layers
+    }
+
+    // The head's own space, which head-locked panels ride in.
+    pub(crate) fn view_space(&self) -> xr::sys::Space {
+        self.view.as_raw()
     }
 
     // The head at `time`, in the `local` space, with its velocities. A head that the runtime does
@@ -535,8 +543,9 @@ impl XrSession {
         if counts != self.logged_layers {
             self.logged_layers = counts;
             log::info!(
-                "cranpose xr: the frame has {} layers, {} of them test depth and {} write it, of {} that the runtime takes",
+                "cranpose xr: the frame has {} layers, {} of them in the space of the head or a controller, {} test depth and {} write it, of {} that the runtime takes",
                 counts.layers,
+                counts.tracked,
                 counts.tested,
                 counts.written,
                 self.limit.layers(),

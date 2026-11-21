@@ -14,18 +14,22 @@ use crate::{
 /// of its own.
 ///
 /// `follow` says what the subspace follows and how. With
-/// `FollowTarget::View(FollowMode::Snap)` the panels stand in front of the head when the subspace
-/// first composes, and again after the runtime recenters the room. Until the headset has tracked
-/// the head, which can take a few frames after the app starts, the panels stand where a
-/// `Subspace` puts them. With `FollowMode::Tight` the origin follows the target in every frame.
+/// `FollowTarget::View(FollowMode::Snap(dimensions))` the panels stand in front of the head when
+/// the subspace first composes, and again after the runtime recenters the room. Until the headset
+/// has tracked the head, which can take a few frames after the app starts, the panels stand where
+/// a `Subspace` puts them. With `FollowMode::Tight` the origin follows the target in every frame.
 /// [`FollowTarget::Controller`] follows the controller in a hand, for example to put a small ball
-/// above it. [`FollowTarget::Anchor`] follows an [`Anchor`](crate::Anchor), which holds content on a
-/// table or a wall and keeps it there after the app restarts, with
+/// above it or a menu at the hand. [`FollowTarget::Anchor`] follows an [`Anchor`](crate::Anchor),
+/// which holds content on a table or a wall and keeps it there after the app restarts, with
 /// [`Anchor::persist`](crate::Anchor::persist).
 ///
-/// The origin of a view or a controller has the target's place and its turn about the vertical
-/// axis, so the panels stand upright. The origin of an anchor is the anchor's pose. A panel that
-/// the user carried keeps its place relative to the origin, so it moves with the origin. A panel
+/// The origin has the target's pose in the dimensions that the mode tracks
+/// ([`TrackedDimensions`](crate::TrackedDimensions)). With `TrackedDimensions::All` the panels
+/// turn with the target about every axis: a menu at a controller holds its place against the
+/// controller as the hand tilts and rolls. With `TrackedDimensions::TranslationAndYaw` the origin
+/// has the target's place and its turn about the vertical axis, so the panels stand upright. A
+/// panel that the user carried keeps its place relative to the origin, so it moves with the
+/// origin: a carry of a panel at a controller sets its offset from the controller. A panel
 /// that another following subspace takes over, as when the app names a new anchor, is placed by its
 /// modifier again. A panel's
 /// [`SpatialMoveEvent`](crate::SpatialMoveEvent) poses are relative to this origin.

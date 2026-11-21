@@ -23,7 +23,7 @@ pub(crate) mod field_dock;
 mod panel_slot;
 mod surface_delivery;
 
-pub(crate) use panel_slot::{Mobility, PanelKind, PanelSlot, Ride, Shape};
+pub(crate) use panel_slot::{Mobility, PanelKind, PanelSlot, Ride, Shape, TrackedSpace};
 
 #[cfg(any(test, headset))]
 use crate::spatial_store::SpatialStore;
@@ -247,9 +247,13 @@ impl Entry {
                 self.origin = origin;
                 self.slot.pose = origin.then(&self.carried.unwrap_or(follow.local));
                 self.slot.ride = standing.hand.map_or(Ride::Free, Ride::On);
+                self.slot.tracked = standing.tracked;
                 self.publish_pose();
             }
-            None => self.slot.ride = Ride::Hidden,
+            None => {
+                self.slot.ride = Ride::Hidden;
+                self.slot.tracked = None;
+            }
         }
     }
 }
@@ -509,6 +513,7 @@ impl Space {
                         resize: None,
                         room: size,
                         ride: Ride::Free,
+                        tracked: None,
                     },
                     panel,
                     dots: [None; 2],
@@ -539,7 +544,10 @@ impl Space {
             .and_then(|id| self.inner.follow_origins.borrow().standing(id))
         {
             Some(standing) => entry.stand(standing),
-            None => entry.slot.ride = Ride::Free,
+            None => {
+                entry.slot.ride = Ride::Free;
+                entry.slot.tracked = None;
+            }
         }
         entry.publish_pose();
         entry.slot.atlas

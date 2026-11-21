@@ -34,6 +34,7 @@ mod surface_layers;
 mod surface_swapchain;
 mod system_properties;
 mod tracked_pose;
+mod tracked_spaces;
 mod tracking;
 mod trial_layer;
 mod volume_layers;

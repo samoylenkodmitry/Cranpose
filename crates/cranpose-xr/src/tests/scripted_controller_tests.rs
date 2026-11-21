@@ -125,6 +125,7 @@ const PANEL: PanelSlot = PanelSlot {
     room: [400.0, 300.0],
     priority: 0,
     ride: Ride::Free,
+    tracked: None,
 };
 
 #[test]

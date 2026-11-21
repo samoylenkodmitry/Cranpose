@@ -49,12 +49,14 @@ Cranpose developers too:
   Jetpack XR 1.0.0-beta02 spells it `Subspace(follow = FollowTarget.view(FollowMode.snap()))`. It
   replaced `FollowingSubspace(target, behavior)` and the `UserSubspace(lockingBehavior)` of the
   alpha releases. Rust has no overloads, so the composable keeps the name `FollowingSubspace`.
-  `FollowTarget::View(FollowMode::Snap)` places it when it first composes and again after a
-  recenter. `FollowMode::Tight` follows the target in every frame, as Jetpack XR's
-  `FollowMode.tight` does. `FollowTarget::Controller(Hand, FollowMode)` follows a controller's
-  grip pose. Jetpack XR has no controller target. `FollowTarget::Anchor(Anchor, FollowMode)` holds
-  the panels to an anchor, as Jetpack XR's `FollowTarget.anchor` does. Its `FollowMode.soft` is not
-  there yet.
+  `FollowTarget::View(FollowMode::Snap(dimensions))` places it when it first composes and again
+  after a recenter. `FollowMode::Tight(dimensions)` follows the target in every frame, as Jetpack
+  XR's `FollowMode.tight` does. `TrackedDimensions::All` tracks all six dimensions of the target's
+  pose, as Jetpack XR's `TrackedDimensions.All` does. `TrackedDimensions::TranslationAndYaw` tracks
+  its place and its yaw, so the panels stand upright. `FollowTarget::Controller(Hand, FollowMode)`
+  follows a controller's grip pose, turned as its aim pose is. Jetpack XR has no controller target.
+  `FollowTarget::Anchor(Anchor, FollowMode)` holds the panels to an anchor, as Jetpack XR's
+  `FollowTarget.anchor` does. Its `FollowMode.soft` is not there yet.
 - `SpatialRow`, `SpatialColumn`, `SpatialBox`, `SpatialCurvedRow`, `SpatialSpacer`: layouts in
   meters.
 - `SpatialExternalSurface(stereo_mode, modifier) { scope }`: hands the app a surface that a
@@ -656,7 +658,8 @@ A target and a mode make six cases:
   subspaces again in the first frame at or after that time.
 - `View(Tight)`: the same origin in every frame. A frame in which the runtime loses the head keeps
   the origin of the frame before.
-- `Controller(hand, Tight)`: the origin is the place of the hand's grip pose, with no offset.
+- `Controller(hand, Tight)`: the origin is the place of the hand's grip pose with the turn of its aim
+  pose, with no offset.
 - `Controller(hand, Snap)`: the origin is that place in the first frame that tracks the controller.
   A recenter places it again. The panels do not show before the first place.
 - `Anchor(anchor, Tight)`: the origin is the anchor's pose in every frame, with all six degrees of
@@ -667,11 +670,25 @@ A target and a mode make six cases:
   its place at once, and one that the app loaded from storage waits for the runtime to recognize the
   room. A detached anchor leaves the panels where they were.
 
-For a view and a controller only the target's turn about the vertical axis counts, so the panels stand upright. A ball that
-sits 10 cm above a controller stays straight above it when the hand tilts. Jetpack XR's
-`TrackedDimensions.All` would tilt the ball with the hand. The turn is the heading of the pose's
-forward axis seen from above. A pose whose forward axis is within about 6 degrees of vertical has no
-heading, so the origin keeps the last one.
+`TrackedDimensions::All` gives the origin the target's whole pose: the head's pose a meter ahead, the
+controller's pose or the anchor's pose. A menu at a controller tilts and rolls with the hand.
+`TrackedDimensions::TranslationAndYaw` keeps only the target's turn about the vertical axis, so the
+panels stand upright. A ball that sits 10 cm above a controller stays straight above it when the
+hand tilts. The turn is the heading of the pose's forward axis seen from above. A pose whose forward
+axis is within about 6 degrees of vertical has no heading, so the origin keeps the last one.
+
+A `Tight` subspace of all six dimensions of the view or of a controller rides in a tracked space:
+the head's `VIEW` space or the space of the controller's aim action. Its panels get
+`PanelSlot::tracked`. The end of the frame hands each layer of such a panel to the compositor in
+that space: the content's quad or cylinder, the surfaces and the handles. Its pose there is the
+panel's pose in the room relative to the pose that the frame located for the space. The pose in the
+room places the panel for the hits, the sort and the layer budget in the same frame. The compositor
+places the layer with the newest pose that it has of the space at the time the frame shows, so the
+panel holds still against the hand. The aim of a scripted controller is not the runtime's space, so
+its panels stay in the room's space at the pose that the script gives. A `Snap` subspace and an
+upright one stay in the room's space: they do not turn with every move of the target. An anchor
+holds still, so the room's space places its panels exactly. The log line `the frame has N layers`
+says how many of them ride in a tracked space.
 
 A controller gives its place from the grip pose and its turn from the aim pose. The OpenXR grip
 pose has its forward axis along the controller's handle. The handle points steeply upward when
@@ -680,7 +697,10 @@ hand rises a few tens of degrees. A quad layer shows its front face only, so a f
 vanish. The aim pose points where the ray points. That direction stays steady. A controller counts
 as tracked when the runtime tracks both poses.
 
-A panel that the user carried keeps its pose relative to the origin, so it moves with the origin.
+A panel that the user carried keeps its pose relative to the origin, so it moves with the origin. A
+carry of a panel at a controller therefore sets the panel's offset from the controller. The carry
+skips the snap to the room's planes for such a panel. A panel that the other hand grabs from nearer
+than 30 cm stays as near as the grab found it.
 A panel that another following subspace takes over, as when the app names a new anchor, is placed by its modifier again, because the place that the user carried it to is relative to the old origin.
 
 A following subspace of a controller has no place while the runtime does not track the controller.

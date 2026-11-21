@@ -88,6 +88,7 @@ impl SurfaceLayers {
                     source: LayerSource::Surface(view),
                     pose: slot.pose,
                     size: slot.size().map(|dp| dp * METERS_PER_DP),
+                    space: None,
                 })
             })
     }

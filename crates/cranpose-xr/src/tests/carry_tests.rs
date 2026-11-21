@@ -29,6 +29,7 @@ fn slot() -> PanelSlot {
         room: [800.0, 500.0],
         priority: 0,
         ride: Ride::Free,
+        tracked: None,
     }
 }
 
@@ -81,6 +82,20 @@ fn a_push_moves_the_panel_away_within_limits() {
     // A push back out of the near limit takes effect at once
     assert!(close([distance(0.2), 0.0, 0.0], [-0.5, 0.0, 0.0]));
     assert!(close([distance(10.0), 0.0, 0.0], [-5.0, 0.0, 0.0]));
+}
+
+#[test]
+fn a_panel_grabbed_nearer_than_the_near_limit_stays_where_the_grab_found_it() {
+    // A panel at the other hand, 18 cm ahead of the aim and a little to the side
+    let panel = Pose::at([0.05, -0.02, -0.18]);
+    let mut carry = Carry::grab(&Pose::IDENTITY, &panel);
+    assert!(close(carry.pose(&Pose::IDENTITY).position, panel.position));
+    // A pull toward the controller stops at the distance of the grab
+    carry.push(-1.0);
+    let near = carry.pose(&Pose::IDENTITY).position;
+    let length = near.iter().map(|v| v * v).sum::<f32>().sqrt();
+    let grabbed = panel.position.iter().map(|v| v * v).sum::<f32>().sqrt();
+    assert!((length - grabbed).abs() < 1e-4, "{length} {grabbed}");
 }
 
 #[test]

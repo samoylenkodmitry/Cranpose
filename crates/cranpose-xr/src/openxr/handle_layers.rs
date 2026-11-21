@@ -82,6 +82,7 @@ impl HandleLayers {
             source: LayerSource::Drawn((SIZE, SIZE)),
             pose: handle.pose,
             size: [handle.side; 2],
+            space: None,
         })
     }
 }

@@ -39,6 +39,9 @@ pub(crate) struct PanelSlot {
     pub(crate) room: [f32; 2],
     // Whether a controller places the panel
     pub(crate) ride: Ride,
+    // The space whose newest pose the compositor places the panel's layers with, or `None` for
+    // the room's space
+    pub(crate) tracked: Option<TrackedSpace>,
 }
 
 impl PanelSlot {
@@ -111,6 +114,18 @@ pub(crate) enum Ride {
     // The panel's subspace has no place: it follows a controller that the runtime does not
     // track. The panel shows nowhere and takes no hits.
     Hidden,
+}
+
+// A tracked space that the panels of a following subspace ride in, when the subspace follows every
+// move of its target. The headset hands their layers to the compositor in that space, at the
+// panel's pose relative to the space. The compositor then places them with the newest pose of the
+// head or the controller, at the time the frame shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TrackedSpace {
+    // The head's own space
+    View,
+    // The space of the aim pose of the controller in this hand
+    Aim(Hand),
 }
 
 // Whether the user may carry a panel with a controller.
