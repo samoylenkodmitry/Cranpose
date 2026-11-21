@@ -58,14 +58,36 @@ impl ControllerStates {
     }
 
     // Takes the controllers of a frame: each hand that holds a controller shows a model at its grip,
-    // unless the app turned the models off.
+    // unless the app turned the hand's model off. The parts of a shown model take the controller's
+    // inputs.
     pub(crate) fn track(&self, controllers: [&Controller; 2]) {
-        let grips = if self.settings.get_non_reactive().enabled {
-            controller_grips::shown(controllers)
-        } else {
-            [None; 2]
-        };
+        let enabled = self.settings.get_non_reactive().enabled;
+        let mut grips = controller_grips::shown(controllers);
+        for (grip, enabled) in grips.iter_mut().zip(enabled) {
+            if !enabled {
+                *grip = None;
+            }
+        }
         self.show(grips);
+        #[cfg(feature = "gltf")]
+        self.follow(controllers, grips);
+    }
+
+    // Poses the parts of each shown model that has loaded from its controller's inputs.
+    #[cfg(feature = "gltf")]
+    fn follow(&self, controllers: [&Controller; 2], grips: [Option<Pose>; 2]) {
+        let loads = self.loads.get_non_reactive();
+        for ((load, controller), grip) in loads.iter().zip(controllers).zip(grips) {
+            if grip.is_none() {
+                continue;
+            }
+            if let Some(loaded) = load
+                .as_ref()
+                .and_then(crate::SpatialGltfModelState::loaded_now)
+            {
+                loaded.follow(controller);
+            }
+        }
     }
 
     // Moves the models to the controllers' grips, `None` for a hand that shows none. A hand that

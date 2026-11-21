@@ -1,6 +1,10 @@
 //! The state of a glTF model that a [`SpatialGltfModel`](crate::SpatialGltfModel) shows.
 
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::Arc,
+};
 
 use cranpose::{
     LaunchedEffect, composable,
@@ -10,9 +14,9 @@ use cranpose::{
 use cranpose_core::{MutableState, NodeId, mutableStateOf, rememberKeyed};
 
 use crate::{
-    HitInfo, gltf_animation::GltfAnimation, gltf_clip::Trs, gltf_error::GltfError,
-    gltf_import::import, gltf_model::GltfModel, gltf_model_node::GltfModelNode,
-    spatial_gltf_model_source::SpatialGltfModelSource,
+    HitInfo, controller_parts::PartInput, gltf_animation::GltfAnimation, gltf_clip::Trs,
+    gltf_error::GltfError, gltf_import::import, gltf_model::GltfModel,
+    gltf_model_node::GltfModelNode, spatial_gltf_model_source::SpatialGltfModelSource,
     spatial_gltf_model_status::SpatialGltfModelStatus, surface_ring::SurfaceRing,
 };
 
@@ -45,6 +49,9 @@ pub(crate) struct LoadedModel {
     // Counts the starts and stops of the animations, which change the pose
     pub(crate) requests: MutableState<u32>,
     poses: RefCell<NodePoses>,
+    // The inputs of the controller that the model draws, which pose its parts, once a frame gave
+    // them
+    input: Cell<Option<PartInput>>,
     // Counts the times the poses changed. A draw that reads it draws again when they do.
     revision: MutableState<u32>,
 }
@@ -87,10 +94,31 @@ impl LoadedModel {
             animations,
             requests,
             poses: RefCell::new(NodePoses::default()),
+            input: Cell::new(None),
             revision: mutableStateOf(0),
         };
         loaded.pose();
+        if !loaded.model.parts.is_empty() {
+            let parts: Vec<&str> = loaded.model.parts.describe().collect();
+            log::info!(
+                "glTF model: the inputs of a controller move its {}",
+                parts.join(", ")
+            );
+        }
         loaded
+    }
+
+    // Poses the parts that the inputs of `controller` move, when the model has such parts and the
+    // inputs changed since the last frame. A frame whose inputs stayed costs a comparison.
+    #[cfg(any(test, headset))]
+    pub(crate) fn follow(&self, controller: &crate::Controller) {
+        if self.model.parts.is_empty() {
+            return;
+        }
+        let input = PartInput::of(controller);
+        if self.input.replace(Some(input)) != Some(input) {
+            self.pose();
+        }
     }
 
     // Places the nodes where the playing animations put them, and tells the draws.
@@ -103,7 +131,11 @@ impl LoadedModel {
         {
             let mut nodes = self.poses.borrow_mut();
             let NodePoses { locals, worlds } = &mut *nodes;
-            self.model.world_transforms(poses, locals, worlds);
+            self.model.local_transforms(poses, locals);
+            if let Some(input) = self.input.get() {
+                self.model.parts.pose(&input, locals);
+            }
+            self.model.worlds_of(locals, worlds);
         }
         self.revision
             .update(|revision| *revision = revision.wrapping_add(1));
@@ -210,6 +242,15 @@ impl SpatialGltfModelState {
     // The model, once it has loaded.
     pub(crate) fn loaded(&self) -> Option<Rc<LoadedModel>> {
         match self.load.get() {
+            Load::Loaded(loaded) => Some(loaded),
+            Load::Loading | Load::Failed(_) => None,
+        }
+    }
+
+    // The model, once it has loaded, read from outside the composition: the frame loop's read.
+    #[cfg(any(test, headset))]
+    pub(crate) fn loaded_now(&self) -> Option<Rc<LoadedModel>> {
+        match self.load.get_non_reactive() {
             Load::Loaded(loaded) => Some(loaded),
             Load::Loading | Load::Failed(_) => None,
         }

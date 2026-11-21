@@ -1,20 +1,24 @@
 //! Reads a glTF 2.0 file into a [`GltfModel`].
 //!
 //! The reader takes the node tree of the file's scene, one mesh for each primitive, one picture
-//! for each material and the keyframes of each animation. It leaves out what the volume does not
-//! draw: skins and morph targets, cameras, lights, and every material property but the base color.
+//! for each material and the keyframes of each animation. A skinned primitive whose every vertex
+//! follows one joint becomes one mesh for each joint (see `gltf_skin`). It leaves out what the
+//! volume does not draw: other skins and morph targets, cameras, lights, and every material
+//! property but the base color.
 
 use std::{path::Path, sync::Arc};
 
 use cranpose::space::{Mesh, MeshError, Vec3};
 
 use crate::{
+    controller_parts::ControllerParts,
     gltf_buffers::Buffers,
     gltf_clip::{Channel, Clip, Interpolation, Track, Trs, normalized_rotation},
     gltf_error::GltfError,
     gltf_ktx2,
     gltf_material::{Alpha, Texture, bake},
     gltf_model::{Draw, GltfModel, MaterialLayer},
+    gltf_skin::{Pieces, rigid_pieces},
     spatial_gltf_model_source::SpatialGltfModelSource,
 };
 
@@ -44,18 +48,26 @@ pub(crate) fn parse(bytes: &[u8], base: Option<&Path>) -> Result<GltfModel, Gltf
                 .pbr_metallic_roughness()
                 .base_color_texture()
                 .map_or(0, |texture| texture.tex_coord());
-            let Some(mesh) = meshes.of(mesh.index(), &primitive, &buffers, tex_coord)? else {
+            let placed = meshes.placed(
+                &nodes[node],
+                &primitive,
+                &buffers,
+                tex_coord,
+                &scene.reached,
+            )?;
+            if placed.is_empty() {
                 continue;
-            };
-            draws.push(Draw {
-                node,
-                mesh,
-                layer: layers.of(&document, &material, &buffers, base)?,
-            });
+            }
+            let layer = layers.of(&document, &material, &buffers, base)?;
+            draws.extend(
+                placed
+                    .into_iter()
+                    .map(|(node, mesh)| Draw { node, mesh, layer }),
+            );
         }
     }
     let clips = clips(&document, &buffers)?;
-    let rest = nodes
+    let rest: Vec<Trs> = nodes
         .iter()
         .map(|node| {
             let (translation, rotation, scale) = node.transform().decomposed();
@@ -66,10 +78,11 @@ pub(crate) fn parse(bytes: &[u8], base: Option<&Path>) -> Result<GltfModel, Gltf
             }
         })
         .collect();
-    let names = nodes
+    let names: Vec<Option<Arc<str>>> = nodes
         .iter()
         .map(|node| node.name().map(Arc::from))
         .collect();
+    let parts = ControllerParts::find(&names, &rest, &clips);
     let mut model = GltfModel {
         rest,
         parents: scene.parents,
@@ -78,6 +91,7 @@ pub(crate) fn parse(bytes: &[u8], base: Option<&Path>) -> Result<GltfModel, Gltf
         draws,
         layers: layers.baked,
         clips,
+        parts,
         bounds: ([0.0; 3], [0.0; 3]),
     };
     model.bounds = bounds_at_rest(&model)?;
@@ -89,6 +103,8 @@ struct Scene {
     parents: Vec<Option<usize>>,
     // Each node of the scene after its parent
     order: Vec<usize>,
+    // Whether the scene reaches each node
+    reached: Vec<bool>,
 }
 
 impl Scene {
@@ -125,7 +141,11 @@ impl Scene {
             children.extend(nodes[node].children().map(|child| child.index()));
             stack.extend(children.drain(..).rev());
         }
-        Self { parents, order }
+        Self {
+            parents,
+            order,
+            reached: seen,
+        }
     }
 }
 
@@ -149,6 +169,37 @@ impl Meshes {
                 .map(|mesh| vec![Made::Not; mesh.primitives().count()])
                 .collect(),
         )
+    }
+
+    // The meshes that draw `primitive` of `node`, each with the node that places it: the pieces of
+    // a rigid skin on their joints, or else the primitive's one mesh on `node`. Empty for a
+    // primitive that draws nothing.
+    fn placed(
+        &mut self,
+        node: &gltf::Node<'_>,
+        primitive: &gltf::Primitive<'_>,
+        buffers: &Buffers,
+        tex_coord: u32,
+        reached: &[bool],
+    ) -> Result<Pieces, GltfError> {
+        let Some(mesh) = node.mesh() else {
+            return Ok(Pieces::new());
+        };
+        if let Some(skin) = node.skin() {
+            let pieces =
+                rigid_pieces(&skin, primitive, buffers, tex_coord, reached).map_err(|reason| {
+                    GltfError::Mesh {
+                        mesh: mesh.index(),
+                        primitive: primitive.index(),
+                        reason,
+                    }
+                })?;
+            if let Some(pieces) = pieces {
+                return Ok(pieces);
+            }
+        }
+        let made = self.of(mesh.index(), primitive, buffers, tex_coord)?;
+        Ok(made.map(|made| (node.index(), made)).into_iter().collect())
     }
 
     // The mesh of `primitive`, made on first use, or `None` for a primitive that draws nothing.
@@ -177,6 +228,25 @@ impl Meshes {
     }
 }
 
+// The vertices and the triangles of a primitive, three corners to a triangle.
+pub(crate) struct Triangles {
+    pub(crate) positions: Vec<[f32; 3]>,
+    pub(crate) uvs: Vec<[f32; 2]>,
+    pub(crate) normals: Option<Vec<[f32; 3]>>,
+    pub(crate) indices: Vec<u32>,
+}
+
+impl Triangles {
+    // The mesh of the triangles, or `None` when there is no triangle.
+    pub(crate) fn into_mesh(self) -> Result<Option<Mesh>, String> {
+        match Mesh::new(self.positions, self.uvs, self.normals, self.indices) {
+            Ok(mesh) => Ok(Some(mesh)),
+            Err(MeshError::Empty) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+}
+
 // The mesh of a primitive that draws triangles. A primitive of points or lines draws nothing, and
 // so does a primitive with no triangle.
 fn primitive_mesh(
@@ -184,6 +254,18 @@ fn primitive_mesh(
     buffers: &Buffers,
     tex_coord: u32,
 ) -> Result<Option<Mesh>, String> {
+    match primitive_triangles(primitive, buffers, tex_coord)? {
+        Some(triangles) => triangles.into_mesh(),
+        None => Ok(None),
+    }
+}
+
+// The triangles of a primitive, or `None` for a primitive of points or lines.
+pub(crate) fn primitive_triangles(
+    primitive: &gltf::Primitive<'_>,
+    buffers: &Buffers,
+    tex_coord: u32,
+) -> Result<Option<Triangles>, String> {
     use gltf::mesh::Mode;
     let mode = primitive.mode();
     if !matches!(
@@ -215,11 +297,12 @@ fn primitive_mesh(
         Mode::TriangleFan => fan_triangles(&listed),
         _ => listed,
     };
-    match Mesh::new(positions, uvs, normals, indices) {
-        Ok(mesh) => Ok(Some(mesh)),
-        Err(MeshError::Empty) => Ok(None),
-        Err(error) => Err(error.to_string()),
-    }
+    Ok(Some(Triangles {
+        positions,
+        uvs,
+        normals,
+        indices,
+    }))
 }
 
 // The triangles of a strip: each index after the second makes one with the two before it, and

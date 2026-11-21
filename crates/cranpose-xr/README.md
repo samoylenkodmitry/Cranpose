@@ -335,11 +335,30 @@ plain model has a handle, a head, a thumbstick, two buttons, a trigger and a tip
 front. It has no texture and no asset file. It uses the axes of the runtime's models around the
 grip pose: x to the right, y up and z toward the user.
 
-`local_controller_models()` gives the app a `ControllerModels` handle. `set_enabled(false)` turns the
-models off, so no frame draws a scene for them. `set_model(hand, model)` replaces the model of one
-hand with a `ControllerModel`. `Runtime` is the default. `Plain` is the built-in model. `Gltf(source)`
-is a model of the app's own, which needs the `gltf` feature. Its origin lies at the grip pose, and
-its unit is the meter.
+The runtime's model moves its parts with the controller's inputs: the trigger, the grip, the two face
+buttons, the menu button and the thumbstick. A Meta Quest's file is one mesh with a skin, and each
+vertex follows one joint. The loader cuts such a rigid skin into one mesh for each joint, so a part
+moves with its node and no vertex is skinned in a frame. The file's first animation holds the pose of
+each part at a fixed key, which is a place in its list of keys: the trigger pulled at key 16, the
+grip squeezed at 21, the first face button down at 5, the second at 8, the menu button down at 24 and
+the thumbstick leaned to the eight points of the compass at 29, 39, 34, 40, 31, 36, 32 and 37, from
+forward going to the right. A node's name holds the name of its input (`b_trigger_front`,
+`b_trigger_grip`, `b_button_a` or `b_button_x`, `b_button_b` or `b_button_y`, `b_button_oculus`,
+`b_thumbstick`). These are the keys and the names that Meta's Unity SDK reads from the same files
+(`OVRGLTFAnimatinonNode`). The trigger and the grip go from the rest pose to their key as their value
+goes from 0 to 1, a button takes its key while it is down, and the thumbstick takes the pose between
+the keys of the two nearest points of the compass, as far from the rest as the stick leans. A model
+of the app's own with the same names and keys moves the same way. On the right controller the node
+`b_button_oculus` is the Meta button, which no app sees, so it stays at rest. The files have no pose
+for a press of the thumbstick.
+
+`local_controller_models()` gives the app a `ControllerModels` handle. `hand(hand)` gives the
+`HandModel` of one hand: `set_enabled(false)` turns that hand's model off, and with both off no frame
+draws a scene for them. An app that shows the model of the hand that points at its panels turns each
+hand on and off apart. `set_model(hand, model)` replaces the model of one hand with a
+`ControllerModel`. `Runtime` is the default. `Plain` is the built-in model. `Gltf(source)` is a model
+of the app's own, which needs the `gltf` feature. Its origin lies at the grip pose, and its unit is
+the meter.
 
 ```rust,ignore
 use cranpose_xr::{ControllerModel, Hand, SpatialGltfModelSource, local_controller_models};
@@ -350,32 +369,34 @@ if let Some(models) = local_controller_models().current() {
         Hand::Right,
         ControllerModel::Gltf(SpatialGltfModelSource::from_bytes(MY_CONTROLLER)),
     );
-    // models.set_enabled(false) shows none
+    // models.hand(Hand::Left).set_enabled(false) shows no model in the left hand
 }
 ```
 
-Jetpack XR has no controller models. Its `Entity.setEnabled` and `isEnabled` name the switch. The
-names of the model choices are Cranpose's own.
+Jetpack XR has no controller models. Its `Entity.setEnabled` and `isEnabled` name the switch of
+`HandModel`, since each hand's model is an entity of its own. The names of the model choices are
+Cranpose's own.
 
 A model costs the projection layer of the volumes while a controller is in use. An app with no
 volume pays for that layer, its swapchains and its pass only then. With the models off, or with no
 controller in use, no frame draws the scene. Every app gets the models at its next update, since
 they are on by default. An app that draws its own controllers, such as one that streams a scene,
-calls `set_enabled(false)`.
+turns them off with `set_enabled(false)` on each hand.
 
 The frame loop moves a model by writing one state that the draw reads. A controller that moves
 composes nothing. The draw reuses the spaces of a model's surfaces, so it builds no list and no
 space. The write of the state is the framework's: it keeps a record for each changed value, as it
 does for a volume that a user carries.
 
-No headset has run this path. The runtime's listing of the extension under the manifest entries, the
-render model paths, the contents of the runtime's file, the loader on that file, the alignment of
-the file with the grip pose, the depth test against panels and the frame rate of an app with no
-volume are untested. The permission name, the path names and the origin of the models at the grip
-pose follow the extension's documentation and stay assumptions until a headset confirms them. The
-extension has three calls and none gives the state of a button, so a model moves its buttons only
-if its file holds clips, which no run has shown. Android XR and the desktop runtimes use the plain
-model.
+A Quest 3 (Horizon OS runtime 210) lists the extension under the manifest entries and hands out
+"Meta Quest Touch Plus Controller Left" and "Right", 508,088 and 507,568 bytes, the same bytes for
+both glTF subsets. Each loads with six moving parts. The model is in meters with no scale: its
+longest span is 126.5 mm and its box in its own axes 124.7 by 67.7 by 52.0 mm, where a Touch Plus
+measures about 126 by 67 by 43 mm. A run with scripted controllers on that headset changed the
+picture where the parts are: a pulled trigger and the thumbstick in each direction by far more than
+the noise of a still head, and the A button by about twice that noise. The alignment of the file with
+a real controller's grip, the depth test against panels and the frame rate of an app with no volume
+are untested. Android XR and the desktop runtimes use the plain model.
 
 ## Spatial audio
 
