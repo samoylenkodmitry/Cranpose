@@ -3,9 +3,9 @@ use std::{hash::Hash, ops::Range, sync::Arc};
 use bytemuck::{Pod, Zeroable};
 
 use crate::{
-    ArcGeometry, BlendMode, Brush, Color, CornerRadii, DrawPrimitive, GroupMarker, LineFrame,
-    LineGeometry, Point, Rect, ShapeRecordBody, ShapeRecordCurve, Stroke, StrokeCap, StrokeJoin,
-    TAU, TileMode, Trapezoid, arc_band,
+    ArcGeometry, BlendMode, Brush, Color, CornerRadii, DrawPrimitive, GroupMarker, LineGeometry,
+    Point, Rect, ShapeRecordBody, ShapeRecordCurve, Stroke, StrokeCap, StrokeJoin, TAU, TileMode,
+    Trapezoid, arc_band,
     float::{at_least, within},
     vertex_gradient,
 };
@@ -15,6 +15,7 @@ mod command_recording;
 mod draw_groups;
 mod materialize;
 mod record_tables;
+mod row_run;
 mod shape_spans;
 
 use band_ring::{BandRing, vertex_pixels};
@@ -26,6 +27,7 @@ use materialize::{
     parts_segment_primitives,
 };
 pub use record_tables::RecordTables;
+use row_run::{RowRun, line_body, line_curve, slice_body, slice_curve};
 
 /// The kind bits of [`ShapeRecord::flags`]: a plain rect.
 pub const RECORD_KIND_RECT: u32 = 0;
@@ -501,35 +503,6 @@ fn record_coverage(body: &ShapeRecordBody) -> Rect {
         0.0
     };
     expand_rect(row_rect(body.rect), half_stroke)
-}
-
-/// The record of the segment `line`, whose frame is `frame`, painted by
-/// the interned `brush`: the ends ride in the arc columns, and the unit
-/// direction and half length the vertex stage orients its quad by in the
-/// curve column. A line reads back nothing else, so it keeps no source
-/// arguments, which an arc keeps for its radius and angles.
-fn line_record(
-    line: &LineGeometry,
-    frame: &LineFrame,
-    (brush, color): (u32, [f32; 4]),
-    stroke_width: f32,
-    flags: u32,
-) -> (ShapeRecordBody, ShapeRecordCurve) {
-    (
-        ShapeRecordBody {
-            rect: rect_row(line.end_bounds()),
-            color,
-            stroke_width,
-            flags,
-            brush,
-            placement: 0,
-            arc_geometry: [line.start.x, line.start.y, line.end.x, line.end.y],
-        },
-        ShapeRecordCurve {
-            radii: [0.0; 4],
-            arc_normalized: [frame.direction.x, frame.direction.y, frame.half_length, 0.0],
-        },
-    )
 }
 
 fn interior_repays(body: &ShapeRecordBody, curve: &ShapeRecordCurve) -> bool {
@@ -1092,10 +1065,12 @@ impl ShapeRecorder {
             flags |= ARC_DEGENERATE_BIT;
         }
         let frame = line.frame();
-        let (body, curve) = line_record(line, &frame, brush, stroke.width, flags);
+        let ends = line.end_bounds();
+        let body = line_body(line, ends, brush, stroke.width, flags);
+        let curve = line_curve(&frame);
         // A square end on a slant reaches past half the width, which is
         // all `push_shape` grows the ends' box by.
-        let bounds = line.bounds_in(&frame);
+        let bounds = line.bounds_around(ends, &frame);
         self.include_bounds(bounds);
         let shading = self.brush_shading(&body, &curve);
         self.push_shaded(body, curve, [0.0; 4], (blend, shading), None);
@@ -1131,40 +1106,18 @@ impl ShapeRecorder {
                 arc_normalized: [0.0; 4],
             },
         );
-        for (index, trapezoid) in trapezoids.iter().enumerate() {
+        let brush = (handle, color);
+        let mut run = RowRun::new(blend, shading);
+        for trapezoid in trapezoids {
             let bounds = trapezoid.bounds();
             self.include_bounds(bounds);
-            let open = (u32::from(trapezoid.open_left) * OPEN_LEFT_BIT)
-                | (u32::from(trapezoid.open_right) * OPEN_RIGHT_BIT);
-            self.push_in_run(
-                index > 0,
-                ShapeRecordBody {
-                    rect: rect_row(bounds),
-                    color,
-                    stroke_width: 0.0,
-                    flags: flags | open,
-                    brush: handle,
-                    placement: 0,
-                    arc_geometry: [
-                        trapezoid.top[0],
-                        trapezoid.top[1],
-                        trapezoid.bottom[0],
-                        trapezoid.bottom[1],
-                    ],
-                },
-                ShapeRecordCurve {
-                    radii,
-                    arc_normalized: [
-                        trapezoid.left,
-                        trapezoid.right,
-                        trapezoid.right - trapezoid.left,
-                        0.0,
-                    ],
-                },
-                [0.0; 4],
-                (blend, shading),
+            run.push(
+                self,
+                || slice_body(trapezoid, bounds, brush, flags),
+                || slice_curve(trapezoid, radii),
             );
         }
+        run.close(self);
     }
 
     /// Records a rect with `brush`, as an outline when `stroke` is `Some`. Returns the rect the
@@ -1437,44 +1390,19 @@ impl ShapeRecorder {
         );
     }
 
-    /// Whether the open segment takes a record of `band_class` without
-    /// leaving more than [`SEGMENT_WASTE_QUADS`] pinned: a larger class
-    /// raises every earlier record's budget, a smaller one collapses its
-    /// own surplus. Accounts the waste when it does.
-    #[inline]
-    /// Records a piece of a run: the segments of one stroke or the slices
-    /// of one fill, which share a brush, a blend, a shading and a fragment
-    /// kind with no interior, and so a segment key; the caller widens the
-    /// bounds by their reach. The first piece takes [`Self::push_shaded`]. A later one extends the segment the run
-    /// opened or joined with nothing to check while that segment holds no
-    /// band class; in an arc segment it takes the full check, which can
-    /// cut a new segment.
-    fn push_in_run(
-        &mut self,
-        started: bool,
-        mut body: ShapeRecordBody,
-        curve: ShapeRecordCurve,
-        source: [f32; 4],
-        (blend, shading): (BlendMode, BrushShading),
-    ) {
-        let plain = started
-            && self
-                .tables
-                .segments
-                .last()
-                .is_some_and(|segment| segment.band_class == 0);
-        if !plain {
-            self.push_shaded(body, curve, source, (blend, shading), None);
-            return;
-        }
-        body.flags |= shading.flag();
-        let tables = self.tables_mut();
-        tables.shapes.push(body, curve, source);
-        if let Some(segment) = tables.segments.last_mut() {
-            segment.count += 1;
-        }
+    // Whether a later row of a run only extends the open segment: the
+    // segment holds no band class.
+    fn extends_plainly(&self) -> bool {
+        self.tables
+            .segments
+            .last()
+            .is_some_and(|segment| segment.band_class == 0)
     }
 
+    // Whether the open segment takes a record of `band_class` without
+    // leaving more than `SEGMENT_WASTE_QUADS` pinned: a larger class raises
+    // every earlier record's budget, a smaller one collapses its own
+    // surplus. Accounts the waste when it does.
     fn segment_takes_class(&mut self, band_class: u8) -> bool {
         let last = self.tables.segments.last().expect("a keyed segment exists");
         let held = ARC_BUCKET_SEGMENTS[last.band_class as usize];
