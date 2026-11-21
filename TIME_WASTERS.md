@@ -45,7 +45,7 @@
 - ProMotion tracing needs `CADisableMinimumFrameDurationOnPhone` in the actual application plist as well as the display-link frame-rate range.
 - Track native selection layers by active/resting hierarchy and subtract common bar translation before interpreting strain.
 - Capture the window tree for glass pane filters; the broad pane can live outside the tab bar subtree.
-- Keep Cargo target directories separate for A/B checkouts and verify artifact hashes; a shared directory can reuse the other checkout's libraries or embedded shaders.
+- Keep Cargo target directories separate for A/B checkouts. Cargo names the units of path packages without their path, so two source trees that share one target give a stale build that reuses the other checkout's libraries or embedded shaders. Compare the hashes of the binaries before a measure.
 
 - Move Settings sliders beyond touch slop before fine corrections; tiny drags can leave the thumb unchanged.
 - Robot runners must forward the explicit reference-content settings and assert the fixture; a sanitized environment can silently turn a green-icon check into the default blue-icon scene.
