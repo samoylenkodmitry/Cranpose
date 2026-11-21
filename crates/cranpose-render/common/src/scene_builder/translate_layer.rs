@@ -159,6 +159,9 @@ pub(super) fn translated_container(
 #[derive(Default)]
 pub(crate) struct TranslateScratch {
     placed_fresh: Vec<PlacedChild>,
+    // Whether a child of `placed_fresh` enters or is a kept label that takes
+    // its text again: slices the store has not seen.
+    fresh_slices: bool,
     old_ids: Vec<NodeId>,
     old_index_by_id: HashMap<NodeId, usize>,
     retained: Vec<Option<Item>>,
@@ -232,7 +235,8 @@ fn translated_children(
             &mut scratch.old_index_by_id,
         )
     };
-    check_retained_children(store, children, dirty_nodes, placed_fresh).map(|()| order)
+    scratch.fresh_slices = check_retained_children(store, children, dirty_nodes, placed_fresh)?;
+    Some(order)
 }
 
 const MATCH_SEARCHES: usize = 16;
@@ -290,14 +294,19 @@ fn match_old_children(
     }
 }
 
+// Sets how the step keeps each child of `placed_fresh` that `children`
+// held. `None` when a child that is not dirty no longer fits its layer; else
+// whether a child enters or is a kept label that takes its text again.
 fn check_retained_children(
     store: &SceneStore,
     children: &[Item],
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     placed_fresh: &mut [PlacedChild],
-) -> Option<()> {
+) -> Option<bool> {
+    let mut fresh_slices = false;
     for placed in placed_fresh {
         let Some(old_index) = placed.old_index else {
+            fresh_slices = true;
             continue;
         };
         let child = children[old_index].as_child()?;
@@ -326,8 +335,9 @@ fn check_retained_children(
             Some(NodeUpdate::Content) if text_alone() => KeptChild::Retexted,
             Some(_) => KeptChild::Left,
         };
+        fresh_slices |= matches!(placed.kept, KeptChild::Retexted);
     }
-    Some(())
+    Some(fresh_slices)
 }
 
 // The items of a container a translate step parts: the children its own
@@ -596,10 +606,7 @@ fn reads_window_origin(
 ) -> bool {
     modifier_slices_have_origin_sinks(slices)
         || container.has_origin_sinks()
-        || scratch
-            .placed_fresh
-            .iter()
-            .any(|placed| placed.old_index.is_none() || matches!(placed.kept, KeptChild::Retexted))
+        || scratch.fresh_slices
 }
 
 // The geometry of `container`, the layer a translate step places the
