@@ -74,6 +74,11 @@ event-listener = "5.4.2"
 name = "integration"
 path = "tests/integration.rs"
 
+[[test]]
+name = "movable_host_memory"
+path = "tests/movable_host_memory/main.rs"
+harness = false
+
 
 [[bench]]
 name = "observation_cleanup"

@@ -86,15 +86,25 @@ impl ComposerRuntimeState {
         self.retained_groups.set(next);
     }
 
-    pub(crate) fn clear_host_storage_key(&self, host_key: usize, table: &mut SlotTable) {
-        if self.retains_any()
-            && let Some(removed) = self.retention_by_host.borrow_mut().remove(&host_key)
-        {
+    fn remove_host_retention(&self, host_key: usize) -> Option<RetentionManager> {
+        let mut retention_by_host = self.retention_by_host.borrow_mut();
+        if retention_by_host.is_empty() {
+            return None;
+        }
+        let removed = retention_by_host.remove(&host_key)?;
+        if !removed.is_empty() {
             self.sub_retained_groups(removed.len());
         }
-        if !self.pending_movables_by_host.borrow().is_empty() {
-            self.pending_movables_by_host.borrow_mut().remove(&host_key);
+        Some(removed)
+    }
+
+    pub(crate) fn clear_host_storage_key(&self, host_key: usize, table: &mut SlotTable) {
+        self.remove_host_retention(host_key);
+        let mut pending_movables = self.pending_movables_by_host.borrow_mut();
+        if !pending_movables.is_empty() {
+            pending_movables.remove(&host_key);
         }
+        drop(pending_movables);
         self.live_hosts.borrow_mut().remove(&host_key);
         self.movable_owners.forget_host(table);
         table.release_scopes();
@@ -545,13 +555,7 @@ impl ComposerRuntimeState {
         lifecycle: &mut crate::slot::SlotLifecycleCoordinator,
         table_disposal: HostTableDisposal,
     ) -> Option<PreparedRetainedDisposal> {
-        let retention = self
-            .retains_any()
-            .then(|| self.retention_by_host.borrow_mut().remove(&host_key))
-            .flatten();
-        if let Some(retention) = &retention {
-            self.sub_retained_groups(retention.len());
-        }
+        let retention = self.remove_host_retention(host_key);
         let applier_host = self.applier_host.borrow().as_ref().and_then(Weak::upgrade);
         let Some(applier_host) = applier_host else {
             if let Some(retention) = retention {
@@ -569,6 +573,9 @@ impl ComposerRuntimeState {
             }
         }
         if table_disposal == HostTableDisposal::DisposeWithRetained {
+            // Forget disposed-but-attached movables owned by other hosts before
+            // `take_all_drops` clears this table's anchors and movable groups.
+            self.movable_owners.forget_host(table);
             // Queue the host's own slot payloads underneath any retained
             // subtrees so retained nodes unmount first and the host's slot
             // drops run inside the applier host's teardown scope.
@@ -620,10 +627,7 @@ impl ComposerRuntimeState {
         table: &mut SlotTable,
         lifecycle: &mut crate::slot::SlotLifecycleCoordinator,
     ) {
-        if self.retains_any()
-            && let Some(retention) = self.retention_by_host.borrow_mut().remove(&host_key)
-        {
-            self.sub_retained_groups(retention.len());
+        if let Some(retention) = self.remove_host_retention(host_key) {
             self.deactivate_and_queue_subtrees(retention, table, lifecycle);
         }
         self.clear_host_storage_key(host_key, table);
