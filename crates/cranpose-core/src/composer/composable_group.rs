@@ -167,13 +167,11 @@ impl Drop for ComposableGroup<'_> {
         if self.forces_content {
             self.composer.leave_forced_content();
         }
-        if let Some(mut pass) = self.pass.take() {
-            if self.completed
-                && let Err(err) = self.composer.finish_slot_host_pass(&pass.host)
-            {
-                log::error!("slot host pass finalization failed: {err}");
-            }
-            pass.close();
+        if let Some(pass) = self.pass.take()
+            && self.completed
+            && let Err(err) = self.composer.finish_slot_host_pass(&pass.host)
+        {
+            log::error!("slot host pass finalization failed: {err}");
         }
     }
 }

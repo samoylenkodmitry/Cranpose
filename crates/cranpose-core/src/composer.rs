@@ -66,7 +66,7 @@ impl<T: 'static> ValueSlotHandle<'_, T> {
     }
 }
 
-fn slots_storage_key(host: &Rc<SlotsHost>) -> usize {
+fn slots_storage_key(host: &SlotsHost) -> usize {
     host.storage_key()
 }
 
@@ -114,14 +114,11 @@ struct SlotHostPassGuard {
     host: Rc<SlotsHost>,
     /// The branch fold depth the pass began at.
     fold_base: usize,
-    active: bool,
 }
 
 impl SlotHostPassGuard {
+    #[inline(never)]
     fn close(&mut self) {
-        if !self.active {
-            return;
-        }
         if self.host.has_active_pass() {
             self.host.abandon_active_pass();
         }
@@ -136,7 +133,6 @@ impl SlotHostPassGuard {
         }
         self.core.branch_folds.end_pass(self.fold_base);
         self.core.shared_state.movable_owners.leave_pass_depth();
-        self.active = false;
     }
 }
 
@@ -811,10 +807,10 @@ impl Composer {
         mode: crate::slot::SlotPassMode,
         f: impl FnOnce(&Self) -> R,
     ) -> Result<(R, SlotPassOutcome), NodeError> {
-        let mut guard = self.begin_slot_host_pass(slots, mode);
+        let guard = self.begin_slot_host_pass(slots, mode);
         let result = f(self);
         let outcome = self.finish_slot_host_pass(&guard.host)?;
-        guard.close();
+        drop(guard);
         Ok((result, outcome))
     }
 
@@ -824,7 +820,7 @@ impl Composer {
         mode: crate::slot::SlotPassMode,
         f: impl FnOnce(&Self) -> R,
     ) -> (R, SlotPassOutcome) {
-        let mut guard = self.begin_slot_host_pass(&slots, mode);
+        let guard = self.begin_slot_host_pass(&slots, mode);
         let result = f(self);
         let outcome = match self.finish_slot_host_pass(&guard.host) {
             Ok(outcome) => outcome,
@@ -833,7 +829,7 @@ impl Composer {
                 SlotPassOutcome::default()
             }
         };
-        guard.close();
+        drop(guard);
         (result, outcome)
     }
 
@@ -867,17 +863,21 @@ impl Composer {
             core: self.clone_core(),
             host: slots,
             fold_base,
-            active: true,
         }
     }
 
-    fn finish_slot_host_pass(&self, slots: &Rc<SlotsHost>) -> Result<SlotPassOutcome, NodeError> {
+    fn finish_slot_host_pass(&self, slots: &SlotsHost) -> Result<SlotPassOutcome, NodeError> {
         let finished = {
             let mut applier = self.core.applier.borrow_dyn();
             slots.finish_pass(&mut *applier)
         }?;
-        self.core
-            .handle_detached_children_in_host(slots, None, finished.detached_root_children)?;
+        if !finished.detached_root_children.is_empty() {
+            self.core.handle_detached_children_in_host(
+                slots,
+                None,
+                finished.detached_root_children,
+            )?;
+        }
         self.core.evict_retained_subtrees_for_host(slots)?;
         self.settle_pass_movables(slots)?;
         slots.complete_pass_cleanup(&finished.outcome);

@@ -51,18 +51,15 @@ impl NodeDisposal {
         }
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.nodes.is_empty()
-            && self.slot_hosts.is_empty()
-            && self.lifecycle.pending_drops_len() == 0
-    }
-
-    pub(crate) fn append_lifecycle(&mut self, mut other: SlotLifecycleCoordinator) {
-        self.lifecycle.append(&mut other);
-    }
-
-    pub(crate) fn append_drops(&mut self, drops: Vec<crate::slot::DeferredDrop>) {
-        self.lifecycle.queue_drops(drops);
+    pub(crate) fn from_host_parts(
+        nodes: Vec<(NodeId, u32)>,
+        lifecycle: SlotLifecycleCoordinator,
+    ) -> Self {
+        Self {
+            nodes,
+            lifecycle,
+            slot_hosts: Vec::new(),
+        }
     }
 
     pub(crate) fn retain_subtree(&mut self, subtree: DetachedSubtree) {
@@ -79,7 +76,10 @@ struct NodeDisposalQueue {
 
 impl NodeDisposalQueue {
     fn enqueue(&self, disposal: NodeDisposal) {
-        if !disposal.is_empty() {
+        if !disposal.nodes.is_empty()
+            || !disposal.slot_hosts.is_empty()
+            || disposal.lifecycle.pending_drops_len() != 0
+        {
             self.batches.borrow_mut().push(disposal);
             self.pending.set(true);
         }

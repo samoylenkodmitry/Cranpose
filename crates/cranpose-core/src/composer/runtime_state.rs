@@ -19,6 +19,26 @@ pub(crate) enum HostTableDisposal {
     DisposeWithRetained,
 }
 
+pub(crate) struct PreparedRetainedDisposal {
+    applier_host: Rc<dyn ApplierHost>,
+    nodes: Vec<(crate::NodeId, u32)>,
+    lifecycle: crate::slot::SlotLifecycleCoordinator,
+}
+
+impl PreparedRetainedDisposal {
+    fn is_empty(&self) -> bool {
+        self.nodes.is_empty() && self.lifecycle.pending_drops_len() == 0
+    }
+
+    pub(crate) fn dispose(self) -> Result<(), crate::NodeError> {
+        self.applier_host
+            .dispose_nodes(crate::NodeDisposal::from_host_parts(
+                self.nodes,
+                self.lifecycle,
+            ))
+    }
+}
+
 pub(crate) struct ComposerRuntimeState {
     retention_by_host: RefCell<HashMap<usize, RetentionManager>>,
     retained_groups: Cell<usize>,
@@ -67,10 +87,14 @@ impl ComposerRuntimeState {
     }
 
     pub(crate) fn clear_host_storage_key(&self, host_key: usize, table: &mut SlotTable) {
-        if let Some(removed) = self.retention_by_host.borrow_mut().remove(&host_key) {
+        if self.retains_any()
+            && let Some(removed) = self.retention_by_host.borrow_mut().remove(&host_key)
+        {
             self.sub_retained_groups(removed.len());
         }
-        self.pending_movables_by_host.borrow_mut().remove(&host_key);
+        if !self.pending_movables_by_host.borrow().is_empty() {
+            self.pending_movables_by_host.borrow_mut().remove(&host_key);
+        }
         self.live_hosts.borrow_mut().remove(&host_key);
         self.movable_owners.forget_host(table);
         table.release_scopes();
@@ -142,7 +166,7 @@ impl ComposerRuntimeState {
 
     pub(crate) fn insert_retained(
         &self,
-        host: &Rc<SlotsHost>,
+        host: &SlotsHost,
         key: RetainKey,
         subtree: crate::slot::DetachedSubtree,
         pinned: bool,
@@ -413,7 +437,7 @@ impl ComposerRuntimeState {
 
     pub(crate) fn advance_retention_pass(
         &self,
-        host: &Rc<SlotsHost>,
+        host: &SlotsHost,
     ) -> Vec<crate::slot::DetachedSubtree> {
         if !self.retains_any() {
             return Vec::new();
@@ -520,8 +544,11 @@ impl ComposerRuntimeState {
         table: &mut SlotTable,
         lifecycle: &mut crate::slot::SlotLifecycleCoordinator,
         table_disposal: HostTableDisposal,
-    ) -> Option<(Rc<dyn ApplierHost>, crate::NodeDisposal)> {
-        let retention = self.retention_by_host.borrow_mut().remove(&host_key);
+    ) -> Option<PreparedRetainedDisposal> {
+        let retention = self
+            .retains_any()
+            .then(|| self.retention_by_host.borrow_mut().remove(&host_key))
+            .flatten();
         if let Some(retention) = &retention {
             self.sub_retained_groups(retention.len());
         }
@@ -532,26 +559,34 @@ impl ComposerRuntimeState {
             }
             return None;
         };
-        let retained_subtrees: Vec<_> = retention.map_or_default(RetentionManager::into_subtrees);
-        let mut disposal = crate::NodeDisposal::default();
-        for subtree in &retained_subtrees {
-            subtree.scopes().for_each(RecomposeScope::deactivate);
-            table.invalidate_detached_subtree_anchors(subtree);
+        let mut nodes = Vec::new();
+        let mut disposal_lifecycle = crate::slot::SlotLifecycleCoordinator::default();
+        let retained_subtrees = retention.map(RetentionManager::into_subtrees);
+        if let Some(subtrees) = &retained_subtrees {
+            for subtree in subtrees {
+                subtree.scopes().for_each(RecomposeScope::deactivate);
+                table.invalidate_detached_subtree_anchors(subtree);
+            }
         }
         if table_disposal == HostTableDisposal::DisposeWithRetained {
-            // Deactivate scopes and forget attached movables before draining
-            // table storage, and queue the host's own slot payloads underneath
-            // any retained subtrees so retained nodes unmount first and the
-            // host's slot drops run inside the applier host's teardown scope.
-            self.movable_owners.forget_host(table);
+            // Queue the host's own slot payloads underneath any retained
+            // subtrees so retained nodes unmount first and the host's slot
+            // drops run inside the applier host's teardown scope.
             table.release_scopes();
-            disposal.append_drops(table.take_all_drops());
-            disposal.append_lifecycle(std::mem::take(lifecycle));
+            disposal_lifecycle.queue_drops(table.take_all_drops());
+            disposal_lifecycle.append(lifecycle);
         }
-        for subtree in retained_subtrees {
-            disposal.retain_subtree(subtree);
+        if let Some(subtrees) = retained_subtrees {
+            for subtree in subtrees {
+                subtree.append_disposal_roots(&mut nodes);
+                disposal_lifecycle.queue_subtree_disposal(subtree);
+            }
         }
-        Some((applier_host, disposal))
+        Some(PreparedRetainedDisposal {
+            applier_host,
+            nodes,
+            lifecycle: disposal_lifecycle,
+        })
     }
 
     pub(crate) fn dispose_host_on_drop(
@@ -568,8 +603,8 @@ impl ComposerRuntimeState {
         );
         self.clear_host_storage_key(host_key, table);
         match prepared {
-            Some((applier_host, disposal)) if !disposal.is_empty() => {
-                if let Err(err) = applier_host.dispose_nodes(disposal) {
+            Some(prepared) if !prepared.is_empty() => {
+                if let Err(err) = prepared.dispose() {
                     log::error!(
                         "retained subtree disposal failed while dropping SlotsHost {host_key}: {err}"
                     );
@@ -585,12 +620,12 @@ impl ComposerRuntimeState {
         table: &mut SlotTable,
         lifecycle: &mut crate::slot::SlotLifecycleCoordinator,
     ) {
-        let Some(retention) = self.retention_by_host.borrow_mut().remove(&host_key) else {
-            self.clear_host_storage_key(host_key, table);
-            return;
-        };
-        self.sub_retained_groups(retention.len());
-        self.deactivate_and_queue_subtrees(retention, table, lifecycle);
+        if self.retains_any()
+            && let Some(retention) = self.retention_by_host.borrow_mut().remove(&host_key)
+        {
+            self.sub_retained_groups(retention.len());
+            self.deactivate_and_queue_subtrees(retention, table, lifecycle);
+        }
         self.clear_host_storage_key(host_key, table);
     }
 

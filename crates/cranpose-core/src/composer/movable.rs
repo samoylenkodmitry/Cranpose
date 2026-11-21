@@ -110,7 +110,7 @@ impl Composer {
         Ok(())
     }
 
-    pub(super) fn settle_pass_movables(&self, slots: &Rc<SlotsHost>) -> Result<(), NodeError> {
+    pub(super) fn settle_pass_movables(&self, slots: &SlotsHost) -> Result<(), NodeError> {
         slots.flush_pending_drops();
         self.wake_sites_whose_movable_arrived();
         if !self.core.shared_state.movable_owners.in_nested_pass() {
@@ -276,7 +276,7 @@ impl Composer {
 impl ComposerCore {
     pub(super) fn handle_detached_movable_in_host(
         &self,
-        host: &Rc<SlotsHost>,
+        host: &SlotsHost,
         subtree: crate::slot::DetachedSubtree,
     ) -> Result<(), NodeError> {
         if self.should_dispose_detached_movable(&subtree) {
@@ -310,7 +310,7 @@ impl ComposerCore {
 
     pub(super) fn dispose_movable_subtree_in_host(
         &self,
-        host: &Rc<SlotsHost>,
+        host: &SlotsHost,
         mut subtree: crate::slot::DetachedSubtree,
     ) -> Result<(), NodeError> {
         for nested in subtree.split_off_unowned_nested_movables() {

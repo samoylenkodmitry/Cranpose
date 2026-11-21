@@ -207,17 +207,7 @@ impl SlotsHost {
                 runtime_state,
                 ..
             } = &mut *inner;
-            let prepared = previous_state.prepare_retained_disposal_for_host(
-                host_key,
-                table,
-                lifecycle,
-                composer::HostTableDisposal::Keep,
-            );
-            debug_assert!(
-                prepared.is_none(),
-                "orphaned runtime state must not have a live applier host"
-            );
-            previous_state.clear_host(self, table);
+            previous_state.abandon_retained_subtrees_for_host(host_key, table, lifecycle);
             *runtime_state = Some(Rc::clone(state));
             std::mem::take(lifecycle)
         };
@@ -289,8 +279,8 @@ impl SlotsHost {
                 state.prepare_retained_disposal_for_host(host_key, table, lifecycle, table_disposal)
             })
         };
-        if let Some((applier_host, disposal)) = prepared {
-            applier_host.dispose_nodes(disposal)?;
+        if let Some(prepared) = prepared {
+            prepared.dispose()?;
         }
         let (taken, mut lifecycle) = {
             let mut inner = self.inner.borrow_mut();

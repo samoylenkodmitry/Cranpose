@@ -1,8 +1,6 @@
 // Disposition of detached subtrees: retain reusable groups, split nested
 // movables out of leaving groups, and dispose the rest.
 
-use std::rc::Rc;
-
 use smallvec::SmallVec;
 
 use crate::{
@@ -24,7 +22,7 @@ impl ComposerCore {
 
     pub(super) fn handle_detached_children_in_host(
         &self,
-        slots_host: &Rc<SlotsHost>,
+        slots_host: &SlotsHost,
         parent_scope: Option<ScopeId>,
         detached: Vec<crate::slot::DetachedSubtree>,
     ) -> Result<(), NodeError> {
@@ -66,7 +64,7 @@ impl ComposerCore {
 
     pub(super) fn retain_detached_subtree_in_host(
         &self,
-        slots_host: &Rc<SlotsHost>,
+        slots_host: &SlotsHost,
         parent_scope: Option<ScopeId>,
         subtree: crate::slot::DetachedSubtree,
     ) -> Result<(), NodeError> {
@@ -109,8 +107,11 @@ impl ComposerCore {
 
     pub(super) fn evict_retained_subtrees_for_host(
         &self,
-        slots_host: &Rc<SlotsHost>,
+        slots_host: &SlotsHost,
     ) -> Result<(), NodeError> {
+        if !self.shared_state.retains_any() {
+            return Ok(());
+        }
         let evicted = self.shared_state.advance_retention_pass(slots_host);
         for subtree in evicted {
             self.dispose_detached_subtree_in_host(slots_host, subtree)?;
@@ -120,7 +121,7 @@ impl ComposerCore {
 
     pub(super) fn dispose_detached_subtree_in_host(
         &self,
-        slots_host: &Rc<SlotsHost>,
+        slots_host: &SlotsHost,
         subtree: crate::slot::DetachedSubtree,
     ) -> Result<(), NodeError> {
         let root_nodes = subtree.collect_checked_root_nodes("disposal");
