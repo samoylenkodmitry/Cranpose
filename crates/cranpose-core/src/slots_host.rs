@@ -43,14 +43,15 @@ pub(crate) struct SlotsHostInner {
     pub(crate) pass_state: Option<Box<slot::SlotWriteSessionState>>,
 }
 
-// Passes of more hosts at once are rare; they take new states.
-const SPARE_WRITE_STATES: usize = 2;
-
 // A writer state for a pass under `folds`: one of the thread's spare states
-// when it has one.
+// when it has one. Up to two spare states chain through `next_spare`.
 fn spare_write_state(folds: &Rc<slot::BranchFolds>) -> Box<slot::SlotWriteSessionState> {
-    match crate::thread_state::try_runtimes(|state| state.spare_write_states.borrow_mut().pop())
-        .flatten()
+    match crate::thread_state::try_runtimes(|state| {
+        let mut head = state.spare_write_states.take()?;
+        state.spare_write_states.set(head.next_spare.take());
+        Some(head)
+    })
+    .flatten()
     {
         Some(mut state) => {
             state.set_folds(Rc::clone(folds));
@@ -60,11 +61,14 @@ fn spare_write_state(folds: &Rc<slot::BranchFolds>) -> Box<slot::SlotWriteSessio
     }
 }
 
-fn recycle_write_state(state: Box<slot::SlotWriteSessionState>) {
+fn recycle_write_state(mut state: Box<slot::SlotWriteSessionState>) {
     crate::thread_state::try_runtimes(|threads| {
-        let mut spare = threads.spare_write_states.borrow_mut();
-        if spare.len() < SPARE_WRITE_STATES {
-            spare.push(state);
+        let head = threads.spare_write_states.take();
+        if head.as_ref().is_none_or(|first| first.next_spare.is_none()) {
+            state.next_spare = head;
+            threads.spare_write_states.set(Some(state));
+        } else {
+            threads.spare_write_states.set(head);
         }
     });
 }

@@ -159,12 +159,8 @@ pub(crate) struct RuntimeThreadState {
     pub(crate) spare_composer_stacks: Cell<Option<crate::composer::ComposerStacks>>,
     // Slot writer states between passes, which the hosts on the thread
     // share: a state per host would hold as much for each item of a lazy
-    // list as for the root.
-    #[expect(
-        clippy::vec_box,
-        reason = "a spare state moves into a host as the box it is kept in, without a copy"
-    )]
-    pub(crate) spare_write_states: RefCell<Vec<Box<crate::slot::SlotWriteSessionState>>>,
+    // list as for the root. Up to two spare states chain via `next_spare`.
+    pub(crate) spare_write_states: Cell<Option<Box<crate::slot::SlotWriteSessionState>>>,
     pub(crate) spare_parked_tails: Cell<Option<Box<crate::slot::ParkedTailStorage>>>,
     pub(crate) bridges: RefCell<FixedHashMap<u64, Rc<dyn Any>>>,
     #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
@@ -203,7 +199,7 @@ impl RuntimeThreadState {
             current_composer: RefCell::new(None),
             spare_commands: RefCell::new(Vec::new()),
             spare_composer_stacks: Cell::new(None),
-            spare_write_states: RefCell::new(Vec::new()),
+            spare_write_states: Cell::new(None),
             spare_parked_tails: Cell::new(None),
             bridges: RefCell::new(fixed_hash_map()),
             #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
@@ -269,7 +265,7 @@ impl RuntimeThreadState {
         swap_values(current_composer, &other.current_composer);
         swap_values(spare_commands, &other.spare_commands);
         spare_composer_stacks.swap(&other.spare_composer_stacks);
-        swap_values(spare_write_states, &other.spare_write_states);
+        spare_write_states.swap(&other.spare_write_states);
         spare_parked_tails.swap(&other.spare_parked_tails);
         swap_values(bridges, &other.bridges);
         #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
