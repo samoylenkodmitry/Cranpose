@@ -1173,9 +1173,10 @@ fn owner_group_leaves_across_hosts_while_second_host_takes_live_content() {
 
 #[test]
 fn sole_owned_movables_past_inline_limit_dispose_inline() {
-    const COUNT: usize = 20;
+    const HALF: usize = 10;
+    const COUNT: usize = HALF * 2;
     let mut composition = Composition::new(MemoryApplier::new());
-    let show = MutableState::with_runtime(true, composition.runtime_handle());
+    let phase = MutableState::with_runtime(1u8, composition.runtime_handle());
     let drops = Rc::new(Cell::new(0usize));
     let root_key = location_key(file!(), line!(), column!());
 
@@ -1183,14 +1184,16 @@ fn sole_owned_movables_past_inline_limit_dispose_inline() {
         let drops = Rc::clone(&drops);
         composition
             .render(root_key, move || {
-                if show.value() {
-                    // Wrap all 20 movables in one leaving group so a single
-                    // DetachedSubtree holds all 20 owners (> 16 inline limit)
-                    // and exercises the sorted lookup path in SoleOwnedMovables.
+                let stage = phase.value();
+                if stage > 0 {
+                    // Stage 1 composes items `HALF..COUNT` first; stage 2 prepends
+                    // `0..HALF` so the single leaving group holds > 16 movables in
+                    // non-monotonic id order, exercising sorted insertion and search.
+                    let range = if stage == 1 { HALF..COUNT } else { 0..COUNT };
                     let container_key = location_key(file!(), line!(), column!());
                     with_current_composer(|composer| {
                         composer.with_group(container_key, |composer| {
-                            for index in 0..COUNT {
+                            for index in range {
                                 let drops = Rc::clone(&drops);
                                 composer.with_key(&index, |_| {
                                     let content = rememberMovableContentOf(move || {
@@ -1209,7 +1212,11 @@ fn sole_owned_movables_past_inline_limit_dispose_inline() {
     render(&mut composition);
     assert_eq!(drops.get(), 0);
 
-    show.set_value(false);
+    phase.set_value(2);
+    render(&mut composition);
+    assert_eq!(drops.get(), 0);
+
+    phase.set_value(0);
     render(&mut composition);
     assert_eq!(drops.get(), COUNT);
 }

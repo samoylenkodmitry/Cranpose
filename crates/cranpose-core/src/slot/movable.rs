@@ -173,46 +173,18 @@ enum SplitMovables {
 
 const INLINE_OWNED_MOVABLES: usize = 16;
 
-// In-place O(n log n) heapsort avoids pulling std's multi-kilobyte driftsort /
-// sort8_stable / quicksort instantiations for `(Key, bool)` into embedded images.
-#[cold]
-#[inline(never)]
-fn sort_owned_movables(entries: &mut [(Key, bool)]) {
-    fn sift_down(entries: &mut [(Key, bool)], mut root: usize, end: usize) {
-        while let Some(mut child) = root.checked_mul(2).and_then(|c| c.checked_add(1)) {
-            if child >= end {
-                break;
-            }
-            if child + 1 < end && entries[child].0 < entries[child + 1].0 {
-                child += 1;
-            }
-            if entries[root].0 >= entries[child].0 {
-                break;
-            }
-            entries.swap(root, child);
-            root = child;
-        }
-    }
-
-    let len = entries.len();
-    for start in (0..len / 2).rev() {
-        sift_down(entries, start, len);
-    }
-    for end in (1..len).rev() {
-        entries.swap(0, end);
-        sift_down(entries, 0, end);
-    }
-}
-
 #[derive(Default)]
 struct SoleOwnedMovables {
     entries: SmallVec<[(Key, bool); INLINE_OWNED_MOVABLES]>,
     collected: bool,
-    sorted: bool,
     kept_any: bool,
 }
 
 impl SoleOwnedMovables {
+    fn lookup(&self, id: Key) -> Result<usize, usize> {
+        self.entries.binary_search_by_key(&id, |&(key, _)| key)
+    }
+
     #[cold]
     #[inline(never)]
     fn ensure_collected(&mut self, payloads: &[super::PayloadRecord]) {
@@ -221,27 +193,16 @@ impl SoleOwnedMovables {
         }
         self.collected = true;
         for payload in payloads {
-            if let Some(id) = sole_owned_movable_id(&*payload.value) {
-                self.entries.push((id, false));
+            if let Some(id) = sole_owned_movable_id(&*payload.value)
+                && let Err(index) = self.lookup(id)
+            {
+                self.entries.insert(index, (id, false));
             }
-        }
-        if self.entries.len() > INLINE_OWNED_MOVABLES {
-            sort_owned_movables(&mut self.entries);
-            self.sorted = true;
-        }
-    }
-
-    #[inline(never)]
-    fn find_index(&self, id: Key) -> Option<usize> {
-        if self.sorted {
-            self.entries.binary_search_by_key(&id, |&(key, _)| key).ok()
-        } else {
-            self.entries.iter().position(|&(key, _)| key == id)
         }
     }
 
     fn mark_kept(&mut self, id: Key) -> bool {
-        let Some(index) = self.find_index(id) else {
+        let Ok(index) = self.lookup(id) else {
             return false;
         };
         self.entries[index].1 = true;
@@ -250,8 +211,7 @@ impl SoleOwnedMovables {
     }
 
     fn was_kept(&self, id: Key) -> bool {
-        self.find_index(id)
-            .is_some_and(|index| self.entries[index].1)
+        self.lookup(id).is_ok_and(|index| self.entries[index].1)
     }
 
     fn any_kept(&self) -> bool {
