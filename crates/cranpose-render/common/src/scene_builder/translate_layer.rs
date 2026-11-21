@@ -617,7 +617,9 @@ fn translated_geometry(
     store: &SceneStore,
     container: RecordId,
     scratch: &TranslateScratch,
-    (layout_state, slices, parent_abs): (&LayoutState, &ModifierNodeSlices, ParentOrigin),
+    layout_state: &LayoutState,
+    slices: &ModifierNodeSlices,
+    parent_abs: ParentOrigin,
 ) -> TranslateGeometry {
     let layer = store.layer(container);
     let parent_abs = if reads_window_origin(slices, layer, scratch) {
@@ -694,7 +696,9 @@ pub(super) fn translate_layer_from_data(
             store,
             container,
             scratch,
-            (&layout_state, &modifier_slices, parent_abs),
+            &layout_state,
+            &modifier_slices,
+            parent_abs,
         );
         let children = geometry.children_context(store.layer(container), ancestors);
         match &order {

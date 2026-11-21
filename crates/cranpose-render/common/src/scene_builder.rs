@@ -633,11 +633,14 @@ fn update_layer_properties(
         {
             return None;
         }
-        // A layer update keeps the node's modifier slices, so the store's
-        // note of the window origin sinks in the layer's subtree holds.
+        // The node's slices may be new in this update: they and the store's
+        // note of the sinks beneath the layer say whether a node reads where
+        // the layer lies.
+        let reads =
+            modifier_slices_have_origin_sinks(slices) || store.layer(target).has_origin_sinks();
         let context = LowerContext {
             inherited: ancestors.inherited,
-            parent_abs: if store.layer(target).has_origin_sinks() {
+            parent_abs: if reads {
                 ancestors.parent_abs.resolve(store)
             } else {
                 None
