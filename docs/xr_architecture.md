@@ -324,7 +324,10 @@ images itself: the binary chunk of a `.glb`, `data:` URIs, and files beside a `.
 own `import` feature would do the same, but it needs `base64` 0.13, a second version of a crate that
 the workspace has once. It would also decode every image of the file, where the loader decodes the
 images that a base color texture names, with the PNG and JPEG decoders of the `image` crate. A
-`SpatialGltfModelSource` is a path or bytes. A source made from bytes has no directory, so it
+texture that has no source and names its image in `KHR_texture_basisu`, as the controller models of a
+Meta Quest do, has a KTX2 file of Basis Universal data. The `basisu` crate, a transcoder in Rust,
+turns its first mip level that fits a layer into RGBA pixels. A `SpatialGltfModelSource` is a path or
+bytes. A source made from bytes has no directory, so it
 finds no external buffer.
 
 **What the loader keeps.** One `Mesh` for each triangle primitive (lists, strips and fans), with
@@ -391,14 +394,17 @@ the crate's region of the right eye, 33,137 magenta and 32,355 lime pixels show,
 change their class between two screenshots a second apart, so the animation runs in the headset's
 frame loop. The crate shares the projection layer of the torus's volume, so it adds no layer. The
 log shows the layer count that the earlier measurement of the depth test gave (18 asked, 16 taken,
-two panels left out; see "The layer limit"), with no change after the model loads. It has no
+two panels left out by the code of that time, which had no layer budget), with no change after the
+model loads. It has no
 `glTF model:` failure and no `the 3D content ends`.
 
 The `gltf` feature adds 770 KB to the stripped arm64 library of the demo, which is 11,835 KB without
 the feature and 12,605 KB with it. Both come from a local `release-fast` build. The build without
 the feature leaves out the demo's crate too. Of the 770 KB, the `zune_jpeg`, `image` and `png`
 crates take 209 KB, `serde_json` 181 KB, `gltf` and `gltf_json` 58 KB, and `cranpose_xr` 49 KB. The
-shipping `release` profile has other absolute sizes. An app without the feature has none of it.
+shipping `release` profile has other absolute sizes. An app without the feature has none of it. The
+`basisu` transcoder adds 1,120 KB to that library (14,140 KB to 15,261 KB, stripped arm64, the
+Gradle `release` build of the xr-demo).
 
 ### Controller models
 
@@ -524,16 +530,64 @@ handle. The projection layer is one layer however many volumes there are.
 
 ### The layer limit
 
-A runtime takes a limited number of layers in a frame. The system properties report the number.
-A Quest 3 reports 32 and ends a frame of 18 layers with `XR_ERROR_LAYER_LIMIT_EXCEEDED`. The
-session starts with the reported number. After that error the limit falls to 16, the number that
-the specification guarantees (`layer_limit`). The frame that failed is lost. The frames after it
-leave out the panels that stand farthest from the head, which are the first layers of the panel
-stage, until the frame fits. The projection layers and the rays stay. The log names the refusal
-(`the runtime refused 18 layers and takes 16`) and each change of the frame's layer count with the
-number of panels left out. A frame whose other layers alone pass the limit still fails, and the
-session ends. The demo with a controller in view submits 18 layers on a Quest 3, so it leaves out
-the two panels that stand farthest.
+A runtime takes a limited number of layers in a frame. The system properties report the number,
+and the specification guarantees 16. A Quest 3 reports 32 and ends a frame of 17 or more layers with
+`XR_ERROR_LAYER_LIMIT_EXCEEDED`. So the session plans its frames for 16 layers until the runtime
+takes a frame of the reported number (`layer_limit`). The first frame that the runtime shows tries
+it: copies of an empty layer, a clear picture of 4 by 4 pixels, fill that frame up to the reported
+number. A runtime that refuses the frame gets the same frame again in the same `xrEndFrame` turn
+without the copies, so no frame is lost. The limit then stays at 16. A runtime that ends a frame
+when it refuses it takes no second end of it, so that one frame is lost. The log names the result
+once (`the runtime takes 16 layers of the 32 that it reports`).
+
+When a frame needs more layers than the limit, the projection layer of the 3D content draws some
+pictures in place of their layers (`layer_budget`, `projected_pass`). No panel goes missing.
+
+- The room's layer, the streamed scenes, the projection layer and the rays keep their layers. A
+  surface keeps its layers too, because only the compositor reads what its producer writes.
+- The handles go into the projection layer first. A handle is a small sphere, so its picture needs
+  no sharpness. Then the content panels of the lowest rank go there.
+- A panel ranks by its `SubspaceModifier::layer_priority` first, then by whether a hand points at
+  it or holds one of its handles, then by the distance of its plane from the head: the nearer panel
+  ranks higher. A panel that the last frame drew into the projection layer counts 5 cm farther than
+  it stands, so two panels at about one distance do not trade places at each small move of the head.
+- A frame with no 3D content gets a projection layer for the pictures. That layer takes one place
+  of the budget. 17 panels with no room's layer keep 15 layers and draw 2 into the
+  projection layer.
+- Surfaces that do not fit beside the fixed layers are left out, the farthest first. A frame whose
+  3D content failed has no projection layer. That frame leaves out the pictures of the lowest
+  rank.
+
+The pass draws each picture into both eyes' images after the scene of the volumes, back to front, as
+a flat rectangle or as 32 strips of a cylinder for a curved panel. A panel samples its part of the
+panels' atlas, which the composition already draws. A handle samples a texture of its sphere.
+Where the layer carries depth, the pass tests against the scene's depth and writes its own, so a
+picture hides behind a nearer volume. The panels over the projection layer test against the
+pictures as they test against the volumes. A runtime with no depth test shows every panel of its own
+layer over the pictures. The default rank keeps that order right, because the pictures are the
+farthest panels. A priority or a pointer that keeps a far panel on its layer can put it over a
+nearer picture there. The pictures in the projection layer are sampled twice, once by the pass and
+once by the compositor, so their text shows softer than on a layer of their own. Each content panel
+keeps its own swapchain filled, so a panel that gets its layer back shows its picture at once.
+
+A frame within the limit plans with one count of its layers. It draws nothing more and submits the
+same layers in the same order as before the budget existed. The pass, its pipelines and the
+textures of the handles exist from the first frame that draws a picture. The log names each change
+of the plan (`the frame needs 19 layers and gets 16 of the 16 that the runtime takes: the projection
+layer draws 4 of them, 0 are left out`) and of the submitted count.
+
+A Quest 3 (runtime "Oculus" 210.137.0) refuses the trial frame of 32 layers. The same frame then
+ends with its 16 layers, so no frame is lost. The runtime logs one warning for the trial
+(`optimized layer count 32 exceeds compositor resource limit 16`). The build `XR_DEMO_PANELS=19`
+needs 21 layers: 19 panels and two rays. It gets 16: 13 panels, the rays and a projection layer
+that draws the other 6 panels. All 19 panels show in both eyes of the compositor's screenshot
+(`scripts/dev/xr_layer_budget_check.py`). The frame rate is 120 in every second after the start.
+The app's GPU time is 0.82 ms, the GPU's share 35.3 percent and the compositor's time 1.89 ms. A
+build of 14 panels fills the 16 layers with nothing in the projection layer: 0.14 ms, 10.5 percent
+and 0.65 ms. The same 14-panel build of the code before the budget gives the same three numbers, so
+a frame within the limit costs nothing that the runtime measures. The full demo with both scripted
+controllers needs 19 layers. Its projection layer draws 3 handles, and every panel and surface keeps
+its own layer, the clip's video surface included.
 
 ### Measured
 
@@ -1132,9 +1186,10 @@ presses the counter's button (`Pressed 6 times`). The pad and the list stand bet
 and the torus's volume: a ray at the panel's top meets the pattern surface first, and a ray at its
 bottom meets the torus first, and a surface or a volume stops the ray as a panel does.
 
-With the controllers on, the frame has 16 layers of the 16 that the runtime takes, and 3 panels are
-left out. The clip's video surface is gone from the picture, which fits the back-to-front order: it
-stands farthest from the head. The other two layers were not identified. With no controller active, the same frame has 16 layers and none left
+With the controllers on, the frame has 16 layers of the 16 that the runtime takes, and the code of
+that time, which had no layer budget, left 3 panels out. The clip's video surface is gone from the
+picture, which fits the back-to-front order: it stands farthest from the head. The layer budget of
+"The layer limit" shows every panel of that frame. The other two layers were not identified. With no controller active, the same frame has 16 layers and none left
 out, because no beam shows. On a Quest 3 the system's "Finding position in room" dialog held the launch of the demo, and a press
 clears that dialog, so no frame ran there. The layer count of a Quest 3 and the buttons of a real
 controller are not measured. The long press and the zoom gesture work with a
@@ -1204,8 +1259,8 @@ The selection rules and the pointer's behavior with hand states are covered by
 availability and what the frame gives, and it draws a map of the hands: a dot for each fingertip
 that the cameras track, seen from the front. The map is part of the panel. The compositor of a
 Quest 3 takes 16 layers at most (`xrEndFrame` fails above that, although the system properties
-report 32), and the demo already submits that many, so a panel for the section would push
-another panel out of the frame. The demo's volume takes two of them, one for the 3D content and one for its handle. A panel for each fingertip would add ten layers, and a hand's own pointing ray would stop
+report 32), and the demo already submits that many, so a panel for the section would put another
+panel into the projection layer. The demo's volume takes two of them, one for the 3D content and one for its handle. A panel for each fingertip would add ten layers, and a hand's own pointing ray would stop
 at the dot at its fingertip. The build script asks for hand tracking, which needs no prompt on a
 Quest. `XR_DEMO_TRACKING=none` asks for nothing, and `XR_DEMO_TRACKING=all` adds the body, the face
 and the eyes, which the system asks the user to allow.
@@ -1216,6 +1271,15 @@ seconds opening. In the Android XR emulator the counter counted from 5 to 9 betw
 screenshots, with the beam running from the hand's aim pose to the button and the panel's line
 "Pointers L/R: none / hands". The panel's pointer line reads `XrFrame::pointer`, and the log's
 once-a-second line holds the pointers and the hands' aims.
+
+The full demo shows the room around the headset from its start. A screenshot of the compositor then
+holds a picture of the room, which a device check must not keep. `XR_DEMO_PASSTHROUGH=off` starts the
+demo with the room hidden, so that its screenshots hold the panels on black. A check can test the
+picture for it: in the screenshots of the builds `XR_DEMO_PASSTHROUGH=off`, `XR_DEMO_VOLUME`,
+`XR_DEMO_CONTROLLERS=only` and `XR_DEMO_ROOM=script`, 46 to 99 percent of the pixels are exactly black
+and under 0.4 percent are a dark grey (a brightest channel from 1 to 23).
+`scripts/dev/xr_vrapi_stats.py` reads the frame rate, the app's time for a frame and the GPU's share
+from the line that a Quest's runtime logs each second for the app.
 
 `XR_DEMO_VOLUME=through` builds a scene of a panel and a torus that pierces it, a meter ahead of
 the head where the demo started, and shows nothing else. A compositor that tests depth shows the
@@ -1296,6 +1360,12 @@ The Horizon OS runtime lists its spatial entity extensions to an app only while 
 the missing string for each hidden extension. A runtime that lists both families gets Android XR's.
 `XR_META_spatial_entity_persistence` is not used: the storage extension of `XR_FB_` keeps and loads
 anchors, and the query extension lists them.
+
+A Quest lists the stored anchors some frames after the start. Until then
+`AnchorCapabilities::persistence` is `AwaitingPermission`, so an app that loads what it kept waits for the
+list. The runtime takes the storage location of a query from the `next` of the query's filter and
+refuses a uuid or a component filter that has none with `ERROR_VALIDATION_FAILURE`. A location filter
+alone fails the same way, so the list of the anchors is a query with no filter.
 
 The prompt for `SCENE_UNDERSTANDING_COARSE` and `USE_SCENE` comes before the session, as the tracking
 prompts do, because the system takes an immersive app off the headset to show it. A feature that the

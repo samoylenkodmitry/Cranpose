@@ -41,7 +41,10 @@
 //! of 96 small tiles that hold still under a clock whose text changes every
 //! frame. `SCREEN=scroll` shows, 320 by 480, a short viewport over a long
 //! column of sixty rows that scrolls by itself: each frame moves every row
-//! while the viewport shows a few.
+//! while the viewport shows a few. `SCREEN=radial` shows, 320 by 480, ten
+//! rounded fills of radial gradients and of gradients blended with
+//! `Multiply` that move every frame: the fills a renderer paints pixel by
+//! pixel.
 //!
 //! `PIXELS=rgb565` draws 16-bit pixels, high byte first, as the ESP32
 //! boards' displays take them, in place of RGBA bytes.
@@ -85,6 +88,8 @@ mod deep_moves;
 mod frame_time;
 #[path = "../tests/support/long_scroll.rs"]
 mod long_scroll;
+#[path = "../tests/support/radial_fills.rs"]
+mod radial_fills;
 #[path = "../tests/support/reading.rs"]
 mod reading;
 #[path = "../tests/support/still_wall.rs"]
@@ -186,7 +191,7 @@ impl Bar {
 }
 
 // What the frames show: `SCREEN=dashboard`, `paths`, `moves`, `wall`,
-// `scroll`, `shrink` or the bar.
+// `scroll`, `radial`, `shrink` or the bar.
 #[derive(Clone, Copy, PartialEq)]
 enum Shown {
     Bar,
@@ -195,6 +200,7 @@ enum Shown {
     Moves,
     Wall,
     Scroll,
+    Radial,
     Shrink,
 }
 
@@ -206,6 +212,7 @@ impl Shown {
             Ok("moves") => Self::Moves,
             Ok("wall") => Self::Wall,
             Ok("scroll") => Self::Scroll,
+            Ok("radial") => Self::Radial,
             Ok("shrink") => Self::Shrink,
             _ => Self::Bar,
         }
@@ -219,6 +226,7 @@ impl Shown {
             | Self::Moves
             | Self::Wall
             | Self::Scroll
+            | Self::Radial
             | Self::Shrink => TALL_HEIGHT,
         }
     }
@@ -572,6 +580,7 @@ fn Screen(setup: Setup) {
         Shown::Moves => deep_moves::DeepMoves("Cranpose"),
         Shown::Wall => still_wall::StillWall("Cranpose"),
         Shown::Scroll => long_scroll::LongScroll("Cranpose"),
+        Shown::Radial => radial_fills::RadialFills(),
         Shown::Shrink => ShrinkingColumn(setup.peak_rows),
     }
 }

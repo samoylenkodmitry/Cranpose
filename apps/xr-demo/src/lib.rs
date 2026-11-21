@@ -37,6 +37,7 @@ mod decoder_limits;
 mod foveated_player;
 mod headset_readout;
 mod hum;
+mod panel_grid;
 mod pattern_writer;
 mod presses_panel;
 mod ray_target;
@@ -54,6 +55,7 @@ use crate_model::CrateModel;
 use foveated_player::FoveatedPlayer;
 use headset_readout::{HeadsetClock, HeadsetReadout, Readout, StreamLogs};
 use hum::rememberHum;
+use panel_grid::{PanelGrid, grid_build};
 use pattern_writer::PatternWriter;
 use presses_panel::PressesPanel;
 use ray_target::rememberRayTarget;
@@ -76,6 +78,10 @@ const BALL: f32 = 40.0;
 // shows a different color to each eye.
 #[composable]
 pub fn XrDemo() {
+    if let Some(count) = grid_build() {
+        PanelGrid(count);
+        return;
+    }
     if depth_test_build() {
         DepthTest();
         return;
@@ -128,8 +134,8 @@ pub fn XrDemo() {
         );
         // A volume takes two of the compositor's layers, one for the 3D content and one for its
         // handle. A Quest takes 16. With both rays, the ball and the text panel the demo has more,
-        // and the open keyboard is one more, so the frame leaves out the panels that stand
-        // farthest from the head. The torus hums: the sound comes from the torus and follows it
+        // and the open keyboard is one more, so the projection layer draws the handles and the
+        // farthest panels in place of their own layers. The torus hums: the sound comes from the torus and follows it
         // when a controller carries it. A build that plays the hum from the head's side leaves
         // the torus silent.
         TorusVolume(
@@ -448,8 +454,12 @@ fn CurvedStrip() {
     });
 }
 
+// `XR_DEMO_PASSTHROUGH=off` starts the demo with the room hidden. A screenshot of a device check
+// then holds no picture of the room around the headset.
+const PASSTHROUGH_BUILD: Option<&str> = option_env!("XR_DEMO_PASSTHROUGH");
+
 // A button that shows or hides the room around the panels, or a note where the headset cannot.
-// The room shows from the start.
+// The room shows from the start, unless the build says `XR_DEMO_PASSTHROUGH=off`.
 #[composable]
 fn PassthroughButton() {
     let Some(environment) = local_spatial_environment().current() else {
@@ -467,7 +477,12 @@ fn PassthroughButton() {
         return;
     }
     DisposableEffect(true, move |_| {
-        environment.set_preferred_passthrough_opacity(Some(1.0));
+        let opacity = if PASSTHROUGH_BUILD == Some("off") {
+            0.0
+        } else {
+            1.0
+        };
+        environment.set_preferred_passthrough_opacity(Some(opacity));
         DisposableEffectResult::new(|| {})
     });
     let shown = environment.current_passthrough_opacity() > 0.0;

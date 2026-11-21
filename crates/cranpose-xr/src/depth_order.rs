@@ -15,7 +15,7 @@ use crate::Pose;
 // nearest point puts a small curved panel at the edge of a large surface behind that surface.
 // The distance to the tangent plane at the head's angle sinks a flat panel 3 cm in front of a
 // curved panel under it when the head steps 20 cm aside.
-fn plane_distance(head: [f32; 3], layer: &Pose) -> f32 {
+pub(crate) fn plane_distance(head: [f32; 3], layer: &Pose) -> f32 {
     let normal = layer.rotate([0.0, 0.0, 1.0]);
     let from_layer = [
         head[0] - layer.position[0],

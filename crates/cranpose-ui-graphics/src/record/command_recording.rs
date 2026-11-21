@@ -3,11 +3,10 @@ use std::{cell::OnceCell, hash::Hasher, ops::Range, sync::Arc};
 use bytemuck::Zeroable;
 
 use super::{
-    ArcRecordArgs, BrushRecord, BrushShading, CAP_SHIFT, ContentMarkers, DrawGroups,
-    GradientStopRecord, RECORD_KIND_LINE, RecordLane, RecordSegment, RecordTables, Recorded,
-    RecordingSummary, ShapeRecord, ShapeRecorder, brush_of, line_record, materialize_shape,
-    pack_flags, parts_primitives_with_markers, parts_segment_primitives, primitive_coverage_rect,
-    union_rect,
+    ArcRecordArgs, BrushRecord, CAP_SHIFT, ContentMarkers, DrawGroups, GradientStopRecord,
+    RECORD_KIND_LINE, RecordLane, RecordSegment, RecordTables, Recorded, RecordingSummary, RowRun,
+    ShapeRecord, ShapeRecorder, brush_of, line_body, line_curve, materialize_shape, pack_flags,
+    parts_primitives_with_markers, parts_segment_primitives, primitive_coverage_rect, union_rect,
 };
 use crate::{
     ArcGeometry, BlendMode, Brush, CornerRadii, DrawGroup, DrawPlacement, DrawPrimitive, FxHasher,
@@ -672,7 +671,7 @@ impl<'a> CommandRecorder<'a> {
             stroke,
             drawn: LineGeometry::width_draws(stroke.half_width()),
             blend,
-            interned: None,
+            run: None,
         }
     }
 
@@ -725,8 +724,8 @@ pub struct LineRun<'r, 'a> {
     /// Whether the stroke's width draws anything.
     drawn: bool,
     blend: BlendMode,
-    /// The interned brush and its shading, from the first segment on.
-    interned: Option<((u32, [f32; 4]), BrushShading)>,
+    /// The interned brush and the run of rows, from the first segment on.
+    run: Option<((u32, [f32; 4]), RowRun)>,
 }
 
 impl LineRun<'_, '_> {
@@ -737,31 +736,43 @@ impl LineRun<'_, '_> {
         if !self.drawn || !LineGeometry::ends_draw(start, end, cap) {
             return;
         }
+        let (brush, run) = self.run.get_or_insert_with(|| {
+            self.recorder.note_shape();
+            let shapes = &mut *self.recorder.shapes;
+            let brush = shapes.intern_brush(self.brush);
+            let shading = shapes.brush_shading(
+                &ShapeRecordBody {
+                    brush: brush.0,
+                    flags: self.flags,
+                    ..ShapeRecordBody::zeroed()
+                },
+                &ShapeRecordCurve::zeroed(),
+            );
+            (brush, RowRun::new(self.blend, shading))
+        });
+        let brush = *brush;
+        // The segment's own values come after the first row's interning,
+        // so they are not held across its calls.
         let line = LineGeometry::new(start, end, Stroke { cap, ..self.stroke });
-        let started = self.interned.is_some();
-        let (brush, shading) = match self.interned {
-            Some(interned) => interned,
-            None => {
-                let shapes = &mut *self.recorder.shapes;
-                let brush = shapes.intern_brush(self.brush);
-                let shading = shapes.brush_shading(
-                    &ShapeRecordBody {
-                        brush: brush.0,
-                        flags: self.flags,
-                        ..ShapeRecordBody::zeroed()
-                    },
-                    &ShapeRecordCurve::zeroed(),
-                );
-                self.recorder.note_shape();
-                self.interned = Some((brush, shading));
-                (brush, shading)
-            }
-        };
         let frame = line.frame();
+        let ends = line.end_bounds();
         let flags = self.flags | ((cap as u32) << CAP_SHIFT);
-        let (body, curve) = line_record(&line, &frame, brush, self.stroke.width, flags);
+        let width = self.stroke.width;
         let shapes = &mut *self.recorder.shapes;
-        shapes.include_bounds(line.bounds_in(&frame));
-        shapes.push_in_run(started, body, curve, [0.0; 4], (self.blend, shading));
+        shapes.include_bounds(line.bounds_around(ends, &frame));
+        run.push(
+            shapes,
+            || line_body(&line, ends, brush, width, flags),
+            || line_curve(&frame),
+        );
+    }
+}
+
+// The run adds the rows it appended to its segment once, as the stroke ends.
+impl Drop for LineRun<'_, '_> {
+    fn drop(&mut self) {
+        if let Some((_, run)) = self.run.take() {
+            run.close(&mut *self.recorder.shapes);
+        }
     }
 }

@@ -644,22 +644,13 @@ impl LineGeometry {
     /// The pixels the stroke can reach: the ends' box grown by
     /// [`Self::reach`].
     pub fn bounds(&self) -> Rect {
-        self.grown_ends(self.reach())
+        grown(self.end_bounds(), self.reach())
     }
 
-    /// [`Self::bounds`] for a segment whose [`Self::frame`] is `frame`.
-    pub fn bounds_in(&self, frame: &LineFrame) -> Rect {
-        self.grown_ends(self.reach_along(|| frame.direction))
-    }
-
-    fn grown_ends(&self, reach: Point) -> Rect {
-        let ends = self.end_bounds();
-        Rect {
-            x: ends.x - reach.x,
-            y: ends.y - reach.y,
-            width: ends.width + reach.x * 2.0,
-            height: ends.height + reach.y * 2.0,
-        }
+    // `Self::bounds` for a segment whose ends' box is `ends` and whose
+    // `Self::frame` is `frame`.
+    pub(crate) fn bounds_around(&self, ends: Rect, frame: &LineFrame) -> Rect {
+        grown(ends, self.reach_along(|| frame.direction))
     }
 
     /// The same segment with its ends at `start` and `end` and its width
@@ -699,6 +690,16 @@ impl LineGeometry {
         }
         let reach = frame.half_length + self.cap_reach();
         across_coverage * (reach + 0.5 - along).clamp(0.0, 1.0)
+    }
+}
+
+// The box `ends` grown by `reach` on each axis, both ways.
+fn grown(ends: Rect, reach: Point) -> Rect {
+    Rect {
+        x: ends.x - reach.x,
+        y: ends.y - reach.y,
+        width: ends.width + reach.x * 2.0,
+        height: ends.height + reach.y * 2.0,
     }
 }
 

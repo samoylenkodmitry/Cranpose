@@ -76,12 +76,21 @@ impl RecordFlags {
     pub(crate) const REDRAW_PENDING: Self = Self(1 << 10);
     // The record keeps properties in the store's side slab.
     pub(crate) const HAS_PROPS: Self = Self(1 << 11);
+    // The record is a leaf whose last redraw changed only where it reached
+    // at the refresh before that redraw.
+    pub(crate) const REDRAWN_WITHIN: Self = Self(1 << 12);
+    // The flags that follow a redraw through its update, which the update's
+    // end clears.
+    #[cfg(feature = "window-damage")]
+    pub(crate) const REDRAW_STATE: Self =
+        Self(Self::REDRAW_PENDING.0 | Self::INSERTED.0 | Self::REDRAWN_WITHIN.0);
     // The flags the store keeps itself, which a flag write leaves.
     pub(crate) const STORE_KEPT: Self = Self(
         Self::HAS_PROPS.0
             | Self::HAS_GRAPHICS_LAYER.0
             | Self::HAS_LAYER_BOUNDS.0
             | Self::REACH_STALE.0
+            | Self::REDRAWN_WITHIN.0
             | Self::INSERTED.0
             | Self::REDRAW_PENDING.0,
     );

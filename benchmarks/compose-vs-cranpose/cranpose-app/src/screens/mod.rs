@@ -1,3 +1,4 @@
+pub mod charts;
 #[cfg(feature = "chat")]
 pub mod chat;
 #[cfg(feature = "chat")]

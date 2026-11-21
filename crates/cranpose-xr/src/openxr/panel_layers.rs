@@ -3,7 +3,9 @@
 //!
 //! The composition draws only when it changes. Then each panel's part of the atlas is copied
 //! into the next image of the panel's swapchain. Between changes the compositor keeps showing
-//! the images it has, so a still panel costs no GPU time.
+//! the images it has, so a still panel costs no GPU time. A frame with more layers than the
+//! runtime takes draws some panels into the projection layer instead, from the atlas. Their
+//! swapchains stay filled, so a panel that gets its layer back shows its picture at once.
 
 use cranpose::{GpuContext, GuestView};
 use openxr as xr;
@@ -16,6 +18,7 @@ use super::{
 };
 use crate::{
     METERS_PER_DP,
+    projected_pass::{Picture, ProjectedLayer},
     space::{PanelKind, PanelSlot, Shape, Space},
 };
 
@@ -120,6 +123,31 @@ impl PanelLayers {
         })
     }
 
+    // The panel's picture as the projection layer draws it in place of the panel's layer, from its
+    // part of the atlas. A panel with no layer has none here.
+    pub(crate) fn projected(&self, slot: &PanelSlot) -> Option<ProjectedLayer> {
+        let pose = match self.layer(slot)? {
+            Layer::Quad(quad) => quad.pose,
+            Layer::Cylinder(cylinder) => cylinder.pose,
+        };
+        let radius = match slot.shape {
+            Shape::Flat => None,
+            Shape::Curved { radius } => Some(radius),
+        };
+        let [x, y, width, height] = slot.atlas.map(|dp| (dp * DENSITY).round() as u32);
+        Some(ProjectedLayer {
+            picture: Picture::Atlas([x, y, width.max(1), height.max(1)]),
+            pose,
+            size: slot.size().map(|dp| dp * METERS_PER_DP),
+            radius,
+        })
+    }
+
+    // The atlas that the composition drew last, which the projection layer samples.
+    pub(crate) fn atlas(&self) -> Option<&wgpu::Texture> {
+        self.atlas.as_ref().map(|(texture, _)| texture)
+    }
+
     // The texture the composition draws the atlas into, made anew when the atlas's size changes.
     fn atlas_texture(
         &mut self,
@@ -142,7 +170,10 @@ impl PanelLayers {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: self.format.wgpu,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            // The projection layer samples it for the panels that it draws
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());

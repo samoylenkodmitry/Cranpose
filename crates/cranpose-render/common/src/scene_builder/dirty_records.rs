@@ -5,8 +5,9 @@
 use cranpose_core::{MemoryApplier, NodeId, RecordId, collections::map::HashMap};
 
 use super::{
-    AbsOrigin, GraphChanges, Inherited, Level, LowerContext, TranslateAncestorContext,
-    inline_leaf::fold_kept_leaf, note_space_change, read_placed_node_data, rebuild_tracking_hits,
+    AbsOrigin, GraphChanges, Inherited, Level, LowerContext, ParentOrigin,
+    TranslateAncestorContext, inline_leaf::fold_kept_leaf, note_space_change,
+    parent_origin::ChildrenOrigin, read_placed_node_data, rebuild_tracking_hits,
     redraw_retained_layer, release_for_rebuild, remove_dirty_descendants,
     try_update_retained_layer, update_dirty_inline, write_node_layer,
 };
@@ -57,7 +58,7 @@ pub(super) fn update_dirty_records(
         };
         if last
             .as_ref()
-            .is_some_and(|lineage| lineage.parent != parent)
+            .is_some_and(|lineage| lineage.children.record() != parent)
         {
             last = None;
         }
@@ -94,7 +95,7 @@ fn update_dirty_record(
     applier: &MemoryApplier,
     store: &mut SceneStore,
     (record, node, kind): (RecordId, NodeId, NodeUpdate),
-    lineage: &mut Lineage,
+    lineage: &Lineage,
     dirty: &mut HashMap<NodeId, NodeUpdate>,
 ) -> Option<GraphChanges> {
     let pass = ParentPass::of(store, lineage);
@@ -105,7 +106,7 @@ fn update_dirty_record(
     }
     if store.kind(record) == RecordKind::Leaf {
         let context = pass.lower_context(None);
-        let window = |store: &SceneStore| lineage.children(store);
+        let window = |store: &SceneStore| *lineage.children.read(store);
         let hits =
             update_dirty_inline(applier, store, (record, node, kind), context, window, dirty)?;
         return Some(GraphChanges::hits(hits));
@@ -118,23 +119,21 @@ fn update_dirty_record(
 // What the records from the root down to one parent record pass to its
 // children, shared by the dirty records beneath that parent.
 struct Lineage {
-    parent: RecordId,
+    // Where the children of the parent lie, worked out at the first read:
+    // only an update that publishes window origins reads it.
+    children: ChildrenOrigin,
     // Whether the parent or a record above it translates its content.
     translated: bool,
     // Whether the parent or a record above it lies in 3D.
     in_space: bool,
-    // Where the children of the parent lie. Absent until an update reads
-    // it: a redraw never does.
-    children: Option<AbsOrigin>,
 }
 
 impl Lineage {
     fn of(store: &SceneStore, parent: RecordId) -> Self {
         let mut lineage = Self {
-            parent,
+            children: ChildrenOrigin::of(parent),
             translated: false,
             in_space: false,
-            children: None,
         };
         let mut record = Some(parent);
         while let Some(current) = record
@@ -147,21 +146,6 @@ impl Lineage {
         }
         lineage
     }
-
-    // Worked out from the root down at the first read, then kept for the
-    // siblings: a record's children lie where the records above it put them.
-    fn children(&mut self, store: &SceneStore) -> AbsOrigin {
-        *self
-            .children
-            .get_or_insert_with(|| children_origin(store, self.parent))
-    }
-}
-
-fn children_origin(store: &SceneStore, record: RecordId) -> AbsOrigin {
-    let above = store
-        .parent(record)
-        .map_or(AbsOrigin::ROOT, |parent| children_origin(store, parent));
-    above.children_of(store.layer(record))
 }
 
 #[derive(Clone, Copy)]
@@ -172,7 +156,7 @@ struct ParentPass {
 
 impl ParentPass {
     fn of(store: &SceneStore, lineage: &Lineage) -> Self {
-        let parent = store.layer(lineage.parent);
+        let parent = store.layer(lineage.children.record());
         Self {
             inherited: Inherited {
                 motion_context_animated: parent.motion_context_animated(),
@@ -199,14 +183,13 @@ fn update_dirty_layer(
     store: &mut SceneStore,
     (layer, node_id, kind): (RecordId, NodeId, NodeUpdate),
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
-    (pass, lineage): (ParentPass, &mut Lineage),
+    (pass, lineage): (ParentPass, &Lineage),
 ) -> Option<GraphChanges> {
     if kind == NodeUpdate::Draws
         && redraw_retained_layer(applier, store, layer, Level::Child, pass.inherited)
     {
         return Some(GraphChanges::default());
     }
-    let children = lineage.children(store);
     if let Some(changes) = try_update_retained_layer(
         applier,
         store,
@@ -216,7 +199,7 @@ fn update_dirty_layer(
         Level::Child,
         TranslateAncestorContext {
             inherited: pass.inherited,
-            parent_abs: children,
+            parent_abs: ParentOrigin::Beneath(&lineage.children),
         },
     ) {
         return Some(changes);
@@ -225,7 +208,7 @@ fn update_dirty_layer(
     // remains to update for them, and a dirty one would otherwise go
     // unmatched and rebuild the whole scene.
     remove_dirty_descendants(store, layer, dirty_nodes);
-    let context = pass.lower_context(Some(children));
+    let context = pass.lower_context(Some(*lineage.children.read(store)));
     let hit_graph_dirty = rebuild_tracking_hits(store, layer, |store, layer| {
         release_for_rebuild(store, layer);
         read_placed_node_data(applier, node_id, Level::Child, |data| {

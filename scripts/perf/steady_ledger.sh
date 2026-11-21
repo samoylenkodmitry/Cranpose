@@ -14,7 +14,7 @@
 #                                        lines: each value's highest and spread
 #   steady_ledger.sh --ab BASE HEAD      build HEAD, print the difference a
 #                                        row from BASE, with the callgrind
-#                                        instructions of five windows; the
+#                                        instructions of eight windows; the
 #                                        host keeps each BASE built and
 #                                        measured in ~/hotpath/base/SHA for
 #                                        every later A/B
@@ -45,8 +45,10 @@
 # `realloc` of an over-aligned block, an allocation and a memcpy, from DHAT's
 # copies under it. DHAT in heap mode places the start's calls in their
 # groups. The dashboard row runs the `framebuffer_frame` bench, the pixel
-# path of the ESP32 boards, under DHAT alone: a run minus a run of no
-# frames. Needs valgrind 3.15 or newer and python3.
+# path of the ESP32 boards, in their 16-bit pixels under DHAT alone: a run
+# minus a run of no frames. An A/B also counts its instructions in RGBA
+# bytes, the pixels watchOS draws, as the row dashboard-rgba. Needs valgrind
+# 3.15 or newer and python3.
 set -euo pipefail
 
 # The measured window of every row: the frames after the start that run
@@ -69,6 +71,7 @@ readonly LAYOUTS=(
     "grid-layer steady_frames steady_frames::steady_frames --scenario=grid_layer --rows=30 --cols=12"
     "deep steady_frames steady_frames::steady_frames --scenario=deep --depth=40 --chips=6"
     "deep-layer steady_frames steady_frames::steady_frames --scenario=deep_layer --depth=40 --chips=6"
+    "charts steady_frames steady_frames::steady_frames --scenario=charts --charts=28 --points=200"
     "movable-lazy movable_content movable_content::steady_frames --steady-ledger --case=lazy_movable_scroll"
     "movable-heavy movable_content movable_content::steady_frames --steady-ledger --case=lazy_movable_heavy"
     "movable-context-menu movable_content movable_content::steady_frames --steady-ledger --case=lazy_context_menu_scroll"
@@ -78,7 +81,7 @@ readonly LAYOUTS=(
 readonly START_ROW=wall-t20
 # The layouts whose counted frames an A/B also runs under callgrind, beside
 # the start of START_ROW and the dashboard.
-readonly INSTRUCTION_ROWS=" gauntlet-t12 patchwork-t17 feed movable-heavy "
+readonly INSTRUCTION_ROWS=" gauntlet-t12 patchwork-t17 feed charts movable-heavy "
 # The layouts whose scene changes in the counted window: nodes come and go,
 # texts change and caches fill. The blocks that their window leaves live
 # follow the scene's phase (from -101 to +2 a frame on the gauntlet t16 at
@@ -93,7 +96,7 @@ readonly PHASED_ROWS=" patchwork-t17 gauntlet-t16 gauntlet-t12 feed ticker "
 # of its own. FORMAT names the rows that this script writes; a new one
 # measures a kept base again.
 readonly SHARED="${STEADY_LEDGER_SHARED:-$HOME/hotpath}"
-readonly FORMAT=2
+readonly FORMAT=4
 
 self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
@@ -118,6 +121,11 @@ job() {
     case $kind in
     fb-instr)
         SCREEN=dashboard PIXELS=rgb565 FRAMES="$COUNTED_FRAMES" "${callgrind[@]}" \
+            --zero-before='framebuffer_frame::steady_frames*' "$fb" > "$out.$kind" 2>&1
+        return
+        ;;
+    fb-instr-rgba)
+        SCREEN=dashboard FRAMES="$COUNTED_FRAMES" "${callgrind[@]}" \
             --zero-before='framebuffer_frame::steady_frames*' "$fb" > "$out.$kind" 2>&1
         return
         ;;
@@ -169,7 +177,7 @@ jobs_of() {
         done
     done
     echo dashboard >> "$dir/runs/$run/order"
-    [ -z "$instructions" ] || echo "$run $side fb-instr dashboard"
+    [ -z "$instructions" ] || printf '%s\n' "$run $side fb-instr dashboard" "$run $side fb-instr-rgba dashboard"
     echo "$run $side fb-0 dashboard"
     echo "$run $side fb-$COUNTED_FRAMES dashboard"
 }

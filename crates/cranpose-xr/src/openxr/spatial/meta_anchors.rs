@@ -139,13 +139,21 @@ impl MetaAnchors {
         match meta_calls::query(
             &self.instance,
             &self.session,
-            Filter::Stored,
+            Filter::All,
             Some(xr::sys::SpaceComponentTypeFB::SEMANTIC_LABELS),
             LIST_LIMIT,
         ) {
             Ok(request) => self.pending.push((request, Pending::List)),
             Err(error) => self.refuse(error, frame),
         }
+    }
+
+    // The first listing of the storage has come: an app that loads what it kept can read the list.
+    fn become_ready(&mut self, frame: &Frame<'_>) {
+        self.ready = true;
+        frame.store.update_capabilities(|capabilities| {
+            capabilities.persistence = TrackingAvailability::Active;
+        });
     }
 
     // The runtime does not keep anchors for the app: it says so in the capabilities.
@@ -313,7 +321,7 @@ impl MetaAnchors {
                     }
                     // A listing that ends with no results lists nothing
                     Some(Pending::List) if !self.ready => {
-                        self.ready = true;
+                        self.become_ready(frame);
                         log::info!("cranpose xr: anchor storage ready, it keeps no anchors");
                         frame.store.set_persisted(&[]);
                     }
@@ -396,7 +404,7 @@ impl MetaAnchors {
                     .extend(self.results.iter().map(|found| uuid_of(&found.uuid)));
                 self.release_results();
                 if !self.ready {
-                    self.ready = true;
+                    self.become_ready(frame);
                     log::info!(
                         "cranpose xr: anchor storage ready, it keeps {} anchors: {:?}",
                         self.listed.len(),

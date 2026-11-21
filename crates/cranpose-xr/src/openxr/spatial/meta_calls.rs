@@ -15,8 +15,8 @@ use crate::Uuid;
 // Which entities a query asks for.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Filter {
-    // The ones in the app's local storage
-    Stored,
+    // Every entity that the runtime lists to the app
+    All,
     // The one with this identifier
     Uuid(Uuid),
     // Those that have this component enabled
@@ -85,31 +85,36 @@ pub(crate) fn query(
         Filter::Uuid(uuid) => uuid,
         _ => Uuid::from_bytes([0; 16]),
     });
+    // The Horizon OS runtime takes the storage location of a query from the `next` of its filter,
+    // and refuses a uuid or a component filter that has none (its log says "invalid filter
+    // flags"). It refuses a location filter alone as well, so a query for every entity has no
+    // filter.
     let location = xr::sys::SpaceStorageLocationFilterInfoFB {
         ty: xr::sys::SpaceStorageLocationFilterInfoFB::TYPE,
         next: ptr::null(),
         location: xr::sys::SpaceStorageLocationFB::LOCAL,
     };
+    let in_location: *const std::ffi::c_void = ptr::from_ref(&location).cast();
     let by_uuid = xr::sys::SpaceUuidFilterInfoFB {
         ty: xr::sys::SpaceUuidFilterInfoFB::TYPE,
-        next: ptr::null(),
+        next: in_location,
         uuid_count: 1,
         uuids: &mut wire,
     };
     let by_component = |component| xr::sys::SpaceComponentFilterInfoFB {
         ty: xr::sys::SpaceComponentFilterInfoFB::TYPE,
-        next: ptr::null(),
+        next: in_location,
         component_type: component,
     };
     let included = match filter {
-        Filter::Component(component) => by_component(component),
-        _ => by_component(xr::sys::SpaceComponentTypeFB::LOCATABLE),
+        Filter::Component(component) => Some(by_component(component)),
+        _ => None,
     };
     let left_out = exclude.map(by_component);
-    let filter_header: *const xr::sys::SpaceFilterInfoBaseHeaderFB = match filter {
-        Filter::Stored => ptr::from_ref(&location).cast(),
-        Filter::Uuid(_) => ptr::from_ref(&by_uuid).cast(),
-        Filter::Component(_) => ptr::from_ref(&included).cast(),
+    let filter_header: *const xr::sys::SpaceFilterInfoBaseHeaderFB = match (&included, filter) {
+        (Some(included), _) => ptr::from_ref(included).cast(),
+        (None, Filter::Uuid(_)) => ptr::from_ref(&by_uuid).cast(),
+        (None, _) => ptr::null(),
     };
     let info = xr::sys::SpaceQueryInfoFB {
         ty: xr::sys::SpaceQueryInfoFB::TYPE,

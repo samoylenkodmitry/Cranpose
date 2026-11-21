@@ -114,6 +114,12 @@ jobs:
         if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         run: just mpris
 
+      - name: Lint the optional desktop backends on Linux
+        if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
+        # The mac clippy job never compiles the Linux-only code that these
+        # features turn on, such as the MPRIS player.
+        run: just clippy-optional-backends
+
       - name: Check the wgpu fork's Vulkan synchronization
         if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         run: just vulkan-sync

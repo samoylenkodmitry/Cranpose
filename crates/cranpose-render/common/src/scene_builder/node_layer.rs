@@ -39,10 +39,10 @@ impl LowerContext {
     };
 
     // What a child lowers with beneath `ancestors`.
-    pub(super) fn beneath(ancestors: TranslateAncestorContext) -> Self {
+    pub(super) fn beneath(ancestors: TranslateAncestorContext<'_>, store: &SceneStore) -> Self {
         Self {
             inherited: ancestors.inherited,
-            parent_abs: Some(ancestors.parent_abs),
+            parent_abs: ancestors.parent_abs.resolve(store).copied(),
         }
     }
 
@@ -366,7 +366,7 @@ impl AbsOrigin {
         window_transform: Some(ProjectiveTransform::identity()),
     };
 
-    pub(super) fn children_of(self, layer: LayerRef<'_>) -> Self {
+    pub(super) fn children_of(&self, layer: LayerRef<'_>) -> Self {
         let origin = layer.origin_in_parent();
         let content_offset = layer.content_offset();
         let top_left = Point {
@@ -458,25 +458,15 @@ pub(super) fn with_node_layer<R>(
     let (local_bounds, node_bounds) = layer_and_node_bounds(slices, size);
     let shaped = shaped_graphics_layer(slices, local_bounds);
     let graphics_layer = shaped.as_deref();
-    let geometry = context.parent_abs.map(|parent_abs| {
-        TranslateGeometry::new(
-            layout_state,
-            graphics_layer.unwrap_or(&GraphicsLayer::DEFAULT),
-            local_bounds,
-            parent_abs,
-        )
-    });
-    if let Some(geometry) = geometry {
-        slices.publish_window_geometry(geometry.top_left, geometry.window_transform, size);
-    } else {
-        slices.publish_pointer_input_size(size);
-    }
-    let content_offset = layout_state.content_offset();
-    let child_context = context.for_children(
-        slices,
-        content_offset,
-        geometry.map(TranslateGeometry::child_abs),
+    let geometry = TranslateGeometry::new(
+        layout_state,
+        graphics_layer.unwrap_or(&GraphicsLayer::DEFAULT),
+        local_bounds,
+        context.parent_abs.as_ref(),
     );
+    geometry.publish(slices, size);
+    let content_offset = layout_state.content_offset();
+    let child_context = context.for_children(slices, content_offset, geometry.child_abs().copied());
     let head = node_layer_head(
         node_id,
         slices,

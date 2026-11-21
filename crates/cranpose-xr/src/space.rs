@@ -121,6 +121,8 @@ pub(crate) struct PanelSlot {
     pub(crate) mobility: Mobility,
     // The shape the panel shows on. A surface panel is flat.
     pub(crate) shape: Shape,
+    // How strongly the panel holds a layer of the compositor of its own
+    pub(crate) priority: i32,
     // The sizes that the user may give the panel, if the content set a resize.
     pub(crate) resize: Option<ResizeLimits>,
     // The width and height in dp of the room that the panel holds in the atlas and in its image:
@@ -619,6 +621,7 @@ impl Space {
                         pose,
                         mobility: Mobility::Fixed,
                         shape: Shape::Flat,
+                        priority: 0,
                         resize: None,
                         room: size,
                         ride: Ride::Free,
@@ -735,11 +738,12 @@ impl Space {
             .map(|entry| entry.slot.id)
     }
 
-    // Sets the shape of the panel `id`.
-    pub(crate) fn set_shape(&self, id: u64, shape: Shape) {
+    // Sets the shape of the panel `id` and how strongly it holds a layer of its own.
+    pub(crate) fn set_layer(&self, id: u64, shape: Shape, priority: i32) {
         let mut entries = self.inner.entries.borrow_mut();
         if let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == id) {
             entry.slot.shape = shape;
+            entry.slot.priority = priority;
         }
     }
 

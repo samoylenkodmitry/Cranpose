@@ -34,6 +34,7 @@ pub struct SubspaceModifier {
     resize: Option<(ResizeLimits, ResizePolicy)>,
     point_source: Option<PointSource>,
     dock: Dock,
+    layer_priority: i32,
 }
 
 impl Default for SubspaceModifier {
@@ -54,6 +55,7 @@ impl SubspaceModifier {
             resize: None,
             point_source: None,
             dock: Dock::Free,
+            layer_priority: 0,
         }
     }
 
@@ -161,6 +163,29 @@ impl SubspaceModifier {
     pub const fn point_source(mut self, source: PointSource) -> Self {
         self.point_source = Some(source);
         self
+    }
+
+    /// Sets how strongly a [`SpatialPanel`](crate::SpatialPanel) holds a layer of the headset's
+    /// compositor of its own. The default is 0.
+    ///
+    /// A runtime takes a limited number of layers in a frame: a Quest 3 takes 16. When a frame
+    /// has more, the projection layer of the 3D content draws the pictures of the lowest rank, so
+    /// every panel still shows. The text of those panels shows softer. The handles go there
+    /// first. Then a panel of a lower priority goes there before a panel of a higher one. Among
+    /// panels of one priority, a panel that a hand points at keeps its layer before one that no
+    /// hand points at. Then a nearer panel keeps its layer before a farther one. A surface keeps
+    /// its layers before every panel, because only the compositor shows what its producer writes.
+    /// So this modifier does nothing to a surface or a volume.
+    ///
+    /// Jetpack XR has no counterpart: Android XR gives each panel a layer of its own.
+    pub const fn layer_priority(mut self, priority: i32) -> Self {
+        self.layer_priority = priority;
+        self
+    }
+
+    // How strongly the content holds a layer of its own.
+    pub(crate) const fn priority(&self) -> i32 {
+        self.layer_priority
     }
 
     // The sound that the content is a source of, if the modifier made it one.

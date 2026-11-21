@@ -175,3 +175,36 @@ fn a_view_with_no_extent_has_no_camera() {
         None
     );
 }
+
+#[test]
+fn the_clip_matrix_shows_a_point_where_the_scene_shows_it_at_the_scenes_depth() {
+    let turned = turn_degrees(10.0, -20.0, 5.0);
+    let edges = [-0.9, 0.7, 0.8, -0.6];
+    for first_row in [FirstRow::Top, FirstRow::Bottom] {
+        let camera =
+            EyeCamera::of(&eye([0.1, 1.6, 0.2], turned, edges), SIZE, first_row).expect("a camera");
+        let clip = camera.clip_from_room(SIZE);
+        let forward = Pose {
+            position: [0.1, 1.6, 0.2],
+            orientation: turned,
+        };
+        for local in [[0.0, 0.0, -1.0], [0.3, -0.2, -2.0], [-0.4, 0.5, -0.7]] {
+            let room = forward.then(&Pose::at(local)).position;
+            let point = [room[0], room[1], room[2], 1.0];
+            let [x, y, z, w] = clip.map(|row| (0..4).map(|i| row[i] * point[i]).sum::<f32>());
+            let pixel = (
+                (x / w + 1.0) / 2.0 * SIZE.0 as f32,
+                (1.0 - y / w) / 2.0 * SIZE.1 as f32,
+            );
+            assert_near(pixel, shows(&camera, room));
+            let scene = scene_direction(room) * UNITS_PER_METER;
+            let along = camera.camera.view.transform_point(scene).z;
+            let expected = 1.0 - camera.camera.near() / along;
+            assert!(
+                (z / w - expected).abs() < 1e-5,
+                "depth {} and not {expected}",
+                z / w
+            );
+        }
+    }
+}

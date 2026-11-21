@@ -86,11 +86,20 @@ impl Damage {
         let Self::Part(rects) = self else {
             return;
         };
-        let window = window_rect(viewport);
-        rects.keep_within(window);
-        if rects.pixels() > FULL_SHARE * window.width * window.height {
+        rects.keep_within(window_rect(viewport));
+        if self.takes_most_of(viewport) {
             *self = Self::Full;
         }
+    }
+
+    // Whether the damage takes more than [`FULL_SHARE`] of a window of
+    // `viewport`: a part past it, or a damage that is no part.
+    pub(crate) fn takes_most_of(&self, viewport: (u32, u32)) -> bool {
+        let Self::Part(rects) = self else {
+            return true;
+        };
+        let window = window_rect(viewport);
+        rects.pixels() > FULL_SHARE * window.width * window.height
     }
 
     // Takes the value of `other`; a part copies only the rects it holds.

@@ -48,6 +48,8 @@ pub(crate) struct MetaPlanes {
     // The request of the scan that runs, and the planes that it found so far
     scanning: Option<u64>,
     seen: Vec<PlaneKey>,
+    // How many entities the last logged scan listed
+    logged: Option<usize>,
     // The requests that enable an entity's location, with the entity
     locating: Vec<(u64, Candidate)>,
     // Reused for the scan's results and for each entity's labels and polygon
@@ -65,6 +67,7 @@ impl MetaPlanes {
             last_scan: None,
             scanning: None,
             seen: Vec::new(),
+            logged: None,
             locating: Vec::new(),
             results: Vec::new(),
             labels: Vec::new(),
@@ -124,6 +127,13 @@ impl MetaPlanes {
                 self.scanning = None;
                 // A scan that failed tells nothing of which planes are gone
                 if result.into_raw() >= 0 {
+                    if self.logged != Some(self.seen.len()) {
+                        self.logged = Some(self.seen.len());
+                        log::info!(
+                            "cranpose xr: the scene scan lists {} entities with a rectangle",
+                            self.seen.len()
+                        );
+                    }
                     let seen = &self.seen;
                     frame
                         .store
