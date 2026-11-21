@@ -68,7 +68,7 @@ impl MovableHostRig {
             .render(self.root_key, move || {
                 if show_owner.value() {
                     let content = rememberMovableContentOf(|| {
-                        let _ = remember(|| 1_u32);
+                        let _slot = remember(|| 1_u32);
                     });
                     *shared_movable.borrow_mut() = Some(content);
                 }
