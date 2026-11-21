@@ -14,7 +14,7 @@
 #                                        lines: each value's highest and spread
 #   steady_ledger.sh --ab BASE HEAD      build HEAD, print the difference a
 #                                        row from BASE, with the callgrind
-#                                        instructions of five windows; the
+#                                        instructions of seven windows; the
 #                                        host keeps each BASE built and
 #                                        measured in ~/hotpath/base/SHA for
 #                                        every later A/B
@@ -70,12 +70,13 @@ readonly LAYOUTS=(
     "grid-layer --scenario=grid_layer --rows=30 --cols=12"
     "deep --scenario=deep --depth=40 --chips=6"
     "deep-layer --scenario=deep_layer --depth=40 --chips=6"
+    "charts --scenario=charts --charts=28 --points=200"
 )
 # The layout whose start gets a row of its own, a layout node.
 readonly START_ROW=wall-t20
 # The layouts whose counted frames an A/B also runs under callgrind, beside
 # the start of START_ROW and the dashboard.
-readonly INSTRUCTION_ROWS=" gauntlet-t12 patchwork-t17 feed "
+readonly INSTRUCTION_ROWS=" gauntlet-t12 patchwork-t17 feed charts "
 # The layouts whose scene changes in the counted window: nodes come and go,
 # texts change and caches fill. The blocks that their window leaves live
 # follow the scene's phase (from -101 to +2 a frame on the gauntlet t16 at
@@ -90,7 +91,7 @@ readonly PHASED_ROWS=" patchwork-t17 gauntlet-t16 gauntlet-t12 feed ticker "
 # of its own. FORMAT names the rows that this script writes; a new one
 # measures a kept base again.
 readonly SHARED="${STEADY_LEDGER_SHARED:-$HOME/hotpath}"
-readonly FORMAT=2
+readonly FORMAT=3
 
 self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 

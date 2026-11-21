@@ -32,6 +32,7 @@ pub enum Scenario {
     GridLayer,
     Deep,
     DeepLayer,
+    Charts,
     Workspace,
     Gauntlet,
     Wall,
@@ -41,6 +42,7 @@ pub enum Scenario {
 impl Scenario {
     fn from_name(name: &str) -> Self {
         match name {
+            "charts" => Self::Charts,
             "ticker" => Self::Ticker,
             "particles" => Self::Particles,
             "layers" => Self::Layers,
@@ -66,6 +68,7 @@ impl Scenario {
             Self::GridLayer => "Cranpose · grid + layers",
             Self::Deep => "Cranpose · deep",
             Self::DeepLayer => "Cranpose · deep + layers",
+            Self::Charts => "Cranpose · charts",
             Self::Workspace => "Cranpose · trading workspace",
             // Both apps title it alike: the two pictures are compared.
             Self::Gauntlet => "Gauntlet",
@@ -153,6 +156,7 @@ struct Launch {
     columns: usize,
     depth: usize,
     chips: usize,
+    charts: screens::charts::ChartsLoad,
     workspace: screens::workspace::WorkspaceMode,
     gauntlet: screens::gauntlet::GauntletLoad,
     wall: screens::wall::WallLoad,
@@ -189,6 +193,10 @@ impl Launch {
             columns: count("cols", 12),
             depth: count("depth", 40),
             chips: count("chips", 6),
+            charts: screens::charts::ChartsLoad {
+                charts: count("charts", 12),
+                points: count("points", 100).max(2),
+            },
             workspace: screens::workspace::WorkspaceMode::from_name(
                 args.string("mode").unwrap_or("quotes"),
             ),
@@ -250,6 +258,7 @@ pub fn PerfCompareApp() {
                     launch.depth,
                     launch.chips,
                 ),
+                Scenario::Charts => screens::charts::ChartsScreen(launch.charts),
                 Scenario::Workspace => {
                     screens::workspace::WorkspaceFrame(launch.workspace, launch.still)
                 }

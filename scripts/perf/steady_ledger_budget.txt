@@ -29,6 +29,8 @@
 # the realloc and realloc_bytes rows of layers, grid and grid-layer come from
 # one run at each of its last two heads on main 5e4770c63, which gave equal
 # values.
+# The charts rows come from three runs of that row alone on main 0edf9547e
+# with the layout added.
 # The ticker's copied spread holds both modes of the scene store's shape
 # chunk compaction (`keep_live_runs`), whose copies differ by 2,920 B from
 # run to run of one binary for a reason not yet known (#2247).
@@ -105,6 +107,11 @@ deep-layer       realloc                      0.22       0.00
 deep-layer       live                         0.00       0.00
 deep-layer       copied                      23115          0
 deep-layer       realloc_bytes                 482          0
+charts           malloc                      28.05       0.00
+charts           realloc                      0.13       0.00
+charts           live                         0.00       0.00
+charts           copied                       5024          0
+charts           realloc_bytes                  76          0
 dashboard        malloc                      27.63       0.02
 dashboard        realloc                      0.33       0.02
 dashboard        live                         0.00       0.00

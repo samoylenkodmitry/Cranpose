@@ -45,6 +45,7 @@ model with every comparison because frame capacity varies by device.
 | `grid_layer` | `grid`, with every cell in a static rotated graphics layer. | 30 × 12 cells | Relayout under many layers |
 | `deep` | The same width animation over 40 levels nested inside one another, each with a row of wrapping chips. | 40 levels × 6 chips | Deep relayout |
 | `deep_layer` | `deep`, with every level in a static rotated graphics layer. | 40 levels × 6 chips | Relayout under nested layers |
+| `charts` | A grid of charts drawn from a frame index, read in the draw phase only. Each chart fills the band between two series that cross, draws a gauge (a track ring and the arc of its value), strokes both series (one with round joins) and strokes a dashed target line. The Cranpose and Compose apps alone draw it. | 28 charts × 200 points | Path fills, strokes and dashes |
 | `workspace` | GPUI trading workspace: quote subscriptions, watchlist, chart, order book, trades and statistics. | 200 symbols, 16 hidden subscriptions | Text updates, clipping, scrolling and hover |
 | `gauntlet` | Every stage at once (below). Advances a frame index each frame, never wall time. | tier 5 | Composition, layout, intrinsics, text, images, paths, shadows, layers |
 | `wall` | The still wall (below): thousands of tiles that never change, a clock line whose text changes and a cursor outline that moves. Desktop and browser apps. | tier 20 | What a frame costs when almost nothing on the screen changes |
@@ -59,6 +60,7 @@ Knobs:
   alpha at 1;
 - `grid` and `grid_layer`: `--ei rows` and `--ei cols`;
 - `deep` and `deep_layer`: `--ei depth` and `--ei chips`;
+- `charts`: `--ei charts` and `--ei points` (default 12 charts of 100 points);
 - `workspace`: `--es mode quotes`, `scroll` or `hover` (default `quotes`);
 - `--ez still true` holds the feed still, or starts the workspace at tick zero
   with its stream, automatic scrolling and synthetic hover stopped;
