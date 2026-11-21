@@ -1,5 +1,5 @@
 use cranpose_services::{
-    HostController, PlatformDirectories, clear_application_id, clear_host_controller,
+    HostController, MediaCommand, PlatformDirectories, clear_application_id, clear_host_controller,
     observe_media_commands, set_application_id, set_host_controller,
 };
 use zbus::{
