@@ -529,16 +529,51 @@ handle. The projection layer is one layer however many volumes there are.
 
 ### The layer limit
 
-A runtime takes a limited number of layers in a frame. The system properties report the number.
-A Quest 3 reports 32 and ends a frame of 18 layers with `XR_ERROR_LAYER_LIMIT_EXCEEDED`. The
-session starts with the reported number. After that error the limit falls to 16, the number that
-the specification guarantees (`layer_limit`). The frame that failed is lost. The frames after it
-leave out the panels that stand farthest from the head, which are the first layers of the panel
-stage, until the frame fits. The projection layers and the rays stay. The log names the refusal
-(`the runtime refused 18 layers and takes 16`) and each change of the frame's layer count with the
-number of panels left out. A frame whose other layers alone pass the limit still fails, and the
-session ends. The demo with a controller in view submits 18 layers on a Quest 3, so it leaves out
-the two panels that stand farthest.
+A runtime takes a limited number of layers in a frame. The system properties report the number,
+and the specification guarantees 16. A Quest 3 reports 32 and ends a frame of 17 or more layers with
+`XR_ERROR_LAYER_LIMIT_EXCEEDED`. So the session plans its frames for 16 layers until the runtime
+takes a frame of the reported number (`layer_limit`). The first frame that the runtime shows tries
+it: copies of an empty layer, a clear picture of 4 by 4 pixels, fill that frame up to the reported
+number. A runtime that refuses the frame gets the same frame again in the same `xrEndFrame` turn
+without the copies, so no frame is lost. The limit then stays at 16. A runtime that ends a frame
+when it refuses it takes no second end of it, so that one frame is lost. The log names the result
+once (`the runtime takes 16 layers of the 32 that it reports`).
+
+When a frame needs more layers than the limit, the projection layer of the 3D content draws some
+pictures in place of their layers (`layer_budget`, `projected_pass`). No panel goes missing.
+
+- The room's layer, the streamed scenes, the projection layer and the rays keep their layers. A
+  surface keeps its layers too, because only the compositor reads what its producer writes.
+- The handles go into the projection layer first. A handle is a small sphere, so its picture needs
+  no sharpness. Then the content panels of the lowest rank go there.
+- A panel ranks by its `SubspaceModifier::layer_priority` first, then by whether a hand points at
+  it or holds one of its handles, then by the distance of its plane from the head: the nearer panel
+  ranks higher. A panel that the last frame drew into the projection layer counts 5 cm farther than
+  it stands, so two panels at about one distance do not trade places at each small move of the head.
+- A frame with no 3D content gets a projection layer for the pictures. That layer takes one place
+  of the budget. 17 panels with no room's layer keep 15 layers and draw 2 into the
+  projection layer.
+- Surfaces that do not fit beside the fixed layers are left out, the farthest first. A frame whose
+  3D content failed has no projection layer. That frame leaves out the pictures of the lowest
+  rank.
+
+The pass draws each picture into both eyes' images after the scene of the volumes, back to front, as
+a flat rectangle or as 32 strips of a cylinder for a curved panel. A panel samples its part of the
+panels' atlas, which the composition already draws. A handle samples a texture of its sphere.
+Where the layer carries depth, the pass tests against the scene's depth and writes its own, so a
+picture hides behind a nearer volume. The panels over the projection layer test against the
+pictures as they test against the volumes. A runtime with no depth test shows every panel of its own
+layer over the pictures. The default rank keeps that order right, because the pictures are the
+farthest panels. A priority or a pointer that keeps a far panel on its layer can put it over a
+nearer picture there. The pictures in the projection layer are sampled twice, once by the pass and
+once by the compositor, so their text shows softer than on a layer of their own. Each content panel
+keeps its own swapchain filled, so a panel that gets its layer back shows its picture at once.
+
+A frame within the limit plans with one count of its layers. It draws nothing more and submits the
+same layers in the same order as before the budget existed. The pass, its pipelines and the
+textures of the handles exist from the first frame that draws a picture. The log names each change
+of the plan (`the frame needs 19 layers and gets 16 of the 16 that the runtime takes: the projection
+layer draws 4 of them, 0 are left out`) and of the submitted count.
 
 ### Measured
 
@@ -1209,8 +1244,8 @@ The selection rules and the pointer's behavior with hand states are covered by
 availability and what the frame gives, and it draws a map of the hands: a dot for each fingertip
 that the cameras track, seen from the front. The map is part of the panel. The compositor of a
 Quest 3 takes 16 layers at most (`xrEndFrame` fails above that, although the system properties
-report 32), and the demo already submits that many, so a panel for the section would push
-another panel out of the frame. The demo's volume takes two of them, one for the 3D content and one for its handle. A panel for each fingertip would add ten layers, and a hand's own pointing ray would stop
+report 32), and the demo already submits that many, so a panel for the section would put another
+panel into the projection layer. The demo's volume takes two of them, one for the 3D content and one for its handle. A panel for each fingertip would add ten layers, and a hand's own pointing ray would stop
 at the dot at its fingertip. The build script asks for hand tracking, which needs no prompt on a
 Quest. `XR_DEMO_TRACKING=none` asks for nothing, and `XR_DEMO_TRACKING=all` adds the body, the face
 and the eyes, which the system asks the user to allow.

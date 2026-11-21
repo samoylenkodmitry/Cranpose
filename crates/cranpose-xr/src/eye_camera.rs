@@ -87,6 +87,27 @@ impl EyeCamera {
             },
         })
     }
+
+    // The matrix, by rows, that takes a point of the room in meters to the clip space of an image
+    // of `size` pixels, as the scene's camera shows it. The depth that it gives is the scene's
+    // own: `1 - near / z` for a point at distance `z` along the camera's axis.
+    pub(crate) fn clip_from_room(&self, size: (u32, u32)) -> [[f32; 4]; 4] {
+        let view = self.camera.view.rows();
+        let scale = [UNITS_PER_METER, -UNITS_PER_METER, -UNITS_PER_METER, 1.0];
+        let row = |index: usize, factor: f32| -> [f32; 4] {
+            std::array::from_fn(|column| view[index][column] * scale[column] * factor)
+        };
+        let focal = self.camera.focal_length;
+        let near = self.camera.near();
+        let depth = row(2, 1.0);
+        let w = row(3, 1.0);
+        [
+            row(0, 2.0 * focal / size.0 as f32),
+            row(1, -2.0 * focal / size.1 as f32),
+            std::array::from_fn(|column| depth[column] - near * w[column]),
+            depth,
+        ]
+    }
 }
 
 // The camera's right, down and forward axes in the room.

@@ -130,6 +130,7 @@ const PANEL: PanelSlot = PanelSlot {
     shape: Shape::Flat,
     resize: None,
     room: [800.0, 800.0],
+    priority: 0,
     ride: Ride::Free,
 };
 

@@ -42,6 +42,9 @@ mod picking;
 #[path = "controller_scene_tests.rs"]
 mod controllers;
 
+#[path = "projected_pass_tests.rs"]
+mod projected;
+
 // What the host of a test holds: the GPU, the guest view that runs the content, the space and the
 // counts of what composed.
 struct Headset {

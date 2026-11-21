@@ -27,6 +27,14 @@ pixels once at the display's resolution, so its text stays sharp. A dp is a mill
 room. Each controller points at the panels, and its trigger presses. Both controllers work at once.
 Outside a headset the panels draw flat, side by side.
 
+A runtime takes a limited number of layers in a frame: a Quest 3 takes 16. When a frame needs
+more, the projection layer of the 3D content draws some pictures in place of their own layers, so
+every panel still shows. The handles go there first, then the panels of the lowest rank, whose text
+then shows softer. A panel ranks by its `SubspaceModifier::layer_priority(priority)` (0 by default,
+higher first), then by whether a hand points at it, then by its nearness to the head. Surfaces,
+streamed scenes and the rays always keep their layers. A frame within the limit costs nothing more.
+`docs/xr_architecture.md` ("The layer limit") has the details.
+
 A panel or a surface with `SubspaceModifier::movable()` has a handle under it: a sphere that shows
 from any side. A controller grabs it from any side and carries the panel.
 `movable_with(MovePolicy::system(...))` calls back with a `SpatialMoveEvent` for the grab
@@ -879,9 +887,8 @@ A key does not take the focus from the field.
   keyboard again.
 - The keyboard has the Latin alphabet only. It has no other layout, no suggestions, no composing
   text and no repeat of a held key.
-- The open keyboard is one more layer of the frame. A runtime takes 16 layers at least, so an app
-  that stands near the limit loses the panel that stands farthest from the head, as with any other
-  panel.
+- The open keyboard is one more layer of the frame. In an app that stands at the runtime's limit,
+  the projection layer then draws one more handle or panel of the lowest rank.
 
 On Android XR the system shows its own input method over an immersive app. A text field then opens
 that keyboard in place of the drawn one, through the same request. The keyboard is a panel of the

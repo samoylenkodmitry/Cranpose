@@ -48,6 +48,7 @@ pub(super) const PANEL: PanelSlot = PanelSlot {
     shape: Shape::Flat,
     resize: None,
     room: [800.0, 500.0],
+    priority: 0,
     ride: Ride::Free,
 };
 
@@ -61,6 +62,7 @@ const BEHIND: PanelSlot = PanelSlot {
     shape: Shape::Flat,
     resize: None,
     room: [200.0, 100.0],
+    priority: 0,
     ride: Ride::Free,
 };
 
@@ -745,6 +747,7 @@ fn a_surface_stops_the_ray_and_takes_no_pointer_events() {
         shape: Shape::Flat,
         resize: None,
         room: [400.0, 300.0],
+        priority: 0,
         ride: Ride::Free,
     };
     let mut frames = Frames::default();
@@ -1176,6 +1179,7 @@ fn square_volume() -> (PanelSlot, PickMeshes) {
         shape: Shape::Flat,
         resize: None,
         room: [960.0, 540.0],
+        priority: 0,
         ride: Ride::Free,
     };
     let square = std::sync::Arc::new(cranpose::space::Mesh::plane());
@@ -1576,6 +1580,7 @@ const BUTTON_PANEL: PanelSlot = PanelSlot {
     shape: Shape::Flat,
     resize: None,
     room: [500.0, 400.0],
+    priority: 0,
     ride: Ride::Free,
 };
 
