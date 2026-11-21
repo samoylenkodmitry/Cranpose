@@ -532,9 +532,9 @@ its node `grip` turns the model 60 degrees about x and moves it 46 mm forward an
 A build with scripted controllers held the right controller still a quarter meter ahead of the eyes
 and pressed one input at a time. Raw screen captures stayed in memory, each press against the rest
 captures before and after it, in cells of 32 by 32 pixels: the fullest cell's change past the change
-between the two rests. A pulled trigger scored 944 to 967 of 1024 in 14 cells, the thumbstick 657 to
+between the two rests. A pulled trigger scored 947 to 964 of 1024 in 14 cells, the thumbstick 657 to
 722 forward and 303 to 378 to the right, and the A button 196 to 236 in the same cell each time. A
-rest between two rests scored 4 to 113 in 18 runs. The grip faces away from the eyes in that view
+rest between two rests scored 4 to 113 in 19 runs. The grip faces away from the eyes in that view
 and scored 23 to 36.
 
 Untested: the alignment of the file with a real controller's grip (the controllers on the desk

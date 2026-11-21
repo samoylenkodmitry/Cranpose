@@ -236,8 +236,13 @@ fn lean(rest: &Trs, leans: &[Trs; 8], [right, forward]: [f32; 2]) -> Trs {
     // Eighths of a turn from forward toward the right
     let eighths =
         right.atan2(forward).rem_euclid(std::f32::consts::TAU) * 8.0 / std::f32::consts::TAU;
-    let from = (eighths.floor() as usize) % 8;
-    let toward = mix(&leans[from], &leans[(from + 1) % 8], eighths.fract());
+    let from = (1u8..8)
+        .rev()
+        .find(|&point| eighths >= f32::from(point))
+        .unwrap_or(0);
+    let fraction = eighths - f32::from(from);
+    let from = usize::from(from);
+    let toward = mix(&leans[from], &leans[(from + 1) % 8], fraction);
     mix(rest, &toward, length.min(1.0))
 }
 
