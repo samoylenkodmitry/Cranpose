@@ -76,12 +76,13 @@ readonly LAYOUTS=(
     "movable-heavy movable_content movable_content::steady_frames --steady-ledger --case=lazy_movable_heavy"
     "movable-context-menu movable_content movable_content::steady_frames --steady-ledger --case=lazy_context_menu_scroll"
     "movable-flip movable_content movable_content::steady_frames --steady-ledger --case=movable_parent_flip"
+    "movable-unordered movable_content movable_content::steady_frames --steady-ledger --case=movable_unordered_dispose"
 )
 # The layout whose start gets a row of its own, a layout node.
 readonly START_ROW=wall-t20
 # The layouts whose counted frames an A/B also runs under callgrind, beside
 # the start of START_ROW and the dashboard.
-readonly INSTRUCTION_ROWS=" gauntlet-t12 patchwork-t17 feed charts movable-heavy "
+readonly INSTRUCTION_ROWS=" gauntlet-t12 patchwork-t17 feed charts movable-heavy movable-unordered "
 # The layouts whose scene changes in the counted window: nodes come and go,
 # texts change and caches fill. The blocks that their window leaves live
 # follow the scene's phase (from -101 to +2 a frame on the gauntlet t16 at

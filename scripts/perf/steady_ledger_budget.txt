@@ -139,3 +139,8 @@ movable-flip     realloc                      0.00       0.00
 movable-flip     live                         0.00       0.00
 movable-flip     copied                       1073          0
 movable-flip     realloc_bytes                   0          0
+movable-unordered malloc                   3904.33       0.00
+movable-unordered realloc                   135.00       0.00
+movable-unordered live                        0.00       0.00
+movable-unordered copied                  92038581          0
+movable-unordered realloc_bytes             182256          0

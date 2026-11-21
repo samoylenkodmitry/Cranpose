@@ -8,7 +8,8 @@ use std::{alloc::System, cell::Cell, hint::black_box, rc::Rc, time::Instant};
 
 use cranpose_app_shell::AppShell;
 use cranpose_core::{
-    MutableState, location_key, rememberMovableContentOf, rememberMutableStateOf, with_key,
+    MutableState, location_key, remember, rememberMovableContentOf, rememberMutableStateOf,
+    with_current_composer, with_key,
 };
 use cranpose_foundation::lazy::{LazyItems, LazyListScope, LazyListState, rememberLazyListState};
 use cranpose_liquid::{LiquidContextMenu, LiquidShape, LiquidTheme, LiquidThemeSpec, SchemeMode};
@@ -33,6 +34,10 @@ const HEAVY_ROW_HEIGHT: f32 = 4.0;
 const HEAVY_ROWS_PER_FRAME: f32 = 32.0;
 const HEAVY_MOVABLES_PER_ROW: usize = 8;
 const HEAVY_VIEWPORT: (u32, u32) = (360, 2048);
+const UNORDERED_SLOTS: usize = 3;
+const UNORDERED_GROUPS_PER_SLOT: usize = 32;
+const UNORDERED_HALF: usize = 9;
+const UNORDERED_COUNT: usize = UNORDERED_HALF * 2;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BenchCase {
@@ -40,14 +45,16 @@ enum BenchCase {
     LazyMovableHeavy,
     LazyContextMenuScroll,
     MovableParentFlip,
+    MovableUnorderedDispose,
 }
 
 impl BenchCase {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::LazyMovableScroll,
         Self::LazyMovableHeavy,
         Self::LazyContextMenuScroll,
         Self::MovableParentFlip,
+        Self::MovableUnorderedDispose,
     ];
 
     fn name(self) -> &'static str {
@@ -56,6 +63,7 @@ impl BenchCase {
             Self::LazyMovableHeavy => "lazy_movable_heavy",
             Self::LazyContextMenuScroll => "lazy_context_menu_scroll",
             Self::MovableParentFlip => "movable_parent_flip",
+            Self::MovableUnorderedDispose => "movable_unordered_dispose",
         }
     }
 
@@ -65,6 +73,7 @@ impl BenchCase {
             "lazy_movable_heavy" => Some(Self::LazyMovableHeavy),
             "lazy_context_menu_scroll" => Some(Self::LazyContextMenuScroll),
             "movable_parent_flip" => Some(Self::MovableParentFlip),
+            "movable_unordered_dispose" => Some(Self::MovableUnorderedDispose),
             _ => None,
         }
     }
@@ -118,6 +127,7 @@ enum Driver {
         scroll_delta: f32,
     },
     Flip(Rc<Cell<Option<MutableState<bool>>>>),
+    Step(Rc<Cell<Option<MutableState<usize>>>>),
 }
 
 impl Driver {
@@ -138,6 +148,11 @@ impl Driver {
             Self::Flip(handle) => {
                 let side = handle.get().expect("flip state captured");
                 shell.app_context().enter(|| side.set(!side.get()));
+                shell.update();
+            }
+            Self::Step(handle) => {
+                let step = handle.get().expect("step state captured");
+                shell.app_context().enter(|| step.set(step.get() + 1));
                 shell.update();
             }
         }
@@ -226,7 +241,9 @@ fn LazyMovableList(handle: Rc<Cell<Option<LazyListState>>>, case: BenchCase) {
     let item_count = match case {
         BenchCase::LazyMovableHeavy => HEAVY_ITEM_COUNT,
         BenchCase::LazyMovableScroll | BenchCase::LazyContextMenuScroll => ITEM_COUNT,
-        BenchCase::MovableParentFlip => unreachable!("flip uses its own root"),
+        BenchCase::MovableParentFlip | BenchCase::MovableUnorderedDispose => {
+            unreachable!("non-lazy case uses its own root")
+        }
     };
     LazyColumn(
         Modifier::empty().fill_max_size(),
@@ -240,10 +257,57 @@ fn LazyMovableList(handle: Rc<Cell<Option<LazyListState>>>, case: BenchCase) {
                         BenchCase::LazyMovableScroll => MovableRowBody(index),
                         BenchCase::LazyMovableHeavy => HeavyMovableRowBody(index),
                         BenchCase::LazyContextMenuScroll => ContextMenuRowBody(index),
-                        BenchCase::MovableParentFlip => unreachable!("flip uses its own root"),
+                        BenchCase::MovableParentFlip | BenchCase::MovableUnorderedDispose => {
+                            unreachable!("non-lazy case uses its own root")
+                        }
                     });
                 },
             );
+        },
+    );
+}
+
+#[composable]
+fn UnorderedMovableGroup(group: usize, phase: usize) {
+    if phase == 0 {
+        return;
+    }
+    // Phase 1 composes the second half first; phase 2 prepends the first half
+    // so phase 0 disposes one leaving group whose sole-owned movables sit in
+    // non-rising id order past the inline capacity.
+    let start = if phase == 1 { UNORDERED_HALF } else { 0 };
+    let container_key = location_key(file!(), line!(), column!());
+    with_current_composer(|composer| {
+        composer.with_group(container_key, |_| {
+            for index in start..UNORDERED_COUNT {
+                with_key(&index, || {
+                    let content = rememberMovableContentOf(move || {
+                        let _payload = remember(|| group.wrapping_add(index));
+                    });
+                    content.show();
+                });
+            }
+        });
+    });
+}
+
+#[composable]
+fn MovableUnorderedRoot(handle: Rc<Cell<Option<MutableState<usize>>>>) {
+    let step = rememberMutableStateOf(|| 0usize);
+    handle.set(Some(step));
+    let current = step.get();
+    Box(
+        Modifier::empty().fill_max_size(),
+        BoxSpec::default(),
+        move || {
+            for slot in 0..UNORDERED_SLOTS {
+                let phase = (current + slot) % UNORDERED_SLOTS;
+                with_key(&slot, || {
+                    for group in 0..UNORDERED_GROUPS_PER_SLOT {
+                        with_key(&group, || UnorderedMovableGroup(group, phase));
+                    }
+                });
+            }
         },
     );
 }
@@ -297,7 +361,8 @@ fn start_shell(case: BenchCase) -> (AppShell<GraphRenderer>, Driver) {
         BenchCase::LazyMovableHeavy => HEAVY_VIEWPORT,
         BenchCase::LazyMovableScroll
         | BenchCase::LazyContextMenuScroll
-        | BenchCase::MovableParentFlip => VIEWPORT,
+        | BenchCase::MovableParentFlip
+        | BenchCase::MovableUnorderedDispose => VIEWPORT,
     };
     let key = location_key(file!(), line!(), column!());
     match case {
@@ -365,6 +430,20 @@ fn start_shell(case: BenchCase) -> (AppShell<GraphRenderer>, Driver) {
             );
             shell.update();
             (shell, Driver::Flip(handle))
+        }
+        BenchCase::MovableUnorderedDispose => {
+            cranpose_ui::set_idle_prefetch_passes(false);
+            let handle = Rc::new(Cell::new(None));
+            let captured = Rc::clone(&handle);
+            let mut shell = AppShell::new_with_size(
+                GraphRenderer::default(),
+                key,
+                move || MovableUnorderedRoot(Rc::clone(&captured)),
+                (width, height),
+                (width as f32, height as f32),
+            );
+            shell.update();
+            (shell, Driver::Step(handle))
         }
     }
 }
