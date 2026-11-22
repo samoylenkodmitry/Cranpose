@@ -1,4 +1,4 @@
-//! Platform output devices.
+//! Platform output devices, and the platform's microphone ([`open_microphone`]).
 //!
 //! A backend's whole job is to obtain a real-time callback, hand it a
 //! [`Renderer`], and keep the stream alive. Everything above the callback is
@@ -18,6 +18,10 @@ use crate::mixer::{Mixer, MixerSeed, RenderStatus};
 #[cfg(all(feature = "aaudio", target_os = "android"))]
 mod aaudio;
 
+mod microphone;
+
+pub use microphone::{AudioSource, InputFormat, InputPreset, Recorder, open_microphone};
+
 #[cfg(any(
     all(feature = "aaudio", target_os = "android"),
     all(
@@ -33,14 +37,29 @@ mod hardware_position;
 #[cfg(all(feature = "avaudio", target_os = "watchos"))]
 mod avaudio;
 
+#[cfg(all(feature = "avaudio", target_os = "watchos"))]
+mod avaudio_microphone;
+
 #[cfg(all(
     feature = "cpal-backend",
     not(any(target_os = "android", target_arch = "wasm32"))
 ))]
 mod cpal_device;
 
+#[cfg(all(
+    feature = "cpal-backend",
+    not(any(target_os = "android", target_arch = "wasm32"))
+))]
+mod cpal_microphone;
+
 #[cfg(all(feature = "web-audio", target_arch = "wasm32"))]
 mod web_audio;
+
+#[cfg(all(feature = "web-audio", target_arch = "wasm32"))]
+mod web_microphone;
+
+#[cfg(all(feature = "web-audio", target_arch = "wasm32"))]
+mod page;
 
 /// How long before its sound a render call runs, in seconds, on top of the
 /// buffer of the device itself.

@@ -380,6 +380,9 @@ pub enum AudioError {
     /// The platform audio device refused the request.
     #[error("audio backend failure: {0}")]
     Backend(String),
+    /// The person has not allowed the application to record from the microphone.
+    #[error("the microphone is not allowed")]
+    NotAllowed,
 }
 
 /// Plays sound. Installed by the platform backend; the default is a no-op.

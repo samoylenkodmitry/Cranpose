@@ -10,7 +10,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Real-time audio engine for Cranpose (AAudio on Android/Wear OS, AVAudioEngine on watchOS, cpal on desktop, Web Audio in a browser)"
+description = "Real-time audio engine and microphone for Cranpose (AAudio on Android/Wear OS, AVAudioEngine on watchOS, cpal on desktop, Web Audio in a browser)"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -61,6 +61,8 @@ objc2-avf-audio = { version = "0.3.2", default-features = false, optional = true
     "AVAudioIONode",
     "AVAudioMixerNode",
     "AVAudioNode",
+    "AVAudioBuffer",
+    "AVAudioTime",
     "AVAudioSession",
     "AVAudioSessionTypes",
     "AVAudioSourceNode",
@@ -86,8 +88,17 @@ web-sys = { version = "0.3", optional = true, features = [
     "AudioContextState",
     "AudioDestinationNode",
     "AudioNode",
+    "AudioProcessingEvent",
     "AudioScheduledSourceNode",
     "BaseAudioContext",
     "EventTarget",
+    "MediaDevices",
+    "MediaStream",
+    "MediaStreamAudioSourceNode",
+    "MediaStreamConstraints",
+    "MediaStreamTrack",
+    "MediaTrackConstraints",
+    "Navigator",
+    "ScriptProcessorNode",
     "Window",
 ] }

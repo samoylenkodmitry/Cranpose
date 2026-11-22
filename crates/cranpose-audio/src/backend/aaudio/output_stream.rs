@@ -1,48 +1,43 @@
-#![expect(unsafe_code, reason = "owns an AAudio stream and runs its callbacks")]
+#![expect(
+    unsafe_code,
+    reason = "runs the renderer in an AAudio stream's callback"
+)]
 
 use std::{
-    ffi::c_void,
-    ptr::{self, NonNull},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    ops::Deref,
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
 use cranpose_services::AudioError;
 
-use super::library::{Failure, Library, RawStream, StreamFunction};
+use super::{
+    library::{Library, monotonic_nanos},
+    stream::{Callback, Direction, Leaked, Running, Stream, data_callback},
+};
 use crate::{
-    backend::{NOMINAL_CHANNELS, Renderer, hardware_position::HardwarePosition},
+    backend::{NOMINAL_CHANNELS, Renderer},
     mixer::RenderStatus,
 };
 
-const DIRECTION_OUTPUT: i32 = 0;
-const FORMAT_PCM_FLOAT: i32 = 2;
-const SHARING_MODE_SHARED: i32 = 1;
-const PERFORMANCE_MODE_LOW_LATENCY: i32 = 12;
-const CALLBACK_CONTINUE: i32 = 0;
-const CALLBACK_STOP: i32 = 1;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) struct StreamState(i32);
-
-impl StreamState {
-    pub(super) const UNINITIALIZED: Self = Self(0);
-    pub(super) const STARTING: Self = Self(3);
-    pub(super) const STARTED: Self = Self(4);
-    pub(super) const CLOSING: Self = Self(11);
-    pub(super) const CLOSED: Self = Self(12);
-    pub(super) const DISCONNECTED: Self = Self(13);
+struct DataContext {
+    library: &'static Library,
+    renderer: Box<dyn Renderer>,
 }
 
-// An open 32-bit float output stream that runs a renderer. Dropping it closes
-// the stream, then drops the renderer on the dropping thread.
+// An open 32-bit float output stream that runs a renderer. Dropping it closes the stream, then
+// drops the renderer on the dropping thread: the stream is declared first, so it drops first.
 pub(super) struct OutputStream {
-    library: &'static Library,
-    raw: NonNull<RawStream>,
-    _callbacks: Callbacks,
+    stream: Stream,
+    _data: Leaked<DataContext>,
+}
+
+impl Deref for OutputStream {
+    type Target = Stream;
+
+    fn deref(&self) -> &Stream {
+        &self.stream
+    }
 }
 
 impl OutputStream {
@@ -52,233 +47,56 @@ impl OutputStream {
         connected: Arc<AtomicBool>,
     ) -> Result<Self, AudioError> {
         let library = Library::load()?;
-        let callbacks = Callbacks::new(library, renderer, connected);
-        let mut builder = ptr::null_mut();
-        // SAFETY: `builder` is a place for the new builder.
-        library
-            .check(unsafe { (library.builder.create)(&mut builder) })
-            .map_err(|failure| failure.in_context("failed to create an AAudio stream builder"))?;
-        let mut raw = ptr::null_mut();
-        // SAFETY: `builder` is the builder created above, and this block
-        // deletes it after its last use. The stream gets the callbacks'
-        // contexts, which live until the stream is closed: `OutputStream`
-        // closes it before it drops them, and a stream that failed to open
-        // never calls them.
-        let opened = unsafe {
-            (library.builder.set_direction)(builder, DIRECTION_OUTPUT);
-            (library.builder.set_format)(builder, FORMAT_PCM_FLOAT);
-            (library.builder.set_channel_count)(builder, NOMINAL_CHANNELS as i32);
-            (library.builder.set_performance_mode)(builder, PERFORMANCE_MODE_LOW_LATENCY);
-            (library.builder.set_sharing_mode)(builder, SHARING_MODE_SHARED);
-            (library.builder.set_data_callback)(
-                builder,
-                Some(render),
-                callbacks.data.as_ptr().cast(),
-            );
-            (library.builder.set_error_callback)(
-                builder,
-                Some(report_error),
-                callbacks.error.as_ptr().cast(),
-            );
-            let opened = (library.builder.open_stream)(builder, &mut raw);
-            (library.builder.delete)(builder);
-            opened
-        };
-        library
-            .check(opened)
-            .map_err(|failure| failure.in_context("failed to open the AAudio output stream"))?;
-        let raw = NonNull::new(raw)
-            .ok_or_else(|| AudioError::Backend("AAudio opened no output stream".into()))?;
-        let stream = Self {
-            library,
-            raw,
-            _callbacks: callbacks,
-        };
-        let format = stream.query(library.stream.format);
-        if format != FORMAT_PCM_FLOAT {
-            return Err(AudioError::Backend(format!(
-                "AAudio opened the output stream as format {format} rather than 32-bit float"
-            )));
-        }
-        Ok(stream)
-    }
-
-    pub(super) fn request_start(&self) -> Result<(), Failure> {
-        self.library
-            .check(self.query(self.library.stream.request_start))
-    }
-
-    pub(super) fn request_pause(&self) -> Result<(), Failure> {
-        self.library
-            .check(self.query(self.library.stream.request_pause))
-    }
-
-    pub(super) fn request_stop(&self) -> Result<(), Failure> {
-        self.library
-            .check(self.query(self.library.stream.request_stop))
-    }
-
-    pub(super) fn state(&self) -> StreamState {
-        StreamState(self.query(self.library.stream.state))
-    }
-
-    pub(super) fn sample_rate(&self) -> i32 {
-        self.query(self.library.stream.sample_rate)
-    }
-
-    pub(super) fn channel_count(&self) -> i32 {
-        self.query(self.library.stream.channel_count)
-    }
-
-    pub(super) fn frames_per_burst(&self) -> i32 {
-        self.query(self.library.stream.frames_per_burst)
-    }
-
-    pub(super) fn underrun_count(&self) -> i32 {
-        self.query(self.library.stream.xrun_count)
+        let data = Leaked::new(DataContext { library, renderer });
+        // SAFETY: `data` is the `DataContext` that `render` reads, and it lives until the stream
+        // closes: `OutputStream` declares it after the stream.
+        let stream = unsafe {
+            Stream::open(
+                library,
+                Direction::Output,
+                NOMINAL_CHANNELS as i32,
+                data_callback::<DataContext>,
+                data.as_ptr(),
+                connected,
+            )
+        }?;
+        Ok(Self {
+            stream,
+            _data: data,
+        })
     }
 
     // How long from now until the hardware presents the frame that the next render call writes,
-    // or `None` while the stream has no timestamp: AAudio gives none until a short time after
-    // `requestStart`, and while the stream does not run.
+    // or `None` while the stream has no timestamp.
     //
     // The thread that owns the stream calls this, so the real-time callback does no extra work.
     pub(super) fn output_latency(&self) -> Option<Duration> {
-        let (mut frame_position, mut nano_time) = (0, 0);
-        // SAFETY: the two outputs are places for one `i64` each. `raw` is this open stream.
-        let result = unsafe {
-            (self.library.stream.timestamp)(
-                self.raw.as_ptr(),
-                libc::CLOCK_MONOTONIC,
-                &mut frame_position,
-                &mut nano_time,
-            )
-        };
-        if result < 0 {
-            return None;
-        }
-        // SAFETY: `raw` is this open stream.
-        let written_frames = unsafe { (self.library.stream.frames_written)(self.raw.as_ptr()) };
-        HardwarePosition {
-            frame_position,
-            nano_time,
-        }
-        .latency(written_frames, monotonic_nanos(), self.sample_rate())
+        self.timestamp()?
+            .latency(self.frames_written(), monotonic_nanos(), self.sample_rate())
     }
 
-    fn query(&self, function: StreamFunction) -> i32 {
-        // SAFETY: every caller passes a stream function of `library`, and
-        // `raw` is this open stream.
-        unsafe { function(self.raw.as_ptr()) }
+    pub(super) fn underrun_count(&self) -> i32 {
+        self.xrun_count()
     }
 }
 
-impl Drop for OutputStream {
-    fn drop(&mut self) {
-        if let Err(failure) = self.library.check(self.query(self.library.stream.close)) {
-            log::warn!("failed to close the AAudio stream: {failure}");
+impl Callback for DataContext {
+    fn library(&self) -> &'static Library {
+        self.library
+    }
+
+    fn run(
+        &mut self,
+        _stream: &Running,
+        audio: &mut [f32],
+        sample_rate: i32,
+        channels: usize,
+    ) -> bool {
+        self.renderer
+            .set_device_format(sample_rate as f32, channels);
+        match self.renderer.render(audio) {
+            RenderStatus::Continue => true,
+            RenderStatus::Idle => false,
         }
     }
-}
-
-// The time on the clock that AAudio's timestamps use, in nanoseconds.
-#[allow(
-    clippy::unnecessary_cast,
-    reason = "`time_t` is 64 bits wide on some Android ABIs and 32 bits on the others"
-)]
-fn monotonic_nanos() -> i64 {
-    let mut now = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    // SAFETY: `now` is a place for the time. Every Android has `CLOCK_MONOTONIC`.
-    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) };
-    now.tv_sec as i64 * 1_000_000_000 + now.tv_nsec as i64
-}
-
-struct DataContext {
-    library: &'static Library,
-    renderer: Box<dyn Renderer>,
-}
-
-struct ErrorContext {
-    library: &'static Library,
-    connected: Arc<AtomicBool>,
-}
-
-// The contexts the stream's callbacks receive. They are reached only through
-// these pointers, by AAudio while the stream is open and by `drop` after.
-struct Callbacks {
-    data: NonNull<DataContext>,
-    error: NonNull<ErrorContext>,
-}
-
-impl Callbacks {
-    fn new(
-        library: &'static Library,
-        renderer: Box<dyn Renderer>,
-        connected: Arc<AtomicBool>,
-    ) -> Self {
-        Self {
-            data: NonNull::from(Box::leak(Box::new(DataContext { library, renderer }))),
-            error: NonNull::from(Box::leak(Box::new(ErrorContext { library, connected }))),
-        }
-    }
-}
-
-impl Drop for Callbacks {
-    fn drop(&mut self) {
-        // SAFETY: both contexts came from `Box::leak` in `new`, and no stream
-        // calls them any more: the one they were given to is closed, or never
-        // opened.
-        unsafe {
-            drop(Box::from_raw(self.data.as_ptr()));
-            drop(Box::from_raw(self.error.as_ptr()));
-        }
-    }
-}
-
-unsafe extern "C" fn render(
-    stream: *mut RawStream,
-    user_data: *mut c_void,
-    audio_data: *mut c_void,
-    frames: i32,
-) -> i32 {
-    // SAFETY: `user_data` is the stream's `DataContext`, which outlives the
-    // stream. AAudio runs the data callback on one thread at a time, and no
-    // other code reaches the context while the stream is open.
-    let context = unsafe { &mut *user_data.cast::<DataContext>() };
-    let library = context.library;
-    // SAFETY: AAudio passes the open stream the callback runs for.
-    let (sample_rate, channels) = unsafe {
-        (
-            (library.stream.sample_rate)(stream),
-            (library.stream.channel_count)(stream),
-        )
-    };
-    let channels = channels.max(1) as usize;
-    context
-        .renderer
-        .set_device_format(sample_rate as f32, channels);
-
-    let samples = frames.max(0) as usize * channels;
-    if samples == 0 || audio_data.is_null() {
-        return CALLBACK_CONTINUE;
-    }
-    // SAFETY: AAudio guarantees `audio_data` points at `frames *
-    // channelCount` writable samples for this call only, and `open` refuses a
-    // stream whose samples are not 32-bit float.
-    let out = unsafe { std::slice::from_raw_parts_mut(audio_data.cast::<f32>(), samples) };
-    match context.renderer.render(out) {
-        RenderStatus::Continue => CALLBACK_CONTINUE,
-        RenderStatus::Idle => CALLBACK_STOP,
-    }
-}
-
-unsafe extern "C" fn report_error(_stream: *mut RawStream, user_data: *mut c_void, error: i32) {
-    // SAFETY: `user_data` is the stream's `ErrorContext`, which outlives the
-    // stream and is only read while the stream is open.
-    let context = unsafe { &*user_data.cast::<ErrorContext>() };
-    context.connected.store(false, Ordering::Release);
-    log::warn!("AAudio stream error: {}", context.library.failure(error));
 }
