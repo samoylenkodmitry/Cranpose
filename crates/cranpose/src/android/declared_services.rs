@@ -30,4 +30,9 @@ pub(crate) fn register(app: &android_activity::AndroidApp, capabilities: &Capabi
     if capabilities.has(Service::DeviceMotion) {
         super::device_motion::register(app.clone());
     }
+    // Present only when the application declares network requests, which
+    // bring `CranposeNetworkRequest`; anywhere else a request is unavailable.
+    if capabilities.has(Service::NetworkRequest) {
+        super::network_request::register(app.clone());
+    }
 }

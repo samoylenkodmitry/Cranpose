@@ -103,6 +103,8 @@ pub(crate) mod microphone;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod microphone_standby;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+pub(crate) mod network_request;
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod overlay_window;
 #[cfg(any(test, feature = "renderer-wgpu"))]
 pub(crate) mod panic_hook;

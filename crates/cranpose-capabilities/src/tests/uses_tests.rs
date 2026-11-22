@@ -68,6 +68,29 @@ fn an_application_that_does_not_declare_device_motion_asks_for_no_sensor_rate() 
     assert!(!android_manifest(&NONE).contains("HIGH_SAMPLING_RATE_SENSORS"));
 }
 
+const NETWORK_REQUEST: [Use; 1] = [Use::network_request()];
+
+#[test]
+fn a_network_request_asks_to_change_the_network_state_and_no_sentence() {
+    let request = Capabilities {
+        uses: &NETWORK_REQUEST,
+        demands: &[],
+        opens: &[],
+        links: &[],
+    };
+    assert_eq!(
+        android_permissions(&request),
+        vec![
+            "android.permission.ACCESS_NETWORK_STATE",
+            "android.permission.CHANGE_NETWORK_STATE",
+            "android.permission.INTERNET",
+        ]
+    );
+    assert!(json(&request).contains("{ \"name\": \"network-request\", \"reason\": null }"));
+    assert!(rust_source(&request).contains("Use::network_request(),"));
+    assert!(!android_manifest(&NONE).contains("CHANGE_NETWORK_STATE"));
+}
+
 const FACE: [Use; 1] = [Use::face_tracking()];
 const ALL_TRACKING: [Use; 4] = [
     Use::hand_tracking(),

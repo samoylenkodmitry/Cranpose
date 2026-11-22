@@ -13,6 +13,7 @@ use std::{
 use fluent_syntax::ast::{Entry, Expression, InlineExpression, Message, Pattern, PatternElement};
 
 mod demand;
+mod network;
 mod tracking;
 mod uses;
 
@@ -47,6 +48,9 @@ pub enum Service {
     Update,
     /// The network, and whether the device is on one.
     Network,
+    /// Networks that the application asks the system for by the link they
+    /// run over, such as a USB cable's, and sockets bound to them.
+    NetworkRequest,
     /// The wearer's heart rate, from the device's own sensor.
     HeartRate,
     /// Recording that can start from the background, kept possible by a
@@ -98,7 +102,7 @@ impl Service {
             Self::Overlay => "overlay",
             Self::Haptics => "haptics",
             Self::Update => "update",
-            Self::Network => "network",
+            Self::Network | Self::NetworkRequest => network::of(self).name,
             Self::HeartRate => "heart-rate",
             Self::MicrophoneStandby => "microphone-standby",
             Self::Wearable => "wearable",
@@ -139,10 +143,7 @@ impl Service {
             Self::Overlay => &["android.permission.SYSTEM_ALERT_WINDOW"],
             Self::Haptics => &["android.permission.VIBRATE"],
             Self::Update => &["android.permission.REQUEST_INSTALL_PACKAGES"],
-            Self::Network => &[
-                "android.permission.INTERNET",
-                "android.permission.ACCESS_NETWORK_STATE",
-            ],
+            Self::Network | Self::NetworkRequest => network::of(self).permissions,
             // Android 16 split the body sensors into the health
             // permissions; older releases read the same sensor under
             // BODY_SENSORS, which `android_permissions_up_to` carries.

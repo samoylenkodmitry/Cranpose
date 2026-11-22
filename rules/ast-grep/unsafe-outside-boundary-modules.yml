@@ -84,6 +84,7 @@ ignores:
   - crates/cranpose/src/android/jni.rs
   - crates/cranpose/src/android/media.rs
   - crates/cranpose/src/android/microphone_standby.rs
+  - crates/cranpose/src/android/network_request.rs
   - crates/cranpose/src/android/perf_hint.rs
   - crates/cranpose/src/android/permissions.rs
   - crates/cranpose/src/android/pipeline_update.rs
