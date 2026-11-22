@@ -25,6 +25,8 @@ mod configuration;
 ))]
 mod crop_window;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+pub(crate) mod declared_services;
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod decoder_capabilities;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod device;
