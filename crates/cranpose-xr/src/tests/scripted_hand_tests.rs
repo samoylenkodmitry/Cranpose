@@ -201,3 +201,19 @@ fn a_scripted_pinch_moves_to_the_place_presses_once_and_releases_once() {
     assert_eq!(presses, [213], "{gestures:?}");
     assert_eq!(releases, [293], "{gestures:?}");
 }
+
+#[test]
+fn a_script_with_a_palm_holds_that_joint_valid_and_tracked_and_the_others_at_rest() {
+    let palm = Pose::at([0.1, -0.3, -0.35]);
+    let open = script().with_palm(palm);
+    let mut frame = XrFrame::default();
+    play(&open, &mut frame);
+    let joint = frame.right_hand.joint(HandJointType::Palm);
+    assert!(joint.valid && joint.tracked && joint.radius > 0.0);
+    assert_eq!(joint.pose, palm);
+    assert!(!frame.right_hand.joint(HandJointType::Wrist).valid);
+    // A script without a palm leaves every joint at rest
+    let mut plain = XrFrame::default();
+    play(&script(), &mut plain);
+    assert!(!plain.right_hand.joint(HandJointType::Palm).valid);
+}

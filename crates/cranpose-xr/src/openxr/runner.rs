@@ -311,8 +311,7 @@ impl Immersive {
         });
         self.room_events.clear();
         self.space.track(
-            self.headset.device_pose(),
-            self.headset.controllers(),
+            &self.headset.follow_poses(),
             self.headset.display_time(),
             self.headset.recenter(),
         );

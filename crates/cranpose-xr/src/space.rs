@@ -31,7 +31,7 @@ use crate::{
     FollowTarget, Hand, MovePolicy, Pose, Recenter, ResizeLimits, ResizePolicy, SpatialMoveEvent,
     SpatialMoveEventType, SpatialResizeEvent, SpatialResizeEventType, StereoMode,
     dock::Dock,
-    follow_origin::{FollowOrigins, Standing},
+    follow_origin::{FollowOrigins, Poses, Standing},
     locals::with_locals,
     sound_sources::SoundSources,
     stream_source::StreamSource,
@@ -380,18 +380,12 @@ impl Space {
         not(any(test, headset)),
         expect(dead_code, reason = "the headset backend calls it")
     )]
-    // Tells the following subspaces where the head and the controllers are in the frame at `time`,
-    // and whether the runtime recentered the room. The panels of a subspace that moved take
-    // their new poses.
-    pub(crate) fn track(
-        &self,
-        head: Option<Pose>,
-        controllers: [Option<Pose>; 2],
-        time: Duration,
-        recenter: Option<Recenter>,
-    ) {
+    // Tells the following subspaces where the head, the controllers and the hands are in the frame
+    // at `time`, and whether the runtime recentered the room. The panels of a subspace that moved
+    // take their new poses.
+    pub(crate) fn track(&self, poses: &Poses, time: Duration, recenter: Option<Recenter>) {
         let mut origins = self.inner.follow_origins.borrow_mut();
-        if !origins.track(head, controllers, time, recenter) {
+        if !origins.track(poses, time, recenter) {
             return;
         }
         for entry in self.inner.entries.borrow_mut().iter_mut() {

@@ -16,8 +16,9 @@ use super::{
 };
 use crate::{
     Controller, Hand, Haptics, HeadsetProperties, PointerMapping, PointerSettings, Pose, Recenter,
-    RenderViewpoint, TrackingFeature, XrFrame, aim::Aim, frame_effects::FrameEffects,
-    haptics::controller_asks, pointer_aim::pointer_aim, session_status::SessionStatus,
+    RenderViewpoint, TrackingFeature, XrFrame, aim::Aim, follow_origin::Poses,
+    frame_effects::FrameEffects, haptics::controller_asks, pointer_aim::pointer_aim,
+    session_status::SessionStatus,
 };
 
 // The handles on the headset that the app's content reads: the registry of its frame effects, its
@@ -129,6 +130,16 @@ impl HeadsetInput {
     pub(crate) fn eye_image_size(&self) -> (u32, u32) {
         let [width, height] = self.properties.eye_image_sizes[0].recommended;
         (width, height)
+    }
+
+    // Where the targets of the following subspaces are in the frame sampled last: the head, each
+    // controller and the joints of each hand.
+    pub(crate) fn follow_poses(&self) -> Poses {
+        Poses {
+            head: self.frame.device_pose,
+            controllers: self.controllers(),
+            hands: [self.frame.left_hand, self.frame.right_hand],
+        }
     }
 
     // The controller of `hand` in the frame sampled last.

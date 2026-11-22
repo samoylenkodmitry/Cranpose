@@ -10,6 +10,7 @@ use cranpose_testing::{
 use crate::{
     FollowMode, FollowTarget, FollowingSubspace, Hand, MovePolicy, Pose, Recenter,
     SpatialMoveEvent, SpatialMoveEventType, SpatialPanel, SubspaceModifier, TrackedDimensions,
+    follow_origin::Poses,
     pose::turn_degrees,
     space::{PanelMove, Ride, SUBSPACE_ORIGIN, Space, TrackedSpace, local_space},
 };
@@ -62,7 +63,15 @@ fn headset() -> Headset {
 impl Headset {
     // Tells the space where the head is, with no controller tracked.
     fn track(&self, head: Option<Pose>, time: Duration, recenter: Option<Recenter>) {
-        self.space.track(head, [None, None], time, recenter);
+        self.space.track(
+            &Poses {
+                head,
+                controllers: [None, None],
+                ..Poses::default()
+            },
+            time,
+            recenter,
+        );
     }
 
     // The poses of the panels in the room, after the composition caught up.
@@ -73,7 +82,7 @@ impl Headset {
 }
 
 // A head at `position` turned left by `yaw` degrees.
-fn head(position: [f32; 3], yaw: f32) -> Pose {
+pub(crate) fn head(position: [f32; 3], yaw: f32) -> Pose {
     Pose {
         position,
         orientation: turn_degrees(0.0, yaw, 0.0),
@@ -81,7 +90,7 @@ fn head(position: [f32; 3], yaw: f32) -> Pose {
 }
 
 // Whether two poses are the same place and the same turn.
-fn same(a: &Pose, b: &Pose) -> bool {
+pub(crate) fn same(a: &Pose, b: &Pose) -> bool {
     let near = |x: [f32; 3], y: [f32; 3]| x.iter().zip(y).all(|(x, y)| (x - y).abs() < 1e-4);
     near(a.position, b.position)
         && [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
@@ -89,7 +98,7 @@ fn same(a: &Pose, b: &Pose) -> bool {
             .all(|axis| near(a.rotate(*axis), b.rotate(*axis)))
 }
 
-fn seconds(seconds: u64) -> Duration {
+pub(crate) fn seconds(seconds: u64) -> Duration {
     Duration::from_secs(seconds)
 }
 
@@ -151,13 +160,13 @@ fn a_following_subspace_stands_in_front_of_the_head_and_again_after_a_recenter()
 
 // A headset whose app puts a ball of `diameter` dp 10 cm above the origin of a subspace that
 // follows `target`.
-struct Ball {
-    robot: RobotTestRule<TestRenderer>,
-    space: Space,
-    diameter: MutableState<f32>,
+pub(crate) struct Ball {
+    pub(crate) robot: RobotTestRule<TestRenderer>,
+    pub(crate) space: Space,
+    pub(crate) diameter: MutableState<f32>,
 }
 
-fn ball(target: FollowTarget) -> Ball {
+pub(crate) fn ball(target: FollowTarget) -> Ball {
     let held = Rc::new(RefCell::new(None));
     let keep = Rc::clone(&held);
     let robot = create_headless_robot_test(500, 400, move || {
@@ -187,19 +196,27 @@ fn ball(target: FollowTarget) -> Ball {
 
 impl Ball {
     // The ball as the frame sees it, with no composition between the tracking and the read.
-    fn slot(&self) -> crate::space::PanelSlot {
+    pub(crate) fn slot(&self) -> crate::space::PanelSlot {
         self.space.panels()[0]
     }
 
     // Tells the space where the controllers are in a frame at `time`.
-    fn track(&self, controllers: [Option<Pose>; 2], time: Duration) {
-        self.space.track(None, controllers, time, None);
+    pub(crate) fn track(&self, controllers: [Option<Pose>; 2], time: Duration) {
+        self.space.track(
+            &Poses {
+                head: None,
+                controllers,
+                ..Poses::default()
+            },
+            time,
+            None,
+        );
     }
 }
 
 // A controller at `position` that points up by `pitch` degrees, is turned left by `yaw` and
 // rolled by `roll`.
-fn controller(position: [f32; 3], pitch: f32, yaw: f32, roll: f32) -> Pose {
+pub(crate) fn controller(position: [f32; 3], pitch: f32, yaw: f32, roll: f32) -> Pose {
     Pose {
         position,
         orientation: turn_degrees(pitch, yaw, roll),
@@ -207,7 +224,7 @@ fn controller(position: [f32; 3], pitch: f32, yaw: f32, roll: f32) -> Pose {
 }
 
 // Whether the ball stands at `position` and turned left by `yaw` degrees only.
-fn upright_at(slot: &crate::space::PanelSlot, position: [f32; 3], yaw: f32) -> bool {
+pub(crate) fn upright_at(slot: &crate::space::PanelSlot, position: [f32; 3], yaw: f32) -> bool {
     same(&slot.pose, &head(position, yaw))
 }
 
@@ -311,8 +328,15 @@ fn a_snap_subspace_of_a_controller_places_once_and_stays_when_the_controller_is_
         change_time: seconds(4),
         pose_in_previous_space: None,
     };
-    ball.space
-        .track(None, [None, None], seconds(3), Some(recenter));
+    ball.space.track(
+        &Poses {
+            head: None,
+            controllers: [None, None],
+            ..Poses::default()
+        },
+        seconds(3),
+        Some(recenter),
+    );
     assert!(upright_at(&ball.slot(), [0.5, 1.1, -0.5], 90.0));
     ball.track(
         [Some(controller([1.0, 1.0, 1.0], 0.0, 0.0, 0.0)), None],
@@ -337,8 +361,11 @@ fn a_tight_subspace_of_the_view_follows_the_head_in_every_frame() {
         .enumerate()
     {
         ball.space.track(
-            Some(head(position, yaw)),
-            [None, None],
+            &Poses {
+                head: Some(head(position, yaw)),
+                controllers: [None, None],
+                ..Poses::default()
+            },
             seconds(1 + frame as u64),
             None,
         );
@@ -427,7 +454,15 @@ impl OnAnchor {
     // A frame of the runtime: the anchor's pose, then the space's follow.
     fn frame(&self, pose: Option<Pose>, tracking: crate::TrackingState, time: Duration) {
         self.store.publish_anchor(&self.anchor, pose, tracking);
-        self.space.track(None, [None, None], time, None);
+        self.space.track(
+            &Poses {
+                head: None,
+                controllers: [None, None],
+                ..Poses::default()
+            },
+            time,
+            None,
+        );
     }
 }
 
@@ -475,8 +510,15 @@ fn a_snap_panel_takes_the_anchors_place_once_and_again_after_a_recenter() {
         change_time: seconds(2),
         pose_in_previous_space: None,
     };
-    on.space
-        .track(None, [None, None], seconds(2), Some(recenter));
+    on.space.track(
+        &Poses {
+            head: None,
+            controllers: [None, None],
+            ..Poses::default()
+        },
+        seconds(2),
+        Some(recenter),
+    );
     assert!(same(&on.slot().pose, &Pose::at([4.0, 0.1, 0.0])));
 }
 
@@ -592,7 +634,15 @@ fn a_panel_that_a_new_anchor_holds_after_a_carry_stands_at_the_anchor_and_not_at
     swapping
         .store
         .publish_anchor(&anchor, Some(moved), crate::TrackingState::Tracking);
-    swapping.space.track(None, [None, None], seconds(1), None);
+    swapping.space.track(
+        &Poses {
+            head: None,
+            controllers: [None, None],
+            ..Poses::default()
+        },
+        seconds(1),
+        None,
+    );
     assert!(same(&swapping.space.panels()[0].pose, &moved));
 }
 
@@ -648,7 +698,15 @@ impl Held {
 
     // Tells the space where the left controller is in a frame at `time`.
     fn track(&self, left: Pose, time: Duration) {
-        self.space.track(None, [Some(left), None], time, None);
+        self.space.track(
+            &Poses {
+                head: None,
+                controllers: [Some(left), None],
+                ..Poses::default()
+            },
+            time,
+            None,
+        );
     }
 
     // A step of a carry of the panel by the other hand, which puts it at `pose` in the room.
@@ -689,7 +747,15 @@ fn a_subspace_of_all_dimensions_holds_its_panel_against_the_controller_and_rides
         assert_eq!(slot.tracked, Some(TrackedSpace::Aim(Hand::Left)));
     }
     // A lost controller hides the panel and takes it out of the aim's space
-    held.space.track(None, [None, None], seconds(4), None);
+    held.space.track(
+        &Poses {
+            head: None,
+            controllers: [None, None],
+            ..Poses::default()
+        },
+        seconds(4),
+        None,
+    );
     assert_eq!(held.slot().ride, Ride::Hidden);
     assert_eq!(held.slot().tracked, None);
 }
@@ -754,8 +820,15 @@ fn a_view_subspace_of_all_dimensions_holds_its_panel_against_the_head() {
         position: [0.2, 1.6, 0.1],
         orientation: turn_degrees(-30.0, 45.0, 10.0),
     };
-    held.space
-        .track(Some(nodding), [None, None], seconds(1), None);
+    held.space.track(
+        &Poses {
+            head: Some(nodding),
+            controllers: [None, None],
+            ..Poses::default()
+        },
+        seconds(1),
+        None,
+    );
     let slot = held.slot();
     let ahead = nodding.then(&SUBSPACE_ORIGIN);
     assert!(same(&slot.pose, &ahead.then(&menu().pose())));
@@ -789,110 +862,4 @@ fn a_snap_or_upright_subspace_stays_in_the_rooms_space() {
         &head([0.5, 1.0, -0.5], 90.0).then(&local)
     ));
     assert_eq!(upright.slot().tracked, None);
-}
-
-// The ball of a soft subspace of the view with the head at `position`, turned left by `yaw`: a
-// meter ahead of the head and 10 cm above it.
-fn ahead_of(position: [f32; 3], yaw: f32) -> Pose {
-    head(position, yaw).then(&Pose::at([0.0, 0.1, -1.0]))
-}
-
-fn millis(millis: u64) -> Duration {
-    Duration::from_millis(millis)
-}
-
-#[test]
-fn a_soft_subspace_of_the_view_holds_still_for_small_moves_and_glides_after_a_turn() {
-    let ball = ball(FollowTarget::View(FollowMode::soft(
-        TrackedDimensions::TranslationAndYaw,
-    )));
-    let track = |position: [f32; 3], yaw: f32, time: Duration| {
-        ball.space
-            .track(Some(head(position, yaw)), [None, None], time, None);
-        ball.slot().pose
-    };
-    // The first tracked frame puts the ball in front of the head at once
-    let first = ahead_of([0.0, 1.6, 0.0], 0.0);
-    assert!(same(&track([0.0, 1.6, 0.0], 0.0, millis(1000)), &first));
-
-    // A turn of 20 degrees and a step of 15 cm stay below the thresholds of 24 degrees and 20 cm
-    assert!(same(&track([0.0, 1.6, 0.0], 20.0, millis(1100)), &first));
-    assert!(same(&track([0.15, 1.6, 0.0], 0.0, millis(1200)), &first));
-    // A pitch is no dimension of an upright follow, so a look down moves nothing
-    ball.space.track(
-        Some(Pose {
-            position: [0.0, 1.6, 0.0],
-            orientation: turn_degrees(-60.0, 0.0, 0.0),
-        }),
-        [None, None],
-        millis(1300),
-        None,
-    );
-    assert!(same(&ball.slot().pose, &first));
-
-    // A turn of 40 degrees holds the ball for the start delay of 200 ms
-    assert!(same(&track([0.0, 1.6, 0.0], 40.0, millis(2000)), &first));
-    assert!(same(&track([0.0, 1.6, 0.0], 40.0, millis(2150)), &first));
-    // Then the ball covers half of its way in each half life of 175 ms: a frame 175 ms after the
-    // last one puts it halfway
-    let target = ahead_of([0.0, 1.6, 0.0], 40.0);
-    let halfway = track([0.0, 1.6, 0.0], 40.0, millis(2325)).position;
-    let middle = [0, 1, 2].map(|axis| (first.position[axis] + target.position[axis]) / 2.0);
-    let off = (0..3)
-        .map(|axis| (halfway[axis] - middle[axis]).abs())
-        .fold(0.0, f32::max);
-    assert!(off < 1e-3, "{halfway:?} {middle:?}");
-
-    // Frames of 11 ms bring it to the target, where it stops
-    let mut time = 2325;
-    while !same(&ball.slot().pose, &target) {
-        time += 11;
-        assert!(time < 5000, "the ball reached no rest");
-        track([0.0, 1.6, 0.0], 40.0, millis(time));
-    }
-    assert!(time > 2325 + 3 * 175, "{time}");
-    // At rest it holds still again for a small turn
-    assert!(same(
-        &track([0.0, 1.6, 0.0], 50.0, millis(time + 500)),
-        &target
-    ));
-    assert_eq!(ball.slot().tracked, None);
-}
-
-#[test]
-fn a_soft_subspace_stands_at_its_target_at_once_after_a_recenter_and_after_a_lost_controller() {
-    let ball = ball(FollowTarget::View(FollowMode::soft(
-        TrackedDimensions::TranslationAndYaw,
-    )));
-    ball.space
-        .track(Some(head([0.0; 3], 0.0)), [None, None], seconds(1), None);
-    let recenter = Recenter {
-        change_time: seconds(2),
-        pose_in_previous_space: None,
-    };
-    ball.space.track(
-        Some(head([1.0, 0.0, 0.0], 90.0)),
-        [None, None],
-        seconds(2),
-        Some(recenter),
-    );
-    assert!(same(&ball.slot().pose, &ahead_of([1.0, 0.0, 0.0], 90.0)));
-
-    let ball = self::ball(FollowTarget::Controller(
-        Hand::Right,
-        FollowMode::soft(TrackedDimensions::TranslationAndYaw),
-    ));
-    ball.track(
-        [None, Some(controller([0.0, 1.0, 0.0], 0.0, 0.0, 0.0))],
-        seconds(1),
-    );
-    assert!(upright_at(&ball.slot(), [0.0, 1.1, 0.0], 0.0));
-    ball.track([None, None], seconds(2));
-    assert_eq!(ball.slot().ride, Ride::Hidden);
-    ball.track(
-        [None, Some(controller([3.0, 1.0, 0.0], 0.0, 0.0, 0.0))],
-        seconds(3),
-    );
-    assert_eq!(ball.slot().ride, Ride::On(Hand::Right));
-    assert!(upright_at(&ball.slot(), [3.0, 1.1, 0.0], 0.0));
 }

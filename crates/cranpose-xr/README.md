@@ -121,6 +121,13 @@ take no hits. A controller's own ray ignores the panels that ride on it. The oth
 presses them and carries them by their handle. A carry sets the panel's offset from the
 controller, and the panel follows the hand at that offset after it.
 
+`FollowTarget::Hand(hand, joint, mode)` follows a joint of a hand that the cameras track, such as
+`HandJointType::Palm` for a ball on the palm. Jetpack XR has no hand target: its ARCore `Hand` gives
+the joints' poses. The origin has the joint's pose with OpenXR's axes of a hand joint: -z toward the
+finger tips and +y out of the back of the hand. While the hand is not tracked or the joint has no
+valid pose, the panels do not show and take no hits. The hand's own pointer ignores them, so the
+other hand's pinch presses them. The app needs `Use::hand_tracking()`.
+
 With `FollowMode::Tight(TrackedDimensions::All)` a panel holds its place against the controller as
 the hand tilts and rolls. The headset hands the panel's layers to the compositor in the space of
 the controller's aim pose, at the panel's pose relative to it. The compositor places them with
@@ -727,7 +734,8 @@ A build that turns on the `scripted-hand` feature can play a hand in place of th
 check where no hand can be tracked, such as an emulator. `script_hand(ScriptedHand::pointing(hand,
 from, at, PinchCycle::default()))` installs a hand whose aim pose points at a place in the room and
 whose index finger pinches in a cycle. The frame holds it as a tracked hand, so the pointer treats
-it as the cameras' hand. A script for each hand plays at once. The feature is off by default.
+it as the cameras' hand. `with_palm(pose)` also holds its palm joint at a pose, for content that
+follows the palm. A script for each hand plays at once. The feature is off by default.
 
 ## One pointer for each hand
 
