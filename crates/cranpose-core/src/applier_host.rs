@@ -51,6 +51,17 @@ impl NodeDisposal {
         }
     }
 
+    pub(crate) fn from_host_parts(
+        nodes: Vec<(NodeId, u32)>,
+        lifecycle: SlotLifecycleCoordinator,
+    ) -> Self {
+        Self {
+            nodes,
+            lifecycle,
+            slot_hosts: Vec::new(),
+        }
+    }
+
     pub(crate) fn retain_subtree(&mut self, subtree: DetachedSubtree) {
         subtree.append_disposal_roots(&mut self.nodes);
         self.lifecycle.queue_subtree_disposal(subtree);
@@ -74,11 +85,14 @@ impl NodeDisposalQueue {
         }
     }
 
-    fn flush<A: Applier + ?Sized>(
-        &self,
-        applier: &mut A,
-        dispose: fn(&mut A, NodeId) -> Result<(), NodeError>,
-    ) -> Result<(), NodeError> {
+    #[inline(never)]
+    fn flush(&self, applier: &mut dyn Applier) -> Result<(), NodeError> {
+        if !self.pending.get() {
+            return Ok(());
+        }
+        // Keep dropped runtime cells and states alive until every queued node
+        // in this flush unmounts.
+        let _teardown = crate::runtime::enter_state_teardown_scope();
         while self.pending.get() {
             let next = self.batches.borrow_mut().pop();
             let Some(mut batch) = next else {
@@ -89,7 +103,7 @@ impl NodeDisposalQueue {
                 let resume_at = self.batches.borrow().len();
                 self.batches.borrow_mut().push(batch);
                 if applier.node_generation(node) == generation
-                    && let Err(error) = dispose(applier, node)
+                    && let Err(error) = dispose_detached_node_now(applier, node)
                 {
                     self.batches.borrow_mut()[resume_at]
                         .nodes
@@ -171,7 +185,7 @@ impl<A: Applier + 'static> ConcreteApplierHost<A> {
         ApplierGuard {
             inner,
             disposals: &self.disposals,
-            dispose: |applier, node| dispose_detached_node_now(applier, node),
+            as_dyn: |applier| applier,
         }
     }
 
@@ -186,9 +200,7 @@ impl<A: Applier + 'static> ConcreteApplierHost<A> {
     /// assert!(host.try_into_inner().is_ok());
     /// ```
     pub fn try_into_inner(mut self) -> Result<A, (Self, NodeError)> {
-        if let Err(error) = self.disposals.flush(self.inner.get_mut(), |applier, node| {
-            dispose_detached_node_now(applier, node)
-        }) {
+        if let Err(error) = self.disposals.flush(self.inner.get_mut()) {
             return Err((self, error));
         }
         Ok(self.inner.into_inner())
@@ -202,16 +214,21 @@ impl<A: Applier + 'static> ApplierHost for ConcreteApplierHost<A> {
                 applier as &mut dyn Applier
             }),
             disposals: &self.disposals,
-            dispose: dispose_detached_node_now,
+            as_dyn: |applier| applier,
         }
     }
 
-    fn dispose_nodes(&self, disposal: NodeDisposal) -> Result<(), NodeError> {
+    fn dispose_nodes(&self, mut disposal: NodeDisposal) -> Result<(), NodeError> {
+        if !self.disposals.pending.get()
+            && disposal.nodes.is_empty()
+            && disposal.slot_hosts.is_empty()
+        {
+            flush_drops_in_teardown(&mut disposal.lifecycle);
+            return Ok(());
+        }
         self.disposals.enqueue(disposal);
         if let Ok(mut applier) = self.inner.try_borrow_mut() {
-            return self.disposals.flush(&mut *applier, |applier, node| {
-                dispose_detached_node_now(applier, node)
-            });
+            return self.disposals.flush(&mut *applier);
         }
         Ok(())
     }
@@ -221,11 +238,17 @@ impl<A: Applier + 'static> ApplierHost for ConcreteApplierHost<A> {
     }
 }
 
+#[inline(never)]
+fn flush_drops_in_teardown(lifecycle: &mut SlotLifecycleCoordinator) {
+    let _teardown = crate::runtime::enter_state_teardown_scope();
+    lifecycle.flush_pending_drops();
+}
+
 /// A mutable applier borrow that drains recursive node disposal before returning.
 pub struct ApplierGuard<'a, A: Applier + ?Sized + 'static> {
     inner: RefMut<'a, A>,
     disposals: &'a NodeDisposalQueue,
-    dispose: fn(&mut A, NodeId) -> Result<(), NodeError>,
+    as_dyn: fn(&mut A) -> &mut dyn Applier,
 }
 
 impl<A: Applier + ?Sized + 'static> ApplierGuard<'_, A> {
@@ -234,7 +257,7 @@ impl<A: Applier + ?Sized + 'static> ApplierGuard<'_, A> {
     #[cold]
     #[inline(never)]
     fn flush_disposals(&mut self) {
-        if let Err(error) = self.disposals.flush(&mut *self.inner, self.dispose) {
+        if let Err(error) = self.disposals.flush((self.as_dyn)(&mut *self.inner)) {
             log::error!("deferred node disposal failed: {error}");
         }
     }

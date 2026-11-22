@@ -199,7 +199,7 @@ impl<A: Applier + 'static> Composition<A> {
             );
             let (root, side_effects, compact_applier) = composer.install(|composer| {
                 let ((), outcome) = composer.try_with_slot_host_pass(
-                    Rc::clone(&self.slots),
+                    &self.slots,
                     crate::slot::SlotPassMode::Compose,
                     |composer| composer.with_group(key, |_| content()),
                 )?;
@@ -518,7 +518,7 @@ impl<A: Applier + 'static> Composition<A> {
         let (root, side_effects, requested_root_render, compact_applier) =
             composer.install(|composer| {
                 let ((), outcome) = composer.try_with_slot_host_pass(
-                    Rc::clone(host),
+                    host,
                     crate::slot::SlotPassMode::Recompose,
                     |composer| match (batch, threshold_ms) {
                         (Batch::Invalid, None) => {

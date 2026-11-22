@@ -276,7 +276,7 @@ fn try_slot_host_pass_quarantines_mismatched_bound_host() {
     ) = fixture
         .composer
         .try_with_slot_host_pass(
-            Rc::clone(&fixture.mismatched_host),
+            &fixture.mismatched_host,
             slot::SlotPassMode::Compose,
             |composer| {
                 inspect_mismatched_slot_pass_host(
@@ -454,15 +454,11 @@ fn slot_pass_finalization_error_returns_from_try_pass() {
         let (composer, slots_host, applier_host) =
             setup_composer(&mut slots, &mut applier, handle.clone(), None);
         let (node_id, _) = composer
-            .try_with_slot_host_pass(
-                Rc::clone(&slots_host),
-                slot::SlotPassMode::Compose,
-                |composer| {
-                    composer.with_group(location_key(file!(), line!(), column!()), |composer| {
-                        composer.emit_node(TestDummyNode::default)
-                    })
-                },
-            )
+            .try_with_slot_host_pass(&slots_host, slot::SlotPassMode::Compose, |composer| {
+                composer.with_group(location_key(file!(), line!(), column!()), |composer| {
+                    composer.emit_node(TestDummyNode::default)
+                })
+            })
             .expect("initial slot pass should finalize");
         let mut commands = composer.take_commands();
         drop(composer);
@@ -479,11 +475,7 @@ fn slot_pass_finalization_error_returns_from_try_pass() {
 
     let (composer, slots_host, applier_host) =
         setup_composer(&mut slots, &mut applier, handle, None);
-    let result = composer.try_with_slot_host_pass(
-        Rc::clone(&slots_host),
-        slot::SlotPassMode::Compose,
-        |_| {},
-    );
+    let result = composer.try_with_slot_host_pass(&slots_host, slot::SlotPassMode::Compose, |_| {});
 
     assert!(matches!(result, Err(NodeError::Missing { id }) if id == node_id));
     drop(composer);
@@ -500,15 +492,11 @@ fn slot_pass_wrapper_returns_body_result_after_finalization_error() {
         let (composer, slots_host, applier_host) =
             setup_composer(&mut slots, &mut applier, handle.clone(), None);
         let (node_id, _) = composer
-            .try_with_slot_host_pass(
-                Rc::clone(&slots_host),
-                slot::SlotPassMode::Compose,
-                |composer| {
-                    composer.with_group(location_key(file!(), line!(), column!()), |composer| {
-                        composer.emit_node(TestDummyNode::default)
-                    })
-                },
-            )
+            .try_with_slot_host_pass(&slots_host, slot::SlotPassMode::Compose, |composer| {
+                composer.with_group(location_key(file!(), line!(), column!()), |composer| {
+                    composer.emit_node(TestDummyNode::default)
+                })
+            })
             .expect("initial slot pass should finalize");
         let mut commands = composer.take_commands();
         drop(composer);

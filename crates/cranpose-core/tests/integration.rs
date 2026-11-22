@@ -3,6 +3,7 @@ mod blocking_work;
 mod callback_parameters;
 mod computed_locals;
 mod computed_state;
+mod deferred_parent_retention;
 mod derived_state_closure;
 mod derived_state_return;
 mod effect_cancellation;
@@ -10,6 +11,7 @@ mod effects_and_frames;
 mod global_writes;
 mod late_node_records;
 mod lifetime_cancellation;
+mod movable_lifetime;
 mod nested_context;
 mod node_marks;
 #[path = "support/ordered_parent.rs"]

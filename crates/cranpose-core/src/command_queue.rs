@@ -41,6 +41,12 @@ impl CommandTag {
 }
 
 #[derive(Copy, Clone)]
+pub(crate) enum RemoveNodeCommand {
+    Remove(NodeId),
+    DisposeDetached(NodeId),
+}
+
+#[derive(Copy, Clone)]
 pub(crate) struct BubbleDirtyCommand {
     pub(crate) node_id: NodeId,
     pub(crate) bubble: DirtyBubble,
@@ -97,7 +103,7 @@ pub(crate) struct SyncChildrenCommand {
 pub(crate) struct CommandQueue {
     pub(crate) tags: Vec<CommandTag>,
     pub(crate) bubble_dirty: Vec<BubbleDirtyCommand>,
-    pub(crate) remove_nodes: Vec<NodeId>,
+    pub(crate) remove_nodes: Vec<RemoveNodeCommand>,
     pub(crate) attach_children: Vec<AttachChildCommand>,
     pub(crate) insert_children: Vec<InsertChildCommand>,
     pub(crate) move_children: Vec<MoveChildCommand>,
@@ -114,6 +120,23 @@ impl CommandQueue {
         self.tags.push(tag);
     }
 
+    fn push_remove_node(&mut self, command: RemoveNodeCommand) {
+        self.remove_nodes.push(command);
+        self.push_tag(CommandTag::RemoveNode);
+    }
+
+    pub(crate) fn push_dispose_detached_node(&mut self, id: NodeId) {
+        self.push_remove_node(RemoveNodeCommand::DisposeDetached(id));
+    }
+
+    pub(crate) fn push_detach_child(&mut self, parent_id: NodeId, child_id: NodeId) {
+        self.detach_children.push(DetachChildCommand {
+            parent_id,
+            child_id,
+        });
+        self.push_tag(CommandTag::DetachChild);
+    }
+
     pub(crate) fn push(&mut self, command: Command) {
         match command {
             Command::BubbleDirty { node_id, bubble } => {
@@ -121,10 +144,7 @@ impl CommandQueue {
                     .push(BubbleDirtyCommand { node_id, bubble });
                 self.push_tag(CommandTag::BubbleDirty);
             }
-            Command::RemoveNode { id } => {
-                self.remove_nodes.push(id);
-                self.push_tag(CommandTag::RemoveNode);
-            }
+            Command::RemoveNode { id } => self.push_remove_node(RemoveNodeCommand::Remove(id)),
             Command::AttachChild {
                 parent_id,
                 child_id,
@@ -224,7 +244,11 @@ impl CommandQueue {
         self.bubble_dirty
             .len()
             .saturating_mul(size_of::<BubbleDirtyCommand>())
-            .saturating_add(self.remove_nodes.len().saturating_mul(size_of::<NodeId>()))
+            .saturating_add(
+                self.remove_nodes
+                    .len()
+                    .saturating_mul(size_of::<RemoveNodeCommand>()),
+            )
             .saturating_add(
                 self.attach_children
                     .len()
@@ -275,7 +299,7 @@ impl CommandQueue {
             .saturating_add(
                 self.remove_nodes
                     .capacity()
-                    .saturating_mul(size_of::<NodeId>()),
+                    .saturating_mul(size_of::<RemoveNodeCommand>()),
             )
             .saturating_add(
                 self.attach_children
@@ -383,7 +407,7 @@ impl CommandQueue {
 /// them.
 struct CommandPayloads<'a> {
     bubble_dirty: std::vec::Drain<'a, BubbleDirtyCommand>,
-    remove_nodes: std::vec::Drain<'a, NodeId>,
+    remove_nodes: std::vec::Drain<'a, RemoveNodeCommand>,
     attach_children: std::vec::Drain<'a, AttachChildCommand>,
     insert_children: std::vec::Drain<'a, InsertChildCommand>,
     move_children: std::vec::Drain<'a, MoveChildCommand>,
@@ -426,10 +450,14 @@ impl CommandPayloads<'_> {
                     next_command_payload(&mut self.bubble_dirty, tag)?;
                 Command::BubbleDirty { node_id, bubble }.apply_with_cleanup(applier, cleanup)?;
             }
-            CommandTag::RemoveNode => {
-                let id = next_command_payload(&mut self.remove_nodes, tag)?;
-                Command::RemoveNode { id }.apply_with_cleanup(applier, cleanup)?;
-            }
+            CommandTag::RemoveNode => match next_command_payload(&mut self.remove_nodes, tag)? {
+                RemoveNodeCommand::Remove(id) => {
+                    Command::RemoveNode { id }.apply_with_cleanup(applier, cleanup)?;
+                }
+                RemoveNodeCommand::DisposeDetached(id) => {
+                    apply_dispose_detached_node(applier, id)?;
+                }
+            },
             CommandTag::Callback => {
                 let callback = next_command_payload(&mut self.callbacks, tag)?;
                 Command::Callback(callback).apply_with_cleanup(applier, cleanup)?;
@@ -561,6 +589,12 @@ impl CommandPayloads<'_> {
         debug_assert!(self.sync_children.next().is_none());
         debug_assert!(self.callbacks.next().is_none());
     }
+}
+
+#[cold]
+#[inline(never)]
+fn apply_dispose_detached_node(applier: &mut dyn Applier, id: NodeId) -> Result<(), NodeError> {
+    crate::slot::dispose_detached_node_now(applier, id)
 }
 
 fn command_payload_error(tag: CommandTag) -> NodeError {

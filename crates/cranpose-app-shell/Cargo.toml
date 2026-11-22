@@ -55,3 +55,7 @@ arboard = { version = "3.7", default-features = false, optional = true }
 [[bench]]
 name = "scroll_frame"
 harness = false
+
+[[bench]]
+name = "movable_content"
+harness = false
