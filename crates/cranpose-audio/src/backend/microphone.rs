@@ -45,7 +45,7 @@ pub trait Recorder: Send {
 }
 
 /// A running microphone stream. Dropping it stops the recording and releases the audio that
-/// [`prepare_microphone`] readied for it.
+/// [`prepare_microphone()`] readied for it.
 pub trait AudioSource: Send + Sync {
     /// Whether the stream still records. The platform ends a stream when its device goes away,
     /// such as a headset that the person unplugs, and the recorder then gets nothing more. An app
@@ -76,10 +76,10 @@ pub trait AudioSource: Send + Sync {
 /// Opens the platform's default microphone, starts it and runs `recorder` on it. Jetpack Compose
 /// has no API for recording: Android apps use `AudioRecord` or AAudio, and this follows AAudio.
 ///
-/// The person must have allowed the microphone first ([`microphone_permission`] reads
+/// The person must have allowed the microphone first ([`microphone_permission()`] reads
 /// [`MicrophonePermission::Granted`]); otherwise this opens nothing and returns
 /// [`AudioError::NotAllowed`]. The stream readies the platform's audio for recording with
-/// [`prepare_microphone`] and keeps it readied while it runs. A build without a backend for the
+/// [`prepare_microphone()`] and keeps it readied while it runs. A build without a backend for the
 /// target returns [`AudioError::Unsupported`]: the backends are the ones of [`super::open`].
 pub fn open_microphone(
     recorder: Box<dyn Recorder>,
