@@ -8,7 +8,7 @@ use cranpose_render_common::{
     font_source::{
         ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS, FontLoadError, FontRegistry,
     },
-    text_fonts::{TextFonts, default_typeface},
+    text_fonts::TextFonts,
 };
 use cranpose_text::{FontBytes, Typeface};
 use cranpose_ui::{
@@ -23,6 +23,7 @@ mod android_overlay_window_options;
     any(feature = "desktop-shell", feature = "ios")
 ))]
 mod launch_error;
+mod launcher_fonts;
 
 pub use android_gpu_backend::AndroidGpuBackend;
 pub use android_overlay_window_options::AndroidOverlayWindowOptions;
@@ -36,6 +37,7 @@ pub use launch_error::LaunchError;
     any(feature = "desktop-shell", feature = "ios")
 ))]
 pub(crate) use launch_error::exit_after_launch_error;
+pub use launcher_fonts::{AppFonts, DefaultFont, LauncherFonts};
 
 #[cfg(test)]
 #[path = "tests/inspector_settings.rs"]
@@ -317,43 +319,6 @@ impl AppSettings {
                 .join(", ")
         );
         TextFonts::new(faces)
-    }
-}
-
-/// Where an [`AppLauncher`]'s text faces come from.
-///
-/// A launcher starts as [`DefaultFont`] and becomes [`AppFonts`] as soon as a
-/// font method runs. The state is a type rather than a flag because only a
-/// type keeps the embedded face out of the binary: a flag checked at run time
-/// still references the bytes, and the linker keeps what is referenced.
-pub trait LauncherFonts: launcher_fonts::Sealed {
-    /// The face text draws in when the app supplied none.
-    fn default_face() -> Option<Typeface>;
-}
-
-mod launcher_fonts {
-    pub trait Sealed {}
-    impl Sealed for super::DefaultFont {}
-    impl Sealed for super::AppFonts {}
-}
-
-/// The app has supplied no fonts, so text draws in the framework's embedded
-/// face (the `embedded-default-font` feature, on by default).
-pub struct DefaultFont;
-
-impl LauncherFonts for DefaultFont {
-    fn default_face() -> Option<Typeface> {
-        default_typeface()
-    }
-}
-
-/// The app supplied its own fonts. Text draws only in them, and the embedded
-/// face is left out of the binary.
-pub struct AppFonts;
-
-impl LauncherFonts for AppFonts {
-    fn default_face() -> Option<Typeface> {
-        None
     }
 }
 
