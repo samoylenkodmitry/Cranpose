@@ -55,6 +55,8 @@ Cranpose developers too:
   pose, as Jetpack XR's `TrackedDimensions.All` does. `TrackedDimensions::TranslationAndYaw` tracks
   its place and its yaw, so the panels stand upright. `FollowTarget::Controller(Hand, FollowMode)`
   follows a controller's grip pose, turned as its aim pose is. Jetpack XR has no controller target.
+  `FollowTarget::Hand(Hand, HandJointType, FollowMode)` follows a joint of a tracked hand, such as
+  the palm. Jetpack XR has no hand target either.
   `FollowTarget::Anchor(Anchor, FollowMode)` holds the panels to an anchor, as Jetpack XR's
   `FollowTarget.anchor` does. `FollowMode::soft(dimensions)` holds the panels still until the
   target moves past `SoftFollowMode`'s start thresholds for its start delay, then glides after the

@@ -3,7 +3,7 @@
 use std::{sync::OnceLock, time::Duration};
 
 use crate::{
-    Hand, HandAim, HandState, Pinch, Pose, TrackingState, XrFrame,
+    Hand, HandAim, HandJoint, HandJointType, HandState, Pinch, Pose, TrackingState, XrFrame,
     key_layout::{self, KeyKind, PlacedKey},
     keyboard_state::KeyboardState,
     pose::turn_of_axes,
@@ -13,6 +13,8 @@ use crate::{
 
 // A pinch above this counts as made, as the runtime's own flag does.
 const PINCHING: f32 = 0.8;
+// The radius of a scripted palm joint, in meters: about an adult's palm
+const PALM_RADIUS: f32 = 0.04;
 
 /// How the index finger of a [`ScriptedHand`] pinches over time, in a cycle that repeats. The
 /// strength is 0 while the hand rests, rises to 1 while the fingers close, stays at 1 while they
@@ -99,11 +101,23 @@ pub struct ScriptedHand {
     // The aim pose of each cycle, in turn
     aims: Vec<Pose>,
     cycle: PinchCycle,
+    // The palm's pose, when the script holds the hand open with its palm there
+    palm: Option<Pose>,
     // The time of the first frame that played the script, on the clock of the frames
     started: OnceLock<Duration>,
 }
 
 impl ScriptedHand {
+    /// The script with the hand's palm joint at `palm`, valid and tracked, as an open hand holds it.
+    /// Content that follows the palm ([`FollowTarget::Hand`](crate::FollowTarget::Hand)) then
+    /// stands there. The pose has the OpenXR axes of a hand joint: -z toward the finger tips and +y
+    /// out of the back of the hand. The other joints stay at rest.
+    #[must_use]
+    pub fn with_palm(mut self, palm: Pose) -> Self {
+        self.palm = Some(palm);
+        self
+    }
+
     /// The hand `hand` with its aim pose at `from` in meters, pointing at the place `at`.
     pub fn pointing(hand: Hand, from: [f32; 3], at: [f32; 3], cycle: PinchCycle) -> Self {
         Self::visiting(hand, from, [at], cycle)
@@ -145,6 +159,7 @@ impl ScriptedHand {
             hand,
             aims: places.into_iter().map(|at| aim_pose(from, at)).collect(),
             cycle,
+            palm: None,
             started: OnceLock::new(),
         }
     }
@@ -155,8 +170,18 @@ impl ScriptedHand {
         let (cycles, _) = self.cycle.position(time);
         let index = usize::try_from(cycles).map_or(0, |cycles| cycles % self.aims.len());
         let aim = self.aims[index];
+        let mut joints = [HandJoint::default(); HandJointType::COUNT];
+        if let Some(pose) = self.palm {
+            joints[HandJointType::Palm.index()] = HandJoint {
+                pose,
+                radius: PALM_RADIUS,
+                valid: true,
+                tracked: true,
+            };
+        }
         HandState {
             tracking_state: TrackingState::Tracking,
+            joints,
             aim: Some(HandAim {
                 pose: aim,
                 index: Pinch {
@@ -165,7 +190,6 @@ impl ScriptedHand {
                 },
                 ..HandAim::default()
             }),
-            ..HandState::default()
         }
     }
 }
