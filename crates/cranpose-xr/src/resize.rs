@@ -34,7 +34,7 @@ pub(crate) fn corner_center(slot: &PanelSlot) -> [f32; 3] {
 
 // Where `ray` meets the plane of a panel's face at `pose`, in dp to the right and up from the
 // face's center.
-fn plane_dp(ray: &Ray, pose: &Pose) -> Option<[f32; 2]> {
+pub(crate) fn plane_dp(ray: &Ray, pose: &Pose) -> Option<[f32; 2]> {
     let (_, place) = ray.plane_point(pose)?;
     Some(place.map(|meters| meters / METERS_PER_DP))
 }

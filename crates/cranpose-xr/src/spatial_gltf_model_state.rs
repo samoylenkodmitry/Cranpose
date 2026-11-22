@@ -101,8 +101,17 @@ impl LoadedModel {
         if !loaded.model.parts.is_empty() {
             let parts: Vec<&str> = loaded.model.parts.describe().collect();
             log::info!(
-                "glTF model: the inputs of a controller move its {}",
-                parts.join(", ")
+                "glTF model: the inputs of a controller move its {}; {}",
+                parts.join(", "),
+                loaded.model.ray_start.map_or_else(
+                    || "it has no laser_begin, so its ray starts at the runtime's aim".to_owned(),
+                    |[x, y, z]| format!(
+                        "its laser_begin stands at {:.1}, {:.1}, {:.1} mm from its origin",
+                        x * 1000.0,
+                        y * 1000.0,
+                        z * 1000.0
+                    ),
+                )
             );
         }
         loaded

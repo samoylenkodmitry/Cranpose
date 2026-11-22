@@ -27,6 +27,32 @@ pub(crate) struct Aim {
     pub(crate) source: InputSource,
 }
 
+impl Aim {
+    // The aim with its ray starting at the point of its line nearest `start`, such as the tip of
+    // the controller's model. The ray keeps its line and its direction, so it meets the panels
+    // where it met them before. Only its visible start moves. A tracked hand keeps its ray.
+    #[cfg_attr(
+        not(any(test, headset)),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    pub(crate) fn starting_near(self, start: [f32; 3]) -> Self {
+        if self.source != InputSource::Controller {
+            return self;
+        }
+        let Ray { origin, direction } = self.ray;
+        let along: f32 = (0..3)
+            .map(|axis| (start[axis] - origin[axis]) * direction[axis])
+            .sum();
+        Self {
+            ray: Ray {
+                origin: [0, 1, 2].map(|axis| origin[axis] + along * direction[axis]),
+                direction,
+            },
+            ..self
+        }
+    }
+}
+
 #[cfg(test)]
 impl Aim {
     // The aim of a controller that points along `ray` and pulls its trigger by `trigger`, with its
@@ -42,3 +68,7 @@ impl Aim {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/aim_tests.rs"]
+mod tests;

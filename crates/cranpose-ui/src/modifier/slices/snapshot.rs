@@ -22,9 +22,9 @@ use crate::{
         scroll::{MotionContextAnimatedNode, TranslatedContentContextNode},
     },
     modifier_nodes::{
-        BackgroundElement, ClipToBoundsElement, CornerShapeElement, DrawCommandNode,
+        BackgroundElement, ClickableNode, ClipToBoundsElement, CornerShapeElement, DrawCommandNode,
         GraphicsLayerNode, PaddingElement, PointerIconNode, SelectableTextNode,
-        WindowRectReporterNode,
+        WindowRectReporterNode, clickable::ClickLook,
     },
     text_field_modifier_node::TextFieldModifierNode,
     text_modifier_node::TextModifierNode,
@@ -128,6 +128,7 @@ fn collect_modifier_slices_into(
     }
 
     let mut backgrounds = Backgrounds::default();
+    let mut indication: Option<IndicationSite> = None;
     let mut padding = EdgeInsets::default();
     // The layout nodes walked so far: the index of the coordinator the next
     // draw belongs to, which is the next layout node's (or a layout node's
@@ -173,7 +174,7 @@ fn collect_modifier_slices_into(
                     displaceable: has_layout,
                     modifier_index,
                 };
-                collect_draw_node(node, &draw, slices);
+                collect_draw_node(node, &draw, slices, &mut indication);
             }
 
             // `InPlaceReach::of` names the layout elements whose values no
@@ -225,6 +226,7 @@ fn collect_modifier_slices_into(
         });
     }
 
+    IndicationSite::place(indication, &backgrounds, slices);
     backgrounds.insert_into(slices);
     // The slices stay for as long as the chain does, and so would the room
     // growth left past the commands. A collect into these again pushes as
@@ -318,6 +320,25 @@ impl Backgrounds {
             })
     }
 
+    // The surface that a clickable's indication covers: the rect and shape of
+    // the chain's last background, which is the control's face, or the
+    // clickable's `own` rect with the chain's last shape when no background
+    // draws.
+    fn surface(&self, own: CoordinatorRect) -> crate::BackgroundDraw {
+        match self.slots.last() {
+            Some(slot) => crate::BackgroundDraw::new(
+                slot.color,
+                slot.corner_shape.or(self.last_shape),
+                slot.coordinator.clone(),
+            ),
+            None => crate::BackgroundDraw::new(
+                crate::modifier::Color::TRANSPARENT,
+                self.last_shape.or(self.pending_shape),
+                own,
+            ),
+        }
+    }
+
     fn shape(&mut self, shape: RoundedCornerShape) {
         self.last_shape = Some(shape);
         match self.slots.last_mut() {
@@ -372,16 +393,50 @@ fn collect_window_geometry_sink(
     }
 }
 
+// A clickable of the chain: what its indication shows, and the clickable's
+// own rect, which the indication covers when no background draws.
+struct IndicationSite {
+    look: Rc<ClickLook>,
+    own: CoordinatorRect,
+}
+
+impl IndicationSite {
+    // Draws the chain's indication, if it has one, over the control's
+    // surface, in front of its content.
+    fn place(site: Option<Self>, backgrounds: &Backgrounds, slices: &mut ModifierNodeSlices) {
+        let Some(Self { look, own }) = site else {
+            return;
+        };
+        let surface = backgrounds.surface(own);
+        slices
+            .draw_commands
+            .push(DrawCommand::Overlay(Rc::new(move |scope| {
+                if let Some(color) = look.color() {
+                    surface.fill(scope, color);
+                }
+            })));
+    }
+}
+
 /// Collects what a draw-capable node contributes, drawn at `site`.
+// A clickable leaves its indication in `indication`, which the walk places
+// once it knows the chain's backgrounds.
 fn collect_draw_node(
     node: &dyn cranpose_foundation::ModifierNode,
     site: &DrawSite,
     slices: &mut ModifierNodeSlices,
+    indication: &mut Option<IndicationSite>,
 ) {
     let any = node.as_any();
     // The node's type, asked once: each check below compares it, where a
     // downcast would ask the node again.
     let kind = Any::type_id(any);
+    if let Some(clickable) = as_kind::<ClickableNode>(any, kind) {
+        *indication = Some(IndicationSite {
+            look: clickable.look(),
+            own: site.coordinator.clone(),
+        });
+    }
     if let Some(z_index_node) = as_kind::<crate::modifier::z_index::ZIndexNode>(any, kind) {
         slices.rare_mut().z_index += z_index_node.z_index();
     }

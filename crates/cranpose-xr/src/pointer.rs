@@ -5,6 +5,7 @@
 use std::time::Duration;
 
 use cranpose::PointerButton;
+use drift::Drift;
 use extras::Extras;
 use held::Held;
 
@@ -14,15 +15,16 @@ use crate::{
     aim_filter::angle_between,
     content_ray::ContentRay,
     gestures::Gestures,
-    handle::HandleKind,
+    handle::HandleFocus,
     hit::{Hit, Target, ray_hit},
     mesh_ref::MeshRef,
     ray::Beam,
-    reach::{CLICK_ANGLE, Pull, Reach, Scene},
+    reach::{CLICK_ANGLE, PressTarget, Pull, Reach, Scene},
     space::Cursor,
     surface_input::{Gesture, HandGesture, RayHit, SurfaceGesture, VolumeRay},
 };
 
+mod drift;
 mod extras;
 mod held;
 
@@ -34,6 +36,11 @@ const DRAG_ANGLE: f32 = 4.0;
 // A trigger that falls LET_GO below the highest pull of its press is on its way up. Letting go
 // turns the controller as the pull does, so a press that still holds its point keeps it then.
 const LET_GO: f32 = 0.15;
+
+// How far a hand must move a panel by its handle before the panel moves, in dp of the panel. A dp
+// is a millimeter in the room. The value is three times Compose's touch slop of 8 dp. Each press
+// logs how far it strayed, so the value can follow the strays of real presses.
+pub(crate) const DRAG_SLOP: f32 = 24.0;
 
 // What a frame gives a pointer besides its aim: the time, the time since the frame before in
 // seconds, what the aims meet and how the controller's buttons map to the pointer's.
@@ -62,6 +69,7 @@ struct Press {
     held: Option<Hit>,
     // The mesh of a volume that the press began on
     entity: Option<MeshRef>,
+    drift: Drift,
 }
 
 // The pointer of one hand.
@@ -71,6 +79,8 @@ pub(crate) struct Pointer {
     reach: Reach,
     press: Option<Press>,
     held: Option<Held>,
+    // When the hand took hold of the handle that it holds
+    grabbed_at: Duration,
     // The target that the pointer is over and its place there, in the target's dp
     over: Option<(Target, (f32, f32))>,
     extras: Extras,
@@ -85,6 +95,7 @@ impl Pointer {
             reach: Reach::default(),
             press: None,
             held: None,
+            grabbed_at: Duration::ZERO,
             over: None,
             extras: Extras::default(),
             volume_ray: None,
@@ -97,14 +108,15 @@ impl Pointer {
         let reach = self.reach;
         self.volume_ray = self.volume_ray_of(&reach, frame);
         match pull {
-            Pull::Pulled => match reach.grab() {
-                Some(handle) => self.grab(&reach, &handle, out),
-                None => self.pull(&reach, frame, out),
+            Pull::Pulled => match reach.press_target(self.side, frame.time, frame.scene) {
+                Some(PressTarget::Handle(handle)) => self.grab(&reach, &handle, frame, out),
+                Some(PressTarget::Panel(hit)) => self.pull(&reach, hit, frame, out),
+                None => self.hover(reach.hit, out),
             },
-            Pull::Up if self.held.is_some() => self.put_down(&reach, out),
-            Pull::Up if self.press.is_some() => self.release(&reach, out),
+            Pull::Up if self.held.is_some() => self.put_down(&reach, frame.time, out),
+            Pull::Up if self.press.is_some() => self.release(&reach, frame.time, out),
             _ if self.held.is_some() => self.hold(&reach, frame, out),
-            _ => self.follow(&reach, frame.time, out),
+            _ => self.follow(&reach, frame, out),
         }
         self.press_others(
             aim.map_or_else(Buttons::default, |aim| aim.buttons),
@@ -137,11 +149,19 @@ impl Pointer {
         }
     }
 
-    // The panel whose handle the pointer holds or would grab, and which of its handles.
-    pub(crate) fn handle(&self) -> Option<(u64, HandleKind)> {
+    // The handle that the pointer presses, or else the one that a pull would grab. A press on a
+    // panel shows no handle: it cannot become a carry.
+    pub(crate) fn handle(&self) -> Option<HandleFocus> {
         self.held.map(|held| held.handle()).or_else(|| {
+            if self.press.is_some() {
+                return None;
+            }
             let handle = self.reach.grab()?;
-            Some((handle.slot.id, handle.kind))
+            Some(HandleFocus {
+                panel: handle.slot.id,
+                kind: handle.kind,
+                pressed: false,
+            })
         })
     }
 
@@ -152,59 +172,75 @@ impl Pointer {
 
     // The panel that this hand holds by a handle, which the other hand cannot grab.
     pub(crate) fn held_panel(&self) -> Option<u64> {
-        self.held.map(|held| held.handle().0)
+        self.held.map(|held| held.handle().panel)
     }
 
-    // A press starts where the trigger goes down over a panel. A trigger that was down before
-    // the ray reached a panel does not press.
-    fn pull(&mut self, reach: &Reach, frame: &Frame<'_>, out: &mut Gestures) {
-        match (
-            reach.press_hit(self.side, frame.time, frame.scene),
-            reach.ray,
-        ) {
-            (Some(hit), Some(ray)) => {
-                self.move_to(hit.target(), hit.position(), out);
-                // The press goes where the ray pointed before the pull, which may be another mesh
-                // than the one it points at now
-                if let Some(volume_ray) = &mut self.volume_ray {
-                    volume_ray.hit = hit.pick.map(ray_hit);
-                }
-                let button = frame.mapping.button(ControllerInput::Trigger);
-                if let Some(button) = button {
-                    self.emit(out, hit.target(), Gesture::Press(button));
-                }
-                self.press = Some(Press {
-                    target: hit.target(),
-                    button,
-                    start: frame.time,
-                    direction: ray.direction,
-                    peak: reach.trigger,
-                    held: Some(hit),
-                    entity: hit.pick.map(|pick| pick.mesh),
-                });
-            }
-            _ => self.hover(reach.hit, out),
+    // A press starts where the trigger goes down over a panel, at `hit`, which the ray from
+    // before the pull meets. A trigger that was down before the ray reached a panel does not
+    // press. The controller ticks, so the hand feels that the press took.
+    fn pull(&mut self, reach: &Reach, hit: Hit, frame: &Frame<'_>, out: &mut Gestures) {
+        let Some(ray) = reach.ray else {
+            return;
+        };
+        self.move_to(hit.target(), hit.position(), out);
+        // The press goes where the ray pointed before the pull, which may be another mesh than the
+        // one it points at now
+        if let Some(volume_ray) = &mut self.volume_ray {
+            volume_ray.hit = hit.pick.map(ray_hit);
         }
+        let button = frame.mapping.button(ControllerInput::Trigger);
+        if let Some(button) = button {
+            self.emit(out, hit.target(), Gesture::Press(button));
+        }
+        self.press = Some(Press {
+            target: hit.target(),
+            button,
+            start: frame.time,
+            direction: ray.direction,
+            peak: reach.trigger,
+            held: Some(hit),
+            entity: hit.pick.map(|pick| pick.mesh),
+            drift: Drift::begin(&hit.slot, &ray, frame.time),
+        });
+        self.tick(out);
     }
 
-    // The trigger went up while a press was on: the release goes to the press's target.
-    fn release(&mut self, reach: &Reach, out: &mut Gestures) {
-        if let Some(press) = self.press.take()
-            && let Some(button) = press.button
-        {
-            self.emit(out, press.target, Gesture::Release(button));
+    // The trigger went up while a press was on: the release goes to the press's target. A press
+    // that still held its point clicks, and the controller ticks again. One that dragged ends with
+    // no tick.
+    fn release(&mut self, reach: &Reach, time: Duration, out: &mut Gestures) {
+        if let Some(press) = self.press.take() {
+            if let Some(button) = press.button {
+                self.emit(out, press.target, Gesture::Release(button));
+            }
+            let clicked = press.held.is_some();
+            press
+                .drift
+                .report(self.side, time, if clicked { "a click" } else { "a drag" });
+            if clicked {
+                self.tick(out);
+            }
         }
         self.hover(reach.hit, out);
     }
 
+    // Asks for the light vibration that tells the hand that a press took or ended.
+    fn tick(&self, out: &mut Gestures) {
+        out.ticks[self.side.index()] = true;
+    }
+
     // Moves with the ray: while no press is on, or once a press drags. A press that drags keeps
     // its target: it follows the ray over that target only.
-    fn follow(&mut self, reach: &Reach, time: Duration, out: &mut Gestures) {
+    fn follow(&mut self, reach: &Reach, frame: &Frame<'_>, out: &mut Gestures) {
+        let time = frame.time;
         let Some(press) = &mut self.press else {
             self.hover(reach.hit, out);
             return;
         };
         press.peak = press.peak.max(reach.trigger);
+        if let Some(ray) = reach.ray {
+            press.drift.note(&ray, frame.scene);
+        }
         let letting_go = reach.trigger < press.peak - LET_GO;
         if press.held.is_some()
             && !letting_go

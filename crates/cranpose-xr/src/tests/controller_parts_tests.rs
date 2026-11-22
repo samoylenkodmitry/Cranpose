@@ -204,3 +204,19 @@ fn the_grip_and_the_menu_button_follow_their_inputs() {
         [0.0, 0.019, 0.02],
     );
 }
+
+#[test]
+fn a_controller_model_starts_its_ray_at_its_laser_begin_node() {
+    let model = load("controller_parts.glb");
+    let start = model
+        .ray_start
+        .expect("the test controller has a laser_begin node");
+    let expected = [0.0001, -0.0122, -0.0415];
+    assert!(
+        start
+            .iter()
+            .zip(expected)
+            .all(|(got, want)| (got - want).abs() < 1e-6),
+        "{start:?}"
+    );
+}

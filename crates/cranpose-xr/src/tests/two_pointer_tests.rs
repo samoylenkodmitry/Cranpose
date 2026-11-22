@@ -15,7 +15,7 @@ use cranpose_testing::{
     robot::{RobotTestRule, TestRenderer},
 };
 
-use super::tests::{Frames, MOVABLE, PANEL, aim, aim_at, hand_aim_of, handle_aim};
+use super::tests::{Frames, MOVABLE, PANEL, aim, aim_at, hand_aim_of, handle_aim, hovered};
 use crate::{
     ControllerInput, Hand as Side, HandAim, HandState, Pinch, PointerMapping, SpatialPanel,
     SubspaceModifier, TrackingState,
@@ -330,7 +330,13 @@ fn the_other_hand_cannot_grab_the_handle_that_a_hand_holds() {
     // The left hand grabs. The right hand pulls on the same handle in the next frame.
     frames.update([at_handle(-0.1, 1.0), at_handle(0.1, 0.0)], &[MOVABLE]);
     frames.update([at_handle(-0.1, 1.0), at_handle(0.1, 1.0)], &[MOVABLE]);
-    assert_eq!(frames.pointer.handles()[0], Some((1, HandleKind::Move)));
+    assert_eq!(
+        frames.pointer.handles()[0],
+        Some(crate::handle::HandleFocus {
+            pressed: true,
+            ..hovered(1, HandleKind::Move)
+        })
+    );
     assert_eq!(
         frames.pointer.handles()[1],
         None,
