@@ -273,6 +273,7 @@ mod sound_sources;
 #[cfg(any(test, headset))]
 mod sound_stage;
 mod space;
+mod spatial_button;
 mod spatial_capabilities;
 mod spatial_curved_row;
 mod spatial_environment;
@@ -296,9 +297,12 @@ mod spatial_request;
 mod spatial_resize_event;
 #[cfg(any(test, headset))]
 mod spatial_setup;
+mod spatial_slider;
 mod spatial_store;
 #[cfg(any(test, headset))]
 mod spatial_support;
+mod spatial_switch;
+mod spatial_tray;
 mod spatial_volume;
 mod stereo_mode;
 mod stream_source;
@@ -320,6 +324,10 @@ mod tracking_permission;
 #[cfg(any(test, headset))]
 mod tracking_request;
 mod tracking_state;
+mod tray_material;
+mod tray_meshes;
+mod tray_part;
+mod tray_scene;
 mod uuid;
 #[cfg(any(test, headset))]
 mod vector;
@@ -434,6 +442,7 @@ pub use scripted_controller::{ScriptedButtons, ScriptedController, script_contro
 #[cfg(all(feature = "scripted-hand", headset))]
 pub use scripted_hand::{PinchCycle, ScriptedHand, script_hand};
 pub use soft_follow_mode::SoftFollowMode;
+pub use spatial_button::{ButtonShape, SpatialButton};
 pub use spatial_capabilities::{SpatialCapabilities, local_spatial_capabilities};
 pub use spatial_curved_row::SpatialCurvedRow;
 pub use spatial_environment::{SpatialEnvironment, local_spatial_environment};
@@ -451,6 +460,9 @@ pub use spatial_move_event::{SpatialMoveEvent, SpatialMoveEventType};
 pub use spatial_panel::SpatialPanel;
 pub use spatial_point_source::SpatialPointSource;
 pub use spatial_resize_event::{SpatialResizeEvent, SpatialResizeEventType};
+pub use spatial_slider::{SliderColors, SpatialSlider};
+pub use spatial_switch::{SpatialSwitch, SwitchColors};
+pub use spatial_tray::SpatialTray;
 pub use spatial_volume::{SpatialVolume, SpatialVolumeScope};
 pub use stereo_mode::StereoMode;
 pub use stream_stats::{StreamCounts, StreamStats};

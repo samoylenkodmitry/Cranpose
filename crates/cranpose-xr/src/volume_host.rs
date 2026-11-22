@@ -64,9 +64,14 @@ pub(crate) fn VolumeScene(space: Space) {
     );
 }
 
-// One volume's content, moved to the volume's pose.
+// One volume's content, moved to the volume's pose. A volume that stands in no place composes
+// nothing, so the scene draws nothing of it.
 #[composable]
 fn VolumeNode(content: VolumeContent) {
+    if !content.shown.get() {
+        content.node.set(None);
+        return;
+    }
     let pose = content.pose;
     let compose = content.compose;
     let node = Box(
@@ -87,6 +92,9 @@ fn scene_of(volumes: &Volumes, controllers: &ControllerStates) -> Scene3d {
         .contents()
         .read(|contents| {
             contents.iter().find_map(|content| {
+                if !content.shown.get() {
+                    return None;
+                }
                 let light = content.light.get()?;
                 let turn = scene_from_volume(&content.pose.get());
                 Some(Light {

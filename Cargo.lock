@@ -1931,6 +1931,7 @@ dependencies = [
  "base64",
  "basisu",
  "cranpose",
+ "cranpose-animation",
  "cranpose-app-shell",
  "cranpose-core",
  "cranpose-render-common",

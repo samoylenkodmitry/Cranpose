@@ -143,16 +143,18 @@ pub fn SpatialVolume(
 ) {
     let size = modifier.size_3d_or(DEFAULT_VOLUME_SIZE);
     match local_space().current() {
-        Some(space) => PlacedVolume(space, modifier, size, content),
+        Some(space) => PlacedVolume(space, modifier, (size, None), content),
         None => FlatVolume(size, content),
     }
 }
 
+// A volume that the space places, with a box of `size` dp, `under` a panel of content when one is
+// given: it then stands where that panel stands and takes no ray.
 #[composable]
-fn PlacedVolume(
+pub(crate) fn PlacedVolume(
     space: Space,
     modifier: SubspaceModifier,
-    size: [f32; 3],
+    (size, under): ([f32; 3], Option<u64>),
     content: impl FnMut(&SpatialVolumeScope) + 'static,
 ) {
     let panel = remember({
@@ -161,7 +163,7 @@ fn PlacedVolume(
     })
     .with(|panel| *panel);
     let origin = local_subspace_origin().current();
-    space.place_volume(panel, size, origin, origin.then(&modifier.pose()));
+    space.place_volume_under(panel, size, under, origin, origin.then(&modifier.pose()));
     let id = panel.id;
     space.set_move_policy(id, modifier.move_policy());
     space.set_point_source(id, modifier.attached_point_source());
@@ -187,6 +189,7 @@ fn PlacedVolume(
     space.publish_volume(VolumeContent {
         id,
         pose: panel.volume_pose,
+        shown: panel.volume_shown,
         light,
         compose: Rc::new(RefCell::new(Some(compose))),
         node,
