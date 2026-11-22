@@ -149,9 +149,13 @@ impl Pointer {
         }
     }
 
-    // The handle that the pointer presses, or else the one that a pull would grab.
+    // The handle that the pointer presses, or else the one that a pull would grab. A press on a
+    // panel shows no handle: it cannot become a carry.
     pub(crate) fn handle(&self) -> Option<HandleFocus> {
         self.held.map(|held| held.handle()).or_else(|| {
+            if self.press.is_some() {
+                return None;
+            }
             let handle = self.reach.grab()?;
             Some(HandleFocus {
                 panel: handle.slot.id,

@@ -28,8 +28,9 @@ fn a_pull_that_turns_the_ray_onto_the_handle_presses_the_button_it_pointed_at() 
     let (events, _) = frames.update([None, aim_at([0.0; 3], handle, 1.0)], &[MOVABLE]);
     assert!(events.contains(&PRESS), "{events:?}");
     assert_eq!(
-        frames.pointer.handles()[1].map(|focus| focus.pressed),
-        Some(false)
+        frames.pointer.handles()[1],
+        None,
+        "the press shows no handle"
     );
     for _ in 0..30 {
         frames.update([None, aim_at([0.0; 3], handle, 1.0)], &[MOVABLE]);
