@@ -15,7 +15,7 @@ use cranpose_services::AudioError;
 
 use super::{
     library::{Library, monotonic_nanos},
-    stream::{Callback, Direction, Leaked, Stream, data_callback},
+    stream::{Callback, Direction, Leaked, Running, Stream, data_callback},
 };
 use crate::backend::{
     atomic_duration::AtomicDuration,
@@ -33,7 +33,7 @@ const UNKNOWN: i64 = i64::MIN;
 // What the owner thread and the callback tell each other about the stream's timing.
 pub(super) struct Timing {
     // The capture time on `CLOCK_MONOTONIC` of the stream's frame 0, from the stream's last
-    // timestamp. The callback adds the frames it handed over.
+    // timestamp. The callback finds the time of its buffer from the stream's count of frames read.
     frame_zero_nanos: AtomicI64,
     // How old the first frame of the last record call was.
     pub(super) age: AtomicDuration,
@@ -62,8 +62,6 @@ struct DataContext {
     library: &'static Library,
     recorder: Box<dyn Recorder>,
     timing: Arc<Timing>,
-    // The frames handed to the recorder: the stream's number of the next frame
-    frames: i64,
 }
 
 // An open 32-bit float input stream that runs a recorder. Dropping it closes the stream, then
@@ -94,7 +92,6 @@ impl InputStream {
             library,
             recorder,
             timing,
-            frames: 0,
         });
         let preset = match preset {
             InputPreset::VoiceRecognition => INPUT_PRESET_VOICE_RECOGNITION,
@@ -139,9 +136,16 @@ impl Callback for DataContext {
         self.library
     }
 
-    fn run(&mut self, audio: &mut [f32], sample_rate: i32, channels: usize) -> bool {
-        let first = self.frames;
-        self.frames += (audio.len() / channels) as i64;
+    fn run(
+        &mut self,
+        stream: &Running,
+        audio: &mut [f32],
+        sample_rate: i32,
+        channels: usize,
+    ) -> bool {
+        // The stream's number of this buffer's first frame. A count of its own from 0 was off by
+        // the frames before the first callback: 50 to 150 ms on a Quest 3.
+        let first = (stream.frames_read() - (audio.len() / channels) as i64).max(0);
         let age = self
             .timing
             .frame_zero()

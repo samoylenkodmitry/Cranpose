@@ -13,7 +13,7 @@ use cranpose_services::AudioError;
 
 use super::{
     library::{Library, monotonic_nanos},
-    stream::{Callback, Direction, Leaked, Stream, data_callback},
+    stream::{Callback, Direction, Leaked, Running, Stream, data_callback},
 };
 use crate::{
     backend::{NOMINAL_CHANNELS, Renderer},
@@ -85,7 +85,13 @@ impl Callback for DataContext {
         self.library
     }
 
-    fn run(&mut self, audio: &mut [f32], sample_rate: i32, channels: usize) -> bool {
+    fn run(
+        &mut self,
+        _stream: &Running,
+        audio: &mut [f32],
+        sample_rate: i32,
+        channels: usize,
+    ) -> bool {
         self.renderer
             .set_device_format(sample_rate as f32, channels);
         match self.renderer.render(audio) {

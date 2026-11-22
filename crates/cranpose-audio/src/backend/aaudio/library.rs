@@ -92,6 +92,7 @@ pub(super) struct StreamFunctions {
     pub(super) frames_per_burst: StreamFunction,
     pub(super) xrun_count: StreamFunction,
     pub(super) frames_written: FramesFunction,
+    pub(super) frames_read: FramesFunction,
     pub(super) timestamp: TimestampFunction,
 }
 
@@ -181,6 +182,7 @@ impl StreamFunctions {
                 frames_per_burst: function(handle, c"AAudioStream_getFramesPerBurst")?,
                 xrun_count: function(handle, c"AAudioStream_getXRunCount")?,
                 frames_written: function(handle, c"AAudioStream_getFramesWritten")?,
+                frames_read: function(handle, c"AAudioStream_getFramesRead")?,
                 timestamp: function(handle, c"AAudioStream_getTimestamp")?,
             })
         }

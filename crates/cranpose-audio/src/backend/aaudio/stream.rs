@@ -78,7 +78,30 @@ pub(super) trait Callback {
 
     // Runs for one buffer of interleaved samples, `channels` to a frame, at `sample_rate`. Returns
     // whether the stream goes on: [`CALLBACK_STOP`] ends it.
-    fn run(&mut self, audio: &mut [f32], sample_rate: i32, channels: usize) -> bool;
+    fn run(
+        &mut self,
+        stream: &Running,
+        audio: &mut [f32],
+        sample_rate: i32,
+        channels: usize,
+    ) -> bool;
+}
+
+// The stream that a data callback runs for, during the call.
+pub(super) struct Running {
+    library: &'static Library,
+    raw: *mut RawStream,
+}
+
+impl Running {
+    // The frames that the app has read from an input stream, the buffer of this callback
+    // included: AAudio reads the buffer before it calls the callback. The count starts where
+    // AAudio's buffer started, which lies before the first callback: a stream of a shared
+    // endpoint starts at the endpoint's position.
+    pub(super) fn frames_read(&self) -> i64 {
+        // SAFETY: AAudio passed this open stream to the callback that holds this value.
+        unsafe { (self.library.stream.frames_read)(self.raw) }
+    }
 }
 
 // The data callback of a stream whose context is a `T`.
@@ -108,7 +131,11 @@ pub(super) unsafe extern "C" fn data_callback<T: Callback>(
     // SAFETY: AAudio guarantees `audio_data` points at `frames * channelCount` samples for this
     // call only, and `Stream::open` refuses a stream whose samples are not 32-bit float.
     let audio = unsafe { std::slice::from_raw_parts_mut(audio_data.cast::<f32>(), samples) };
-    if context.run(audio, sample_rate, channels) {
+    let running = Running {
+        library,
+        raw: stream,
+    };
+    if context.run(&running, audio, sample_rate, channels) {
         CALLBACK_CONTINUE
     } else {
         CALLBACK_STOP
