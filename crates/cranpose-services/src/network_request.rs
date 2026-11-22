@@ -36,10 +36,7 @@
 use std::{
     fmt,
     net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6},
-    sync::{
-        Arc, Mutex, MutexGuard, PoisonError,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex, MutexGuard, PoisonError, atomic::Ordering},
 };
 #[cfg(any(unix, windows))]
 use std::{
@@ -48,6 +45,7 @@ use std::{
     time::Duration,
 };
 
+use portable_atomic::AtomicU64;
 #[cfg(any(unix, windows))]
 use socket2::{Domain, Protocol, Socket, Type};
 

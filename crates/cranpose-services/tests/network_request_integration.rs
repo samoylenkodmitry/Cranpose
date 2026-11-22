@@ -165,40 +165,16 @@ fn sockets_are_bound_to_the_network_before_they_connect() {
     );
 }
 
-// The loopback interface of macOS has a link-local address, so a query to
-// the group of all nodes on it finds a service the way it does on a USB link.
-#[cfg(target_os = "macos")]
+// A query to every node on a link goes to `ff02::1` with the link's interface as the scope: a
+// datagram without the scope would leave on the default network's interface.
 #[test]
-fn a_query_to_all_nodes_finds_a_service_by_its_link_local_address() {
-    let _turn = one_requester_at_a_time();
-    let _fake = Fake::installed();
-    let loopback = 1;
-    let service = std::net::UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0)).expect("a service");
-    service
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .expect("a timeout");
-    let port = service.local_addr().expect("its address").port();
-    let network = usb_network(loopback);
-    let client = network
-        .bind_udp(SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)))
-        .expect("a client");
-    client
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .expect("a timeout");
-
-    client
-        .send_to(b"who", network.all_nodes(port))
-        .expect("a query");
-    let mut buf = [0u8; 8];
-    let (n, asker) = service.recv_from(&mut buf).expect("the query");
-    assert_eq!(&buf[..n], b"who");
-    service.send_to(b"me", asker).expect("an answer");
-    let (n, from) = client.recv_from(&mut buf).expect("the answer");
-    assert_eq!(&buf[..n], b"me");
-    let SocketAddr::V6(from) = from else {
-        panic!("an IPv6 answer")
+fn the_group_of_all_nodes_names_the_networks_interface() {
+    let network = usb_network(17);
+    let SocketAddr::V6(group) = network.all_nodes(9950) else {
+        panic!("an IPv6 group")
     };
-    assert!(from.ip().is_unicast_link_local(), "{from}");
-    assert_eq!(from.scope_id(), loopback);
-    clear_platform_network_requester();
+    assert_eq!(*group.ip(), Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1));
+    assert!(group.ip().is_multicast());
+    assert_eq!(group.scope_id(), 17);
+    assert_eq!(group.port(), 9950);
 }
