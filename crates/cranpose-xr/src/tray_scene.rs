@@ -365,14 +365,20 @@ fn Body(
 // A slab of `size` dp, made again only when its size changes by half a dp or more.
 #[composable]
 fn rememberSlab(size: [f32; 3], corner: f32, edge: f32) -> Arc<Mesh> {
-    let made = remember(|| Rc::new(RefCell::new(None::<([i32; 3], Arc<Mesh>)>))).with(Rc::clone);
-    let key = size.map(|side| (side * 2.0).round() as i32);
+    let made = remember(|| Rc::new(RefCell::new(None::<([f32; 3], Arc<Mesh>)>))).with(Rc::clone);
     let mut made = made.borrow_mut();
     match made.as_ref() {
-        Some((known, mesh)) if *known == key => Arc::clone(mesh),
+        Some((known, mesh))
+            if known
+                .iter()
+                .zip(size)
+                .all(|(known, side)| (known - side).abs() < 0.5) =>
+        {
+            Arc::clone(mesh)
+        }
         _ => {
             let mesh = Arc::new(slab(size, corner, edge));
-            *made = Some((key, Arc::clone(&mesh)));
+            *made = Some((size, Arc::clone(&mesh)));
             mesh
         }
     }

@@ -57,7 +57,8 @@ pub(crate) fn slab(size: [f32; 3], corner: f32, edge: f32) -> Mesh {
     normals.push([0.0, 0.0, 1.0]);
     let uvs = positions.iter().map(|&[x, y, _]| uv(x, y)).collect();
     let mut indices = Vec::with_capacity(points * 6 * (rings + 1));
-    let at = |ring: usize, point: usize| (ring * points + point % points) as u32;
+    let index = |at: usize| u32::try_from(at).expect("a slab has few points");
+    let at = |ring: usize, point: usize| index(ring * points + point % points);
     // The front edge's rings and the side, then the fans of the front and the back face
     for ring in 0..=EDGE_STEPS {
         for point in 0..points {
@@ -68,9 +69,9 @@ pub(crate) fn slab(size: [f32; 3], corner: f32, edge: f32) -> Mesh {
     }
     let back_ring = EDGE_STEPS + 2;
     for point in 0..points {
-        indices.extend_from_slice(&[front_center as u32, at(0, point + 1), at(0, point)]);
+        indices.extend_from_slice(&[index(front_center), at(0, point + 1), at(0, point)]);
         indices.extend_from_slice(&[
-            back_center as u32,
+            index(back_center),
             at(back_ring, point),
             at(back_ring, point + 1),
         ]);

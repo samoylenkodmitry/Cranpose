@@ -47,6 +47,7 @@ pub(crate) struct Part {
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 // The states of a part that the control keeps up to date.
+#[derive(Clone, Copy)]
 pub(crate) struct PartStates {
     pub(crate) pressed: State<bool>,
     pub(crate) hovered: State<bool>,

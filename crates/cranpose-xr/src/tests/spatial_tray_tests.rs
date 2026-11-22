@@ -116,11 +116,14 @@ fn bench(kind: Kind) -> Bench {
         frame: 0,
         controls: kept.take().expect("the content composed"),
     };
-    // The tray shows in 180 ms
+    // The tray shows in 180 ms from the first frame, which also builds the scene's pipelines and
+    // may take longer than the show. The last frame comes after the show's end.
+    bench.redraw();
     let shown = Instant::now() + Duration::from_millis(250);
     while Instant::now() < shown {
         bench.redraw();
     }
+    bench.redraw();
     bench
 }
 
@@ -290,10 +293,11 @@ fn a_ray_that_drags_the_knob_sets_the_nearest_value_and_the_knob_follows() {
     for _ in 0..40 {
         bench.frame(knob_at(0.0), 1.0);
     }
-    let steps = (track * 0.7 / 3.0) as u32;
-    for step in 0..=steps {
+    let mut moved = 0.0;
+    while moved <= track * 0.7 {
         let at = knob_at(0.0);
-        bench.frame([at[0] + 3.0 * step as f32, at[1]], 1.0);
+        bench.frame([at[0] + moved, at[1]], 1.0);
+        moved += 3.0;
     }
     bench.frame(knob_at(0.7), 0.0);
     let value = bench.controls.value.get();
