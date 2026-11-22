@@ -243,15 +243,17 @@ pub use cranpose_capabilities as capabilities;
 mod composition_api {
     pub use cranpose_core::{
         BlockingError, BlockingExecutor, BlockingExecutorConfig, BlockingTask, BlockingWork,
-        CollectEvents, ComputedState, CoroutineScope, DisposableEffect, DisposableEffectResult,
-        DisposableEffectScope, EventStream, LaunchedEffect, LaunchedEffectScope, MovableContent,
-        MutableState, SnapshotStateList, SnapshotStateMap, State, TaskHandle, WorkerCall,
-        WorkerData, WorkerJob, collectAsState, computedStateOf, delay, derivedStateOf,
+        CollectEvents, CompositionLocal, CompositionLocalProvider, ComputedState, CoroutineScope,
+        DisposableEffect, DisposableEffectResult, DisposableEffectScope, EventStream,
+        LaunchedEffect, LaunchedEffectScope, MovableContent, MutableState, SnapshotStateList,
+        SnapshotStateMap, State, StaticCompositionLocal, TaskHandle, WorkerCall, WorkerData,
+        WorkerJob, collectAsState, compositionLocalOf, computedStateOf, delay, derivedStateOf,
         forget_movable, interval, key, launchBlocking, movable, movableContentOf, mutableStateList,
         mutableStateListOf, mutableStateMap, mutableStateMapOf, mutableStateOf,
         mutableStateOfNeverEqual, produceState, remember, rememberCoroutineScope,
         rememberEventStream, rememberKeyed, rememberMovableContentOf, rememberMutableStateOf,
-        rememberMutableStateOfNeverEqual, rememberUpdatedState, withBlocking,
+        rememberMutableStateOfNeverEqual, rememberUpdatedState, staticCompositionLocalOf,
+        withBlocking,
     };
 }
 #[cfg(feature = "image-loading")]
