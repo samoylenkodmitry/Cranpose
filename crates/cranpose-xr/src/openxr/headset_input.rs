@@ -99,6 +99,13 @@ impl HeadsetInput {
         )
     }
 
+    // Plays the pointer's press vibration on `hand`'s controller in the next frame.
+    pub(crate) fn tick(&self, hand: Hand) {
+        if let Some(vibration) = self.pointer_settings.press_vibration() {
+            self.haptics.vibrate(hand, vibration);
+        }
+    }
+
     // The time at which the frame sampled last reaches the display, on the monotonic clock.
     pub(crate) fn display_time(&self) -> Duration {
         self.frame.predicted_display_time

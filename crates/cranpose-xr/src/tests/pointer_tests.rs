@@ -22,7 +22,7 @@ use crate::{
     SubspaceModifier, TrackedPose, TrackingState, XrFrame,
     aim::{Aim, Buttons},
     atlas_input,
-    handle::HandleKind,
+    handle::{HandleFocus, HandleKind},
     pointer_aim::pointer_aim,
     scripted_hand::{PinchCycle, ScriptedHand, play},
     space::{
@@ -67,6 +67,15 @@ const BEHIND: PanelSlot = PanelSlot {
     ride: Ride::Free,
     tracked: None,
 };
+
+// The handle `kind` of panel `panel`, which a pointer points at with its trigger up.
+pub(super) fn hovered(panel: u64, kind: HandleKind) -> HandleFocus {
+    HandleFocus {
+        panel,
+        kind,
+        pressed: false,
+    }
+}
 
 // A controller at `x` meters that points straight ahead, turned right by `yaw` degrees.
 pub(super) fn aim(x: f32, yaw: f32, trigger: f32) -> Option<Aim> {
@@ -404,22 +413,40 @@ fn a_pull_on_a_handle_carries_the_panel() {
     let mut frames = Frames::default();
     let (events, _) = frames.update([None, at_handle(0.0, 0.0)], &[movable]);
     assert!(events.is_empty());
-    assert_eq!(frames.pointer.handles()[1], Some((1, HandleKind::Move)));
-    frames.update([None, at_handle(0.0, 1.0)], &[movable]);
     assert_eq!(
-        frames.pointer.moves(),
-        [PanelMove {
-            panel: 1,
-            event_type: SpatialMoveEventType::Start,
-            pose: movable.pose,
-        }]
+        frames.pointer.handles()[1],
+        Some(hovered(1, HandleKind::Move))
+    );
+    frames.update([None, at_handle(0.0, 1.0)], &[movable]);
+    assert!(frames.pointer.moves().is_empty(), "a pull moves nothing");
+    assert_eq!(frames.pointer.ticks(), [false, true], "the pull ticks");
+    assert_eq!(
+        frames.pointer.handles()[1],
+        Some(HandleFocus {
+            pressed: true,
+            ..hovered(1, HandleKind::Move)
+        })
+    );
+    // A move within the slop moves nothing either
+    frames.update([None, at_handle(0.02, 1.0)], &[movable]);
+    assert!(
+        frames.pointer.moves().is_empty(),
+        "the slop holds the panel"
     );
     let (events, cursor) = frames.update([None, at_handle(0.1, 1.0)], &[movable]);
     assert!(events.is_empty());
     assert_eq!(cursor, None);
-    let [moving] = *frames.pointer.moves() else {
-        panic!("the panel moves once: {:?}", frames.pointer.moves());
+    let [start, moving] = *frames.pointer.moves() else {
+        panic!("the panel starts and moves: {:?}", frames.pointer.moves());
     };
+    assert_eq!(
+        start,
+        PanelMove {
+            panel: 1,
+            event_type: SpatialMoveEventType::Start,
+            pose: movable.pose,
+        }
+    );
     assert_eq!(moving.panel, 1);
     assert_eq!(moving.event_type, SpatialMoveEventType::Moving);
     assert!((moving.pose.position[0] - 0.1).abs() < 1e-4);
@@ -448,18 +475,22 @@ pub(super) const MOVABLE: PanelSlot = PanelSlot {
 fn a_pull_on_a_handle_from_behind_the_panel_carries_it() {
     let center = crate::carry::handle_center(&MOVABLE);
     // The controller stands two meters behind the panel and points back at the handle.
-    let behind = |trigger: f32| aim_at([0.1, 0.3, -3.0], center, trigger);
+    let behind = |x: f32, trigger: f32| aim_at([x, 0.3, -3.0], center, trigger);
     let mut frames = Frames::default();
-    frames.update([None, behind(0.0)], &[MOVABLE]);
-    assert_eq!(frames.pointer.handles()[1], Some((1, HandleKind::Move)));
-    frames.update([None, behind(1.0)], &[MOVABLE]);
+    frames.update([None, behind(0.1, 0.0)], &[MOVABLE]);
     assert_eq!(
-        frames.pointer.moves(),
-        [PanelMove {
+        frames.pointer.handles()[1],
+        Some(hovered(1, HandleKind::Move))
+    );
+    frames.update([None, behind(0.1, 1.0)], &[MOVABLE]);
+    frames.update([None, behind(0.2, 1.0)], &[MOVABLE]);
+    assert_eq!(
+        frames.pointer.moves().first(),
+        Some(&PanelMove {
             panel: 1,
             event_type: SpatialMoveEventType::Start,
             pose: MOVABLE.pose,
-        }]
+        })
     );
 }
 
@@ -527,22 +558,32 @@ fn a_pull_on_the_corner_handle_resizes_the_panel_and_reports_each_size() {
     let mut frames = Frames::default();
     let (events, _) = frames.update([None, corner_aim(&panel, [0.0; 2], 0.0)], &[panel]);
     assert!(events.is_empty());
-    assert_eq!(frames.pointer.handles()[1], Some((1, HandleKind::Resize)));
+    assert_eq!(
+        frames.pointer.handles()[1],
+        Some(hovered(1, HandleKind::Resize))
+    );
 
     let (events, _) = frames.update([None, corner_aim(&panel, [0.0; 2], 1.0)], &[panel]);
     assert!(events.is_empty(), "the handle takes the pull");
+    assert!(
+        frames.pointer.resizes().is_empty(),
+        "a pull resizes nothing"
+    );
+    assert!(frames.pointer.moves().is_empty());
+    // A shake within the slop resizes nothing either
+    let shaking = hold(&mut frames, panel, corner_aim(&panel, [0.005, -0.005], 1.0));
+    assert!(shaking.is_empty(), "{shaking:?}");
+
+    // The corner moves 10 cm to the right and 5 cm down: each side moves, and the center stays
+    let mut steps = hold(&mut frames, panel, corner_aim(&panel, [0.1, -0.05], 1.0));
     assert_eq!(
-        frames.pointer.resizes(),
-        [PanelResize {
+        steps.remove(0),
+        PanelResize {
             panel: 1,
             event_type: SpatialResizeEventType::Start,
             size: [800.0, 500.0],
-        }]
+        }
     );
-    assert!(frames.pointer.moves().is_empty());
-
-    // The corner moves 10 cm to the right and 5 cm down: each side moves, and the center stays
-    let steps = hold(&mut frames, panel, corner_aim(&panel, [0.1, -0.05], 1.0));
     assert!(steps.len() > 1, "the sizes follow the ray");
     assert_eq!(steps.last(), Some(&resizing([1000.0, 600.0])));
     assert!(
@@ -695,17 +736,25 @@ fn a_panel_that_moves_and_resizes_has_a_handle_for_each() {
     };
     let mut frames = Frames::default();
     frames.update([None, handle_aim(&both, 0.0, 0.0)], &[both]);
-    assert_eq!(frames.pointer.handles()[1], Some((1, HandleKind::Move)));
+    assert_eq!(
+        frames.pointer.handles()[1],
+        Some(hovered(1, HandleKind::Move))
+    );
     frames.update([None, handle_aim(&both, 0.0, 1.0)], &[both]);
-    assert_eq!(frames.pointer.moves().len(), 1);
+    frames.update([None, handle_aim(&both, 0.1, 1.0)], &[both]);
+    assert_eq!(frames.pointer.moves().len(), 2);
     assert!(frames.pointer.resizes().is_empty());
 
     // The ray's filter lags a jump from one handle to the other, so the other grab starts anew
     let mut frames = Frames::default();
     frames.update([None, corner_aim(&both, [0.0; 2], 0.0)], &[both]);
-    assert_eq!(frames.pointer.handles()[1], Some((1, HandleKind::Resize)));
+    assert_eq!(
+        frames.pointer.handles()[1],
+        Some(hovered(1, HandleKind::Resize))
+    );
     frames.update([None, corner_aim(&both, [0.0; 2], 1.0)], &[both]);
-    assert_eq!(frames.pointer.resizes().len(), 1);
+    let steps = hold(&mut frames, both, corner_aim(&both, [0.1, 0.0], 1.0));
+    assert_eq!(steps[0].event_type, SpatialResizeEventType::Start);
     assert!(frames.pointer.moves().is_empty());
 }
 
@@ -1288,19 +1337,20 @@ fn a_resizable_volume_reports_the_size_of_its_front_face() {
     };
     frame([0.0, 0.0], 0.0);
     frame([0.0, 0.0], 1.0);
-    frame([0.05, -0.05], 1.0);
+    // The ray's filter turns the ray over a few frames
+    for _ in 0..30 {
+        frame([0.05, -0.05], 1.0);
+    }
     frame([0.05, -0.05], 0.0);
     let sizes = sizes.borrow();
-    assert_eq!(
-        sizes
+    let kinds: Vec<_> = sizes.iter().map(|event| event.event_type).collect();
+    assert_eq!(kinds.first(), Some(&SpatialResizeEventType::Start));
+    assert_eq!(kinds.last(), Some(&SpatialResizeEventType::End));
+    assert!(
+        kinds[1..kinds.len() - 1]
             .iter()
-            .map(|event| event.event_type)
-            .collect::<Vec<_>>(),
-        [
-            SpatialResizeEventType::Start,
-            SpatialResizeEventType::Resizing,
-            SpatialResizeEventType::End
-        ]
+            .all(|kind| *kind == SpatialResizeEventType::Resizing),
+        "{kinds:?}"
     );
     assert_eq!(sizes[0].size, [960.0, 540.0]);
     assert!(sizes[1].size[0] > 960.0 && sizes[1].size[1] > 540.0);
@@ -1575,7 +1625,7 @@ fn an_app_that_did_not_ask_for_hand_tracking_gets_no_pointer_from_a_pinch() {
 }
 
 // A panel of 500 by 400 dp a meter ahead, as large as the headless window that shows its content.
-const BUTTON_PANEL: PanelSlot = PanelSlot {
+pub(super) const BUTTON_PANEL: PanelSlot = PanelSlot {
     id: 1,
     kind: PanelKind::Content,
     atlas: [0.0, 0.0, 500.0, 400.0],
@@ -1591,7 +1641,7 @@ const BUTTON_PANEL: PanelSlot = PanelSlot {
 
 // Where the center of the button below lies in the room: 100 dp from the panel's left edge and 50
 // dp from its top.
-const BUTTON_AT: [f32; 3] = [-0.15, 0.15, -1.0];
+pub(super) const BUTTON_AT: [f32; 3] = [-0.15, 0.15, -1.0];
 
 // A window with a button of 200 by 100 dp at its top left, and the count of its clicks.
 fn counting_button() -> (RobotTestRule<TestRenderer>, Rc<Cell<u32>>) {
@@ -1614,7 +1664,7 @@ fn counting_button() -> (RobotTestRule<TestRenderer>, Rc<Cell<u32>>) {
 
 // The clicks that the button counts while the pointer follows `aims` in frames 10 ms apart, with
 // the events sent to the window as the frame loop of the headset sends them.
-fn clicks_of(aims: impl IntoIterator<Item = Option<Aim>>) -> u32 {
+pub(super) fn clicks_of(aims: impl IntoIterator<Item = Option<Aim>>) -> u32 {
     let (mut robot, clicks) = counting_button();
     let mut pointer = Pointers::default();
     for (frame, aim) in (0_u64..).zip(aims) {

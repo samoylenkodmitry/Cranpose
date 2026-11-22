@@ -57,6 +57,9 @@ pub(crate) struct GltfModel {
     pub(crate) parts: ControllerParts,
     // The lowest and highest corner of the box around the meshes at rest, in glTF units
     pub(crate) bounds: ([f32; 3], [f32; 3]),
+    // Where a controller's ray starts, in the model's space at rest: the node that the runtime's
+    // controller models name `laser_begin`, when the model has one
+    pub(crate) ray_start: Option<[f32; 3]>,
 }
 
 // The map from a node's own space to its parent's.

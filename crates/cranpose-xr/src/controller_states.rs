@@ -9,7 +9,9 @@
 use cranpose::{MutableState, mutableStateOf, space::Mat4};
 
 use crate::{
-    Controller, ControllerModel, ControllerModels, Hand, Pose, controller_grips,
+    Controller, ControllerModel, ControllerModels, Hand, Pose,
+    aim::Aim,
+    controller_grips,
     controller_look::{Load, Look, Offer, look},
     controller_models::Settings,
     controller_placement::scene_from_grip,
@@ -169,6 +171,75 @@ impl ControllerStates {
     #[cfg(feature = "gltf")]
     pub(crate) fn set_load(&self, hand: Hand, state: Option<crate::SpatialGltfModelState>) {
         self.loads.update(|loads| loads[hand.index()] = state);
+    }
+
+    // Where the ray of `hand`'s controller starts when the controller's grip stands at `grip`: the
+    // place of the loaded model's `laser_begin`, or `None` while the hand has loaded no model with
+    // that node. The model stays loaded for a while after it hides, so the ray's start does not
+    // jump when the model shows or hides.
+    #[cfg(feature = "gltf")]
+    #[cfg_attr(
+        not(headset),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    pub(crate) fn ray_start(&self, hand: Hand, grip: &Pose) -> Option<[f32; 3]> {
+        let loaded = self.loads.read(|loads| {
+            loads[hand.index()]
+                .as_ref()
+                .and_then(crate::SpatialGltfModelState::loaded_now)
+        })?;
+        let start = loaded.model.ray_start?;
+        Some(grip.then(&Pose::at(start)).position)
+    }
+
+    #[cfg(not(feature = "gltf"))]
+    #[cfg_attr(
+        not(headset),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    pub(crate) fn ray_start(&self, _hand: Hand, _grip: &Pose) -> Option<[f32; 3]> {
+        None
+    }
+
+    // The pointers' aims with each controller's ray starting at the tip of its model, where the
+    // drawn controller shows the ray leave it. `controllers` are the frame's, left then right.
+    #[cfg_attr(
+        not(headset),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    pub(crate) fn start_rays(
+        &self,
+        aims: [Option<Aim>; 2],
+        controllers: [&Controller; 2],
+    ) -> [Option<Aim>; 2] {
+        Hand::BOTH.map(|hand| {
+            let aim = aims[hand.index()]?;
+            let grip = controllers[hand.index()].grip?;
+            Some(match self.ray_start(hand, &grip.pose) {
+                Some(start) => aim.starting_near(start),
+                None => aim,
+            })
+        })
+    }
+
+    // Where the scene draws `hand`'s model's ray start now, in the room in meters, or `None` while
+    // the hand shows no loaded model with that node. A test compares it with the start of the ray
+    // that the frame drew.
+    #[cfg(all(feature = "gltf", feature = "scripted-hand"))]
+    pub(crate) fn drawn_ray_start(&self, hand: Hand) -> Option<[f32; 3]> {
+        if !self.shown.get_non_reactive()[hand.index()] {
+            return None;
+        }
+        let loaded = self.loaded(hand)?;
+        let start = loaded.model.ray_start?;
+        let scene = self.maps[hand.index()]
+            .get_non_reactive()
+            .transform_point(cranpose::space::Vec3::from_array(start));
+        let room = crate::eye_camera::scene_direction(scene.to_array());
+        Some(
+            room.to_array()
+                .map(|mm| mm / crate::eye_camera::UNITS_PER_METER),
+        )
     }
 
     // The glTF model that `hand` has loaded, once it has.

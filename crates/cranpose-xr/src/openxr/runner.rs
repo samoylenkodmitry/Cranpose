@@ -337,12 +337,29 @@ impl Immersive {
             self.picks
                 .refresh((&mut self.guest, root), &self.space, &self.panels, pointed);
         }
+        let aims = self
+            .space
+            .volumes()
+            .controllers()
+            .start_rays(aims, Hand::BOTH.map(|hand| self.headset.controller(hand)));
+        #[cfg(all(feature = "scripted-hand", feature = "gltf"))]
+        super::ray_start_log::log(
+            self.headset.now(),
+            aims,
+            self.space.volumes().controllers(),
+            Hand::BOTH.map(|hand| self.headset.controller(hand).aim),
+        );
         self.pointers.update(
             aims,
             time,
             (&self.panels, &self.picks),
             self.headset.pointer_choice(),
         );
+        for (hand, tick) in Hand::BOTH.into_iter().zip(self.pointers.ticks()) {
+            if tick {
+                self.headset.tick(hand);
+            }
+        }
         atlas_input::deliver(self.guest.shell(), self.pointers.atlas());
         match &self.system_keyboard {
             Some(system) => system.pump(&mut self.guest),
@@ -441,7 +458,7 @@ impl Immersive {
         let pressed = self.pointers.pressed_surfaces();
         let pointed = |id: u64| {
             cursors.iter().flatten().any(|cursor| cursor.panel == id)
-                || active.iter().flatten().any(|(panel, _)| *panel == id)
+                || active.iter().flatten().any(|focus| focus.panel == id)
                 || pressed.contains(&Some(id))
         };
         self.plan.budget.clear();

@@ -360,6 +360,7 @@ CONTROLLER_PARTS = [
     } | {30: turn((1, 0, 0), 3)}),
 ]
 CONTROLLER_KEYS = 42
+LASER_BEGIN = (0.0001, -0.0122, -0.0415)
 
 
 def controller(name, blended):
@@ -426,11 +427,13 @@ def controller(name, blended):
         scene=0,
         scenes=[{"nodes": [0]}],
         nodes=[
-            {"name": "root", "children": [1, 8]},
+            {"name": "root", "children": [1, 8, 9]},
             {"name": "body", "children": [2, 3, 4, 5, 6, 7]},
         ]
         + [{"name": part, "translation": list(at)} for part, at, _, _ in CONTROLLER_PARTS]
-        + [{"name": "controller_mesh", "mesh": 0, "skin": 0}],
+        + [{"name": "controller_mesh", "mesh": 0, "skin": 0}]
+        # Where the ray starts, as a Touch Plus model of a Meta Quest 3 has it
+        + [{"name": "laser_begin", "translation": list(LASER_BEGIN)}],
         meshes=[{"primitives": [primitive]}],
         materials=[{"pbrMetallicRoughness": {"baseColorFactor": [0.8, 0.8, 0.8, 1.0]}}],
         skins=[
