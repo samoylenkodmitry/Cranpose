@@ -68,6 +68,48 @@ impl Pose {
     }
 }
 
+// The pose `share` of the way from `from` to `to`: the place on the straight line between them and
+// the turn on the shorter arc between them. A share of 0 gives `from` and a share of 1 gives `to`.
+pub(crate) fn toward(from: &Pose, to: &Pose, share: f32) -> Pose {
+    let position = [0, 1, 2]
+        .map(|axis| from.position[axis] + (to.position[axis] - from.position[axis]) * share);
+    // A quaternion and its negation are the same turn. The blend takes the one nearer to `from`, so
+    // it runs along the shorter arc.
+    let dot: f32 = from
+        .orientation
+        .iter()
+        .zip(to.orientation)
+        .map(|(a, b)| a * b)
+        .sum();
+    let sign = if dot < 0.0 { -1.0 } else { 1.0 };
+    let blend = [0, 1, 2, 3]
+        .map(|i| from.orientation[i] + (sign * to.orientation[i] - from.orientation[i]) * share);
+    let length = blend.iter().map(|v| v * v).sum::<f32>().sqrt();
+    let orientation = if length > f32::EPSILON {
+        blend.map(|v| v / length)
+    } else {
+        to.orientation
+    };
+    Pose {
+        position,
+        orientation,
+    }
+}
+
+// The pitch, the yaw and the roll of `pose` in degrees, in the room's axes: the pitch of the forward
+// axis above the level, its heading about the vertical axis and the roll of the up axis about the
+// forward axis. The heading of a pose that points nearly straight up or down is 0.
+pub(crate) fn pitch_yaw_roll_degrees(pose: &Pose) -> [f32; 3] {
+    let ahead = pose.rotate([0.0, 0.0, -1.0]);
+    let right = pose.rotate([1.0, 0.0, 0.0]);
+    let up = pose.rotate([0.0, 1.0, 0.0]);
+    [
+        ahead[1].clamp(-1.0, 1.0).asin().to_degrees(),
+        heading_degrees(pose).unwrap_or(0.0),
+        right[1].atan2(up[1]).to_degrees(),
+    ]
+}
+
 // The turn by `pitch` about x, then `yaw` about y, then `roll` about z, as seen from the turned
 // frame, all in degrees: a head that turns left by yaw, then nods by pitch.
 pub(crate) fn turn_degrees(pitch: f32, yaw: f32, roll: f32) -> [f32; 4] {

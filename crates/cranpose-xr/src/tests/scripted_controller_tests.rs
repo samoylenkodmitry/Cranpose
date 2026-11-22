@@ -198,3 +198,27 @@ fn two_scripted_controllers_press_scroll_and_carry_through_the_pointer() {
         "the panel moved to the right by {end}: {moves:?}"
     );
 }
+
+#[test]
+fn an_untracked_step_gives_a_controller_with_no_pose_and_the_next_step_starts_where_it_was() {
+    let script = ScriptedController::new(Hand::Left, [0.1, 0.0, 0.0], [0.1, 0.0, -1.0])
+        .holding(millis(100), PULLED)
+        .untracked(millis(100))
+        .holding(millis(100), ScriptedButtons::default());
+    frame_at(&[&script], 0);
+    let at = |time| frame_at(&[&script], time).left_controller;
+    assert!(at(50).aim.is_some() && at(50).trigger.pressed);
+    let lost = at(150);
+    assert_eq!(lost, Controller::default());
+    assert!(lost.profile.is_none() && lost.grip.is_none());
+    let back = at(250).aim.expect("an aim").pose.position;
+    assert_eq!(back, [0.1, 0.0, 0.0]);
+    // A script that ends with such a step keeps the controller missing
+    let missing =
+        ScriptedController::new(Hand::Right, [0.0; 3], [0.0, 0.0, -1.0]).untracked(millis(1));
+    frame_at(&[&missing], 0);
+    assert_eq!(
+        frame_at(&[&missing], 10_000).right_controller,
+        Controller::default()
+    );
+}

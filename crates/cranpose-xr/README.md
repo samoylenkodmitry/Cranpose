@@ -102,7 +102,16 @@ composable has its own name.
 Each mode takes a `TrackedDimensions`, as in Jetpack XR. `TrackedDimensions::All` tracks all six
 dimensions, so the panels turn with the target about every axis. `TrackedDimensions::TranslationAndYaw`
 tracks the target's place and its turn about the vertical axis, so the panels stand upright. Jetpack
-XR's other sets of flags and `FollowMode.soft` are not available.
+XR's other sets of flags are not available.
+
+`FollowMode::soft(dimensions)` is Jetpack XR's `FollowMode.soft`. The panels hold still while the
+target moves a little, and glide after it once it stayed past a threshold for the start delay: 0.2 m,
+16 degrees of pitch, 24 degrees of yaw or 20 degrees of roll for 200 ms. They then cover half of their
+way to the target in each half life of 175 ms, and rest again when they reach it.
+`FollowMode::Soft(SoftFollowMode { .. })` sets other values. A menu in front of the user thus holds
+still for the small moves of the head that come with pointing at it, and comes back into view after a
+turn. An upright soft follow of the view (`TrackedDimensions::TranslationAndYaw`) never moves for a
+look down, so the user can look at a panel low in the view.
 
 `FollowTarget::Controller(hand, mode)` follows the controller in a hand. Jetpack XR has no such
 target. The origin is where the controller's grip pose is, turned as its aim pose is turned. The
@@ -820,8 +829,10 @@ A build with the `scripted-hand` feature can also play controllers in place of t
 check where no controller exists, such as an emulator. `script_controller(script)` installs a
 `ScriptedController` for one hand, and a script for each hand plays at once. A script lists steps
 with `moving_to(duration, (position, at), ScriptedButtons)` and `holding(duration, buttons)`: in each
-step the controller and its aim move in a straight line, and the buttons stay as given.
-`ScriptedController::handle_of(panel, size)` gives the place of the handle that carries a movable
+step the controller and its aim move in a straight line, and the buttons stay as given. A step of
+`untracked(duration)` plays a controller that the runtime does not track, as one with a flat battery,
+so a check can lose a controller and find it again. A script of one such step plays a missing
+controller. `ScriptedController::handle_of(panel, size)` gives the place of the handle that carries a movable
 panel. The frame holds the result as the `Controller` of that hand with the Touch Plus profile, so
 the pointer, the buttons and the haptics take it as they take a real controller.
 

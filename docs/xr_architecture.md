@@ -56,7 +56,10 @@ Cranpose developers too:
   its place and its yaw, so the panels stand upright. `FollowTarget::Controller(Hand, FollowMode)`
   follows a controller's grip pose, turned as its aim pose is. Jetpack XR has no controller target.
   `FollowTarget::Anchor(Anchor, FollowMode)` holds the panels to an anchor, as Jetpack XR's
-  `FollowTarget.anchor` does. Its `FollowMode.soft` is not there yet.
+  `FollowTarget.anchor` does. `FollowMode::soft(dimensions)` holds the panels still until the
+  target moves past `SoftFollowMode`'s start thresholds for its start delay, then glides after the
+  target with a half life, as Jetpack XR's `FollowMode.soft(dimensions, halfLifeMillis, startDelay,
+  startThresholds)` does.
 - `SpatialRow`, `SpatialColumn`, `SpatialBox`, `SpatialCurvedRow`, `SpatialSpacer`: layouts in
   meters.
 - `SpatialExternalSurface(stereo_mode, modifier) { scope }`: hands the app a surface that a
