@@ -1,0 +1,24 @@
+[package]
+name = "layout-parity-cranpose"
+version = "0.1.0"
+edition = "2024"
+description = "Cranpose side of the Jetpack Compose layout and behavioral parity benchmark"
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[dependencies]
+cranpose = { path = "../../../crates/cranpose", default-features = false, features = ["desktop", "renderer-wgpu"] }
+cranpose-app-shell = { path = "../../../crates/cranpose-app-shell" }
+cranpose-core = { path = "../../../crates/cranpose-core" }
+cranpose-foundation = { path = "../../../crates/cranpose-foundation" }
+cranpose-render-pixels = { path = "../../../crates/cranpose-render/pixels" }
+cranpose-ui = { path = "../../../crates/cranpose-ui" }
+cranpose-ui-graphics = { path = "../../../crates/cranpose-ui-graphics" }
+cranpose-ui-layout = { path = "../../../crates/cranpose-ui-layout" }
+png = "0.18"
+
+# Standalone workspace, like the other benchmark apps under benchmarks/.
+[workspace]
+
+[patch.crates-io]
+cranpose-wgpu = { path = "../../../forks/wgpu/wgpu" }

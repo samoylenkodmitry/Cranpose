@@ -1,0 +1,185 @@
+# Machine-readable divergence ledger for benchmarks/layout-parity.
+# Keep every entry synchronized with the Layout and behavioral parity section
+# of docs/compose_api_parity.md.
+#
+# compare.py --check-ledger enforces a two-way ratchet:
+#   1. Unlisted divergences, worsened deltas, non-finite bounds, missing nodes,
+#      and unlisted stress failures fail the run.
+#   2. Any unexpected entry that starts passing also fails the run so it gets
+#      removed from this ledger and from docs/compose_api_parity.md.
+
+[suite]
+width_dp = 1760
+height_dp = 980
+tol_dp = 0.5
+densities = ["1.0", "1.75"]
+
+[[layout.expected]]
+id = "text-line-height-and-glyph-metrics"
+densities = ["1.0", "1.75"]
+kind = "bounds_delta"
+max_dp = 2.0
+doc_ref = "docs/text.md"
+reason = "SkParagraph and Cranpose text layout round font ascent, descent, and ellipsis advance differently by 0.5 to 2.0 dp."
+tags = [
+  "ftr_left",
+  "ftr_right",
+  "hdr_meta",
+  "hdr_sub",
+  "hdr_title",
+  "z5_hmax_bar",
+  "z5_hmax_fill",
+  "z5_hmax_p1",
+  "z5_hmax_p2",
+  "z5_hmax_row",
+  "z5_imin_div",
+  "z5_imin_left",
+  "z5_imin_right",
+  "z5_imin_row",
+  "z5_wmax_bar",
+  "z5_wmax_col",
+  "z5_wmin_bar",
+  "z5_wmin_col",
+  "z5_wmin_txt",
+  "z6_base_big",
+  "z6_base_custom",
+  "z6_base_med",
+  "z6_base_row",
+  "z6_base_small",
+  "z6_base_wrap",
+  "z6_ta_center",
+  "z6_ta_end",
+  "z6_ta_start",
+  "z6_txt_annotated",
+  "z6_txt_ellipsis",
+  "z6_txt_ellipsis_box",
+  "z6_txt_minlines",
+  "z6_txt_minlines_box",
+  "z6_txt_nowrap",
+  "z6_txt_nowrap_box",
+]
+
+[[layout.unexpected]]
+id = "lazy-row-unbounded-height-returns-infinity"
+issue = "#2458"
+densities = ["1.0", "1.75"]
+kind = "non_finite"
+reason = "LazyRow without Modifier::height returns infinite height inside vertical scrollables, pushing following vertical-scroll siblings to y=Infinity."
+tags = [
+  "z17_lr_wrap_h",
+  "z18_lr_in_vscroll",
+  "z18_vs_tail0",
+  "z18_vs_tail1",
+  "z18_vs_tail2",
+]
+
+[[layout.unexpected]]
+id = "lazy-row-unbounded-height-evicts-following-lazy-items"
+issue = "#2458"
+densities = ["1.0", "1.75"]
+kind = "missing_in_cranpose"
+reason = "Infinite height on z17_lr_wrap_h pushes subsequent LazyColumn items past the viewport so Cranpose never composes them."
+tags = [
+  "z17_lr_perm_a",
+  "z17_lr_perm_b",
+  "z17_lr_rev_wrap",
+  "z17_pa0",
+  "z17_pa1",
+  "z17_pa2",
+  "z17_pa3",
+  "z17_pa4",
+  "z17_pa5",
+  "z17_pb0",
+  "z17_pb1",
+  "z17_pb2",
+  "z17_pb3",
+  "z17_pb4",
+  "z17_rv0",
+  "z17_rv1",
+  "z17_rv2",
+  "z17_rv3",
+  "z17_rv4",
+  "z17_rv5",
+]
+
+[[layout.unexpected]]
+id = "lazy-column-without-width-expands-cross-axis"
+issue = "#2458"
+densities = ["1.0", "1.75"]
+kind = "bounds_delta"
+max_dp = 12.1
+reason = "LazyColumn without an explicit width expands to max_width instead of wrapping content width inside a LazyRow, shifting following siblings by 12 dp."
+tags = [
+  "z19_lc_wrap_w",
+  "z19_vs_in_lr",
+  "z19_vslr0",
+  "z19_vslr1",
+  "z19_vslr2",
+  "z19_vslr3",
+  "z19_vslr4",
+]
+
+[[layout.unexpected]]
+id = "semantics-bounds-ignore-layer-and-offset-with"
+issue = "#2459"
+densities = ["1.0", "1.75"]
+kind = "bounds_delta"
+max_dp = 10.5
+reason = "Semantics bounds ignore ancestor graphicsLayer transforms (z11_gl_nest_c) and Modifier::offset_with translation (z11_off_lam)."
+tags = [
+  "z11_gl_nest_c",
+  "z11_off_lam",
+]
+
+[[layout.unexpected]]
+id = "fractional-density-rounding-drift"
+issue = "#2460"
+densities = ["1.75"]
+kind = "bounds_delta"
+max_dp = 1.2
+reason = "Layout rounding at 1.75x density drifts by 1 to 2 physical pixels (0.57 to 1.14 dp) from Compose pixel-snapped constraints and placements."
+tags = [
+  "z1_chain_inner",
+  "z1_frac_child",
+  "z1_sizein_min",
+  "z1_sizein_min_c",
+  "z1_wh_in",
+  "z1_wh_in_c",
+  "z2_a_tc",
+  "z7_bwc",
+  "z7_bwc_nested",
+  "z7_custom_layout",
+  "z7_diag_2",
+  "z7_diag_3",
+  "z7_mod_layout_inner",
+  "z7_mod_layout_outer",
+  "z8_sub_anchor",
+  "z8_sub_bot_r",
+  "z8_sub_rem",
+  "z8_sub_t4",
+  "z8_sub_t5",
+  "z8_sub_t6",
+  "z8_sub_under",
+  "z9_rtl_off_rel",
+  "z10_fc_5",
+  "z10_fc_6",
+  "z10_fr_4",
+  "z15_sg_2",
+  "z15_sg_3",
+  "z15_sg_7",
+  "z15_vg_0",
+  "z15_vg_3",
+  "z15_vg_5",
+  "z19_ag0",
+  "z19_ag1",
+  "z19_ag2",
+  "z19_ag3",
+  "z19_ag4",
+  "z19_ag5",
+]
+
+[[stress.unexpected]]
+framework = "cranpose"
+scenario = "scroll_state_owner_disposed_before_scroll_node_detaches"
+issue = "#2457"
+reason = "ScrollState::remove_invalidate_callback panics in ScrollNode::on_detach when the ScrollState owner is disposed before the scroll node detaches."

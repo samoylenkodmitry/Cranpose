@@ -22,6 +22,55 @@ Use the [application guide](guide.md) for current usage and the
 [release ledger](release_readiness.md) for 1.0 acceptance. The historical
 comparison below is not a claim of complete behavioral parity.
 
+## Layout and behavioral parity
+
+Nightly CI runs [benchmarks/layout-parity](../benchmarks/layout-parity/README.md)
+against Jetpack Compose Desktop (`1.12.2`) on a single-screen 20-zone layout
+atlas (`1760x980` dp, 462 tagged nodes) at `1.0x` and `1.75x` density. The suite
+also runs 20 Cranpose and 8 Compose behavioral stress scenarios covering scroll
+detachment, modifier permutations, lazy container nesting, RTL/LTR flipping, and
+viewport resizing.
+
+Run the full suite locally with `just layout-parity`. The comparator validates
+every measured node and stress scenario against
+[divergences.toml](../benchmarks/layout-parity/divergences.toml). Any unlisted
+divergence, worsened delta, non-finite bound, missing node, or new panic fails
+the job. Any tracked unexpected bug that starts passing also fails the job until
+the entry is removed from `divergences.toml` and from the table below.
+
+Baseline on `175b56734` (`0.5` dp tolerance):
+
+- `1.0x`: 397/442 common nodes pass (`89.8%`, all 397 exact within `0.01` dp),
+  5 non-finite bounds, 20 nodes absent from Cranpose, 31 expected text-metric
+  divergences, 34 unexpected divergences.
+- `1.75x`: 373/442 common nodes pass (`84.4%`, 303 exact), 5 non-finite bounds,
+  20 nodes absent from Cranpose, 18 expected text-metric divergences, 71
+  unexpected divergences.
+- Stress suite: Compose `8/8` pass. Cranpose `19/20` pass.
+
+### Expected divergences
+
+These differences come from deliberate renderer or text-engine choices. They are
+tracked as bounded allowances in `divergences.toml` rather than bugs.
+
+| Ledger rule | Densities | Scope | Bound | Reason |
+|---|---|---|---|---|
+| `text-line-height-and-glyph-metrics` | `1.0x`, `1.75x` | Chrome (`hdr_*`, `ftr_*`), Zone 5 intrinsics (`z5_*`), Zone 6 baselines and text boxes (`z6_*`) | `<= 2.0` dp | SkParagraph and Cranpose text layout round font ascent, descent, and ellipsis advance differently ([text.md](text.md)). |
+
+### Unexpected divergences to fix
+
+Every unexpected divergence in the layout atlas or behavioral stress suite has a
+linked GitHub issue and a ratchet entry in `divergences.toml`.
+
+| Ledger rule | Issue | Densities | Kind | Observed impact | Summary |
+|---|---|---|---|---|---|
+| `scroll_state_owner_disposed_before_scroll_node_detaches` (stress) | [#2457](https://github.com/samoylenkodmitry/Cranpose/issues/2457) | stress | panic | `19/20` pass | `ScrollState::remove_invalidate_callback` panics in `ScrollNode::on_detach` after the owner of the `ScrollState` is disposed. |
+| `lazy-row-unbounded-height-returns-infinity` | [#2458](https://github.com/samoylenkodmitry/Cranpose/issues/2458) | `1.0x`, `1.75x` | `non_finite` | 5 nodes (`z17_lr_wrap_h`, `z18_lr_in_vscroll`, `z18_vs_tail0..2`) | `LazyRow` without `Modifier::height` returns `Infinity` height inside vertical scrollables. |
+| `lazy-row-unbounded-height-evicts-following-lazy-items` | [#2458](https://github.com/samoylenkodmitry/Cranpose/issues/2458) | `1.0x`, `1.75x` | `missing_in_cranpose` | 20 nodes (`z17_lr_perm_a`, `z17_lr_perm_b`, `z17_lr_rev_wrap`, `z17_pa0..5`, `z17_pb0..4`, `z17_rv0..5`) | Infinite height on `z17_lr_wrap_h` pushes later `LazyColumn` items past the viewport so Cranpose omits them. |
+| `lazy-column-without-width-expands-cross-axis` | [#2458](https://github.com/samoylenkodmitry/Cranpose/issues/2458) | `1.0x`, `1.75x` | `bounds_delta` | 7 nodes (`z19_lc_wrap_w`, `z19_vs_in_lr`, `z19_vslr0..4`), `+12.0` dp | `LazyColumn` without an explicit width expands to `max_width` inside a `LazyRow` instead of wrapping its content width. |
+| `semantics-bounds-ignore-layer-and-offset-with` | [#2459](https://github.com/samoylenkodmitry/Cranpose/issues/2459) (see also [#2059](https://github.com/samoylenkodmitry/Cranpose/issues/2059), [#2386](https://github.com/samoylenkodmitry/Cranpose/issues/2386)) | `1.0x`, `1.75x` | `bounds_delta` | 2 nodes (`z11_gl_nest_c` `5.44` dp, `z11_off_lam` `10.00`–`10.29` dp) | Semantics bounds ignore ancestor `graphicsLayer` transforms and `Modifier::offset_with` layer translation. |
+| `fractional-density-rounding-drift` | [#2460](https://github.com/samoylenkodmitry/Cranpose/issues/2460) | `1.75x` | `bounds_delta` | 37 nodes across Zones 1, 2, 7, 8, 9, 10, 15, 19 (`0.57`–`1.14` dp) | Layout rounding at `1.75x` drifts by 1 to 2 physical pixels from Compose pixel-snapped constraints and placements. |
+
 ## Generated comparison, 2026-10-15
 
 Cranpose at [`75e5c04f9`](https://github.com/samoylenkodmitry/Cranpose/tree/75e5c04f99f9a96542a405693c21c6b9ef601f5d) against

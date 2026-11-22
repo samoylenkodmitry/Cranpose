@@ -66,6 +66,7 @@ fmt:
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/ferro-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/zgui-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/floem-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/layout-parity/cranpose-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/shopbench/Cargo.toml
 
 # Verify formatting without touching the tree. This is the CI gate.
@@ -88,6 +89,7 @@ fmt-check:
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/ferro-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/zgui-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/floem-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/layout-parity/cranpose-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/shopbench/Cargo.toml
 
 # --- lint ------------------------------------------------------------------
@@ -606,6 +608,17 @@ bench-app-check:
     cargo clippy --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml --all-targets -- -D warnings
     cargo test --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml
 
+# Fast static check for benchmarks/layout-parity: clippy on the standalone
+# Cranpose app plus unit tests for the divergence ledger comparator.
+layout-parity-check:
+    cargo clippy --manifest-path benchmarks/layout-parity/cranpose-app/Cargo.toml --all-targets -- -D warnings
+    python3 benchmarks/layout-parity/tests/test_compare.py
+
+# End-to-end Compose Desktop vs Cranpose 20-zone layout atlas (1.0x and 1.75x)
+# and behavioral stress suite, checked against divergences.toml. Nightly runs it.
+layout-parity out="target/layout-parity": _benchmark-python layout-parity-check
+    {{benchmark_python}} benchmarks/layout-parity/compare.py --run --check-ledger --out {{out}}
+
 # The steady-frame ledger (#2247): the `malloc` and `realloc` calls, the
 # blocks left live and the bytes copied a steady frame of every bench layout,
 # and the still wall's start a layout node, against
@@ -734,6 +747,7 @@ _benchmark-python:
 test-shell-helpers: _benchmark-python ci-contract-gates
     python3 scripts/ci/tests/test_rustup_lock.py
     python3 scripts/ci/tests/test_wasm_feature_floor.py
+    python3 benchmarks/layout-parity/tests/test_compare.py
     scripts/ci/clippy_budget_test.sh
     scripts/ci/source_budgets_test.sh
     bash scripts/ci/sccache_lifetime_test.sh
