@@ -27,6 +27,22 @@ pixels once at the display's resolution, so its text stays sharp. A dp is a mill
 room. Each controller points at the panels, and its trigger presses. Both controllers work at once.
 Outside a headset the panels draw flat, side by side.
 
+A press never becomes a move by accident:
+- A pull of the trigger turns the controller. A press therefore takes what the ray pointed at just
+  before the pull, a handle or a place on a panel, so a pull on a button just above a handle presses
+  the button.
+- A press holds its point while the hand shakes, and a click goes through. A press that the ray turns
+  off its control ends there: the control stops showing it pressed, and the release clicks nothing.
+- A pull on a handle moves nothing. The panel moves only once the hand moves it more than 24 dp, as
+  Compose's touch slop holds a drag back. It then takes the whole move since the pull.
+- The controller plays `PointerSettings::press_vibration` when a press takes, when a click ends and
+  when a handle's panel starts and stops moving. A press that turned into a drag ends with no tick.
+- Each press logs how far its ray turned and how far its point moved on the panel, so a device run
+  measures the drift of real presses.
+
+Every Cranpose `clickable` shows its `Indication` while a ray rests on it and while one presses it,
+as it does for a mouse.
+
 A runtime takes a limited number of layers in a frame: a Quest 3 takes 16. When a frame needs
 more, the projection layer of the 3D content draws some pictures in place of their own layers, so
 every panel still shows. The handles go there first, then the panels of the lowest rank, whose text
@@ -37,7 +53,8 @@ limit costs nothing more.
 `docs/xr_architecture.md` ("The layer limit") has the details.
 
 A panel or a surface with `SubspaceModifier::movable()` has a handle under it: a sphere that shows
-from any side. A controller grabs it from any side and carries the panel.
+from any side. A controller grabs it from any side and carries the panel. The sphere grows by a third
+while a ray points at it, and to 1.6 times its size while a trigger presses it.
 `movable_with(MovePolicy::system(...))` calls back with a `SpatialMoveEvent` for the grab
 (`Start`), each change of the pose (`Moving`) and the release (`End`). The event's pose is in
 meters, relative to the subspace's origin. An app that saves it places the panel there at its next
@@ -350,6 +367,12 @@ The hand shows a plain model that Cranpose builds in code in three cases: the ru
 plain model has a handle, a head, a thumbstick, two buttons, a trigger and a tip that marks the
 front. It has no texture and no asset file. It uses the axes of the runtime's models around the
 grip pose: x to the right, y up and z toward the user.
+
+The ray of a controller whose loaded model has a node named `laser_begin` starts at that node, as
+Meta's runtime models mark the tip of the controller. The ray keeps the line and the direction of
+the runtime's aim pose, so it meets the panels where it did. Only its visible start moves: on a
+Quest 3 the aim pose lies 63.7 mm from that node. The start stays while the model hides, so it does
+not jump when the model shows.
 
 The runtime's model moves its parts with the controller's inputs: the trigger, the grip, the two face
 buttons, the menu button and the thumbstick. A Meta Quest's file is one mesh with a skin, and each
