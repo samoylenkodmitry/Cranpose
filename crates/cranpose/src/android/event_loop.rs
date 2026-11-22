@@ -1277,7 +1277,7 @@ fn android_frame_latency(requested: Option<&str>) -> u32 {
 #[path = "tests/event_loop_frame_latency_tests.rs"]
 mod frame_latency_tests;
 
-fn create_android_surface_config(
+pub(crate) fn create_android_surface_config(
     surface: &wgpu::Surface<'static>,
     adapter: &wgpu::Adapter,
     width: u32,

@@ -12,7 +12,7 @@ use cranpose_render_common::{
 };
 use cranpose_text::{FontBytes, Typeface};
 use cranpose_ui::{
-    ImageBitmap,
+    ImageBitmap, Size,
     text::{FontFamily, FontStyle, FontWeight},
 };
 
@@ -156,6 +156,8 @@ pub struct AppSettings {
     pub process_start: Option<fn()>,
     /// Optional Android overlay surface configuration.
     pub android_overlay_window: Option<AndroidOverlayWindowOptions>,
+    /// The board of the system keyboard. See [`AppLauncher::with_input_method`].
+    pub input_method: Option<crate::input_method::InputMethod>,
     /// Run in headless mode (window hidden, for robot testing)
     ///
     /// When enabled, the window is created but not shown. This allows
@@ -223,6 +225,7 @@ impl Default for AppSettings {
             android_gpu_backend: AndroidGpuBackend::default(),
             log_tag: None,
             process_start: None,
+            input_method: None,
             android_overlay_window: None,
             headless: false,
             developer_inspector: None,
@@ -930,6 +933,18 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
         self
     }
 
+    /// Makes the application a system keyboard whose board is `content`,
+    /// `height` logical pixels tall on a screen of the given logical size.
+    ///
+    /// On Android the Gradle plugin's `input-method` service adds the
+    /// keyboard to the system's list; the person enables it in the system's
+    /// keyboard settings. The board types through
+    /// [`local_input_connection`](crate::input_method::local_input_connection).
+    pub fn with_input_method(mut self, content: fn(), height: fn(Size) -> f32) -> Self {
+        self.settings.input_method = Some(crate::input_method::InputMethod { content, height });
+        self
+    }
+
     /// Desktop only: the picture every window the application opens carries,
     /// in the title bar, taskbar and task switcher of Windows and Linux.
     ///
@@ -1343,13 +1358,9 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
         context: jni::objects::JObject<'_>,
         share: jni::sys::jboolean,
     ) {
-        crate::android::process::start_for_service(
-            env,
-            class,
-            context,
-            share,
-            &self.into_settings(),
-        );
+        let settings = self.into_settings();
+        crate::android::process::start_for_service(env, class, context, share, &settings);
+        crate::android::input_method::install(settings);
     }
 
     /// Run the application (Web platform).

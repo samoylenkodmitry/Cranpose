@@ -112,9 +112,11 @@ abstract class CranposeExtension @Inject constructor(objects: ObjectFactory) {
      * permissions and components that service needs and nothing else, so an
      * application that does not record video never asks for the camera.
      *
-     * Valid names: `billing`, `camera`, `haptics`, `meta-entitlement`,
-     * `microphone-standby`, `network`, `notifications`, `overlay`,
-     * `television`, `wearable`, `xr`.
+     * Valid names: `billing`, `camera`, `haptics`, `input-method`,
+     * `meta-entitlement`, `microphone-standby`, `network`, `notifications`,
+     * `overlay`, `television`, `wearable`, `xr`.
+     * The `input-method` service makes the application a system keyboard
+     * whose board `AppLauncher::with_input_method` names.
      * The `xr` service makes an immersive app for headsets: Meta Quest, Pico,
      * HTC Vive, Android XR and Steam Frame (see `xrStore`).
      * The `meta-entitlement` service adds the Meta Platform SDK and the

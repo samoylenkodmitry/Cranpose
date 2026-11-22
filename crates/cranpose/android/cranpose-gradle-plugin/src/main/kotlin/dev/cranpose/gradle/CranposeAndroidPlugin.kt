@@ -205,6 +205,10 @@ class CranposeAndroidPlugin : Plugin<Project> {
             }
         }
 
+        if ("input-method" in services) {
+            // The description of the keyboard that the service's manifest names
+            variant.sources.res?.addStaticSourceDirectory(File(root, "res-input-method").absolutePath)
+        }
         val name = variant.name.replaceFirstChar { first -> first.uppercase() }
         if ("wearable" in services) {
             val capability = project.tasks.register(
@@ -667,6 +671,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
             "billing",
             "camera",
             "haptics",
+            "input-method",
             "meta-entitlement",
             "microphone-standby",
             "network",
@@ -681,7 +686,8 @@ class CranposeAndroidPlugin : Plugin<Project> {
          * Extra Java source directories a service contributes, relative to
          * `androidRoot()`. Most services are manifest-only. Three carry Java
          * that needs a library of its own, so each lives outside the base
-         * `java/` that every application compiles. `billing` carries
+         * `java/` that every application compiles. `input-method` carries
+         * `CranposeInputMethodService`, the system keyboard. `billing` carries
          * `CranposeBilling` for the Play Billing library. `wearable` carries
          * `CranposeWearable` for Google Play services' wearable library.
          * `meta-entitlement` carries `CranposeMetaEntitlement` for the Meta
@@ -689,6 +695,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
          */
         val SERVICE_JAVA_SOURCE = mapOf(
             "billing" to "java-billing",
+            "input-method" to "java-input-method",
             "meta-entitlement" to "java-meta-entitlement",
             "microphone-standby" to "java-microphone-standby",
             "wearable" to "java-wearable",

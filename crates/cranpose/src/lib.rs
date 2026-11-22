@@ -53,6 +53,8 @@ pub use cranpose_render_wgpu::SCENE_DEPTH_FORMAT;
 pub use guest_view::{GuestView, GuestViewError};
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
 mod frame_readback;
+/// The application as the system keyboard.
+pub mod input_method;
 /// Native views mounted in a Cranpose layout by an application-owned host.
 pub mod native_view;
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]

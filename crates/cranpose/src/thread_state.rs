@@ -12,6 +12,8 @@ use crate::{
 pub(crate) struct CranposeThreadState {
     pub(crate) window_state_local: OnceCell<CompositionLocal<Option<WindowState>>>,
     pub(crate) native_view_host: OnceCell<CompositionLocal<NativeViewHost>>,
+    pub(crate) input_connection_local:
+        OnceCell<CompositionLocal<Option<crate::input_method::InputConnection>>>,
     pub(crate) native_window_dispatch: RefCell<Vec<NativeWindowDispatchContext>>,
     #[cfg(all(
         feature = "native-windows",
@@ -56,6 +58,8 @@ pub(crate) struct CranposeThreadState {
         OnceCell<std::rc::Rc<crate::platform_env::PlatformEnvironment>>,
     #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
     pub(crate) android_ime_density: std::cell::Cell<f32>,
+    #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+    pub(crate) input_method: crate::android::input_method::InputMethodState,
     #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
     pub(crate) pacing_diag: RefCell<crate::desktop::PacingDiag>,
     /// The tray and menu bar the composition asks for.
@@ -92,6 +96,7 @@ impl CranposeThreadState {
         Self {
             window_state_local: OnceCell::new(),
             native_view_host: OnceCell::new(),
+            input_connection_local: OnceCell::new(),
             native_window_dispatch: RefCell::new(Vec::new()),
             #[cfg(all(
                 feature = "native-windows",
@@ -114,6 +119,8 @@ impl CranposeThreadState {
             android_platform_env: OnceCell::new(),
             #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
             android_ime_density: std::cell::Cell::new(1.0),
+            #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+            input_method: Default::default(),
             #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
             pacing_diag: RefCell::new(crate::desktop::PacingDiag::default()),
             #[cfg(all(
