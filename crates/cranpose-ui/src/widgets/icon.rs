@@ -7,7 +7,7 @@ use cranpose_ui_graphics::{Brush, Color, VectorPath};
 use cranpose_ui_layout::Alignment;
 
 use crate::{
-    Modifier, SemanticsWidgetRole, Size, composable,
+    Indication, Modifier, SemanticsWidgetRole, Size, composable,
     interaction::{MutableInteractionSource, rememberMutableInteractionSource},
     widgets::{Box, BoxSpec},
 };
@@ -276,7 +276,11 @@ where
         modifier = modifier.background(surface);
     }
     if enabled {
-        modifier = modifier.clickable(move |_| on_click());
+        // A button with its own pressed color shows the press with that color alone
+        modifier = match spec.colors.pressed_background {
+            Some(_) => modifier.clickable_with_indication(Indication::NONE, move |_| on_click()),
+            None => modifier.clickable(move |_| on_click()),
+        };
     }
 
     Box(

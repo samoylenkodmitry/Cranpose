@@ -38,8 +38,8 @@ const DRAG_ANGLE: f32 = 4.0;
 const LET_GO: f32 = 0.15;
 
 // How far a hand must move a panel by its handle before the panel moves, in dp of the panel. A dp
-// is a millimeter in the room. The ray of a hand that only presses strays less on a panel at arm's
-// length: tremor and the turn of a trigger's pull and release move it by a few millimeters.
+// is a millimeter in the room. The value is three times Compose's touch slop of 8 dp. Each press
+// logs how far it strayed, so the value can follow the strays of real presses.
 pub(crate) const DRAG_SLOP: f32 = 24.0;
 
 // What a frame gives a pointer besides its aim: the time, the time since the frame before in

@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use super::{Modifier, Point, SemanticsConfiguration, inspector_metadata};
-use crate::{indication::current_indication, modifier_nodes::ClickableElement};
+use crate::{Indication, indication::current_indication, modifier_nodes::ClickableElement};
 
 impl Modifier {
     /// Make the component clickable.
@@ -13,8 +13,20 @@ impl Modifier {
     ///
     /// Example: `Modifier::empty().clickable(|pt| println!("Clicked at {:?}", pt))`
     pub fn clickable(self, handler: impl Fn(Point) + 'static) -> Self {
-        let handler = Rc::new(handler);
-        let element = ClickableElement::with_handler(handler).indication(current_indication());
+        self.clickable_with_indication(current_indication(), handler)
+    }
+
+    /// Make the component clickable with `indication` in place of the one of
+    /// [`local_indication`](crate::local_indication). Compose's
+    /// `Modifier.clickable(interactionSource, indication, onClick)`.
+    /// [`Indication::NONE`] is Compose's `indication = null`, for a control
+    /// that draws its own hover and press.
+    pub fn clickable_with_indication(
+        self,
+        indication: Indication,
+        handler: impl Fn(Point) + 'static,
+    ) -> Self {
+        let element = ClickableElement::with_handler(Rc::new(handler)).indication(indication);
         let modifier = Self::with_element(element).with_inspector_metadata(inspector_metadata(
             "clickable",
             |info| {

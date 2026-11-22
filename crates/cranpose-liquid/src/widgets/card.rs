@@ -3,7 +3,7 @@ use std::{cell::RefCell, rc::Rc};
 use cranpose_animation::animateColorAsState;
 use cranpose_macros::composable;
 use cranpose_ui::{
-    Modifier, rememberMutableInteractionSource,
+    Indication, Modifier, rememberMutableInteractionSource,
     text::{SpanStyle, TextStyle},
     widgets::{Box, BoxSpec, Column, ColumnSpec, Text},
 };
@@ -130,7 +130,7 @@ pub fn LiquidListRow(
     let base = Modifier::empty()
         .fill_max_width()
         .press_interaction_source(interaction)
-        .clickable(move |_point| {
+        .clickable_with_indication(Indication::NONE, move |_point| {
             on_click();
         })
         .draw_behind(move |scope| {

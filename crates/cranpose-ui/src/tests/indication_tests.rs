@@ -213,7 +213,11 @@ fn the_indication_of_the_local_reaches_the_clickables_under_it() {
 #[test]
 fn a_clickable_with_no_indication_adds_no_draw_to_its_chain() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let element = crate::ClickableElement::new(|_| {}).indication(Indication::NONE);
-    let slices = collect_slices_from_modifier(&Modifier::with_element(element));
-    assert!(slices.draw_commands().is_empty());
+    let slices = collect_slices_from_modifier(
+        &Modifier::empty()
+            .background(FACE)
+            .clickable_with_indication(Indication::NONE, |_| {}),
+    );
+    slices.dispatch_pointer_event(event(PointerEventKind::Down, 20.0, PointerSource::Mouse));
+    assert_eq!(fills(&slices), [(WHOLE, FACE, false)]);
 }

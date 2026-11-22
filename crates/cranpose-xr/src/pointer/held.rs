@@ -36,6 +36,8 @@ pub(super) struct Carried {
     // Until the panel moves: the handle's place in the room at the pull, and that place in the
     // controller's frame, which the panel's place would follow
     pressed: Option<([f32; 3], [f32; 3])>,
+    // The farthest that the handle travelled in dp before the panel moved
+    stray: f32,
 }
 
 // A panel the user resizes.
@@ -50,6 +52,8 @@ pub(super) struct Resized {
     peak: f32,
     // Whether the size has changed yet
     started: bool,
+    // The largest change of the size in dp before the size changed
+    stray: f32,
 }
 
 // What the user holds by a handle.
@@ -78,6 +82,13 @@ impl Held {
             Self::Resize(resized) => resized.started,
         }
     }
+
+    fn stray(&self) -> f32 {
+        match self {
+            Self::Carry(carried) => carried.stray,
+            Self::Resize(resized) => resized.stray,
+        }
+    }
 }
 
 #[expect(
@@ -104,6 +115,7 @@ impl Pointer {
                     carry: Carry::grab(&aim, &slot.pose),
                     pose: slot.pose,
                     pressed: Some((center, aim.inverse().then(&Pose::at(center)).position)),
+                    stray: 0.0,
                 })
             }),
             HandleKind::Resize => {
@@ -117,6 +129,7 @@ impl Pointer {
                             size: slot.size(),
                             peak: reach.trigger,
                             started: false,
+                            stray: 0.0,
                         })
                     })
             }
@@ -147,7 +160,9 @@ impl Pointer {
         if let Some((place, in_hand)) = carried.pressed {
             let now = aim.then(&Pose::at(in_hand)).position;
             let [x, y, z] = sub(now, place);
-            if (x * x + y * y + z * z).sqrt() / METERS_PER_DP <= DRAG_SLOP {
+            let travel = (x * x + y * y + z * z).sqrt() / METERS_PER_DP;
+            carried.stray = carried.stray.max(travel);
+            if travel <= DRAG_SLOP {
                 return;
             }
             carried.pressed = None;
@@ -188,7 +203,9 @@ impl Pointer {
         };
         if !resized.started {
             let grown = [0, 1].map(|axis| (size[axis] - resized.size[axis]).abs());
-            if grown[0].max(grown[1]) <= DRAG_SLOP {
+            let grown = grown[0].max(grown[1]);
+            resized.stray = resized.stray.max(grown);
+            if grown <= DRAG_SLOP {
                 return;
             }
             resized.started = true;
@@ -216,7 +233,8 @@ impl Pointer {
         let held = self.held.take();
         if let Some(held) = held {
             log::info!(
-                "cranpose xr: the {:?} press on a handle ended after {} ms, {}",
+                "cranpose xr: the {:?} press on a handle ended after {} ms, {}; before the drag \
+                 the handle moved {:.1} dp at most",
                 self.side,
                 time.saturating_sub(self.grabbed_at).as_millis(),
                 if held.started() {
@@ -224,6 +242,7 @@ impl Pointer {
                 } else {
                     "with no drag"
                 },
+                held.stray(),
             );
         }
         match held {

@@ -226,6 +226,10 @@ impl ControllerStates {
     // the hand shows no loaded model with that node. A test compares it with the start of the ray
     // that the frame drew.
     #[cfg(all(feature = "gltf", feature = "scripted-hand"))]
+    #[cfg_attr(
+        not(headset),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
     pub(crate) fn drawn_ray_start(&self, hand: Hand) -> Option<[f32; 3]> {
         if !self.shown.get_non_reactive()[hand.index()] {
             return None;
