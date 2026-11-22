@@ -3,8 +3,11 @@
 //! [`AppLauncher::with_input_method`](crate::AppLauncher::with_input_method)
 //! names the board. On Android it runs in an input method service (the
 //! `input-method` service of the Gradle plugin) and draws into the service's
-//! surface on the GPU. The board reads [`local_input_connection`] to type
-//! into the focused text field and to learn what that field asks for.
+//! surface on the GPU. On iOS a keyboard extension's main function calls
+//! [`AppLauncher::run_keyboard_extension`](crate::AppLauncher), and the
+//! extension's `NSExtensionPrincipalClass` is `CranposeInputViewController`.
+//! The board reads [`local_input_connection`] to type into the focused text
+//! field and to learn what that field asks for.
 
 use cranpose_core::{CompositionLocal, compositionLocalOf};
 use cranpose_ui::{ImeAction, KeyboardCapitalization, KeyboardType, Size};

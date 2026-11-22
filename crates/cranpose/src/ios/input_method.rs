@@ -281,7 +281,13 @@ define_class!(
             let view = KeyboardView::new(self.mtm(), root.bounds());
             root.addSubview(&view);
             crate::thread_state::with(|thread| {
-                *thread.ios.keyboard_session.borrow_mut() = Some(KeyboardSession {
+                let mut slot = thread.ios.keyboard_session.borrow_mut();
+                // UIKit may load a new controller before the old one leaves;
+                // the old link would keep firing and keep the old controller.
+                if let Some(link) = slot.as_mut().and_then(|old| old.link.take()) {
+                    link.invalidate();
+                }
+                *slot = Some(KeyboardSession {
                     controller: Weak::new(self),
                     view,
                     link: None,
@@ -360,8 +366,7 @@ impl KeyboardController {
             let constraint = root
                 .heightAnchor()
                 .constraintEqualToConstant(f64::from(height));
-            // Apple's forums report this priority, set before the view
-            // appears, as the one the host follows on a device.
+            // UILayoutPriorityDefaultHigh.
             constraint.setPriority(750.0);
             constraint.setActive(true);
             session.height = Some(constraint);
