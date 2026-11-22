@@ -88,10 +88,13 @@ public class CranposeInputMethodService extends InputMethodService
         frame.addView(surfaceView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, boardHeight()));
         // The board reaches under the navigation bar. The composition reads
-        // the bar's height as its safe area and keeps its keys above it.
+        // the bar's height as its safe area and keeps its keys above it. With
+        // gesture navigation the input window draws its own back and switcher
+        // row, a tappable element taller than the bar.
         frame.setOnApplyWindowInsetsListener((view, insets) -> {
             int inset = Build.VERSION.SDK_INT >= 30
-                    ? insets.getInsets(WindowInsets.Type.navigationBars()).bottom
+                    ? insets.getInsets(WindowInsets.Type.navigationBars()
+                            | WindowInsets.Type.tappableElement()).bottom
                     : insets.getSystemWindowInsetBottom();
             if (inset != bottomInset) {
                 bottomInset = inset;
