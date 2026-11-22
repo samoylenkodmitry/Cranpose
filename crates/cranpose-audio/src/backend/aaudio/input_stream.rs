@@ -25,7 +25,6 @@ use crate::backend::{
 
 const INPUT_PRESET_VOICE_RECOGNITION: i32 = 6;
 const INPUT_PRESET_VOICE_COMMUNICATION: i32 = 7;
-const INPUT_PRESET_UNPROCESSED: i32 = 9;
 // A voice is one channel. The device mixes several microphones down to it.
 const CHANNELS: i32 = 1;
 // The word of a capture time that the owner thread has not published.
@@ -97,7 +96,6 @@ impl InputStream {
         let preset = match preset {
             InputPreset::VoiceRecognition => INPUT_PRESET_VOICE_RECOGNITION,
             InputPreset::VoiceCommunication => INPUT_PRESET_VOICE_COMMUNICATION,
-            InputPreset::Unprocessed => INPUT_PRESET_UNPROCESSED,
         };
         // SAFETY: `data` is the `DataContext` that `record` reads, and it lives until the stream
         // closes: `InputStream` declares it after the stream.

@@ -28,10 +28,6 @@ pub enum InputPreset {
     /// cancellation in a browser. Core Audio, WASAPI and ALSA record the same as for
     /// [`InputPreset::VoiceRecognition`].
     VoiceCommunication,
-    /// The microphone's sound with no processing: no echo cancellation, noise suppression or gain
-    /// control. AAudio's `AAUDIO_INPUT_PRESET_UNPROCESSED`, which can take a faster path than the
-    /// other presets. Other platforms record the same as for [`InputPreset::VoiceRecognition`].
-    Unprocessed,
 }
 
 /// What a microphone stream hands its samples to.
