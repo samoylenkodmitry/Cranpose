@@ -1,4 +1,4 @@
-//! The frame that an output device presented last, with the time of its presentation. It is
+//! The frame that a device presented or captured last, with the time of it. It is
 //! `AAudioStream_getTimestamp`'s answer. Android's `AudioTimestamp` holds the same two numbers.
 
 use std::time::Duration;
@@ -27,17 +27,30 @@ impl HardwarePosition {
         now_nanos: i64,
         sample_rate: i32,
     ) -> Option<Duration> {
-        let rate = i128::from(sample_rate);
-        if rate <= 0 {
-            return None;
-        }
-        let frames_between = i128::from(written_frames) - i128::from(self.frame_position);
-        let presented = i128::from(self.nano_time) + frames_between * NANOS_PER_SECOND / rate;
-        let latency = presented - i128::from(now_nanos);
+        let latency = self.time_of(written_frames, sample_rate)? - i128::from(now_nanos);
         u64::try_from(latency)
             .ok()
             .filter(|&nanos| nanos > 0)
             .map(Duration::from_nanos)
+    }
+
+    // How long before `now_nanos` the hardware of an input stream captured the frame that the
+    // stream's reader numbers `frame`, at `sample_rate` frames a second. A frame that the hardware
+    // has not captured by then has no age, and `None` says so.
+    pub(super) fn age(self, frame: i64, now_nanos: i64, sample_rate: i32) -> Option<Duration> {
+        let age = i128::from(now_nanos) - self.time_of(frame, sample_rate)?;
+        u64::try_from(age).ok().map(Duration::from_nanos)
+    }
+
+    // The time of `frame` on `CLOCK_MONOTONIC`: this position's time plus the frames between the
+    // two. A stream without a rate has no time for a frame.
+    pub(super) fn time_of(self, frame: i64, sample_rate: i32) -> Option<i128> {
+        let rate = i128::from(sample_rate);
+        if rate <= 0 {
+            return None;
+        }
+        let frames_between = i128::from(frame) - i128::from(self.frame_position);
+        Some(i128::from(self.nano_time) + frames_between * NANOS_PER_SECOND / rate)
     }
 }
 

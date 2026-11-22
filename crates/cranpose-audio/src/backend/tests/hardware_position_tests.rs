@@ -36,3 +36,23 @@ fn a_stream_without_a_rate_has_no_latency() {
     assert_eq!(position().latency(1480, 12 * MS, 0), None);
     assert_eq!(position().latency(1480, 12 * MS, -1), None);
 }
+
+#[test]
+fn a_captured_frame_is_as_old_as_the_time_since_its_capture() {
+    // The hardware captured frame 1000 at 10 ms. Frame 520 came 10 ms before, at 0 ms. It is 12 ms now.
+    assert_eq!(
+        position().age(1000, 12 * MS, 48_000),
+        Some(Duration::from_millis(2))
+    );
+    assert_eq!(
+        position().age(520, 12 * MS, 48_000),
+        Some(Duration::from_millis(12))
+    );
+}
+
+#[test]
+fn a_frame_that_the_hardware_has_not_captured_yet_has_no_age() {
+    // Frame 1480 comes at 20 ms.
+    assert_eq!(position().age(1480, 12 * MS, 48_000), None);
+    assert_eq!(position().age(1000, 12 * MS, 0), None);
+}

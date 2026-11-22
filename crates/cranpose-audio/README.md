@@ -33,6 +33,18 @@ A client that opens a device itself through `backend::open` reads the device's t
 
 A browser gives a page no real-time callback on the thread that runs the composition. The Web Audio backend renders on that thread, 1024 frames at a time, and keeps `backend::RENDER_LEAD_SECONDS` of sound scheduled ahead of the context's clock. Each sound is this much later than on the other backends, and a frame that blocks the page for longer leaves a gap. A browser starts a context only after the user has acted on the page; a stream opened before that starts at the first press or key.
 
+## Microphone
+
+`backend::open_microphone` records from the platform's default microphone. Jetpack Compose has no API for recording. Android apps use `AudioRecord` or AAudio, and this follows AAudio. The app passes a `Recorder` and an `InputPreset`. The call opens the input device, starts it and returns an `AudioSource`. Dropping the source stops the recording.
+
+- The person must allow the microphone first: `cranpose_services::microphone_permission` reads `Granted`. Otherwise the call opens nothing and returns `AudioError::NotAllowed`. The stream calls `cranpose_services::prepare_microphone`, which sets the audio session of iOS and watchOS to record, and keeps it readied while it runs.
+- `Recorder::record` gets interleaved float samples in the device's format and the `Instant` at which the microphone took the first frame. It runs on the thread on which the platform delivers recorded sound, so it may not allocate, lock or block.
+- Android uses an AAudio input stream in low-latency mode, with one channel at the device's rate. The thread that owns the stream reads `AAudioStream_getTimestamp`, and the callback adds the frames since to get the capture time. `InputPreset::VoiceRecognition` asks for no echo cancellation. `InputPreset::VoiceCommunication` asks Android to cancel the echo of what the device plays.
+- Desktop and iOS use cpal (Core Audio, WASAPI, ALSA) at the default input's own format. The capture time comes from the callback's timestamp. Both presets record the same.
+- watchOS taps the input node of an `AVAudioEngine`. `InputPreset::VoiceCommunication` turns on its voice processing where the watch has it.
+- A browser asks the person through `getUserMedia` and records with a script processor, one channel in blocks of 1024 frames, with no capture time. `InputPreset::VoiceCommunication` turns on echo cancellation, noise suppression and gain control.
+- `AudioSource::input_latency` gives the age of the first frame of the last block. `AudioSource::is_running` turns false when the platform ends the stream, such as when the device goes away.
+
 ## Links
 
 - [API documentation](https://docs.rs/cranpose-audio/latest/cranpose_audio/)

@@ -8,7 +8,7 @@ use cranpose_services::AudioError;
 use wasm_bindgen::{JsCast, JsValue, closure::Closure, prelude::wasm_bindgen};
 use web_sys::{AudioContext, AudioContextState, AudioScheduledSourceNode};
 
-use crate::backend::{AudioSink, NOMINAL_CHANNELS, Renderer};
+use crate::backend::{AudioSink, NOMINAL_CHANNELS, Renderer, page::PAGE};
 
 const BLOCK_FRAMES: usize = 1024;
 
@@ -40,12 +40,7 @@ extern "C" {
     fn output_latency(this: &LatencyContext) -> f64;
 }
 
-thread_local! {
-    // The open streams; a sink names its stream by the slot it sits in.
-    static STREAMS: RefCell<Vec<Option<Rc<Stream>>>> = const { RefCell::new(Vec::new()) };
-}
-
-struct Stream {
+pub(super) struct Stream {
     context: AudioContext,
     renderer: RefCell<Box<dyn Renderer>>,
     interleaved: RefCell<Vec<f32>>,
@@ -195,14 +190,7 @@ pub(crate) fn open(renderer: Box<dyn Renderer>) -> Result<Box<dyn AudioSink>, Au
         stream.context.sample_rate()
     );
 
-    let slot = STREAMS.with_borrow_mut(|streams| {
-        let slot = streams.iter().position(Option::is_none).unwrap_or_else(|| {
-            streams.push(None);
-            streams.len() - 1
-        });
-        streams[slot] = Some(stream);
-        slot
-    });
+    let slot = PAGE.with(|page| page.streams.insert(stream));
     Ok(Box::new(WebAudioSink { slot }))
 }
 
@@ -224,7 +212,7 @@ struct WebAudioSink {
 
 impl WebAudioSink {
     fn stream(&self) -> Option<Rc<Stream>> {
-        STREAMS.with_borrow(|streams| streams.get(self.slot).cloned().flatten())
+        PAGE.with(|page| page.streams.get(self.slot))
     }
 
     fn with_stream(&self, run: impl FnOnce(&Stream)) {
@@ -258,8 +246,7 @@ impl AudioSink for WebAudioSink {
 
 impl Drop for WebAudioSink {
     fn drop(&mut self) {
-        let stream =
-            STREAMS.with_borrow_mut(|streams| streams.get_mut(self.slot).and_then(Option::take));
+        let stream = PAGE.with(|page| page.streams.take(self.slot));
         if let Some(stream) = stream {
             stream.close();
         }
