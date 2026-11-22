@@ -27,6 +27,8 @@ const INPUT_PRESET_VOICE_RECOGNITION: i32 = 6;
 const INPUT_PRESET_VOICE_COMMUNICATION: i32 = 7;
 // A voice is one channel. The device mixes several microphones down to it.
 const CHANNELS: i32 = 1;
+// The oldest age of a buffer that a capture time can have
+const MAX_AGE: std::time::Duration = std::time::Duration::from_secs(1);
 // The word of a capture time that the owner thread has not published.
 const UNKNOWN: i64 = i64::MIN;
 
@@ -143,13 +145,16 @@ impl Callback for DataContext {
         sample_rate: i32,
         channels: usize,
     ) -> bool {
-        // The stream's number of this buffer's first frame. A count of its own from 0 was off by
-        // the frames before the first callback: 50 to 150 ms on a Quest 3.
+        // The stream's number of this buffer's first frame, in AAudio's count of frames read: the
+        // count of the timestamp's position.
         let first = (stream.frames_read() - (audio.len() / channels) as i64).max(0);
+        // A platform whose timestamp counts from another start gives an age of seconds, which says
+        // nothing: such a buffer has no capture time. A Quest 3 does so for the call preset.
         let age = self
             .timing
             .frame_zero()
-            .and_then(|zero| zero.age(first, monotonic_nanos(), sample_rate));
+            .and_then(|zero| zero.age(first, monotonic_nanos(), sample_rate))
+            .filter(|age| *age < MAX_AGE);
         if let Some(age) = age {
             self.timing.age.store(age);
         }
