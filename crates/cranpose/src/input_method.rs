@@ -43,7 +43,13 @@ pub struct EditorInfo {
 pub struct InputSession(u32);
 
 impl InputSession {
-    #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+    #[cfg(all(
+        feature = "renderer-wgpu",
+        any(
+            all(feature = "android", target_os = "android"),
+            all(feature = "ios", target_os = "ios")
+        )
+    ))]
     pub(crate) fn next(self) -> Self {
         Self(self.0.wrapping_add(1))
     }
@@ -57,7 +63,13 @@ pub struct InputConnection {
 }
 
 impl InputConnection {
-    #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+    #[cfg(all(
+        feature = "renderer-wgpu",
+        any(
+            all(feature = "android", target_os = "android"),
+            all(feature = "ios", target_os = "ios")
+        )
+    ))]
     pub(crate) fn new(editor: EditorInfo, session: InputSession) -> Self {
         Self { editor, session }
     }
@@ -106,7 +118,13 @@ pub fn local_input_connection() -> CompositionLocal<Option<InputConnection>> {
 }
 
 // Provides `connection` to `content`.
-#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+#[cfg(all(
+    feature = "renderer-wgpu",
+    any(
+        all(feature = "android", target_os = "android"),
+        all(feature = "ios", target_os = "ios")
+    )
+))]
 pub(crate) fn provide(connection: InputConnection, content: impl FnOnce()) {
     cranpose_core::CompositionLocalProvider(
         [local_input_connection().provides(Some(connection))],
@@ -121,7 +139,20 @@ mod platform {
     };
 }
 
-#[cfg(not(all(feature = "android", feature = "renderer-wgpu", target_os = "android")))]
+#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+mod platform {
+    pub(super) use crate::ios::input_method::{
+        commit_text, delete_backward, perform_ime_action, switch_to_next_keyboard,
+    };
+}
+
+#[cfg(not(all(
+    feature = "renderer-wgpu",
+    any(
+        all(feature = "android", target_os = "android"),
+        all(feature = "ios", target_os = "ios")
+    )
+)))]
 mod platform {
     // A composition that is not a system keyboard has no connection to
     // reach these, so they have nothing to do.

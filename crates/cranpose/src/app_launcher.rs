@@ -1287,6 +1287,13 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
         std::process::exit(0)
     }
 
+    /// iOS only: runs the board named by [`with_input_method`](Self::with_input_method)
+    /// as the system keyboard. A keyboard extension's main function calls it.
+    #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+    pub fn run_keyboard_extension(self) -> ! {
+        crate::ios::input_method::run(self.into_settings())
+    }
+
     /// Run the application (Android platform).
     ///
     /// # Arguments

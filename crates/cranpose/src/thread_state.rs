@@ -59,7 +59,11 @@ pub(crate) struct CranposeThreadState {
     #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
     pub(crate) android_ime_density: std::cell::Cell<f32>,
     #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
-    pub(crate) input_method: crate::android::input_method::InputMethodState,
+    pub(crate) input_method:
+        crate::keyboard_host::KeyboardState<crate::android::input_method::AndroidWindow>,
+    #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+    pub(crate) input_method:
+        crate::keyboard_host::KeyboardState<crate::ios::input_method::KeyboardLayer>,
     #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
     pub(crate) pacing_diag: RefCell<crate::desktop::PacingDiag>,
     /// The tray and menu bar the composition asks for.
@@ -121,6 +125,8 @@ impl CranposeThreadState {
             android_ime_density: std::cell::Cell::new(1.0),
             #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
             input_method: Default::default(),
+            #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+            input_method: Default::default(),
             #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
             pacing_diag: RefCell::new(crate::desktop::PacingDiag::default()),
             #[cfg(all(
@@ -167,6 +173,8 @@ pub(crate) struct IosThreadState {
     pub(crate) winit_window: RefCell<Option<std::sync::Arc<dyn winit::window::Window>>>,
     pub(crate) key_input_view:
         RefCell<Option<objc2::rc::Retained<crate::ios::keyboard::KeyInputView>>>,
+    // The system keyboard's controller on screen, in a keyboard extension.
+    pub(crate) keyboard_session: RefCell<Option<crate::ios::input_method::KeyboardSession>>,
 }
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
@@ -181,6 +189,7 @@ impl IosThreadState {
             window: RefCell::new(None),
             winit_window: RefCell::new(None),
             key_input_view: RefCell::new(None),
+            keyboard_session: RefCell::new(None),
         }
     }
 }

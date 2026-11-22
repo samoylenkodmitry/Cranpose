@@ -130,6 +130,7 @@ ios = [
     "dep:objc2",
     "dep:objc2-foundation",
     "dep:objc2-ui-kit",
+    "dep:objc2-quartz-core",
     "dep:objc2-uniform-type-identifiers",
     "dep:objc2-user-notifications",
     "dep:block2",
@@ -664,12 +665,15 @@ objc2-foundation = { version = "0.3", default-features = false, optional = true,
     "NSURLRequest",
     "NSURLResponse",
     "NSURLSession",
+    "NSUUID",
+    "NSRunLoop",
     "NSValue",
 ] }
 objc2-ui-kit = { version = "0.3", default-features = false, optional = true, features = [
     "std",
     "block2",
     "objc2-core-foundation",
+    "objc2-quartz-core",
     "objc2-uniform-type-identifiers",
     "UIGeometry",
     "UIScreen",
@@ -717,6 +721,10 @@ objc2-ui-kit = { version = "0.3", default-features = false, optional = true, fea
     "UITouch",
     "UIView",
     "UIViewController",
+    "UIInputView",
+    "UIInputViewController",
+    "NSLayoutAnchor",
+    "NSLayoutConstraint",
     "UIWindow",
     "UIWindowScene",
 ] }
@@ -816,6 +824,15 @@ objc2-core-motion = { version = "0.3.2", default-features = false, optional = tr
     "CMDeviceMotion",
     "CMAttitude",
     "CMLogItem",
+] }
+# The system keyboard's extension draws into a CAMetalLayer on each frame of a
+# CADisplayLink (`ios::input_method`).
+objc2-quartz-core = { version = "0.3", default-features = false, optional = true, features = [
+    "std",
+    "CALayer",
+    "CAMetalLayer",
+    "CADisplayLink",
+    "objc2-core-foundation",
 ] }
 
 [target.'cfg(target_os = "watchos")'.dependencies]

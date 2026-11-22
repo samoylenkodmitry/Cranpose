@@ -55,11 +55,24 @@ pub use guest_view::{GuestView, GuestViewError};
 mod frame_readback;
 /// The application as the system keyboard.
 pub mod input_method;
+#[cfg(all(
+    feature = "renderer-wgpu",
+    any(
+        all(feature = "android", target_os = "android"),
+        all(feature = "ios", target_os = "ios")
+    )
+))]
+mod keyboard_host;
 /// Native views mounted in a Cranpose layout by an application-owned host.
 pub mod native_view;
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
 mod offscreen_instance;
 mod scoped_weak_stack;
+#[cfg(any(
+    test,
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
+))]
+mod uikit_editor_info;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 pub use android::file_picker::open_content_uri;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
