@@ -1,6 +1,6 @@
 //! What a following subspace follows, and how.
 
-use crate::{Anchor, Hand};
+use crate::{Anchor, Hand, SoftFollowMode};
 
 /// The dimensions of the target's pose that a following subspace tracks. Jetpack XR's
 /// `TrackedDimensions`.
@@ -28,9 +28,7 @@ pub enum TrackedDimensions {
 }
 
 /// How content follows its target, and which dimensions of the target's pose it tracks. Jetpack
-/// XR's `FollowMode`, whose `snap` and `tight` take a [`TrackedDimensions`].
-///
-/// Jetpack XR's `FollowMode.soft`, which lags behind the target, is not available here.
+/// XR's `FollowMode`, whose `snap`, `tight` and `soft` take a [`TrackedDimensions`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FollowMode {
@@ -49,6 +47,29 @@ pub enum FollowMode {
     /// places them with the newest pose that it has of the head or the controller, at the time
     /// the frame shows.
     Tight(TrackedDimensions),
+    /// The content holds still while the target moves a little, and glides after it once it moved
+    /// far enough for long enough, as [`SoftFollowMode`] says. Jetpack XR's `FollowMode.soft`.
+    ///
+    /// The follow costs no composition. It moves the panels' poses in the headset's frame loop, in
+    /// the room's space.
+    Soft(SoftFollowMode),
+}
+
+impl FollowMode {
+    /// The soft follow of `dimensions` with Jetpack XR's defaults: a half life of 175 ms, a start
+    /// delay of 200 ms and start thresholds of 0.2 m, 16 degrees of pitch, 24 degrees of yaw and 20
+    /// degrees of roll. Jetpack XR's `FollowMode.soft(dimensions)`.
+    pub const fn soft(dimensions: TrackedDimensions) -> Self {
+        Self::Soft(SoftFollowMode::new(dimensions))
+    }
+
+    /// The dimensions of the target's pose that the mode tracks.
+    pub const fn dimensions(&self) -> TrackedDimensions {
+        match self {
+            Self::Snap(dimensions) | Self::Tight(dimensions) => *dimensions,
+            Self::Soft(soft) => soft.dimensions,
+        }
+    }
 }
 
 /// What a [`FollowingSubspace`](crate::FollowingSubspace) follows. Jetpack XR's `FollowTarget`.

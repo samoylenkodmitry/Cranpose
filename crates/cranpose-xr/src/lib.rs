@@ -130,6 +130,7 @@ mod field_of_view;
 mod flat_stream;
 mod follow_mode;
 mod follow_origin;
+mod follow_thresholds;
 mod following_subspace;
 mod foveated_encoding;
 #[cfg(any(test, all(headset, target_os = "android")))]
@@ -265,6 +266,7 @@ mod scripted_controller;
 mod scripted_hand;
 #[cfg(any(test, headset))]
 mod session_status;
+mod soft_follow_mode;
 #[cfg(any(test, headset))]
 mod soft_keyboard;
 mod sound_sources;
@@ -376,6 +378,7 @@ pub use field_of_view::FieldOfView;
 #[cfg(all(desktop_run, not(headset)))]
 pub use flat_run::run;
 pub use follow_mode::{FollowMode, FollowTarget, TrackedDimensions};
+pub use follow_thresholds::FollowThresholds;
 pub use following_subspace::FollowingSubspace;
 pub use foveated_encoding::FoveatedEncoding;
 #[cfg(feature = "gltf")]
@@ -430,6 +433,7 @@ pub use run_error::RunError;
 pub use scripted_controller::{ScriptedButtons, ScriptedController, script_controller};
 #[cfg(all(feature = "scripted-hand", headset))]
 pub use scripted_hand::{PinchCycle, ScriptedHand, script_hand};
+pub use soft_follow_mode::SoftFollowMode;
 pub use spatial_capabilities::{SpatialCapabilities, local_spatial_capabilities};
 pub use spatial_curved_row::SpatialCurvedRow;
 pub use spatial_environment::{SpatialEnvironment, local_spatial_environment};
