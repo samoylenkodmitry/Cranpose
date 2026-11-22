@@ -69,9 +69,7 @@ impl Part {
             colors: states.colors,
         }
     }
-}
 
-impl Part {
     // `modifier` for the control whose body this is: it reports where the control lays out, shows
     // the pointer's press to the body through `source` and runs `click` at a click. The control
     // draws no indication, because its body shows the hover and the press.

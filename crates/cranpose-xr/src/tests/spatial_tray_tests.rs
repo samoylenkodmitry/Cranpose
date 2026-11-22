@@ -74,7 +74,9 @@ fn bench(kind: Kind) -> Bench {
                 let place = Modifier::empty().offset(x, y).size_points(width, height);
                 match kind {
                     Kind::Button => SpatialButton(
-                        move || controls.clicks.set(controls.clicks.get_non_reactive() + 1),
+                        move || {
+                            controls.clicks.set(controls.clicks.get_non_reactive() + 1);
+                        },
                         place,
                         true,
                         ButtonShape::Key,
@@ -97,7 +99,7 @@ fn bench(kind: Kind) -> Bench {
                         move || {
                             controls
                                 .finished
-                                .set(controls.finished.get_non_reactive() + 1)
+                                .set(controls.finished.get_non_reactive() + 1);
                         },
                         SliderColors::default(),
                     ),
