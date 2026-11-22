@@ -13,7 +13,7 @@ use std::{
 use openxr as xr;
 
 use super::{
-    frame_layers::{Chains, Counts, FrameLayers, Layer, Stages},
+    frame_layers::{Chains, Counts, DepthTest, FrameLayers, Layer, Stages},
     graphics::{Api, Graphics},
     passthrough::Passthrough,
     recenter_events::RecenterEvents,
@@ -485,7 +485,7 @@ impl XrSession {
         stages: Stages<
             'a,
             impl Iterator<Item = ProjectionLayer<'a>>,
-            impl Iterator<Item = Layer<'a>>,
+            impl Iterator<Item = (Layer<'a>, DepthTest)>,
             impl Iterator<Item = QuadLayer<'a>>,
         >,
         plan: Option<VolumePlan>,

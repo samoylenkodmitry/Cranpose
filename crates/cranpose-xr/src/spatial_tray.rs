@@ -39,9 +39,10 @@ const FLAT_CORNER: f32 = 24.0;
 /// control lays out on the panel. A key sinks 5 mm while a ray presses it and rises at the release.
 /// A switch flips, and a slider's knob slides along its groove. A ray that rests on a control lifts
 /// it a little and makes it glow. The meshes read these animations while the scene draws, so they
-/// compose nothing. Where the compositor tests the panels against the scene's depth, the words show
-/// over the parts. `base` is the base's color, or `None` for controls that stand on no base, such as
-/// a single ball.
+/// compose nothing. The panel's layer skips the compositor's depth test while no other volume
+/// stands in front of the tray, so the words show over the parts. A volume in front, such as
+/// another tray, covers the words where the compositor tests depth. `base` is the base's color, or
+/// `None` for controls that stand on no base, such as a single ball.
 ///
 /// The modifier's pose, `movable`, `layer_priority` and following subspace work as on a
 /// [`SpatialPanel`](crate::SpatialPanel). The tray moves with its panel when the user carries it
@@ -49,8 +50,9 @@ const FLAT_CORNER: f32 = 24.0;
 /// meshes of the scene's one projection layer.
 ///
 /// `visible` shows and hides the tray as Compose's `AnimatedVisibility` does: the tray rises from
-/// behind its place in 180 ms and grows to its size as its words fade in, and it sinks back and
-/// fades out in 140 ms. Once it has hidden, it composes neither its panel nor its meshes, so a
+/// behind its place in 180 ms and grows to its size, and it sinks back and shrinks in 140 ms. The
+/// words show with the start of the show and leave with the start of the hide, so the panel draws
+/// once for each. Once the tray has hidden, it composes neither its panel nor its meshes, so a
 /// hidden tray costs nothing. Its content's state ends then.
 ///
 /// Outside a headset the tray is a box of the panel's size with a background of `base` and rounded
@@ -76,7 +78,7 @@ pub fn SpatialTray(
     }
     let size = modifier.size_or(DEFAULT_PANEL_SIZE);
     match local_space().current() {
-        Some(space) => PlacedTray(space, modifier, (size, base), shown, content),
+        Some(space) => PlacedTray(space, modifier, (size, base), (visible, shown), content),
         None => {
             let background = base.unwrap_or(Color(0.0, 0.0, 0.0, 0.0));
             Box(
@@ -96,7 +98,7 @@ fn PlacedTray(
     space: Space,
     modifier: SubspaceModifier,
     (size, base): ([f32; 2], Option<Color>),
-    shown: State<f32>,
+    (visible, shown): (bool, State<f32>),
     content: impl FnMut() + 'static,
 ) {
     let tray = remember(|| TrayParts::new(shown)).with(|tray| *tray);
@@ -111,8 +113,8 @@ fn PlacedTray(
                 Modifier::empty()
                     .fill_max_size()
                     .report_window_rect_state(tray.root)
-                    .graphics_layer(move || GraphicsLayer {
-                        alpha: tray.shown.get(),
+                    .graphics_layer_value(GraphicsLayer {
+                        alpha: f32::from(u8::from(visible)),
                         ..GraphicsLayer::default()
                     }),
                 BoxSpec::default(),
