@@ -144,6 +144,9 @@ objc2-core-media = { version = "0.3.2", default-features = false, features = ["s
 objc2-core-video = { version = "0.3.2", default-features = false, features = ["std", "objc2", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn"] }
 objc2-video-toolbox = { version = "0.3.2", default-features = false, features = ["std", "objc2", "objc2-core-media", "objc2-core-video", "VTDecompressionSession", "VTDecompressionProperties", "VTSession", "VTErrors"] }
 
+[target."cfg(any(unix, windows))".dependencies]
+socket2 = "0.6"
+
 [dev-dependencies]
 # Path-only dev-dep: stripped from the published manifest. Turns on the
 # workspace's shared test scratch directory for this crate's own tests.

@@ -25,6 +25,8 @@ mod configuration;
 ))]
 mod crop_window;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+pub(crate) mod declared_services;
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod decoder_capabilities;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod device;
@@ -100,6 +102,8 @@ pub(crate) mod meta_entitlement_wire;
 pub(crate) mod microphone;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod microphone_standby;
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+pub(crate) mod network_request;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod overlay_window;
 #[cfg(any(test, feature = "renderer-wgpu"))]

@@ -50,6 +50,7 @@ pub mod memory_pressure;
 pub mod microphone_permission;
 pub mod microphone_standby;
 pub mod navigation;
+pub mod network_request;
 pub mod network_status;
 pub mod notifier;
 pub mod opened_links;
@@ -277,6 +278,14 @@ pub use navigation::{
     BackEdge, BackEvent, BackGesture, BackHandler, BackRequestObserver, PredictiveBackHandler,
     back_interception_enabled, exit_requested, observe_back_requests, push_back_gesture,
     push_back_request, request_exit, set_back_interception, take_back_requests, take_exit_request,
+};
+#[cfg(any(unix, windows))]
+pub use network_request::SocketHandle;
+pub use network_request::{
+    LinkSpeed, Network, NetworkHandle, NetworkReach, NetworkRequest, NetworkRequestId,
+    NetworkRequestState, NetworkRequester, NetworkRequesterRef, NetworkTransport, RequestedNetwork,
+    clear_platform_network_requester, publish_network_request_state, request_network,
+    set_platform_network_requester,
 };
 pub use network_status::{
     Connectivity, Metering, NetworkMonitor, NetworkMonitorRef, NetworkStatus,
