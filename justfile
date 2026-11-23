@@ -411,8 +411,8 @@ check-forks base="origin/main":
     done
 
 # The wgpu fork's own tests, the Metal backend's among them, which only a Mac
-# compiles: the workspace leaves the forks out, so `test` runs none of them.
-# Runs when the diff against `base` touches `forks/`.
+# compiles, and the GL backend's: the workspace leaves the forks out, so `test`
+# runs none of them. Runs when the diff against `base` touches `forks/`.
 test-forks base="origin/main":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -420,7 +420,7 @@ test-forks base="origin/main":
         echo "test-forks: forks/ unchanged against {{base}}"
         exit 0
     fi
-    cargo test --manifest-path forks/wgpu/wgpu-hal/Cargo.toml --features metal --target-dir target/forks --lib
+    cargo test --manifest-path forks/wgpu/wgpu-hal/Cargo.toml --features metal,gles --target-dir target/forks --lib
 
 # Copy-paste budget for a block the diff adds, at either end of the copy.
 # Same on-demand install as above, through the same pinned-path resolver.
