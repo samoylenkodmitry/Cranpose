@@ -45,6 +45,9 @@ mod controllers;
 #[path = "projected_pass_tests.rs"]
 mod projected;
 
+#[path = "spatial_tray_tests.rs"]
+mod tray;
+
 // What the host of a test holds: the GPU, the guest view that runs the content, the space and the
 // counts of what composed.
 struct Headset {

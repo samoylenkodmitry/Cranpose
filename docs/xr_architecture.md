@@ -99,6 +99,13 @@ Cranpose developers too:
 
 - `SpatialVolume(modifier, content)`: 3D content in a box, drawn by Cranpose's own scene. See "3D
   content".
+- `SpatialTray(modifier, visible, base, content)`: 2D content on a panel over a tray of 3D
+  geometry, with `SpatialButton(on_click, modifier, enabled, shape, color, content)`,
+  `SpatialSwitch(checked, on_checked_change, modifier, enabled, colors)` and
+  `SpatialSlider(value, on_value_change, modifier, enabled, steps, on_value_change_finished,
+  colors)` on it. Jetpack XR has no 3D controls: its Material components for XR put flat controls
+  on a `SpatialPanel`. The controls keep the names and the arguments of Compose's `Button`,
+  `Switch` and `Slider` with the `Spatial` prefix. See "3D controls".
 - `SpatialGltfModel(state, modifier, content)`: a glTF 2.0 model in a volume, behind the `gltf`
   feature. `rememberSpatialGltfModelState(source)` loads it. See "glTF models".
 - `SpatialPointSource(modifier, source)` and `SubspaceModifier::point_source(source)`: sound that
@@ -268,6 +275,52 @@ crosses the gap between two panels can hide a controller's model and show it aga
 On a Quest 3 a scene made again held one frame for about 36 ms: 15 ms for the four swapchains of
 1680 by 1760 and 15 ms for the new renderer's first draw. The swapchains hold about 143 MB during
 the hold. After it no swapchain exists.
+
+### 3D controls
+
+A `SpatialTray` is two things at one pose: a panel of 2D content and, under it, a volume whose
+box is centered on the panel's plane. The panel carries the words and takes the input. It draws no
+background, and its layer shows the words at the compositor's full resolution. The volume carries
+the meshes: the base and a body for each control. The meshes stand behind the panel's plane, from
+0.7 mm for a key under a resting ray to 10 mm for the base, so the words lie on the parts. The
+volume takes no ray and follows the panel when the user carries it or its subspace follows a
+target.
+
+Each control on the tray lays out on the panel as a Compose control does and reports its rectangle
+in the panel. The tray's scene puts the control's body there. `SpatialButton` is a key cap or a
+ball that sinks 5 mm under a press and rises at the release. `SpatialSwitch` is a rocker that flips
+and lights its end. `SpatialSlider` is a knob in a groove with a mark at each step. A ray that rests
+on a control lifts it 0.8 mm and makes it glow. The bodies read their animations while the scene
+draws, so a press or a hover draws the scene again and composes nothing.
+
+The tray shows in 180 ms: it rises 30 mm from behind its place and grows from 85% of its size. It
+hides in 140 ms. Once it has hidden, it composes neither the panel nor the meshes, so a hidden tray
+costs no layer and no draw. The light of a tray takes four taps of the shadow map. A light with a
+size and 32 to 48 taps for a penumbra took 5.2 ms of the GPU for an open tray of a menu on a
+Quest 3, against 3.0 ms with four taps.
+
+The panel of a tray skips the compositor's depth test (`volume_plan::skips_depth_test`). With the
+test, a Quest 3 cut the words where a tray stood below the view's center: on a tray tilted toward
+the viewer, the words over keys 0.7 to 1.5 mm in front of the key caps vanished below a line near
+the top of the tray. With the meshes 20 mm farther back, more words showed, and every word on the
+base, 30 mm in front of it, showed. In a test of an off-center, tilted plane the depth that
+Cranpose writes equals the depth of the eye's camera at every pixel, so the cut comes from the
+compositor's test of the quad. The panel keeps the test while another volume, such as a second tray, stands in
+front of it as the head sees them, so that volume covers the words.
+
+Measured on a Quest 3 with a stream of 120 frames a second under a hand menu of an app, over 6 s
+for each case:
+
+| Case | Frame rate | Layers | App GPU | Compositor | GPU busy |
+| --- | --- | --- | --- | --- | --- |
+| Flat panels, menu closed | 120 | 7 | 0.37 ms | 1.10 ms | 23% |
+| Flat panels, menu open | 120 | 8 | 0.12 ms | 0.64 ms | 10% |
+| Trays, menu closed (one 3D ball shows) | 120 | 8 | 1.82 ms | 1.80 ms | 46% |
+| Trays, menu open | 120 | 9 | 3.10 ms | 1.95 ms | 66% |
+
+The open tray adds one layer for its panel. The projection layer that the meshes need is the
+other layer, and it costs about 1.5 ms of the GPU while anything 3D shows. No frame was stale in
+the cases with trays.
 
 ### Pointer
 

@@ -23,6 +23,8 @@ pub(crate) struct VolumeContent {
     // The volume's pose in the room, which the scene reads while it draws, so a volume that moves
     // composes nothing
     pub(crate) pose: MutableState<Pose>,
+    // Whether the volume stands in a place: the scene leaves out a volume that stands in none
+    pub(crate) shown: MutableState<bool>,
     // The light that the volume's content sets, in the volume's own axes
     pub(crate) light: MutableState<Option<Light>>,
     // Composes the volume's content

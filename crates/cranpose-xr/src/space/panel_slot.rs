@@ -12,8 +12,9 @@ pub(crate) enum PanelKind {
     Surface(StereoMode),
     // 3D content that the scene of the volumes draws. The panel's pose is the center of its box,
     // its size is the box's width and height in dp, and `depth` is the box's depth in dp. It has no
-    // part of the atlas: a ray stops on the box.
-    Volume { depth: f32 },
+    // part of the atlas: a ray stops on the box. A volume `under` a panel of content stands where
+    // that panel stands and takes no ray: the panel in front of it takes the input.
+    Volume { depth: f32, under: Option<u64> },
 }
 
 // A panel as the backend sees it.
@@ -60,7 +61,7 @@ impl PanelSlot {
     // meeting with the box.
     pub(crate) fn face(&self) -> Pose {
         match self.kind {
-            PanelKind::Volume { depth } => {
+            PanelKind::Volume { depth, .. } => {
                 self.pose
                     .then(&Pose::at([0.0, 0.0, depth * METERS_PER_DP / 2.0]))
             }
@@ -86,7 +87,7 @@ impl PanelSlot {
     pub(crate) fn hit(&self, ray: &Ray) -> Option<PanelHit> {
         let size = self.size().map(|dp| dp * METERS_PER_DP);
         match (self.kind, self.shape) {
-            (PanelKind::Volume { depth }, _) => {
+            (PanelKind::Volume { depth, .. }, _) => {
                 ray.hit_box(&self.pose, [size[0], size[1], depth * METERS_PER_DP])
             }
             (_, Shape::Flat) => ray.hit_panel(&self.pose, size),

@@ -68,8 +68,12 @@ pub(crate) fn ray_hit(pick: MeshPick) -> RayHit {
 
 // Whether the ray of the controller in hand `side` can meet the panel. A panel that stands in no
 // place shows nowhere and takes no hits. A panel that rides a controller is out of reach of that
-// controller's own ray: the left ray passes through the ball above the left controller.
+// controller's own ray: the left ray passes through the ball above the left controller. A volume
+// under a panel is out of reach of every ray, so the panel in front of it takes the input.
 pub(crate) fn reachable(slot: &PanelSlot, side: Side) -> bool {
+    if matches!(slot.kind, PanelKind::Volume { under: Some(_), .. }) {
+        return false;
+    }
     match slot.ride {
         Ride::Free => true,
         Ride::On(rides) => rides != side,

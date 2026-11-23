@@ -145,6 +145,9 @@ pub(crate) struct Panel {
     pub(crate) surface: MutableState<Option<ExternalSurface>>,
     // The pose of a volume in the room, which the scene of the volumes reads while it draws.
     pub(crate) volume_pose: MutableState<Pose>,
+    // Whether a volume stands in a place: a volume of a following subspace whose target the
+    // headset does not track shows nowhere, and the scene leaves its content out.
+    pub(crate) volume_shown: MutableState<bool>,
 }
 
 // The panels of the app in a headset. The headset's backend provides it around the app's
@@ -228,11 +231,25 @@ struct Following {
 }
 
 impl Entry {
+    // The panel that this volume stands under, if it is such a volume.
+    fn under(&self) -> Option<u64> {
+        match self.slot.kind {
+            PanelKind::Volume { under, .. } => under,
+            PanelKind::Content | PanelKind::Surface(_) => None,
+        }
+    }
+
     // Gives the scene of the volumes the pose of a volume, which draws it there without
     // composing. Other panels have no use for the state.
     fn publish_pose(&self) {
         if matches!(self.slot.kind, PanelKind::Volume { .. }) {
-            self.panel.volume_pose.set(self.slot.pose);
+            if self.slot.ride != Ride::Hidden {
+                self.panel.volume_pose.set(self.slot.pose);
+            }
+            let shown = self.slot.ride != Ride::Hidden;
+            if self.panel.volume_shown.get_non_reactive() != shown {
+                self.panel.volume_shown.set(shown);
+            }
         }
     }
 
@@ -253,6 +270,7 @@ impl Entry {
             None => {
                 self.slot.ride = Ride::Hidden;
                 self.slot.tracked = None;
+                self.publish_pose();
             }
         }
     }
@@ -325,7 +343,10 @@ impl Space {
             .entries
             .borrow()
             .iter()
-            .filter(|entry| matches!(entry.slot.kind, PanelKind::Volume { .. }))
+            .filter(|entry| {
+                matches!(entry.slot.kind, PanelKind::Volume { .. })
+                    && entry.slot.ride != Ride::Hidden
+            })
             .count()
     }
 
@@ -388,11 +409,13 @@ impl Space {
         if !origins.track(poses, time, recenter) {
             return;
         }
-        for entry in self.inner.entries.borrow_mut().iter_mut() {
+        let mut entries = self.inner.entries.borrow_mut();
+        for entry in entries.iter_mut() {
             if let Some(standing) = entry.follow.and_then(|follow| origins.moved(follow.id)) {
                 entry.stand(standing);
             }
         }
+        stand_under(&mut entries);
     }
 
     // A new panel with its states. A composable calls it inside a `remember`, so that the states
@@ -406,6 +429,7 @@ impl Space {
             dots: mutableStateOf([None; 2]),
             surface: mutableStateOf(None),
             volume_pose: mutableStateOf(Pose::IDENTITY),
+            volume_shown: mutableStateOf(true),
         }
     }
 
@@ -443,6 +467,7 @@ impl Space {
 
     // Registers the volume `panel` with a box of `size` dp (width, height and depth) centered at
     // `pose`, in a subspace whose origin is `origin`. It takes no room in the atlas.
+    #[cfg(test)]
     pub(crate) fn place_volume(
         &self,
         panel: Panel,
@@ -450,9 +475,26 @@ impl Space {
         origin: impl Into<Origin>,
         pose: Pose,
     ) {
+        self.place_volume_under(panel, size, None, origin, pose);
+    }
+
+    // `place_volume` for a volume that may stand `under` a panel of content. Such a volume stands
+    // where that panel stands, also while the user carries it or its subspace follows a target,
+    // and takes no ray.
+    pub(crate) fn place_volume_under(
+        &self,
+        panel: Panel,
+        size: [f32; 3],
+        under: Option<u64>,
+        origin: impl Into<Origin>,
+        pose: Pose,
+    ) {
         self.place_kind(
             panel,
-            PanelKind::Volume { depth: size[2] },
+            PanelKind::Volume {
+                depth: size[2],
+                under,
+            },
             [size[0], size[1]],
             origin.into(),
             pose,
@@ -544,7 +586,9 @@ impl Space {
             }
         }
         entry.publish_pose();
-        entry.slot.atlas
+        let atlas = entry.slot.atlas;
+        stand_under(&mut entries);
+        atlas
     }
 
     // Sets what the panel `id` does when the user carries it. A panel with no policy stays.
@@ -673,6 +717,7 @@ impl Space {
                 entry.carried = Some(pose);
                 entry.publish_pose();
             }
+            let moved = entry.slot.id;
             let event = SpatialMoveEvent {
                 event_type: step.event_type,
                 pose,
@@ -680,7 +725,11 @@ impl Space {
                 room_pose: entry.origin.then(&pose),
             };
             let listener = entry.policy.as_ref().and_then(MovePolicy::listener);
-            listener.map(|listener| (listener, event))
+            let heard = listener.map(|listener| (listener, event));
+            if entries.iter().any(|entry| entry.under() == Some(moved)) {
+                stand_under(&mut entries);
+            }
+            heard
         };
         // The callback runs with no borrow held, so that it may call the space
         if let Some((listener, event)) = heard {
@@ -822,6 +871,28 @@ impl Space {
 
 // Stacks the panels from the top of the atlas in the order they registered. A panel that moves
 // gets its new origin in its state.
+// Puts each volume that stands under a panel where that panel stands, with its ride, so it moves,
+// follows and hides with the panel.
+fn stand_under(entries: &mut [Entry]) {
+    for index in 0..entries.len() {
+        let Some(panel) = entries[index].under() else {
+            continue;
+        };
+        let Some((pose, ride, tracked)) = entries
+            .iter()
+            .find(|entry| entry.slot.id == panel)
+            .map(|entry| (entry.slot.pose, entry.slot.ride, entry.slot.tracked))
+        else {
+            continue;
+        };
+        let entry = &mut entries[index];
+        entry.slot.pose = pose;
+        entry.slot.ride = ride;
+        entry.slot.tracked = tracked;
+        entry.publish_pose();
+    }
+}
+
 fn restack(entries: &mut [Entry]) {
     let mut top = 0.0;
     for entry in entries

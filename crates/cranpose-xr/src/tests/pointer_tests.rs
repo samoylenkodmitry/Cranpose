@@ -1224,7 +1224,10 @@ fn a_volume_in_front_of_a_panel_takes_the_ray_and_the_panel_behind_it_does_not()
 fn square_volume() -> (PanelSlot, PickMeshes) {
     let slot = PanelSlot {
         id: 9,
-        kind: PanelKind::Volume { depth: 300.0 },
+        kind: PanelKind::Volume {
+            depth: 300.0,
+            under: None,
+        },
         atlas: [0.0, 0.0, 960.0, 540.0],
         pose: Pose::at([0.0, 0.0, -1.0]),
         mobility: Mobility::Fixed,
