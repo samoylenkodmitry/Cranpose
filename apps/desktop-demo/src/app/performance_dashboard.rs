@@ -21,6 +21,7 @@ mod chart_view;
 mod curve_plot;
 mod focus;
 mod launch_chart;
+mod methodology;
 mod motion;
 mod plot;
 mod runs;
@@ -28,6 +29,7 @@ mod subject_bars;
 mod table;
 use focus::Focus;
 use launch_chart::{launch_lines, LaunchChart};
+use methodology::MethodologyCard;
 use plot::{Axis, Plot};
 pub use runs::{
     LegSamples, PerfFramesLeg, PerfFramesScenario, PerfIndex, PerfProtocol, PerfRun, PerfRunFrames,
@@ -401,6 +403,7 @@ pub fn PerformanceDashboard(
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
         move || {
             Header(palette, refresh);
+            MethodologyCard(palette);
             let nightly: Vec<PerfRun> = index.nightly().into_iter().cloned().collect();
             match nightly.last() {
                 Some(latest) => {
