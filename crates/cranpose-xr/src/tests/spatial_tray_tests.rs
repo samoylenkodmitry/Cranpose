@@ -53,6 +53,47 @@ struct Bench {
 }
 
 fn bench(kind: Kind) -> Bench {
+    bench_of(TRAY, move |controls| {
+        let [x, y, width, height] = CONTROL;
+        let place = Modifier::empty().offset(x, y).size_points(width, height);
+        match kind {
+            Kind::Button => SpatialButton(
+                move || {
+                    controls.clicks.set(controls.clicks.get_non_reactive() + 1);
+                },
+                place,
+                true,
+                ButtonShape::Key,
+                Color(0.3, 0.4, 0.6, 1.0),
+                || {},
+            ),
+            Kind::Switch => SpatialSwitch(
+                controls.checked.get(),
+                move |on| controls.checked.set(on),
+                place,
+                true,
+                SwitchColors::default(),
+            ),
+            Kind::Slider => SpatialSlider(
+                controls.value.get(),
+                move |value| controls.value.set(value),
+                place,
+                true,
+                3,
+                move || {
+                    controls
+                        .finished
+                        .set(controls.finished.get_non_reactive() + 1);
+                },
+                SliderColors::default(),
+            ),
+        }
+    })
+}
+
+// A headset with a tray of `size` dp, a meter ahead, whose content is `content`, and a pointer
+// over it.
+fn bench_of(size: [f32; 2], content: impl Fn(Controls) + Clone + 'static) -> Bench {
     let kept = Rc::new(RefCell::new(None));
     let keep = Rc::clone(&kept);
     let headset = headset_of(Rc::new(move |_: &Probes, _| {
@@ -65,46 +106,12 @@ fn bench(kind: Kind) -> Bench {
         })
         .with(|controls| *controls);
         keep.replace(Some(controls));
+        let content = content.clone();
         SpatialTray(
-            SubspaceModifier::new().size(TRAY[0], TRAY[1]).movable(),
+            SubspaceModifier::new().size(size[0], size[1]).movable(),
             controls.visible.get(),
             Some(Color(0.1, 0.2, 0.5, 1.0)),
-            move || {
-                let [x, y, width, height] = CONTROL;
-                let place = Modifier::empty().offset(x, y).size_points(width, height);
-                match kind {
-                    Kind::Button => SpatialButton(
-                        move || {
-                            controls.clicks.set(controls.clicks.get_non_reactive() + 1);
-                        },
-                        place,
-                        true,
-                        ButtonShape::Key,
-                        Color(0.3, 0.4, 0.6, 1.0),
-                        || {},
-                    ),
-                    Kind::Switch => SpatialSwitch(
-                        controls.checked.get(),
-                        move |on| controls.checked.set(on),
-                        place,
-                        true,
-                        SwitchColors::default(),
-                    ),
-                    Kind::Slider => SpatialSlider(
-                        controls.value.get(),
-                        move |value| controls.value.set(value),
-                        place,
-                        true,
-                        3,
-                        move || {
-                            controls
-                                .finished
-                                .set(controls.finished.get_non_reactive() + 1);
-                        },
-                        SliderColors::default(),
-                    ),
-                }
-            },
+            move || content(controls),
         );
     }));
     let mut bench = Bench {
@@ -357,4 +364,151 @@ fn the_tray_stands_under_its_panel_where_the_user_carries_it() {
         to,
         "the volume moves with the panel in the same step"
     );
+}
+
+// What a word of the layout test is: a key's words or a row's label beside its keys.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Words {
+    OnKey,
+    Label,
+}
+
+// The words of a tray laid out as a menu: rows of a label with a switch or keys beside it, and a
+// row of keys with no label, each word with the place where it lays out in the window.
+type Placed = Rc<RefCell<Vec<(Words, &'static str, MutableState<Rect>)>>>;
+
+// A word that notes where it lays out. The harness measures no glyphs, so a box of the size that
+// the words take on a menu stands in for them: a key's words 60 by 24 dp, a label's line 34 dp tall.
+#[composable]
+fn Word(placed: Placed, (kind, text): (Words, &'static str), modifier: Modifier) {
+    let rect = remember(|| mutableStateOf(Rect::default())).with(|rect| *rect);
+    {
+        let mut placed = placed.borrow_mut();
+        if !placed.iter().any(|(_, known, _)| *known == text) {
+            placed.push((kind, text, rect));
+        }
+    }
+    let size = match kind {
+        Words::OnKey => Modifier::empty().size_points(60.0, 24.0),
+        Words::Label => Modifier::empty().fill_max_width().height(34.0),
+    };
+    Box(
+        modifier.then(size).report_window_rect_state(rect),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+// A key with its words on it.
+#[composable]
+fn MenuKey(placed: Placed, text: &'static str, modifier: Modifier) {
+    SpatialButton(
+        || {},
+        modifier.height(52.0),
+        true,
+        ButtonShape::Key,
+        Color(0.3, 0.4, 0.6, 1.0),
+        move || Word(Rc::clone(&placed), (Words::OnKey, text), Modifier::empty()),
+    );
+}
+
+// A label that fills the room that its row's controls leave, 10 dp below the row's top.
+fn label() -> Modifier {
+    Modifier::empty().weight(1.0).padding_symmetric(0.0, 10.0)
+}
+
+#[composable]
+fn Menu(placed: Placed, root: MutableState<Rect>) {
+    Column(
+        Modifier::empty()
+            .fill_max_size()
+            .report_window_rect_state(root)
+            .padding(22.0),
+        ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(8.0)),
+        move || {
+            let row = || Modifier::empty().fill_max_width().height(52.0);
+            let spaced =
+                || RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(8.0));
+            let first = Rc::clone(&placed);
+            Row(row(), spaced(), move || {
+                Word(Rc::clone(&first), (Words::Label, "Stream numbers"), label());
+                SpatialSwitch(
+                    false,
+                    |_| {},
+                    Modifier::empty().width(92.0).height(52.0),
+                    true,
+                    SwitchColors::default(),
+                );
+            });
+            let keys = Rc::clone(&placed);
+            Row(row(), spaced(), move || {
+                for text in ["Steam", "Stream", "Connection"] {
+                    MenuKey(Rc::clone(&keys), text, Modifier::empty().weight(1.0));
+                }
+            });
+            let third = Rc::clone(&placed);
+            Row(row(), spaced(), move || {
+                Word(Rc::clone(&third), (Words::Label, "Interface"), label());
+                for text in ["3D", "Flat"] {
+                    MenuKey(Rc::clone(&third), text, Modifier::empty().width(92.0));
+                }
+            });
+            let last = Rc::clone(&placed);
+            Row(row(), spaced(), move || {
+                for text in ["Back", "Close"] {
+                    MenuKey(Rc::clone(&last), text, Modifier::empty().weight(1.0));
+                }
+            });
+        },
+    );
+}
+
+// Each word of a tray stands on its own control's body or on the base, from the same layout: a
+// ray through the middle of a key's words meets that key's face, and a ray through any corner of a
+// row's label meets the base, never a key of a row above or below it.
+#[test]
+fn words_lie_on_their_own_keys_and_labels_on_the_base_beside_their_row() {
+    let placed: Placed = Rc::new(RefCell::new(Vec::new()));
+    let root = Rc::new(RefCell::new(None::<MutableState<Rect>>));
+    let (keep_placed, keep_root) = (Rc::clone(&placed), Rc::clone(&root));
+    let mut bench = bench_of([470.0, 300.0], move |_| {
+        let rect = remember(|| mutableStateOf(Rect::default())).with(|rect| *rect);
+        keep_root.replace(Some(rect));
+        Menu(Rc::clone(&keep_placed), rect);
+    });
+    let root = root.borrow().expect("the menu composed").get();
+    let words = placed.borrow().clone();
+    assert_eq!(words.len(), 9, "two labels and seven keys' words");
+    for (kind, text, rect) in words {
+        let rect = rect.get();
+        assert!(rect.width > 0.0, "{text} laid out");
+        // The word's place on the panel, in dp from its top left corner
+        let on_panel = |x: f32, y: f32| [rect.x - root.x + x, rect.y - root.y + y];
+        let middle = on_panel(rect.width / 2.0, rect.height / 2.0);
+        match kind {
+            Words::OnKey => {
+                let depth = bench.depth_at(middle);
+                assert!(
+                    (0.2..2.0).contains(&depth),
+                    "the words {text} stand {depth} mm in front of what lies under them, not on a key"
+                );
+            }
+            Words::Label => {
+                let inset = 1.0;
+                for at in [
+                    middle,
+                    on_panel(inset, inset),
+                    on_panel(rect.width - inset, inset),
+                    on_panel(inset, rect.height - inset),
+                    on_panel(rect.width - inset, rect.height - inset),
+                ] {
+                    let depth = bench.depth_at(at);
+                    assert!(
+                        depth > 9.0,
+                        "the label {text} lies over a part {depth} mm behind it at {at:?}"
+                    );
+                }
+            }
+        }
+    }
 }

@@ -11,7 +11,7 @@ use openxr as xr;
 
 use super::{
     entitlement_run::EntitlementRun,
-    frame_layers::{DepthTest, Layer, Stages},
+    frame_layers::{Layer, Stages},
     frame_rate::FrameRate,
     graphics::Graphics,
     handle_layers::{self, Handle, HandleLayers},
@@ -47,7 +47,6 @@ use crate::{
     spatial_store::SpatialStore,
     volume_host::VolumeScene,
     volume_pick::PickMeshes,
-    volume_plan::skips_depth_test,
     volumes::scene_count,
 };
 
@@ -412,7 +411,7 @@ impl Immersive {
                 Stages {
                     streams: std::iter::empty::<ProjectionLayer<'_>>(),
                     volumes: None,
-                    panels: std::iter::empty::<(Layer<'_>, DepthTest)>(),
+                    panels: std::iter::empty::<Layer<'_>>(),
                     overlay: std::iter::empty::<QuadLayer<'_>>(),
                 },
                 None,
@@ -538,28 +537,20 @@ impl Immersive {
                 // A panel that follows every move of the head or a controller rides in its space,
                 // with its handles, so the compositor places them with the newest pose of it
                 let place = slot.tracked.and_then(|tracked| spaces.located(tracked));
-                let test = if skips_depth_test(panels, index, head) {
-                    DepthTest::Skipped
-                } else {
-                    DepthTest::Kept
-                };
                 let content = layers
                     .layer(slot)
-                    .filter(|_| placement.content == Place::Own)
-                    .map(|layer| (layer, test));
+                    .filter(|_| placement.content == Place::Own);
                 let surfaces = surfaces
                     .layers(slot)
                     .filter(move |_| placement.surfaces == Place::Own);
                 let handles = handles
                     .layers(slot, active, head)
                     .filter(move |_| placement.handles == Place::Own);
-                let quads = surfaces
-                    .chain(handles)
-                    .map(|quad| (Layer::Quad(quad), DepthTest::Kept));
                 content
                     .into_iter()
-                    .chain(quads)
-                    .map(move |(layer, test)| (layer.in_space(place), test))
+                    .chain(surfaces.map(Layer::Quad))
+                    .chain(handles.map(Layer::Quad))
+                    .map(move |layer| layer.in_space(place))
             });
         let rays = head
             .into_iter()

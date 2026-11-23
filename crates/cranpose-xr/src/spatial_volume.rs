@@ -43,8 +43,9 @@ impl SpatialVolumeScope {
     /// y down and z away from the viewer. A volume that sets none has no light in its scene.
     ///
     /// A headset draws every volume in one scene, which has one light. The scene takes the light
-    /// of the first volume that sets one and turns it with that volume's pose. A window draws each
-    /// volume in a scene of its own, with that volume's light.
+    /// of the first shown volume whose light casts shadows, else of the first that sets one, and
+    /// turns it with that volume's pose. A window draws each volume in a scene of its own, with
+    /// that volume's light.
     pub fn light(&self, light: Light) {
         self.light.set(Some(light));
     }

@@ -302,7 +302,7 @@ impl VolumeLayers {
                     .filter(|_| drawn.plan.submits_depth)
                     .map(|swapchain| EyeDepth {
                         swapchain,
-                        near: camera.near,
+                        near: camera.depth_near,
                     }),
             }
         };

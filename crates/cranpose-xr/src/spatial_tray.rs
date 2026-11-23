@@ -2,7 +2,7 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use cranpose::prelude::*;
+use cranpose::{prelude::*, space::Light};
 use cranpose_animation::{Easing, animate_float_as_state_with_initial, tween};
 use cranpose_core::{CompositionLocalProvider, derivedStateOf, remember, rememberUpdatedState};
 
@@ -25,7 +25,7 @@ const TRAY_DEPTH: f32 = 100.0;
 // The radius of a flat tray's corners, as the base's corners in a headset
 const FLAT_CORNER: f32 = 24.0;
 
-/// A panel of 2D content that stands on a tray of 3D geometry: a base with depth, light and soft
+/// A panel of 2D content that stands on a tray of 3D geometry: a base with depth, light and
 /// shadows, with the 3D bodies of the [`SpatialButton`](crate::SpatialButton)s,
 /// [`SpatialSwitch`](crate::SpatialSwitch)es and [`SpatialSlider`](crate::SpatialSlider)s of the
 /// content on it. Jetpack XR has no such composable: its controls are flat, on a
@@ -39,10 +39,10 @@ const FLAT_CORNER: f32 = 24.0;
 /// control lays out on the panel. A key sinks 5 mm while a ray presses it and rises at the release.
 /// A switch flips, and a slider's knob slides along its groove. A ray that rests on a control lifts
 /// it a little and makes it glow. The meshes read these animations while the scene draws, so they
-/// compose nothing. The panel's layer skips the compositor's depth test while no other volume
-/// stands in front of the tray, so the words show over the parts. A volume in front, such as
-/// another tray, covers the words where the compositor tests depth. `base` is the base's color, or
-/// `None` for controls that stand on no base, such as a single ball.
+/// compose nothing. The panel's layer takes the compositor's depth test as any panel does, so a
+/// controller's model or another tray in front of the words covers them. `base` is the base's
+/// color, or `None` for controls that stand on no base, such as a single ball. Controls on no base
+/// cast no shadow, so a tray of them adds no shadow map to the frame.
 ///
 /// The modifier's pose, `movable`, `layer_priority` and following subspace work as on a
 /// [`SpatialPanel`](crate::SpatialPanel). The tray moves with its panel when the user carries it
@@ -129,7 +129,12 @@ fn PlacedTray(
             .with_pose(pose),
         ([size[0], size[1], TRAY_DEPTH], Some(panel)),
         move |scope| {
-            scope.light(TRAY_LIGHT);
+            // Controls on no base have nothing to cast a shadow on, so their light casts none and
+            // the frame draws no shadow map for them
+            scope.light(Light {
+                shadows: base.is_some(),
+                ..TRAY_LIGHT
+            });
             TrayScene(tray, base, size);
         },
     );

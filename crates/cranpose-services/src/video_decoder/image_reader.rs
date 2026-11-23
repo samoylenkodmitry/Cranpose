@@ -12,7 +12,10 @@
 use std::{
     ffi::{CStr, c_void},
     ptr::{self, NonNull},
-    sync::{Arc, OnceLock},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use ndk::native_window::NativeWindow;
@@ -85,6 +88,9 @@ pub(super) struct Reader {
     reader: NonNull<AImageReader>,
     window: NativeWindow,
     symbols: &'static Symbols,
+    // How many of its images the app holds now, and how many the reader has
+    held: AtomicUsize,
+    depth: usize,
 }
 
 // SAFETY: an AImageReader is a thread-safe object. Its window is a reference counted native
@@ -140,6 +146,8 @@ impl Reader {
             reader,
             window,
             symbols,
+            held: AtomicUsize::new(0),
+            depth,
         })
     }
 
@@ -147,8 +155,12 @@ impl Reader {
         &self.window
     }
 
-    // Takes the next image that the decoder rendered. The image keeps the reader alive.
+    // Takes the next image that the decoder rendered. The image keeps the reader alive. While the
+    // app holds every image, the reader is not asked: Android logs a warning at each such ask.
     pub(super) fn acquire(self: &Arc<Self>) -> Acquired {
+        if self.held.load(Ordering::Acquire) >= self.depth {
+            return Acquired::Full;
+        }
         let mut image = ptr::null_mut();
         // SAFETY: the reader is live, and the out pointer names a live local.
         let status = unsafe { AImageReader_acquireNextImage(self.reader.as_ptr(), &mut image) };
@@ -183,8 +195,8 @@ pub(super) struct Image {
     timestamp_ns: i64,
     size: (u32, u32),
     crop: CropRect,
-    // Keeps the reader alive until the image is deleted.
-    _reader: Arc<Reader>,
+    // Keeps the reader alive until the image is deleted, which counts the image as held until then
+    reader: Arc<Reader>,
 }
 
 // SAFETY: an AImage moves between threads. One thread uses it at a time, because the frame that
@@ -218,6 +230,7 @@ impl Image {
             return None;
         };
         let side = |from: i32, to: i32| u32::try_from(to - from).unwrap_or(0);
+        reader.held.fetch_add(1, Ordering::AcqRel);
         Some(Self {
             image,
             buffer,
@@ -229,7 +242,7 @@ impl Image {
                 width: side(crop.left, crop.right),
                 height: side(crop.top, crop.bottom),
             },
-            _reader: reader,
+            reader,
         })
     }
 
@@ -256,5 +269,6 @@ impl Drop for Image {
     fn drop(&mut self) {
         // SAFETY: the image is live and owned here.
         unsafe { AImage_delete(self.image.as_ptr()) };
+        self.reader.held.fetch_sub(1, Ordering::AcqRel);
     }
 }

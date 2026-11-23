@@ -53,6 +53,8 @@ pub(crate) const KNOB: f32 = 32.0;
 const KNOB_DEPTH: f32 = 9.0;
 const KNOB_PRESS: f32 = 3.0;
 const MARK_RADIUS: f32 = 2.5;
+// The segments around a ball: a ball of a few centimeters looks round with 24
+const DOME_SEGMENTS: u32 = 24;
 // How far the tray stands behind its place and how small it is when it starts to show
 const SHOW_DEPTH: f32 = 30.0;
 const SHOW_SCALE: f32 = 0.85;
@@ -61,9 +63,9 @@ const GROOVE_COLOR: Color = Color(0.05, 0.06, 0.1, 1.0);
 const DARK_LIGHT: Color = Color(0.12, 0.13, 0.18, 1.0);
 
 // The light of every tray: from the top left, ahead of the viewer. Its shadows take four taps of
-// the shadow map, which soften their edges by a texel. A light of some size takes 32 to 48 taps for
-// its penumbra: on a Quest 3 an open menu tray takes 5.2 ms of the GPU per frame with it,
-// against 3.0 ms with four taps.
+// the shadow map, which soften their edges by a texel. On a Quest 3 the shadow map of an open menu
+// tray takes 0.4 ms of the GPU per frame. A light of some size takes 32 to 48 taps for its
+// penumbra: the same tray took 5.2 ms of the GPU per frame with it, against 3.0 ms with four taps.
 pub(crate) const TRAY_LIGHT: Light = Light {
     direction: Vec3::new(0.35, 0.55, 0.76),
     ambient: 0.42,
@@ -77,8 +79,7 @@ pub(crate) fn TrayScene(tray: TrayParts, base: Option<Color>, size: [f32; 2]) {
     if let Some(color) = base {
         let mesh = rememberSlab([size[0], size[1], BASE_DEPTH], BASE_CORNER, BASE_EDGE);
         Body(
-            mesh,
-            color,
+            (mesh, color, true),
             move || {
                 Mat4::translation(Vec3::new(0.0, 0.0, BASE_FRONT + BASE_DEPTH / 2.0))
                     .then(&shown_transform(tray.shown))
@@ -86,8 +87,10 @@ pub(crate) fn TrayScene(tray: TrayParts, base: Option<Color>, size: [f32; 2]) {
             || satin(Finish::Matte, 0.0),
         );
     }
+    // Parts on no base have nothing to cast a shadow on
+    let shadows = base.is_some();
     for part in tray.list.get() {
-        key(part.id, move || PartBody(tray, part, size));
+        key(part.id, move || PartBody(tray, part, (size, shadows)));
     }
 }
 
@@ -112,7 +115,7 @@ struct Motion {
 }
 
 #[composable]
-fn PartBody(tray: TrayParts, part: Part, size: [f32; 2]) {
+fn PartBody(tray: TrayParts, part: Part, (size, shadows): ([f32; 2], bool)) {
     let motion = Motion {
         press: animateFloatAsState(
             f32::from(u8::from(part.pressed.get())),
@@ -157,8 +160,7 @@ fn PartBody(tray: TrayParts, part: Part, size: [f32; 2]) {
                 KEY_EDGE,
             );
             Body(
-                mesh,
-                face,
+                (mesh, face, shadows),
                 move || {
                     place(Mat4::translation(Vec3::new(
                         0.0,
@@ -171,10 +173,10 @@ fn PartBody(tray: TrayParts, part: Part, size: [f32; 2]) {
         }
         PartShape::Dome => {
             let radius = rect.width.min(rect.height) / 2.0 - KEY_INSET;
-            let mesh = remember(|| Arc::new(Mesh::sphere(40, 20))).with(Arc::clone);
+            let mesh = remember(|| Arc::new(Mesh::sphere(DOME_SEGMENTS, DOME_SEGMENTS / 2)))
+                .with(Arc::clone);
             Body(
-                mesh,
-                face,
+                (mesh, face, shadows),
                 move || {
                     place(Mat4::scaling(Vec3::new(radius, radius, radius)).then(
                         &Mat4::translation(Vec3::new(0.0, 0.0, sunk(motion) + radius)),
@@ -183,8 +185,16 @@ fn PartBody(tray: TrayParts, part: Part, size: [f32; 2]) {
                 glow,
             );
         }
-        PartShape::Rocker => Rocker(rect.width, rect.height, [face, lit], motion, place, glow),
-        PartShape::Slider { stops } => Slider(rect.width, stops, [face, lit], motion, place),
+        PartShape::Rocker => Rocker(
+            [rect.width, rect.height],
+            ([face, lit], shadows),
+            motion,
+            place,
+            glow,
+        ),
+        PartShape::Slider { stops } => {
+            Slider((rect.width, stops), ([face, lit], shadows), motion, place);
+        }
     }
 }
 
@@ -195,9 +205,8 @@ fn sunk(motion: Motion) -> f32 {
 
 #[composable]
 fn Rocker(
-    width: f32,
-    height: f32,
-    [face, lit]: [Color; 2],
+    [width, height]: [f32; 2],
+    ([face, lit], shadows): ([Color; 2], bool),
     motion: Motion,
     place: impl Fn(Mat4) -> Mat4 + Copy + 'static,
     glow: impl Fn() -> Material + Copy + 'static,
@@ -219,8 +228,7 @@ fn Rocker(
     // On, the end half lies deeper: a positive turn about y takes +x away from the viewer
     let turn = move || tilt * (2.0 * flip.get() - 1.0) * (1.0 - 0.3 * press.get());
     Body(
-        mesh,
-        face,
+        (mesh, face, shadows),
         move || {
             place(
                 Mat4::rotation_y(turn()).then(&Mat4::translation(Vec3::new(0.0, 0.0, BASE_FRONT))),
@@ -234,8 +242,7 @@ fn Rocker(
     let at = half * 0.62;
     let on = flip.get() > 0.5;
     Body(
-        dot,
-        if on { lit } else { DARK_LIGHT },
+        (dot, if on { lit } else { DARK_LIGHT }, shadows),
         move || {
             // The point of the face at `at` turns with the rocker
             let (sin, cos) = turn().sin_cos();
@@ -257,9 +264,8 @@ fn Rocker(
 
 #[composable]
 fn Slider(
-    width: f32,
-    stops: u32,
-    [face, lit]: [Color; 2],
+    (width, stops): (f32, u32),
+    ([face, lit], shadows): ([Color; 2], bool),
     motion: Motion,
     place: impl Fn(Mat4) -> Mat4 + Copy + 'static,
 ) {
@@ -273,8 +279,7 @@ fn Slider(
     );
     let groove_front = BASE_FRONT - GROOVE_DEPTH;
     Body(
-        groove,
-        GROOVE_COLOR,
+        (groove, GROOVE_COLOR, shadows),
         move || {
             place(Mat4::translation(Vec3::new(
                 0.0,
@@ -288,8 +293,7 @@ fn Slider(
     // The fill from the start to the knob: a box that the value stretches along x
     let fill = remember(|| Arc::new(Mesh::cuboid())).with(Arc::clone);
     Body(
-        fill,
-        lit,
+        (fill, lit, shadows),
         move || {
             let length = (track * value.get()).max(0.5);
             place(
@@ -306,8 +310,7 @@ fn Slider(
         let at = start + track * index as f32 / (stops.max(2) - 1) as f32;
         let mark = Arc::clone(&mark);
         Body(
-            mark,
-            face,
+            (mark, face, shadows),
             move || {
                 place(
                     Mat4::scaling(Vec3::new(MARK_RADIUS, MARK_RADIUS, MARK_RADIUS * 0.6)).then(
@@ -324,8 +327,7 @@ fn Slider(
     }
     let puck = rememberSlab([knob, knob, KNOB_DEPTH], knob / 2.0, 3.0);
     Body(
-        puck,
-        face,
+        (puck, face, shadows),
         move || {
             let front = FACE + KNOB_PRESS * press.get() - HOVER_LIFT * hover.get();
             place(Mat4::translation(Vec3::new(
@@ -338,11 +340,11 @@ fn Slider(
     );
 }
 
-// One mesh in `color`, which `transform` places and `material` lights while the scene draws.
+// One mesh in `color`, which `transform` places and `material` lights while the scene draws. It
+// casts a shadow when `shadows` says so.
 #[composable]
 fn Body(
-    mesh: Arc<Mesh>,
-    color: Color,
+    (mesh, color, shadows): (Arc<Mesh>, Color, bool),
     transform: impl Fn() -> Mat4 + 'static,
     material: impl Fn() -> Material + 'static,
 ) {
@@ -353,7 +355,7 @@ fn Body(
                 mesh: Arc::clone(&mesh),
                 transform: transform(),
                 material: material(),
-                casts_shadow: true,
+                casts_shadow: shadows,
                 solid: false,
             })
             .background(color),
