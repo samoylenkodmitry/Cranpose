@@ -82,16 +82,18 @@ fn VolumeNode(content: VolumeContent) {
     content.node.set(Some(node));
 }
 
-// The scene as it draws now: the eye's camera and the first light that a volume sets, turned from
-// the volume's axes into the scene's. A scene has one light, so volumes share it. Where no volume
-// sets one, the controllers' models stand in the default light. A draw reads the states, so a
-// camera or a pose that changes draws again without composing. The samples are the ones that the
-// headset's device takes: the renderer stores the layer's depth from a second pass of one sample.
+// The scene as it draws now: the eye's camera and the light of the first shown volume whose light
+// casts shadows, else of the first that sets one, turned from the volume's axes into the scene's. A
+// scene has one light, so volumes share it, and a volume whose light casts none, such as controls
+// on no base, leaves the shadows to a volume that has them. Where no volume sets a light, the
+// controllers' models stand in the default light. A draw reads the states, so a camera or a pose
+// that changes draws again without composing. The samples are the ones that the headset's device
+// takes: the renderer stores the layer's depth from a second pass of one sample.
 fn scene_of(volumes: &Volumes, controllers: &ControllerStates) -> Scene3d {
     let light = volumes
         .contents()
         .read(|contents| {
-            contents.iter().find_map(|content| {
+            let lights = contents.iter().filter_map(|content| {
                 if !content.shown.get() {
                     return None;
                 }
@@ -101,7 +103,15 @@ fn scene_of(volumes: &Volumes, controllers: &ControllerStates) -> Scene3d {
                     direction: turn.transform_vector(light.direction),
                     ..light
                 })
-            })
+            });
+            let mut first = None;
+            for light in lights {
+                if light.shadows {
+                    return Some(light);
+                }
+                first.get_or_insert(light);
+            }
+            first
         })
         .or_else(|| controllers.any_shown().then_some(DEFAULT_LIGHT));
     Scene3d {

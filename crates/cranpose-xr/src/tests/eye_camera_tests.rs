@@ -208,3 +208,67 @@ fn the_clip_matrix_shows_a_point_where_the_scene_shows_it_at_the_scenes_depth() 
         }
     }
 }
+
+// A Quest 3's left eye
+const QUEST_3: [f32; 4] = [-0.942_477_8, 0.698_131_7, 0.767_944_9, -0.959_931_1];
+
+#[test]
+fn a_view_that_reaches_farther_down_names_a_farther_near_plane() {
+    let camera =
+        EyeCamera::of(&at_rest(QUEST_3), (1680, 1760), FirstRow::Bottom).expect("a camera");
+    let share = camera.depth_near / camera.near - 1.0;
+    assert!(
+        (0.13..0.15).contains(&share),
+        "the depth reads {share} farther"
+    );
+    let quarter = std::f32::consts::FRAC_PI_4;
+    let even = EyeCamera::of(
+        &at_rest([-0.9, 0.7, quarter, -quarter]),
+        SIZE,
+        FirstRow::Top,
+    )
+    .expect("a camera");
+    assert!(
+        (even.depth_near - even.near).abs() < 1e-9,
+        "a view as high as it is low names the camera's own"
+    );
+}
+
+// A compositor that measures depth along the middle of the eye's vertical field of view, as a
+// Quest 3's does, reads a panel 0.7 mm in front of a 3D surface as in front of it anywhere in the
+// field of view, from 30 cm to 2 m, when it reads the layer's depth with the near plane that the
+// layer names.
+#[test]
+fn a_turned_compositor_reads_a_panel_in_front_of_a_surface_anywhere_in_the_view() {
+    let view = at_rest(QUEST_3);
+    let camera = EyeCamera::of(&view, (1680, 1760), FirstRow::Bottom).expect("a camera");
+    let fov = view.field_of_view;
+    let middle = (fov.angle_up + fov.angle_down) / 2.0;
+    // The compositor's axis, turned down from the eye's
+    let axis = [0.0, middle.sin(), -middle.cos()];
+    let along = |point: [f32; 3]| -(axis[0] * point[0] + axis[1] * point[1] + axis[2] * point[2]);
+    let steps = 24;
+    for distance in [0.3_f32, 0.45, 0.6, 1.0, 2.0] {
+        for row in 0..=steps {
+            for column in 0..=steps {
+                let share = |index: i32, low: f32, high: f32| {
+                    low + (high - low) * index as f32 / steps as f32
+                };
+                let horizontal = share(column, fov.angle_left, fov.angle_right).tan();
+                let vertical = share(row, fov.angle_down, fov.angle_up).tan();
+                // A surface at `distance` along the eye's axis, and a panel 0.7 mm nearer on the
+                // same line of sight
+                let surface = [horizontal * distance, vertical * distance, -distance];
+                let length = (1.0 + horizontal * horizontal + vertical * vertical).sqrt();
+                let panel = surface.map(|value| value * (1.0 - 0.0007 / (distance * length)));
+                // The layer holds 1 - near / z, and the compositor reads it with the named plane
+                let held = 1.0 - camera.near / distance;
+                let read = camera.depth_near / (1.0 - held);
+                assert!(
+                    along(panel) <= read,
+                    "the panel at ({horizontal}, {vertical}) tangents {distance} m away tests behind the surface"
+                );
+            }
+        }
+    }
+}

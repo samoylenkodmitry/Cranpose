@@ -12,12 +12,6 @@
 //! shows behind it, and a panel in front shows in front. Without the test, a panel covers the
 //! 3D content wherever it stands.
 
-use crate::{
-    METERS_PER_DP, Pose,
-    space::{PanelKind, PanelSlot, Ride},
-    vector::{add, dot, scale, sub},
-};
-
 // The tail of the frame's list of layers, from the bottom to the top. The room's layer comes
 // before it, outside this list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,62 +77,6 @@ pub(crate) fn tests_depth(stage: Stage, plan: Option<VolumePlan>) -> bool {
 // depth test leaves the buffer as it was, and the panels over it would have nothing to test.
 pub(crate) fn writes_depth(stage: Stage, plan: Option<VolumePlan>) -> bool {
     stage == Stage::Volumes && plan.is_some_and(|plan| plan.tests_depth)
-}
-
-// Whether the layer of the panel `index` of `panels` skips the compositor's depth test, as `head`
-// sees the panels. A panel that carries the words of a tray skips it: the tray's parts lie a
-// millimeter or more behind the words, and a Quest 3's compositor cuts the words with its test
-// where the tray stands off the view's center, though the depth of the projection layer is exact
-// there. The words keep the test while another volume stands in front of them, so that the volume
-// covers them.
-pub(crate) fn skips_depth_test(panels: &[PanelSlot], index: usize, head: Option<[f32; 3]>) -> bool {
-    let panel = &panels[index];
-    let own = |slot: &PanelSlot| matches!(slot.kind, PanelKind::Volume { under: Some(id), .. } if id == panel.id);
-    if !panels.iter().any(own) {
-        return false;
-    }
-    let Some(head) = head else {
-        return true;
-    };
-    !panels.iter().any(|slot| {
-        matches!(slot.kind, PanelKind::Volume { .. })
-            && !own(slot)
-            && slot.ride != Ride::Hidden
-            && covers(slot, panel, head)
-    })
-}
-
-// Whether the front face of the volume `near` covers a part of the panel `far` as `head` sees
-// them. The corners of the face that lie between the head and the panel's plane, carried along the
-// lines of sight onto that plane, span a rectangle that meets the panel's.
-fn covers(near: &PanelSlot, far: &PanelSlot, head: [f32; 3]) -> bool {
-    let face = near.face();
-    let [width, height] = near.size().map(|dp| dp * METERS_PER_DP / 2.0);
-    let [far_width, far_height] = far.size().map(|dp| dp * METERS_PER_DP / 2.0);
-    let normal = far.pose.rotate([0.0, 0.0, 1.0]);
-    let plane = dot(sub(far.pose.position, head), normal);
-    let mut span: Option<[f32; 4]> = None;
-    for [x, y] in [
-        [-width, -height],
-        [width, -height],
-        [-width, height],
-        [width, height],
-    ] {
-        let sight = sub(face.then(&Pose::at([x, y, 0.0])).position, head);
-        let along = dot(sight, normal);
-        // The line of sight meets the plane past the corner only when the corner is in front
-        if along.abs() <= f32::EPSILON || plane / along <= 1.0 {
-            continue;
-        }
-        let met = scale(sight, plane / along);
-        let [x, y, _] = far.pose.unrotate(sub(add(head, met), far.pose.position));
-        span = Some(span.map_or([x, x, y, y], |[left, right, bottom, top]| {
-            [left.min(x), right.max(x), bottom.min(y), top.max(y)]
-        }));
-    }
-    span.is_some_and(|[left, right, bottom, top]| {
-        left < far_width && right > -far_width && bottom < far_height && top > -far_height
-    })
 }
 
 #[cfg(test)]

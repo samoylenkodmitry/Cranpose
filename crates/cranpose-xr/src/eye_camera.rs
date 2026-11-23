@@ -32,8 +32,32 @@ pub(crate) struct EyeCamera {
     // the eye's own and reaches farther on the side where the image has pixels to spare, because
     // the camera has one focal length for both directions.
     pub(crate) field_of_view: FieldOfView,
-    // The camera's near plane, in meters, which the layer's depth says
+    // The camera's near plane, in meters
     pub(crate) near: f32,
+    // The near plane that the layer's depth names, in meters: farther than the camera's by the
+    // share that `depth_scale` gives, so the compositor reads each depth that much farther
+    pub(crate) depth_near: f32,
+}
+
+// How much farther than the scene the layer's depth puts it: one plus the turn between the eye's
+// axis and the middle of its vertical field of view, in radians, times the tangent of the field's
+// farther vertical edge.
+//
+// A Quest 3's compositor tests a panel's depth as if it measured along the middle of the eye's
+// vertical field of view, 5.5 degrees below the eye's axis, while the projection layer's depth
+// measures along the axis, as OpenXR says. A panel below the axis then tests farther than it
+// stands, by about the turn times its distance below the axis. On a Quest 3, 45 cm ahead, a key 6
+// mm behind a panel hid it from 11 cm below the axis down, and a key 24 mm behind from 24 cm. A
+// depth measured along the turned axis showed nearly all of them. Pitching the layer's views to
+// that middle changed nothing, so the compositor turns from whatever view the layer names. Over a field of view the error stays
+// below the turn times the tangent of the field's edge times the distance, so a depth read that
+// much farther covers it: 14% on a Quest 3. A field of view that is as high as it is low gives
+// no turn and no margin. A 3D object that stands nearer than a panel by more than the share
+// still covers it.
+pub(crate) fn depth_scale(view: &FieldOfView) -> f32 {
+    let turn = ((view.angle_up + view.angle_down) / 2.0).abs();
+    let edge = view.angle_up.tan().max(-view.angle_down.tan());
+    1.0 + turn * edge
 }
 
 impl EyeCamera {
@@ -76,8 +100,10 @@ impl EyeCamera {
             view: Mat4::from_rows([x, y, forward, [0.0, 0.0, 0.0, 1.0]]),
             focal_length,
         };
+        let near = camera.near() / UNITS_PER_METER;
         Some(Self {
-            near: camera.near() / UNITS_PER_METER,
+            near,
+            depth_near: near * depth_scale(view),
             camera,
             field_of_view: FieldOfView {
                 angle_left: (center[0] - half[0]).atan(),

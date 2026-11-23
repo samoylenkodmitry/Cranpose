@@ -51,7 +51,7 @@ impl ControllerStates {
 
     // The app's handle on the settings.
     pub(crate) fn handle(&self) -> ControllerModels {
-        ControllerModels::over(self.settings)
+        ControllerModels::over(self.settings, self.shown)
     }
 
     // Records the runtime's model of `hand`'s controller.

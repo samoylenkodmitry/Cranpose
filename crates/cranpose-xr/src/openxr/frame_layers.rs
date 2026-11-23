@@ -46,7 +46,6 @@ pub(crate) struct Stages<'a, Streams, Panels, Overlay> {
     pub(crate) streams: Streams,
     // The one projection layer of the app's 3D content, if the frame has it
     pub(crate) volumes: Option<ProjectionLayer<'a>>,
-    // The layers of the panels, each with whether it takes the depth test
     pub(crate) panels: Panels,
     pub(crate) overlay: Overlay,
 }
@@ -58,15 +57,6 @@ enum RawLayer {
     Projection(usize),
     Quad(xr::sys::CompositionLayerQuad),
     Cylinder(xr::sys::CompositionLayerCylinderKHR),
-}
-
-// Whether a layer of a panel takes the frame's depth test.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DepthTest {
-    // The layer tests against the depth of the projection layer when the frame tests depth
-    Kept,
-    // The layer covers the 3D content wherever it stands
-    Skipped,
 }
 
 // What a layer does with the compositor's depth buffer.
@@ -138,7 +128,7 @@ impl FrameLayers {
         stages: Stages<
             'a,
             impl Iterator<Item = ProjectionLayer<'a>>,
-            impl Iterator<Item = (Layer<'a>, DepthTest)>,
+            impl Iterator<Item = Layer<'a>>,
             impl Iterator<Item = QuadLayer<'a>>,
         >,
         plan: Option<VolumePlan>,
@@ -178,25 +168,14 @@ impl FrameLayers {
                 }
                 Stage::Panels => {
                     self.layers
-                        .extend(
-                            panels
-                                .take()
-                                .into_iter()
-                                .flatten()
-                                .map(|(panel, test)| Raw {
-                                    layer: match panel {
-                                        Layer::Quad(quad) => RawLayer::Quad(quad.to_raw(space)),
-                                        Layer::Cylinder(cylinder) => {
-                                            RawLayer::Cylinder(cylinder.to_raw(space))
-                                        }
-                                    },
-                                    depth: if test == DepthTest::Skipped {
-                                        Depth::Ignored
-                                    } else {
-                                        depth
-                                    },
-                                }),
-                        );
+                        .extend(panels.take().into_iter().flatten().map(|panel| {
+                            raw(match panel {
+                                Layer::Quad(quad) => RawLayer::Quad(quad.to_raw(space)),
+                                Layer::Cylinder(cylinder) => {
+                                    RawLayer::Cylinder(cylinder.to_raw(space))
+                                }
+                            })
+                        }));
                 }
                 Stage::Overlay => {
                     self.layers.extend(

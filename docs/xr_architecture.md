@@ -255,6 +255,20 @@ depth that the projection layer wrote. A panel behind a 3D object shows behind i
 front of the object shows in front of it. Panels still draw over each other in the order of their
 distance, and a panel's rounded corners still blend.
 
+The depth that the projection layer carries is `1 - near / z`, with `z` along each eye's axis, as
+OpenXR says. A Quest 3's compositor tests a panel as if it measured the panel's depth along the
+middle of the eye's vertical field of view, 5.5 degrees below the axis (an angle of 44 degrees up and
+55 down). A panel below the axis then tests farther than it stands, by about a tenth of its distance
+below the axis. On a Quest 3, 45 cm ahead, a key 6 mm behind a panel hid it from 11 cm below the
+axis down, and a key 24 mm behind it from 24 cm. A depth measured along the turned axis showed nearly
+all of them, and views pitched to that middle changed nothing: the compositor turns from whatever
+view the layer names. So the layer's depth names a near plane farther than the camera's, and the
+compositor reads every depth that much farther: one plus the turn in radians times the tangent of
+the field's farther vertical edge, 14% on a Quest 3 (`eye_camera::depth_scale`). That share covers
+the error over the whole field of view, so a panel 0.7 mm in front of a mesh shows anywhere in it. A
+mesh still covers a panel where it stands 14% nearer. A field of view as high as it is low names
+the camera's own plane.
+
 The compositor's depth buffer starts at the far plane. The depth that a projection layer carries in
 its views does not reach the buffer. A layer writes its depth only when it chains the test struct
 with `depthMask` set. The projection layer chains one with `ALWAYS` as the compare operation and the
@@ -299,14 +313,13 @@ costs no layer and no draw. The light of a tray takes four taps of the shadow ma
 size and 32 to 48 taps for a penumbra took 5.2 ms of the GPU for an open tray of a menu on a
 Quest 3, against 3.0 ms with four taps.
 
-The panel of a tray skips the compositor's depth test (`volume_plan::skips_depth_test`). With the
-test, a Quest 3 cut the words where a tray stood below the view's center: on a tray tilted toward
-the viewer, the words over keys 0.7 to 1.5 mm in front of the key caps vanished below a line near
-the top of the tray. With the meshes 20 mm farther back, more words showed, and every word on the
-base, 30 mm in front of it, showed. In a test of an off-center, tilted plane the depth that
-Cranpose writes equals the depth of the eye's camera at every pixel, so the cut comes from the
-compositor's test of the quad. The panel keeps the test while another volume, such as a second tray, stands in
-front of it as the head sees them, so that volume covers the words.
+The panel of a tray takes the compositor's depth test as any panel does. Its words stand 0.7 to 10
+mm in front of the tray's meshes, which the margin of the layer's depth leaves in front anywhere in
+the view. A controller's model or another tray that stands in front of the words covers them.
+
+Controls on no base, such as a single ball, cast no shadow, and their light has none: the scene's
+light is that of the first volume whose light casts shadows, so the frame draws a shadow map only
+while a tray with a base shows. A ball takes 24 segments around.
 
 Measured on a Quest 3 with a stream of 120 frames a second under a hand menu of an app, over 6 s
 for each case:
