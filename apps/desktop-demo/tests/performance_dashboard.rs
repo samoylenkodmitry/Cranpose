@@ -1,8 +1,14 @@
 //! The Performance tab reads the run index the nightly publishes and shows
 //! the latest night, the trend, and the framework comparison on each device.
 
-use std::{collections::BTreeMap, rc::Rc};
+use std::{
+    collections::BTreeMap,
+    rc::Rc,
+    sync::{Arc, Mutex},
+};
 
+use cranpose_core::CompositionLocalProvider;
+use cranpose_services::{local_uri_handler, UriHandler, UriHandlerError, UriHandlerRef};
 use cranpose_testing::{
     robot::{create_headless_robot_test, RobotTestRule, TestRenderer},
     ComposeTestRule,
@@ -956,4 +962,92 @@ fn picked_bars_set_the_scale_of_the_chart_by_themselves() {
         assert!(texts.iter().any(|text| text == grid), "{grid}: {texts:?}");
     }
     assert!(!texts.iter().any(|text| text == "600"), "{texts:?}");
+}
+
+struct RecordingUriHandler(Arc<Mutex<Vec<String>>>);
+
+impl UriHandler for RecordingUriHandler {
+    fn open_uri(&self, uri: &str) -> Result<(), UriHandlerError> {
+        self.0.lock().expect("lock").push(uri.to_string());
+        Ok(())
+    }
+}
+
+#[test]
+fn the_methodology_card_explains_external_measurement_and_toggles_details() {
+    let mut robot = dashboard();
+    let texts = robot.get_all_text();
+    assert!(
+        texts
+            .iter()
+            .any(|text| text == "How benchmarks are measured"),
+        "{texts:?}"
+    );
+    assert!(
+        texts.iter().any(
+            |text| text.contains("FrameCount.app") && text.contains("SurfaceFlinger --latency")
+        ),
+        "{texts:?}"
+    );
+    assert!(
+        texts.iter().any(|text| text == "Full methodology"),
+        "{texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|text| text == "FrameCount.swift"),
+        "details stay collapsed until opened: {texts:?}"
+    );
+
+    click_on(&mut robot, "More details");
+    let expanded = robot.get_all_text();
+    assert!(
+        expanded.iter().any(|text| text == "Hide details"),
+        "{expanded:?}"
+    );
+    for link in [
+        "desktop.py",
+        "FrameCount.swift",
+        "perf_window.sh",
+        "Benchmark README",
+    ] {
+        assert!(
+            expanded.iter().any(|text| text == link),
+            "missing {link}: {expanded:?}"
+        );
+    }
+
+    click_on(&mut robot, "Hide details");
+    let collapsed = robot.get_all_text();
+    assert!(
+        !collapsed.iter().any(|text| text == "FrameCount.swift"),
+        "{collapsed:?}"
+    );
+}
+
+#[test]
+fn methodology_links_open_the_markdown_doc_and_harness_sources() {
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let handler: UriHandlerRef = Rc::new(RecordingUriHandler(Arc::clone(&opened)));
+    let index = Rc::new(PerfIndex::parse(INDEX).expect("the fixture parses"));
+    let source = frames();
+    let mut robot = create_headless_robot_test(1100, 4000, move || {
+        CompositionLocalProvider(vec![local_uri_handler().provides(Rc::clone(&handler))], {
+            let index = Rc::clone(&index);
+            let source = source.clone();
+            move || PerformanceDashboard(Rc::clone(&index), None, source.clone())
+        });
+    });
+
+    click_on(&mut robot, "Full methodology");
+    click_on(&mut robot, "More details");
+    click_on(&mut robot, "FrameCount.swift");
+
+    let uris = opened.lock().expect("lock").clone();
+    assert_eq!(
+        uris,
+        vec![
+            "https://github.com/samoylenkodmitry/Cranpose/blob/main/docs/performance_methodology.md",
+            "https://github.com/samoylenkodmitry/Cranpose/blob/main/benchmarks/compose-vs-cranpose/framecount/FrameCount.swift",
+        ]
+    );
 }
