@@ -321,19 +321,24 @@ Controls on no base, such as a single ball, cast no shadow, and their light has 
 light is that of the first volume whose light casts shadows, so the frame draws a shadow map only
 while a tray with a base shows. A ball takes 24 segments around.
 
-Measured on a Quest 3 with a stream of 120 frames a second under a hand menu of an app, over 6 s
-for each case:
+Measured on a Quest 3 with a stream of 120 frames a second under a hand menu of an app, over 3 s
+for each case. The app shows a flat ball while no controller model shows, and the 3D ball once a
+model shows:
 
 | Case | Frame rate | Layers | App GPU | Compositor | GPU busy |
 | --- | --- | --- | --- | --- | --- |
-| Flat panels, menu closed | 120 | 7 | 0.37 ms | 1.10 ms | 23% |
-| Flat panels, menu open | 120 | 8 | 0.12 ms | 0.64 ms | 10% |
-| Trays, menu closed (one 3D ball shows) | 120 | 8 | 1.82 ms | 1.80 ms | 46% |
-| Trays, menu open | 120 | 9 | 3.10 ms | 1.95 ms | 66% |
+| Flat panels, menu closed | 120 | 3 | 1.02 ms | 0.91 ms | 27% |
+| Trays, menu closed | 120 | 3 | 1.00 ms | 0.90 ms | 31% |
+| Flat panels, menu closed, a panel and a controller model show | 120 | 8 | 2.84 ms | 2.51 ms | 68% |
+| Trays, menu closed, a panel and a controller model show | 120 | 8 | 2.84 ms | 2.50 ms | 69% |
+| Flat panels, menu open | 120 | 4 | 1.01 ms | 1.06 ms | 29% |
+| Trays, menu open | 120 | 5 | 3.58 ms | 2.35 ms | 70% |
+| Trays, menu open, with no shadow map | 120 | 5 | 3.19 ms | 2.52 ms | 73% |
 
-The open tray adds one layer for its panel. The projection layer that the meshes need is the
-other layer, and it costs about 1.5 ms of the GPU while anything 3D shows. No frame was stale in
-the cases with trays.
+A closed menu of trays costs what a flat menu costs. Its ball draws in the projection layer that the
+controller's model already needs, and it casts no shadow. The open trays add one layer and 2.6 ms of
+the GPU. The shadow map takes 0.4 ms of that. The open trays had 7 or 8 stale frames in the second
+in which the menu first showed and none after.
 
 ### Pointer
 

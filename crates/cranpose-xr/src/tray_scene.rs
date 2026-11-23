@@ -63,9 +63,9 @@ const GROOVE_COLOR: Color = Color(0.05, 0.06, 0.1, 1.0);
 const DARK_LIGHT: Color = Color(0.12, 0.13, 0.18, 1.0);
 
 // The light of every tray: from the top left, ahead of the viewer. Its shadows take four taps of
-// the shadow map, which soften their edges by a texel. A light of some size takes 32 to 48 taps for
-// its penumbra: on a Quest 3 an open menu tray takes 5.2 ms of the GPU per frame with it,
-// against 3.0 ms with four taps.
+// the shadow map, which soften their edges by a texel. On a Quest 3 the shadow map of an open menu
+// tray takes 0.4 ms of the GPU per frame. A light of some size takes 32 to 48 taps for its
+// penumbra: the same tray took 5.2 ms of the GPU per frame with it, against 3.0 ms with four taps.
 pub(crate) const TRAY_LIGHT: Light = Light {
     direction: Vec3::new(0.35, 0.55, 0.76),
     ambient: 0.42,
