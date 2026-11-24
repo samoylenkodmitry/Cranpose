@@ -64,55 +64,62 @@ impl LayoutBuilderState {
             };
         }
 
-        if runtime_state.coordinator_chain.is_direct() {
-            let density = cranpose_ui_layout::MeasureScope::density(&scope);
-            let inner_constraints = runtime_state
-                .coordinator_chain
-                .enter_direct(constraints, density);
-            let measurement = runtime_state.measure_policy.measure_into(
+        let density = cranpose_ui_layout::MeasureScope::density(&scope);
+        let (size, accumulated, alignment_lines) = if runtime_state.coordinator_chain.is_direct() {
+            measure_through_direct_chain(
+                runtime_state,
                 &scope,
-                runtime_state.child_measurables(),
-                inner_constraints,
-                placements,
-            );
-            let inner_lines = inherited_alignment_lines(
-                runtime_state.child_states(),
+                density,
+                constraints,
                 placements,
                 placement_indices,
             )
-            .with_overrides(measurement.alignment_lines);
-            let (size, accumulated, alignment_lines) = runtime_state.coordinator_chain.exit_direct(
-                inner_constraints,
-                measurement.size,
-                inner_lines,
-            );
-            return finish_chain_measurement(
+        } else {
+            self.measure_through_general_chain(
+                node_id,
                 runtime_state,
-                chain,
-                density,
-                size,
-                accumulated,
-                alignment_lines,
-            );
-        }
+                &scope,
+                constraints,
+                placements,
+                placement_indices,
+            )
+        };
 
-        self.measure_through_general_chain(
-            (node_id, runtime_state, chain),
-            &scope,
-            constraints,
-            placements,
-            placement_indices,
-        )
+        ModifierChainMeasurement {
+            alignment_lines,
+            size,
+            content_offset: Point {
+                x: accumulated.x - chain.offset.x,
+                y: accumulated.y - chain.offset.y,
+            },
+            offset: chain.offset,
+            window_root: chain.window_root,
+            hold: if chain.window_root {
+                None
+            } else {
+                runtime_state.coordinator_chain.measured_hold(
+                    density,
+                    runtime_state.measure_policy.as_ref(),
+                    runtime_state.child_measurables(),
+                )
+            },
+            ignores_child_sizes: !chain.window_root
+                && runtime_state.coordinator_chain.ignores_child_sizes(
+                    runtime_state.measure_policy.as_ref(),
+                    runtime_state.child_measurables(),
+                ),
+        }
     }
 
     fn measure_through_general_chain(
         &self,
-        (node_id, runtime_state, chain): (NodeId, &LayoutRuntimeState, ModifierChainInputs),
+        node_id: NodeId,
+        runtime_state: &LayoutRuntimeState,
         scope: &crate::density::DensityMeasureScope,
         constraints: Constraints,
         placements: &mut Vec<Placement>,
         placement_indices: &mut Vec<usize>,
-    ) -> ModifierChainMeasurement {
+    ) -> (Size, Point, cranpose_ui_layout::AlignmentLines) {
         let frame = CoordinatorFrame::new(
             &runtime_state.measure_policy,
             scope,
@@ -127,10 +134,7 @@ impl LayoutBuilderState {
         let (content_x, content_y) = placeable.content_offset();
         self.mark_invalidations(node_id, frame.take_invalidations());
 
-        finish_chain_measurement(
-            runtime_state,
-            chain,
-            cranpose_ui_layout::MeasureScope::density(scope),
+        (
             Size {
                 width: placeable.width(),
                 height: placeable.height(),
@@ -199,37 +203,27 @@ impl LayoutBuilderState {
     }
 }
 
-#[inline]
-fn finish_chain_measurement(
+fn measure_through_direct_chain(
     runtime_state: &LayoutRuntimeState,
-    chain: ModifierChainInputs,
+    scope: &crate::density::DensityMeasureScope,
     density: f32,
-    size: Size,
-    accumulated: Point,
-    alignment_lines: cranpose_ui_layout::AlignmentLines,
-) -> ModifierChainMeasurement {
-    ModifierChainMeasurement {
-        alignment_lines,
-        size,
-        content_offset: Point {
-            x: accumulated.x - chain.offset.x,
-            y: accumulated.y - chain.offset.y,
-        },
-        offset: chain.offset,
-        window_root: chain.window_root,
-        hold: if chain.window_root {
-            None
-        } else {
-            runtime_state.coordinator_chain.measured_hold(
-                density,
-                runtime_state.measure_policy.as_ref(),
-                runtime_state.child_measurables(),
-            )
-        },
-        ignores_child_sizes: !chain.window_root
-            && runtime_state.coordinator_chain.ignores_child_sizes(
-                runtime_state.measure_policy.as_ref(),
-                runtime_state.child_measurables(),
-            ),
-    }
+    constraints: Constraints,
+    placements: &mut Vec<Placement>,
+    placement_indices: &mut Vec<usize>,
+) -> (Size, Point, cranpose_ui_layout::AlignmentLines) {
+    let inner_constraints = runtime_state
+        .coordinator_chain
+        .enter_direct(constraints, density);
+    let measurement = runtime_state.measure_policy.measure_into(
+        scope,
+        runtime_state.child_measurables(),
+        inner_constraints,
+        placements,
+    );
+    let inner_lines =
+        inherited_alignment_lines(runtime_state.child_states(), placements, placement_indices)
+            .with_overrides(measurement.alignment_lines);
+    runtime_state
+        .coordinator_chain
+        .exit_direct(inner_constraints, measurement.size, inner_lines)
 }
