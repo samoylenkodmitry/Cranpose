@@ -70,6 +70,14 @@ impl OffsetElement {
             y: round_to_px(offset.y, at.density),
         }
     }
+
+    #[inline]
+    pub(crate) fn placed_prepared(&self) -> Point {
+        Point {
+            x: self.x,
+            y: self.y,
+        }
+    }
 }
 
 impl PlainElement for OffsetElement {
@@ -153,6 +161,14 @@ impl FractionalOffsetElement {
         Self {
             x_fraction,
             y_fraction,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn offset_for(&self, size: Size) -> Point {
+        Point {
+            x: self.x_fraction * size.width,
+            y: self.y_fraction * size.height,
         }
     }
 }

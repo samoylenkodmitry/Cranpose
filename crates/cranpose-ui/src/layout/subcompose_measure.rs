@@ -7,7 +7,7 @@ use cranpose_core::{ApplierHost, NodeError, NodeId};
 use cranpose_ui_layout::{AlignmentLines, Constraints, Placement};
 
 use super::{
-    LayoutBuilderState, ModifierChainInputs,
+    LayoutBuilderState,
     coordinator_chain::{CoordinatorChain, CoordinatorFrame, SubcomposeCoordinatorLeaf},
     core::Placeable,
 };
@@ -16,6 +16,45 @@ use crate::{
     subcompose_layout::{MeasureCallbacks, MeasuredChildren, SubcomposeLayoutNodeHandle},
     widgets::nodes::LayoutParts,
 };
+
+#[derive(Clone, Copy)]
+pub(crate) enum SubcomposeChainPlan {
+    Bypass {
+        offset: Point,
+        moved_coordinators: bool,
+    },
+    Direct {
+        offset: Point,
+        inner_constraints: Constraints,
+    },
+    General {
+        density: f32,
+        offset: Point,
+    },
+}
+
+pub(crate) struct SubcomposeMeasureStart {
+    pub(crate) handle: SubcomposeLayoutNodeHandle,
+    pub(crate) parts: Rc<LayoutParts>,
+    pub(crate) plan: SubcomposeChainPlan,
+    pub(crate) measured_children: Rc<MeasuredChildren>,
+}
+
+impl SubcomposeMeasureStart {
+    pub(crate) fn new(
+        handle: SubcomposeLayoutNodeHandle,
+        parts: Rc<LayoutParts>,
+        plan: SubcomposeChainPlan,
+        measured_children: Rc<MeasuredChildren>,
+    ) -> Self {
+        Self {
+            handle,
+            parts,
+            plan,
+            measured_children,
+        }
+    }
+}
 
 pub(super) struct SubcomposeChainMeasurement {
     pub(super) size: Size,
@@ -75,43 +114,104 @@ impl LayoutBuilderState {
         node_handle: &SubcomposeLayoutNodeHandle,
         parts: &LayoutParts,
         node_id: NodeId,
-        chain_inputs: ModifierChainInputs,
+        plan: SubcomposeChainPlan,
         constraints: Constraints,
         measured_children: &MeasuredChildren,
     ) -> Result<SubcomposeChainMeasurement, NodeError> {
         let measure_error = RefCell::new(None);
-        if !chain_inputs.uses_chain {
-            let result = self.subcompose_policy_result(
-                node_handle,
-                node_id,
-                constraints,
-                measured_children,
-                &measure_error,
-            )?;
-            if let Some(err) = measure_error.borrow_mut().take() {
-                return Err(err);
-            }
-            let moved_coordinators = parts.runtime_state().borrow().take_moved_coordinators();
-            return Ok(SubcomposeChainMeasurement {
-                size: result.size,
-                offset: chain_inputs.offset,
-                content_offset: Point::default(),
-                explicit_lines: result.alignment_lines,
-                inner_constraints: constraints,
-                placements: result.placements,
+        match plan {
+            SubcomposeChainPlan::Bypass {
+                offset,
                 moved_coordinators,
-            });
+            } => {
+                let result = self.subcompose_policy_result(
+                    node_handle,
+                    node_id,
+                    constraints,
+                    measured_children,
+                    &measure_error,
+                )?;
+                if let Some(err) = measure_error.borrow_mut().take() {
+                    return Err(err);
+                }
+                Ok(SubcomposeChainMeasurement {
+                    size: result.size,
+                    offset,
+                    content_offset: Point::default(),
+                    explicit_lines: result.alignment_lines,
+                    inner_constraints: constraints,
+                    placements: result.placements,
+                    moved_coordinators,
+                })
+            }
+            SubcomposeChainPlan::Direct {
+                offset,
+                inner_constraints,
+            } => {
+                let result = self.subcompose_policy_result(
+                    node_handle,
+                    node_id,
+                    inner_constraints,
+                    measured_children,
+                    &measure_error,
+                )?;
+                if let Some(err) = measure_error.borrow_mut().take() {
+                    return Err(err);
+                }
+                let (size, accumulated, explicit_lines, moved_coordinators) = {
+                    let runtime_state = parts.runtime_state().borrow();
+                    let (size, accumulated, explicit_lines) = runtime_state
+                        .coordinator_chain
+                        .exit_direct(inner_constraints, result.size, result.alignment_lines);
+                    (
+                        size,
+                        accumulated,
+                        explicit_lines,
+                        runtime_state.take_moved_coordinators(),
+                    )
+                };
+                Ok(SubcomposeChainMeasurement {
+                    size,
+                    offset,
+                    content_offset: Point {
+                        x: accumulated.x - offset.x,
+                        y: accumulated.y - offset.y,
+                    },
+                    explicit_lines,
+                    inner_constraints,
+                    placements: result.placements,
+                    moved_coordinators,
+                })
+            }
+            SubcomposeChainPlan::General { density, offset } => self
+                .measure_subcompose_general_chain(
+                    (node_handle, parts, node_id),
+                    (density, offset),
+                    constraints,
+                    measured_children,
+                    &measure_error,
+                ),
         }
+    }
 
+    #[inline(never)]
+    fn measure_subcompose_general_chain(
+        self: &Rc<Self>,
+        (node_handle, parts, node_id): (&SubcomposeLayoutNodeHandle, &LayoutParts, NodeId),
+        (density, offset): (f32, Point),
+        constraints: Constraints,
+        measured_children: &MeasuredChildren,
+        measure_error: &RefCell<Option<NodeError>>,
+    ) -> Result<SubcomposeChainMeasurement, NodeError> {
         let leaf = SubcomposeLeaf {
             builder: self,
             node_handle,
             node_id,
             measured_children,
-            measure_error: &measure_error,
+            measure_error,
             measured_policy: RefCell::new(None),
         };
-        let frame = CoordinatorFrame::for_subcompose(chain_inputs.density.density(), &leaf);
+        let frame = CoordinatorFrame::for_subcompose(density, &leaf);
         let (placeable, moved_coordinators) = {
             let runtime_state = parts.runtime_state().borrow();
             let placeable = runtime_state
@@ -136,10 +236,10 @@ impl LayoutBuilderState {
                 width: placeable.width(),
                 height: placeable.height(),
             },
-            offset: chain_inputs.offset,
+            offset,
             content_offset: Point {
-                x: content_x - chain_inputs.offset.x,
-                y: content_y - chain_inputs.offset.y,
+                x: content_x - offset.x,
+                y: content_y - offset.y,
             },
             explicit_lines: placeable.alignment_lines(),
             inner_constraints,

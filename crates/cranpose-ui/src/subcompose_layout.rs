@@ -725,10 +725,23 @@ impl SubcomposeLayoutNode {
         self.modifier_slices_dirty.set(false);
     }
 
-    pub(crate) fn bind_layout_chain(&self) -> crate::layout::ModifierChainInputs {
+    pub(crate) fn begin_measure(
+        &self,
+        constraints: Constraints,
+    ) -> crate::layout::SubcomposeMeasureStart {
         let inner = self.inner.borrow();
-        let mut state = self.parts.runtime_state().borrow_mut();
-        state.bind_subcompose(inner.density, &inner.modifier_chain)
+        let mut runtime = self.parts.runtime_state().borrow_mut();
+        let plan = runtime.bind_subcompose(inner.density, &inner.modifier_chain, constraints);
+        let measured_children = Rc::clone(&inner.measured_children_scratch);
+        drop((runtime, inner));
+        measured_children.borrow_mut().clear();
+        self.cache().clear_measurement();
+        crate::layout::SubcomposeMeasureStart::new(
+            self.handle(),
+            Rc::clone(&self.parts),
+            plan,
+            measured_children,
+        )
     }
 
     pub(crate) fn mark_modifier_slices_dirty(&self) {
@@ -869,10 +882,6 @@ impl SubcomposeLayoutNode {
     /// Check if this node needs measure.
     pub fn needs_measure(&self) -> bool {
         self.parts.cache().dirt().measure
-    }
-
-    pub(crate) fn clear_needs_measure(&self) {
-        self.parts.cache().clear_needs_measure();
     }
 
     /// Clears the node's layout flag and its descendants': a layout pass
@@ -1200,15 +1209,6 @@ impl SubcomposeLayoutNodeHandle {
             return;
         }
         inner.slots.note_nested_host(slot_host);
-    }
-
-    pub(crate) fn measured_children_scratch(&self) -> Rc<MeasuredChildren> {
-        let scratch = {
-            let inner = self.inner.borrow();
-            Rc::clone(&inner.measured_children_scratch)
-        };
-        scratch.borrow_mut().clear();
-        scratch
     }
 
     pub fn modifier(&self) -> Modifier {

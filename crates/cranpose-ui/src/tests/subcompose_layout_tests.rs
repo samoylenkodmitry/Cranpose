@@ -443,15 +443,18 @@ fn subcompose_reuses_measured_children_scratch_map() {
     let policy: Rc<MeasurePolicy> =
         Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
     let node = SubcomposeLayoutNode::new(Modifier::empty(), Rc::clone(&policy));
-    let handle = node.handle();
 
-    let first = handle.measured_children_scratch();
+    let first = node
+        .begin_measure(Constraints::loose(0.0, 0.0))
+        .measured_children;
     let first_ptr = Rc::as_ptr(&first);
     first.borrow_mut().reserve(8);
     let retained_capacity = first.borrow().capacity();
     drop(first);
 
-    let second = handle.measured_children_scratch();
+    let second = node
+        .begin_measure(Constraints::loose(0.0, 0.0))
+        .measured_children;
     assert_eq!(
         Rc::as_ptr(&second),
         first_ptr,

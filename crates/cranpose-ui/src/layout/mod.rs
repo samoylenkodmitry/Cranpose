@@ -74,14 +74,21 @@ use crate::{
     widgets::nodes::{ChildPlacement, IntrinsicKind, LayoutNode, LayoutParts, LayoutState},
 };
 
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 pub(crate) struct LayoutNodeContext {
-    invalidations: Vec<InvalidationKind>,
+    invalidations: u8,
     update_requested: bool,
     density: f32,
 }
 
 impl LayoutNodeContext {
+    pub(crate) const LAYOUT_BIT: u8 = 1 << 0;
+    pub(crate) const DRAW_BIT: u8 = 1 << 1;
+    pub(crate) const SEMANTICS_BIT: u8 = 1 << 2;
+    pub(crate) const POINTER_INPUT_BIT: u8 = 1 << 3;
+    pub(crate) const FOCUS_BIT: u8 = 1 << 4;
+
+    #[inline]
     pub(crate) fn new(density: f32) -> Self {
         Self {
             density,
@@ -89,16 +96,22 @@ impl LayoutNodeContext {
         }
     }
 
-    pub(crate) fn take_invalidations(&mut self) -> Vec<InvalidationKind> {
-        std::mem::take(&mut self.invalidations)
+    #[inline]
+    pub(crate) fn invalidations(&self) -> u8 {
+        self.invalidations
     }
 }
 
 impl ModifierNodeContext for LayoutNodeContext {
+    #[inline]
     fn invalidate(&mut self, kind: InvalidationKind) {
-        if !self.invalidations.contains(&kind) {
-            self.invalidations.push(kind);
-        }
+        self.invalidations |= match kind {
+            InvalidationKind::Layout => Self::LAYOUT_BIT,
+            InvalidationKind::Draw => Self::DRAW_BIT,
+            InvalidationKind::Semantics => Self::SEMANTICS_BIT,
+            InvalidationKind::PointerInput => Self::POINTER_INPUT_BIT,
+            InvalidationKind::Focus => Self::FOCUS_BIT,
+        };
     }
 
     fn request_update(&mut self) {
@@ -166,8 +179,10 @@ impl Drop for ApplierSlotGuard<'_> {
     }
 }
 
+pub(crate) use self::subcompose_measure::{SubcomposeChainPlan, SubcomposeMeasureStart};
+
 #[derive(Clone, Copy, PartialEq)]
-pub(crate) struct ModifierChainInputs {
+struct ModifierChainInputs {
     density: crate::density::Density,
     window_root: bool,
     offset: Point,
@@ -1058,43 +1073,57 @@ impl LayoutBuilderState {
         node_id: NodeId,
         constraints: Constraints,
     ) -> Result<(&'static str, MeasuredNode), NodeError> {
-        self.clear_subcompose_placed(node_id);
-        if let Some(cached) = self.subcompose_measurement_to_keep(node_id, constraints)
-            && let Some(kept) = self.keep_subcompose_measurement(node_id, constraints, &cached)?
-        {
-            return Ok(("subcompose kept", kept));
+        enum Visit {
+            Keep(MeasuredNode),
+            Measure(SubcomposeMeasureStart),
         }
-        Ok(match self.try_measure_subcompose(node_id, constraints)? {
-            Some(measured) => {
-                self.store_subcompose_measurement(node_id, constraints, &measured);
-                ("subcompose", measured)
-            }
-            None => ("fallback", MeasuredNode::default()),
-        })
-    }
 
-    /// The measurement of a subcompose node whose own inputs did not change
-    /// since it measured at `constraints`, as for a layout node: its policy
-    /// does not run, so its content does not compose again.
-    fn subcompose_measurement_to_keep(
-        &self,
-        node_id: NodeId,
-        constraints: Constraints,
-    ) -> Option<MeasuredNode> {
-        let mut applier = self.applier.try_borrow_typed().ok()?;
-        applier
-            .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-                if node.needs_measure() || Node::needs_layout(node) {
-                    return None;
+        let mut keep = true;
+        let started = loop {
+            let Ok(mut applier) = self.applier.try_borrow_typed() else {
+                return Ok(("fallback", MeasuredNode::default()));
+            };
+            let visit = match applier.get_mut(node_id) {
+                Ok(node) => match node.as_any_mut().downcast_mut::<SubcomposeLayoutNode>() {
+                    Some(subcompose) => {
+                        if keep {
+                            subcompose.clear_placed(&self.context);
+                            if !subcompose.needs_measure() && !Node::needs_layout(subcompose) {
+                                let cache = subcompose.cache();
+                                if cache.epoch() >= self.cache_floor
+                                    && let Some(cached) = cache.get_measurement(constraints)
+                                {
+                                    Visit::Keep(cached)
+                                } else {
+                                    Visit::Measure(subcompose.begin_measure(constraints))
+                                }
+                            } else {
+                                Visit::Measure(subcompose.begin_measure(constraints))
+                            }
+                        } else {
+                            Visit::Measure(subcompose.begin_measure(constraints))
+                        }
+                    }
+                    None => return Ok(("fallback", MeasuredNode::default())),
+                },
+                Err(NodeError::Missing { .. }) => return Ok(("fallback", MeasuredNode::default())),
+                Err(err) => return Err(err),
+            };
+            drop(applier);
+            match visit {
+                Visit::Keep(cached) => {
+                    if let Some(kept) =
+                        self.keep_subcompose_measurement(node_id, constraints, &cached)?
+                    {
+                        return Ok(("subcompose kept", kept));
+                    }
+                    keep = false;
                 }
-                let cache = node.cache();
-                if cache.epoch() < self.cache_floor {
-                    return None;
-                }
-                cache.get_measurement(constraints)
-            })
-            .ok()
-            .flatten()
+                Visit::Measure(started) => break started,
+            }
+        };
+        let measured = self.finish_subcompose_measure(node_id, constraints, started)?;
+        Ok(("subcompose", measured))
     }
 
     /// Keeps a subcompose node's measurement as [`Self::keep_measurement`]
@@ -1174,15 +1203,6 @@ impl LayoutBuilderState {
         }
     }
 
-    fn clear_subcompose_placed(&self, node_id: NodeId) {
-        let Ok(mut applier) = self.applier.try_borrow_typed() else {
-            return;
-        };
-        let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-            node.clear_placed(&self.context);
-        });
-    }
-
     fn measure_node(
         self: &Rc<Self>,
         node_id: NodeId,
@@ -1235,33 +1255,17 @@ impl LayoutBuilderState {
         self.measure_subcompose_node(node_id, constraints)
     }
 
-    fn try_measure_subcompose(
+    fn finish_subcompose_measure(
         self: &Rc<Self>,
         node_id: NodeId,
         constraints: Constraints,
-    ) -> Result<Option<MeasuredNode>, NodeError> {
-        let (node_handle, parts, chain_inputs) = {
-            let Ok(mut applier) = self.applier.try_borrow_typed() else {
-                return Ok(None);
-            };
-            let node = match applier.get_mut(node_id) {
-                Ok(node) => node,
-                Err(NodeError::Missing { .. }) => return Ok(None),
-                Err(err) => return Err(err),
-            };
-            let any = node.as_any_mut();
-            if let Some(subcompose) = any.downcast_mut::<SubcomposeLayoutNode>() {
-                let handle = subcompose.handle();
-                let parts = Rc::clone(subcompose.layout_parts());
-                let chain_inputs = subcompose.bind_layout_chain();
-                subcompose.cache().clear_measurement();
-                (handle, parts, chain_inputs)
-            } else {
-                return Ok(None);
-            }
-        };
-
-        let measured_children = node_handle.measured_children_scratch();
+        SubcomposeMeasureStart {
+            handle: node_handle,
+            parts,
+            plan,
+            measured_children,
+        }: SubcomposeMeasureStart,
+    ) -> Result<MeasuredNode, NodeError> {
         let subcompose_measure::SubcomposeChainMeasurement {
             size,
             offset,
@@ -1274,32 +1278,28 @@ impl LayoutBuilderState {
             &node_handle,
             &parts,
             node_id,
-            chain_inputs,
+            plan,
             constraints,
             &measured_children,
         )?;
 
         let mut alignment_lines = AlignmentLines::default();
-        let mut measured_children_by_id = measured_children.borrow_mut();
+        let cache = parts.cache();
+        let layout_state = parts.layout_state();
+        if moved_coordinators && layout_state.size() == size {
+            layout_state.note_geometry_change(node_id, &self.context);
+        }
+        layout_state.set_size(Some(node_id), size, &self.context);
+        layout_state.set_content_offset(Some(node_id), content_offset);
+        parts.note_child_placements(&placements);
+        cache.clear_needs_measure();
+        cache.clear_layout_dirt();
 
         // One borrow of the applier places every child; measuring a child
         // the pass did not measure borrows it on its own.
-        let mut applier = self.applier.try_borrow_typed().ok();
-        if let Some(applier) = applier.as_mut() {
-            let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |parent_node| {
-                let layout_state = parent_node.layout_parts().layout_state();
-                if moved_coordinators {
-                    layout_state.note_geometry_change(node_id, &self.context);
-                }
-                parent_node.set_measured_size(size, &self.context);
-                layout_state.set_content_offset(Some(node_id), content_offset);
-                parent_node
-                    .layout_parts()
-                    .note_child_placements(&placements);
-                parent_node.clear_needs_measure();
-                parent_node.clear_needs_layout();
-            });
-        }
+        let mut applier = (!placements.is_empty())
+            .then(|| self.applier.try_borrow_typed().ok())
+            .flatten();
 
         // A lazy policy placed its items' roots with their measurements; the
         // other placements are looked up.
@@ -1310,15 +1310,15 @@ impl LayoutBuilderState {
             let child: &MeasuredNode = if let Some(measured) = carried.next_measurement() {
                 measured
             } else {
-                looked_up =
-                    if let Some(measured) = measured_children_by_id.remove(&placement.node_id) {
-                        measured
-                    } else {
-                        drop(applier.take());
-                        let measured = self.measure_node(placement.node_id, inner_constraints)?;
-                        applier = self.applier.try_borrow_typed().ok();
-                        measured
-                    };
+                let recorded = measured_children.borrow_mut().remove(&placement.node_id);
+                looked_up = if let Some(measured) = recorded {
+                    measured
+                } else {
+                    drop(applier.take());
+                    let measured = self.measure_node(placement.node_id, inner_constraints)?;
+                    applier = self.applier.try_borrow_typed().ok();
+                    measured
+                };
                 &looked_up
             };
             let policy_position = Point {
@@ -1348,13 +1348,13 @@ impl LayoutBuilderState {
         node_handle.recycle_placed_roots(placed_roots);
         node_handle.recycle_placement_scratch(placements);
 
-        Ok(Some(
-            MeasuredNode::new(size, offset, content_offset).with_alignment_lines(
-                alignment_lines
-                    .translated(offset.y)
-                    .with_overrides(explicit_lines),
-            ),
-        ))
+        let measured = MeasuredNode::new(size, offset, content_offset).with_alignment_lines(
+            alignment_lines
+                .translated(offset.y)
+                .with_overrides(explicit_lines),
+        );
+        cache.store_measurement(constraints, measured);
+        Ok(measured)
     }
 
     fn measure_layout_node(
@@ -1443,7 +1443,7 @@ impl LayoutBuilderState {
             measurement.ignores_child_sizes,
         );
         let layout_state = parts.layout_state();
-        if runtime_state.take_moved_coordinators() {
+        if runtime_state.take_moved_coordinators() && layout_state.size() == measurement.size {
             layout_state.note_geometry_change(node_id, &self.context);
         }
         cache.clear_needs_measure();
@@ -1663,22 +1663,6 @@ impl LayoutBuilderState {
                 _ => ChildChange::Refuse,
             }
         })
-    }
-
-    /// Stores a subcompose node's new measurement in its cache, as a layout
-    /// node's measure stores its own.
-    fn store_subcompose_measurement(
-        &self,
-        node_id: NodeId,
-        constraints: Constraints,
-        measured: &MeasuredNode,
-    ) {
-        let Ok(mut applier) = self.applier.try_borrow_typed() else {
-            return;
-        };
-        let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-            node.cache().store_measurement(constraints, *measured);
-        });
     }
 
     /// Places a child of the kept node `parent` where it was: the node's

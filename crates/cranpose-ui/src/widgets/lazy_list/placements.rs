@@ -37,23 +37,22 @@ pub(super) fn push_lazy_list_placements(
             .unwrap_or(LinearArrangement::Start)
     };
 
-    let spacing = config.spacing;
-    let total_item_size: f32 = visible_items.iter().map(|i| i.main_axis_size).sum::<f32>()
-        + (items_count.saturating_sub(1) as f32) * spacing;
-    let available_main_axis =
-        (viewport_size - config.before_content_padding - config.after_content_padding).max(0.0);
-    let has_spare_space =
-        total_item_size < available_main_axis && visible_items.len() == items_count;
     // `LinearArrangement::Start` is the spec default and matches sequential
     // placement from the reverse edge when `reverse_layout` is true; an
     // explicit `SpacedBy` aligns to visual start under reverse layout as
     // Compose's `Arrangement.spacedBy` does.
-    let should_apply_arrangement = has_spare_space
-        && match arrangement {
-            LinearArrangement::Start => false,
-            LinearArrangement::SpacedBy(_) => config.reverse_layout,
-            _ => true,
-        };
+    let needs_arrangement = match arrangement {
+        LinearArrangement::Start => false,
+        LinearArrangement::SpacedBy(_) => config.reverse_layout,
+        _ => true,
+    };
+    let available_main_axis =
+        (viewport_size - config.before_content_padding - config.after_content_padding).max(0.0);
+    let should_apply_arrangement = needs_arrangement && visible_items.len() == items_count && {
+        let total_item_size: f32 = visible_items.iter().map(|i| i.main_axis_size).sum::<f32>()
+            + (items_count.saturating_sub(1) as f32) * config.spacing;
+        total_item_size < available_main_axis
+    };
 
     if should_apply_arrangement {
         let content_start = if config.reverse_layout {

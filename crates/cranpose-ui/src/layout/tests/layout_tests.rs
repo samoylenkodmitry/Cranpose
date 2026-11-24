@@ -1875,7 +1875,7 @@ fn tree_needs_layout_supports_subcompose_root_nodes() -> Result<(), NodeError> {
     )?);
 
     applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-        node.clear_needs_measure();
+        node.cache().clear_needs_measure();
         node.clear_needs_layout();
     })?;
     assert!(!tree_needs_layout(
