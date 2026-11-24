@@ -1068,6 +1068,9 @@ impl LayoutBuilderState {
         f(&mut applier)
     }
 
+    // Out of line so subcompose measurement never inflates the hot LayoutNode
+    // measure frame or instruction footprint.
+    #[inline(never)]
     fn measure_subcompose_node(
         self: &Rc<Self>,
         node_id: NodeId,
@@ -1088,18 +1091,14 @@ impl LayoutBuilderState {
                     Some(subcompose) => {
                         if keep {
                             subcompose.clear_placed(&self.context);
-                            if !subcompose.needs_measure() && !Node::needs_layout(subcompose) {
-                                let cache = subcompose.cache();
-                                if cache.epoch() >= self.cache_floor
-                                    && let Some(cached) = cache.get_measurement(constraints)
-                                {
-                                    Visit::Keep(cached)
-                                } else {
-                                    Visit::Measure(subcompose.begin_measure(constraints))
-                                }
-                            } else {
-                                Visit::Measure(subcompose.begin_measure(constraints))
-                            }
+                        }
+                        if keep
+                            && !subcompose.needs_measure()
+                            && !Node::needs_layout(subcompose)
+                            && subcompose.cache().epoch() >= self.cache_floor
+                            && let Some(cached) = subcompose.cache().get_measurement(constraints)
+                        {
+                            Visit::Keep(cached)
                         } else {
                             Visit::Measure(subcompose.begin_measure(constraints))
                         }
