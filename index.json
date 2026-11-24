@@ -186378,6 +186378,393 @@
      }
     }
    }
+  },
+  {
+   "file": "runs/2026-11-24-frameworks-b1134eb70-EVR-AL00.json",
+   "kind": "frameworks",
+   "started_at": "2026-11-24T02:55:05+00:00",
+   "device": "EVR-AL00",
+   "main": "b1134eb7076e98f5bdabe347a449e0bf3701fd5c",
+   "release": "v0.28.0",
+   "subjects": [
+    {
+     "name": "cranpose",
+     "label": "Cranpose 0.28.0 main b1134eb70",
+     "source": "benchmarks/compose-vs-cranpose/cranpose-app/src/screens/gauntlet.rs"
+    },
+    {
+     "name": "cranpose-release",
+     "label": "Cranpose v0.28.0",
+     "source": "benchmarks/compose-vs-cranpose/cranpose-app/src/screens/gauntlet.rs"
+    },
+    {
+     "name": "avalonia",
+     "label": "Avalonia 12.2.0",
+     "source": "benchmarks/compose-vs-cranpose/avalonia-app/Gauntlet.cs"
+    },
+    {
+     "name": "compose",
+     "label": "Compose BOM 2026.11.01",
+     "source": "benchmarks/compose-vs-cranpose/shared-compose/dev/perfcompare/compose/Gauntlet.kt"
+    },
+    {
+     "name": "egui",
+     "label": "egui 0.37.0",
+     "source": "benchmarks/compose-vs-cranpose/egui-app/src/lib.rs"
+    },
+    {
+     "name": "flutter",
+     "label": "Flutter 3.51.0-1.0.pre-40",
+     "source": "benchmarks/compose-vs-cranpose/flutter-app/lib/main.dart"
+    },
+    {
+     "name": "lynx",
+     "label": "Lynx 4.2.0",
+     "source": "benchmarks/compose-vs-cranpose/lynx-app/page/src/Gauntlet.tsx"
+    },
+    {
+     "name": "maui",
+     "label": ".NET MAUI 10.0.110",
+     "source": "benchmarks/compose-vs-cranpose/maui-app/GauntletPage.cs"
+    },
+    {
+     "name": "nativescript",
+     "label": "NativeScript 9.1.4",
+     "source": "benchmarks/compose-vs-cranpose/nativescript-app/app/app.ts"
+    },
+    {
+     "name": "rn",
+     "label": "React Native 0.88.1",
+     "source": "benchmarks/compose-vs-cranpose/rn-app/src/Gauntlet.tsx"
+    },
+    {
+     "name": "slint",
+     "label": "Slint 1.19.0",
+     "source": "benchmarks/compose-vs-cranpose/slint-app/ui/gauntlet.slint"
+    },
+    {
+     "name": "views",
+     "label": "Views 1.4.0",
+     "source": "benchmarks/compose-vs-cranpose/views-app/app/src/main/java/dev/perfcompare/views/Gauntlet.kt"
+    },
+    {
+     "name": "web",
+     "label": "Web WebView 157.0.8103.50, Capacitor 8.6.2",
+     "source": "benchmarks/compose-vs-cranpose/web-app/src/gauntlet.ts"
+    }
+   ],
+   "duration_s": 503,
+   "protocol": {
+    "run_s": 10.0,
+    "starts": [
+     "first",
+     "second"
+    ],
+    "rounds": 1,
+    "stop_below_fps": 10,
+    "stop_seconds_in_a_row": 5
+   },
+   "scenarios": {
+    "gauntlet": {
+     "legs": 24,
+     "starts": {
+      "first": {
+       "summary": {
+        "cranpose": {
+         "fps": 57.83938814552148,
+         "first_frame_s": 0.23966770997503772,
+         "cpu_ms_per_frame": 25.636363636363637,
+         "cpu_cores": 1.4827915870033688,
+         "desired_to_present_p50_ms": 35.219271,
+         "janky_pct": 0.6622516556291391,
+         "ram_mb": 173.56640625,
+         "gpu_ram_mb": 66.33203125,
+         "cpu_mhz": 1801.0625,
+         "gpu_mhz": 326.0
+        },
+        "cranpose-release": {
+         "fps": 57.79467680598132,
+         "first_frame_s": 0.25825885497033596,
+         "cpu_ms_per_frame": 25.44407894736842,
+         "cpu_cores": 1.4705323193890314,
+         "desired_to_present_p50_ms": 36.617188,
+         "janky_pct": 0.8237232289950577,
+         "ram_mb": 161.1630859375,
+         "gpu_ram_mb": 53.578125,
+         "cpu_mhz": 1771.5625,
+         "gpu_mhz": 296.75
+        },
+        "avalonia": {
+         "fps": 2.4479804161615544,
+         "first_frame_s": 2.6300000000046566,
+         "cpu_ms_per_frame": 618.5,
+         "cpu_cores": 1.5140758873959212,
+         "desired_to_present_p50_ms": 24.677604,
+         "janky_pct": 100.0,
+         "ram_mb": 337.634765625,
+         "gpu_ram_mb": 71.90234375,
+         "cpu_mhz": 2461.3333333333335,
+         "gpu_mhz": 254.0
+        },
+        "compose": {
+         "fps": 2.6431718061683047,
+         "first_frame_s": 0.8194906249991618,
+         "cpu_ms_per_frame": 458.8888888888889,
+         "cpu_cores": 1.2129221732750108,
+         "desired_to_present_p50_ms": 27.934896,
+         "janky_pct": 100.0,
+         "ram_mb": 142.0009765625,
+         "gpu_ram_mb": 24.55859375,
+         "cpu_mhz": 2600.0,
+         "gpu_mhz": 246.33333333333334
+        },
+        "egui": {
+         "fps": 43.49951124127842,
+         "first_frame_s": 0.3849406259832904,
+         "cpu_ms_per_frame": 23.258426966292134,
+         "cpu_cores": 1.0117302052746777,
+         "desired_to_present_p50_ms": 23.647917,
+         "janky_pct": 31.756756756756758,
+         "ram_mb": 105.255859375,
+         "gpu_ram_mb": 34.59375,
+         "cpu_mhz": 2473.25,
+         "gpu_mhz": 284.6875
+        },
+        "flutter": {
+         "fps": 6.268221574356788,
+         "first_frame_s": 0.7736656250199303,
+         "cpu_ms_per_frame": 305.8139534883721,
+         "cpu_cores": 1.9169096209951573,
+         "desired_to_present_p50_ms": 49.043229,
+         "janky_pct": 100.0,
+         "ram_mb": 290.693359375,
+         "gpu_ram_mb": 49.26171875,
+         "cpu_mhz": 2600.0,
+         "gpu_mhz": 277.0
+        },
+        "lynx": {
+         "fps": 2.668360864022504,
+         "first_frame_s": 1.6955723960418254,
+         "cpu_ms_per_frame": 997.1428571428571,
+         "cpu_cores": 2.660736975839583,
+         "desired_to_present_p50_ms": 26.334375,
+         "janky_pct": 100.0,
+         "ram_mb": 308.8564453125,
+         "gpu_ram_mb": 26.57421875,
+         "cpu_mhz": 2600.0,
+         "gpu_mhz": 185.0
+        },
+        "maui": {
+         "fps": 0.0,
+         "cpu_cores": 1.0749027237385735,
+         "ram_mb": 749.12109375,
+         "gpu_ram_mb": 159.515625
+        },
+        "nativescript": {
+         "fps": 3.354297693927703,
+         "first_frame_s": 3.5159859369741753,
+         "cpu_ms_per_frame": 420.3125,
+         "cpu_cores": 1.4098532494789877,
+         "desired_to_present_p50_ms": 35.0875,
+         "janky_pct": 100.0,
+         "ram_mb": 327.0830078125,
+         "gpu_ram_mb": 37.0859375,
+         "cpu_mhz": 2600.0,
+         "gpu_mhz": 208.0
+        },
+        "rn": {
+         "fps": 1.5698587127170032,
+         "first_frame_s": 0.2825510420370847,
+         "cpu_ms_per_frame": 1263.0,
+         "cpu_cores": 1.982731554161575,
+         "desired_to_present_p50_ms": 36.560417,
+         "janky_pct": 100.0,
+         "ram_mb": 544.451171875,
+         "gpu_ram_mb": 38.55078125,
+         "cpu_mhz": 2545.777777777778,
+         "gpu_mhz": 198.66666666666666
+        },
+        "slint": {},
+        "views": {
+         "fps": 12.940057088547354,
+         "first_frame_s": 0.8417531260056421,
+         "cpu_ms_per_frame": 126.69117647058823,
+         "cpu_cores": 1.6393910561446392,
+         "desired_to_present_p50_ms": 28.152604,
+         "janky_pct": 100.0,
+         "ram_mb": 179.580078125,
+         "gpu_ram_mb": 24.8515625,
+         "cpu_mhz": 2600.0,
+         "gpu_mhz": 277.0
+        },
+        "web": {
+         "fps": 14.116485686074459,
+         "first_frame_s": 0.4033208339824341,
+         "cpu_ms_per_frame": 68.25174825174825,
+         "cpu_cores": 0.9634748272453616,
+         "desired_to_present_p50_ms": 25.684375,
+         "janky_pct": 94.36619718309859,
+         "ram_mb": 211.0712890625,
+         "gpu_ram_mb": 105.83203125,
+         "cpu_mhz": 2600.0,
+         "gpu_mhz": 276.0625
+        }
+       },
+       "verdicts": {},
+       "failures": {
+        "slint": "adb shell sh /data/local/tmp/perf_window.sh dev.perfcompare.slint main '(VRI-)?dev[.]perfcompare[.]slint/[^ ]*' 10.00 0.5 0 10 5 -n dev.perfcompare.slint/dev.perfcompare.launch.LaunchActivity --es scenario gauntlet --ei tier 12 hung for 70.0 s twice, with a restart of the adb server between"
+       },
+       "confirmed": []
+      },
+      "second": {
+       "summary": {
+        "cranpose": {
+         "fps": 58.30959164309258,
+         "first_frame_s": 0.206252605014015,
+         "cpu_ms_per_frame": 24.087947882736156,
+         "cpu_cores": 1.4045584045624417,
+         "desired_to_present_p50_ms": 36.822916,
+         "janky_pct": 0.4893964110929853,
+         "ram_mb": 153.70703125,
+         "gpu_ram_mb": 53.9609375,
+         "cpu_mhz": 1881.875,
+         "gpu_mhz": 303.625
+        },
+        "cranpose-release": {
+         "fps": 58.32540437673233,
+         "first_frame_s": 0.22312135400716215,
+         "cpu_ms_per_frame": 23.91517128874388,
+         "cpu_cores": 1.3948620361548059,
+         "desired_to_present_p50_ms": 36.310417,
+         "janky_pct": 0.49019607843137253,
+         "ram_mb": 153.064453125,
+         "gpu_ram_mb": 54.0,
+         "cpu_mhz": 1737.4375,
+         "gpu_mhz": 307.0625
+        },
+        "avalonia": {
+         "fps": 2.625,
+         "first_frame_s": 2.1867635419475846,
+         "cpu_ms_per_frame": 593.3333333333334,
+         "cpu_cores": 1.5575,
+         "desired_to_present_p50_ms": 24.104167,
+         "janky_pct": 100.0,
+         "ram_mb": 339.072265625,
+         "gpu_ram_mb": 69.8984375,
+         "cpu_mhz": 2441.3333333333335,
+         "gpu_mhz": 261.66666666666663
+        },
+        "compose": {
+         "fps": 2.7067669173074487,
+         "first_frame_s": 0.6594843759085052,
+         "cpu_ms_per_frame": 445.55555555555554,
+         "cpu_cores": 1.2060150376003187,
+         "desired_to_present_p50_ms": 33.184375,
+         "janky_pct": 100.0,
+         "ram_mb": 133.4697265625,
+         "gpu_ram_mb": 24.50390625,
+         "cpu_mhz": 2600.0,
+         "gpu_mhz": 169.66666666666666
+        },
+        "egui": {
+         "fps": 44.327931363242406,
+         "first_frame_s": 0.31277187704108655,
+         "cpu_ms_per_frame": 22.537634408602152,
+         "cpu_cores": 0.9990467111543665,
+         "desired_to_present_p50_ms": 23.867188,
+         "janky_pct": 30.17241379310345,
+         "ram_mb": 101.0244140625,
+         "gpu_ram_mb": 32.5234375,
+         "cpu_mhz": 2533.176470588235,
+         "gpu_mhz": 292.35294117647055
+        },
+        "flutter": {
+         "fps": 6.666666666666667,
+         "first_frame_s": 0.6371828130213544,
+         "cpu_ms_per_frame": 265.55555555555554,
+         "cpu_cores": 1.7703703703703704,
+         "desired_to_present_p50_ms": 49.616146,
+         "janky_pct": 100.0,
+         "ram_mb": 289.5341796875,
+         "gpu_ram_mb": 47.93359375,
+         "cpu_mhz": 2600.0,
+         "gpu_mhz": 277.0
+        },
+        "lynx": {
+         "fps": 3.034300791573505,
+         "first_frame_s": 1.4474682299769484,
+         "cpu_ms_per_frame": 896.9565217391304,
+         "cpu_cores": 2.7216358839200607,
+         "desired_to_present_p50_ms": 30.40677,
+         "janky_pct": 95.45454545454545,
+         "ram_mb": 317.6416015625,
+         "gpu_ram_mb": 29.85546875,
+         "cpu_mhz": 2600.0,
+         "gpu_mhz": 169.66666666666666
+        },
+        "maui": {
+         "fps": 0.0,
+         "cpu_cores": 1.0985365853658537,
+         "ram_mb": 771.2919921875,
+         "gpu_ram_mb": 159.92578125
+        },
+        "nativescript": {
+         "fps": 3.508771929826353,
+         "first_frame_s": 3.119098960014526,
+         "cpu_ms_per_frame": 408.75,
+         "cpu_cores": 1.4342105263165217,
+         "desired_to_present_p50_ms": 34.996875,
+         "janky_pct": 100.0,
+         "ram_mb": 323.89453125,
+         "gpu_ram_mb": 37.09765625,
+         "cpu_mhz": 2600.0,
+         "gpu_mhz": 200.33333333333334
+        },
+        "rn": {
+         "fps": 1.5974440894544923,
+         "first_frame_s": 0.2183755220612511,
+         "cpu_ms_per_frame": 1211.0,
+         "cpu_cores": 1.9345047923293903,
+         "desired_to_present_p50_ms": 38.735417,
+         "janky_pct": 88.88888888888889,
+         "ram_mb": 555.5791015625,
+         "gpu_ram_mb": 40.2890625,
+         "cpu_mhz": 2580.0,
+         "gpu_mhz": 198.66666666666666
+        },
+        "slint": {},
+        "views": {
+         "fps": 13.262342691244513,
+         "first_frame_s": 0.6656895839842036,
+         "cpu_ms_per_frame": 124.37956204379562,
+         "cpu_cores": 1.6495643756117262,
+         "desired_to_present_p50_ms": 32.141667,
+         "janky_pct": 100.0,
+         "ram_mb": 177.859375,
+         "gpu_ram_mb": 25.3515625,
+         "cpu_mhz": 2600.0,
+         "gpu_mhz": 220.9375
+        },
+        "web": {
+         "fps": 14.667988107084057,
+         "first_frame_s": 0.3515755209955387,
+         "cpu_ms_per_frame": 64.66216216216216,
+         "cpu_cores": 0.9484638255729353,
+         "desired_to_present_p50_ms": 24.626042,
+         "janky_pct": 93.87755102040816,
+         "ram_mb": 197.2294921875,
+         "gpu_ram_mb": 92.44140625,
+         "cpu_mhz": 2600.0,
+         "gpu_mhz": 284.6875
+        }
+       },
+       "verdicts": {},
+       "failures": {},
+       "confirmed": []
+      }
+     }
+    }
+   }
   }
  ]
 }
