@@ -105,7 +105,6 @@ impl LayoutBuilderState {
         )
     }
 
-    #[inline(never)]
     fn measure_through_general_chain(
         &self,
         (node_id, runtime_state, chain): (NodeId, &LayoutRuntimeState, ModifierChainInputs),

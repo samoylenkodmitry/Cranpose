@@ -1068,9 +1068,6 @@ impl LayoutBuilderState {
         f(&mut applier)
     }
 
-    // Out of line so subcompose measurement never inflates the hot LayoutNode
-    // measure frame or instruction footprint.
-    #[inline(never)]
     fn measure_subcompose_node(
         self: &Rc<Self>,
         node_id: NodeId,
@@ -1254,6 +1251,7 @@ impl LayoutBuilderState {
         self.measure_subcompose_node(node_id, constraints)
     }
 
+    #[inline(never)]
     fn finish_subcompose_measure(
         self: &Rc<Self>,
         node_id: NodeId,
