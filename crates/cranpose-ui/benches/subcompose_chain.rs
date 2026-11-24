@@ -1,6 +1,6 @@
 //! Amplifies layout cost for `SubcomposeLayoutNode` modifier chains, wrapped
 //! `LazyRow` lists, and dense `LayoutNode` modifier chains under per-frame
-//! relayout. Supports standalone JSON output (`CASE=... FRAMES=...`) and
+//! relayout. Supports standalone JSON output (`--case=... --frames=...`) and
 //! `--steady-ledger` for `scripts/perf/steady_ledger.sh`.
 
 #![allow(
@@ -80,9 +80,9 @@ struct Config {
 
 impl Config {
     fn from_args() -> Self {
-        let mut case = std::env::var("CASE").ok().and_then(|v| Case::parse(&v));
-        let mut warmup = env_usize("WARMUP", DEFAULT_WARMUP);
-        let mut frames = env_usize("FRAMES", DEFAULT_FRAMES);
+        let mut case = None;
+        let mut warmup = DEFAULT_WARMUP;
+        let mut frames = DEFAULT_FRAMES;
         let mut output = OutputFormat::Json;
 
         for arg in std::env::args().skip(1) {
@@ -182,13 +182,6 @@ fn LayoutModifierChainScene(count: usize) {
             }
         },
     );
-}
-
-fn env_usize(name: &str, default: usize) -> usize {
-    std::env::var(name)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
 }
 
 fn measure_once(composition: &mut Composition<MemoryApplier>, width: f32) {

@@ -97,7 +97,7 @@ impl LayoutNodeContext {
     }
 
     #[inline]
-    pub(crate) fn invalidations(&self) -> u8 {
+    pub(crate) fn invalidations(self) -> u8 {
         self.invalidations
     }
 }

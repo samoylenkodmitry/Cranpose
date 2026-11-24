@@ -165,7 +165,7 @@ impl FractionalOffsetElement {
     }
 
     #[inline]
-    pub(crate) fn offset_for(&self, size: Size) -> Point {
+    pub(crate) fn offset_for(self, size: Size) -> Point {
         Point {
             x: self.x_fraction * size.width,
             y: self.y_fraction * size.height,
