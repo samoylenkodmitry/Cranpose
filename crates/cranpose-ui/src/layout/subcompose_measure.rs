@@ -4,18 +4,17 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{ApplierHost, NodeError, NodeId};
-use cranpose_foundation::InvalidationKind;
 use cranpose_ui_layout::{AlignmentLines, Constraints, Placement};
 
 use super::{
-    LayoutBuilderState, LayoutNodeContext, ModifierChainInputs,
-    coordinator_chain::{CoordinatorChain, CoordinatorLeaf},
+    LayoutBuilderState, ModifierChainInputs,
+    coordinator_chain::{CoordinatorChain, CoordinatorFrame, SubcomposeCoordinatorLeaf},
     core::Placeable,
 };
 use crate::{
     modifier::{Point, Size},
     subcompose_layout::{MeasureCallbacks, MeasuredChildren, SubcomposeLayoutNodeHandle},
-    widgets::nodes::{IntrinsicKind, LayoutParts},
+    widgets::nodes::LayoutParts,
 };
 
 pub(super) struct SubcomposeChainMeasurement {
@@ -28,52 +27,17 @@ pub(super) struct SubcomposeChainMeasurement {
     pub(super) moved_coordinators: bool,
 }
 
-struct SubcomposeCoordinatorFrame<'a> {
+struct SubcomposeLeaf<'a> {
     builder: &'a Rc<LayoutBuilderState>,
     node_handle: &'a SubcomposeLayoutNodeHandle,
     node_id: NodeId,
     measured_children: &'a MeasuredChildren,
     measure_error: &'a RefCell<Option<NodeError>>,
-    density: f32,
-    context: RefCell<LayoutNodeContext>,
     measured_policy: RefCell<Option<(Constraints, cranpose_ui_layout::MeasureResult)>>,
 }
 
-impl<'a> SubcomposeCoordinatorFrame<'a> {
-    fn new(
-        builder: &'a Rc<LayoutBuilderState>,
-        node_handle: &'a SubcomposeLayoutNodeHandle,
-        node_id: NodeId,
-        measured_children: &'a MeasuredChildren,
-        measure_error: &'a RefCell<Option<NodeError>>,
-        density: f32,
-    ) -> Self {
-        Self {
-            builder,
-            node_handle,
-            node_id,
-            measured_children,
-            measure_error,
-            density,
-            context: RefCell::new(LayoutNodeContext::new(density)),
-            measured_policy: RefCell::new(None),
-        }
-    }
-
-    fn take_invalidations(&self) -> Vec<InvalidationKind> {
-        self.context.borrow_mut().take_invalidations()
-    }
-}
-
-impl CoordinatorLeaf for SubcomposeCoordinatorFrame<'_> {
-    fn density(&self) -> f32 {
-        self.density
-    }
-
-    fn context(&self) -> &RefCell<LayoutNodeContext> {
-        &self.context
-    }
-
+impl SubcomposeCoordinatorLeaf for SubcomposeLeaf<'_> {
+    #[inline(never)]
     fn measure_leaf(&self, chain: &CoordinatorChain, constraints: Constraints) -> Placeable {
         match self.builder.subcompose_policy_result(
             self.node_handle,
@@ -98,10 +62,6 @@ impl CoordinatorLeaf for SubcomposeCoordinatorFrame<'_> {
                 Placeable::value(0.0, 0.0, NodeId::default())
             }
         }
-    }
-
-    fn intrinsic_leaf(&self, _kind: IntrinsicKind) -> f32 {
-        0.0
     }
 }
 
@@ -143,14 +103,15 @@ impl LayoutBuilderState {
             });
         }
 
-        let frame = SubcomposeCoordinatorFrame::new(
-            self,
+        let leaf = SubcomposeLeaf {
+            builder: self,
             node_handle,
             node_id,
             measured_children,
-            &measure_error,
-            chain_inputs.density.density(),
-        );
+            measure_error: &measure_error,
+            measured_policy: RefCell::new(None),
+        };
+        let frame = CoordinatorFrame::for_subcompose(chain_inputs.density.density(), &leaf);
         let (placeable, moved_coordinators) = {
             let runtime_state = parts.runtime_state().borrow();
             let placeable = runtime_state
@@ -163,7 +124,7 @@ impl LayoutBuilderState {
             return Err(err);
         }
 
-        let (inner_constraints, placements) = frame
+        let (inner_constraints, placements) = leaf
             .measured_policy
             .into_inner()
             .map_or((constraints, Vec::new()), |(inner, result)| {

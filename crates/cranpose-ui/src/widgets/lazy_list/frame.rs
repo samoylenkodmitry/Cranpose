@@ -63,6 +63,8 @@ impl LazyFrame {
         };
         let cross_axis_size = if config.grid.is_some() {
             self.cross_axis_size
+        } else if min_cross >= max_cross && max_cross.is_finite() {
+            max_cross
         } else {
             let max_item_cross = result
                 .visible_items
