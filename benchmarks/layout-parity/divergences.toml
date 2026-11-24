@@ -60,66 +60,6 @@ tags = [
 ]
 
 [[layout.unexpected]]
-id = "lazy-row-unbounded-height-returns-infinity"
-issue = "#2458"
-densities = ["1.0", "1.75"]
-kind = "non_finite"
-reason = "LazyRow without Modifier::height returns infinite height inside vertical scrollables, pushing following vertical-scroll siblings to y=Infinity."
-tags = [
-  "z17_lr_wrap_h",
-  "z18_lr_in_vscroll",
-  "z18_vs_tail0",
-  "z18_vs_tail1",
-  "z18_vs_tail2",
-]
-
-[[layout.unexpected]]
-id = "lazy-row-unbounded-height-evicts-following-lazy-items"
-issue = "#2458"
-densities = ["1.0", "1.75"]
-kind = "missing_in_cranpose"
-reason = "Infinite height on z17_lr_wrap_h pushes subsequent LazyColumn items past the viewport so Cranpose never composes them."
-tags = [
-  "z17_lr_perm_a",
-  "z17_lr_perm_b",
-  "z17_lr_rev_wrap",
-  "z17_pa0",
-  "z17_pa1",
-  "z17_pa2",
-  "z17_pa3",
-  "z17_pa4",
-  "z17_pa5",
-  "z17_pb0",
-  "z17_pb1",
-  "z17_pb2",
-  "z17_pb3",
-  "z17_pb4",
-  "z17_rv0",
-  "z17_rv1",
-  "z17_rv2",
-  "z17_rv3",
-  "z17_rv4",
-  "z17_rv5",
-]
-
-[[layout.unexpected]]
-id = "lazy-column-without-width-expands-cross-axis"
-issue = "#2458"
-densities = ["1.0", "1.75"]
-kind = "bounds_delta"
-max_dp = 12.1
-reason = "LazyColumn without an explicit width expands to max_width instead of wrapping content width inside a LazyRow, shifting following siblings by 12 dp."
-tags = [
-  "z19_lc_wrap_w",
-  "z19_vs_in_lr",
-  "z19_vslr0",
-  "z19_vslr1",
-  "z19_vslr2",
-  "z19_vslr3",
-  "z19_vslr4",
-]
-
-[[layout.unexpected]]
 id = "semantics-bounds-ignore-layer-and-offset-with"
 issue = "#2459"
 densities = ["1.0", "1.75"]

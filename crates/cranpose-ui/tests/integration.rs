@@ -21,6 +21,7 @@ mod inline_widgets;
 mod inspector_and_insets;
 mod kept_modifiers;
 mod lazy_content_padding;
+mod lazy_cross_axis;
 mod lazy_memory_headroom;
 mod lazy_retained_many_roots;
 mod lazy_reuse_pool;

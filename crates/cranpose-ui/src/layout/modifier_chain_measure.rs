@@ -1,7 +1,7 @@
 //! The measure of a layout node through its modifier chain and measure
 //! policy.
 
-use cranpose_core::NodeId;
+use cranpose_core::{Applier, NodeId};
 use cranpose_foundation::InvalidationKind;
 use cranpose_ui_layout::{Constraints, Placement};
 
@@ -110,12 +110,16 @@ impl LayoutBuilderState {
     }
     // Marks the node `node_id` with what its modifier chain invalidated while
     // it measured.
-    fn mark_invalidations(&self, node_id: NodeId, invalidations: Vec<InvalidationKind>) {
+    pub(super) fn mark_invalidations(&self, node_id: NodeId, invalidations: Vec<InvalidationKind>) {
         if invalidations.is_empty() {
             return;
         }
         self.with_applier_result(|applier| {
-            applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
+            let Ok(node) = applier.get_mut(node_id) else {
+                return Ok(());
+            };
+            let any = node.as_any_mut();
+            if let Some(layout_node) = any.downcast_mut::<LayoutNode>() {
                 for kind in invalidations {
                     match kind {
                         InvalidationKind::Layout => layout_node.mark_needs_measure(),
@@ -125,7 +129,20 @@ impl LayoutBuilderState {
                         InvalidationKind::Focus => layout_node.mark_needs_focus_sync(),
                     }
                 }
-            })
+            } else if let Some(subcompose) =
+                any.downcast_mut::<crate::subcompose_layout::SubcomposeLayoutNode>()
+            {
+                for kind in invalidations {
+                    match kind {
+                        InvalidationKind::Layout => subcompose.mark_needs_measure(),
+                        InvalidationKind::Draw => subcompose.mark_needs_redraw(),
+                        InvalidationKind::Semantics => subcompose.mark_needs_semantics(),
+                        InvalidationKind::PointerInput => subcompose.mark_needs_pointer_pass(),
+                        InvalidationKind::Focus => subcompose.mark_needs_focus_sync(),
+                    }
+                }
+            }
+            Ok(())
         })
         .ok();
     }

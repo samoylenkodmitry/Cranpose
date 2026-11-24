@@ -699,11 +699,6 @@ impl SubcomposeLayoutNode {
         }
     }
 
-    /// The grid the composition provided, which the chain's lengths land on.
-    pub(crate) fn density(&self) -> crate::density::Density {
-        self.inner.borrow().density
-    }
-
     /// Replaces the modifier chain and invalidates the layout, draw, pointer input and semantics
     /// work that the changed modifier nodes affect.
     pub fn set_modifier(&mut self, modifier: Modifier) {
@@ -722,13 +717,18 @@ impl SubcomposeLayoutNode {
 
     fn update_modifier_slices_cache(&self) {
         let inner = self.inner.borrow();
-        // No coordinators: the draws sit inside the padding before them.
         self.modifier_slices_snapshot.collect(
             inner.modifier_chain.chain(),
-            None,
+            Some(&self.parts),
             inner.density.density(),
         );
         self.modifier_slices_dirty.set(false);
+    }
+
+    pub(crate) fn bind_layout_chain(&self) -> crate::layout::ModifierChainInputs {
+        let inner = self.inner.borrow();
+        let mut state = self.parts.runtime_state().borrow_mut();
+        state.bind_subcompose(inner.density, &inner.modifier_chain)
     }
 
     pub(crate) fn mark_modifier_slices_dirty(&self) {

@@ -68,10 +68,7 @@ pub use self::{
     semantics_update::{build_semantics_tree_from_applier, update_semantics_tree_from_applier},
 };
 use crate::{
-    modifier::{
-        DimensionConstraint, EdgeInsets, ModifierNodeSlicesDebugStats, Point, Rect as GeometryRect,
-        Size,
-    },
+    modifier::{ModifierNodeSlicesDebugStats, Point, Rect as GeometryRect, Size},
     render_state::AppContext,
     subcompose_layout::SubcomposeLayoutNode,
     widgets::nodes::{ChildPlacement, IntrinsicKind, LayoutNode, LayoutParts, LayoutState},
@@ -170,7 +167,7 @@ impl Drop for ApplierSlotGuard<'_> {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-struct ModifierChainInputs {
+pub(crate) struct ModifierChainInputs {
     density: crate::density::Density,
     window_root: bool,
     offset: Point,
@@ -1243,7 +1240,7 @@ impl LayoutBuilderState {
         node_id: NodeId,
         constraints: Constraints,
     ) -> Result<Option<MeasuredNode>, NodeError> {
-        let (node_handle, resolved_modifiers) = {
+        let (node_handle, parts, chain_inputs) = {
             let Ok(mut applier) = self.applier.try_borrow_typed() else {
                 return Ok(None);
             };
@@ -1255,71 +1252,32 @@ impl LayoutBuilderState {
             let any = node.as_any_mut();
             if let Some(subcompose) = any.downcast_mut::<SubcomposeLayoutNode>() {
                 let handle = subcompose.handle();
-                let resolved_modifiers = handle
-                    .resolved_modifiers()
-                    .on_device_grid(subcompose.density().density());
+                let parts = Rc::clone(subcompose.layout_parts());
+                let chain_inputs = subcompose.bind_layout_chain();
                 subcompose.cache().clear_measurement();
-                (handle, resolved_modifiers)
+                (handle, parts, chain_inputs)
             } else {
                 return Ok(None);
             }
         };
 
-        let props = resolved_modifiers.layout_properties();
-        let padding = resolved_modifiers.padding();
-        let offset = resolved_modifiers.offset();
-        let mut inner_constraints = normalize_constraints(subtract_padding(constraints, padding));
-
-        if let DimensionConstraint::Points(width) = props.width() {
-            let constrained_width = width - padding.horizontal_sum();
-            inner_constraints.max_width = inner_constraints.max_width.min(constrained_width);
-            inner_constraints.min_width = inner_constraints.min_width.min(constrained_width);
-        }
-        if let DimensionConstraint::Points(height) = props.height() {
-            let constrained_height = height - padding.vertical_sum();
-            inner_constraints.max_height = inner_constraints.max_height.min(constrained_height);
-            inner_constraints.min_height = inner_constraints.min_height.min(constrained_height);
-        }
-
-        let measure_error = RefCell::new(None);
         let measured_children = node_handle.measured_children_scratch();
-        let measure_result = self.subcompose_policy_result(
-            &node_handle,
-            node_id,
+        let subcompose_measure::SubcomposeChainMeasurement {
+            size,
+            offset,
+            content_offset,
+            explicit_lines,
             inner_constraints,
-            &measured_children,
-            &measure_error,
-        )?;
-
-        if let Some(err) = measure_error.borrow_mut().take() {
-            return Err(err);
-        }
-
-        let cranpose_ui_layout::MeasureResult {
-            size: measured_size,
-            alignment_lines: explicit_lines,
             placements,
-        } = measure_result;
-
-        let mut width = measured_size.width + padding.horizontal_sum();
-        let mut height = measured_size.height + padding.vertical_sum();
-
-        width = resolve_dimension(
-            width,
-            props.width(),
-            props.min_width(),
-            props.max_width(),
-            constraints.min_width,
-            constraints.max_width,
-        );
-        height = resolve_dimension(
-            height,
-            props.height(),
-            props.min_height(),
-            props.max_height(),
-            constraints.min_height,
-            constraints.max_height,
-        );
+            moved_coordinators,
+        } = self.measure_subcompose_through_modifier_chain(
+            &node_handle,
+            &parts,
+            node_id,
+            chain_inputs,
+            constraints,
+            &measured_children,
+        )?;
 
         let mut alignment_lines = AlignmentLines::default();
         let mut measured_children_by_id = measured_children.borrow_mut();
@@ -1329,7 +1287,12 @@ impl LayoutBuilderState {
         let mut applier = self.applier.try_borrow_typed().ok();
         if let Some(applier) = applier.as_mut() {
             let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |parent_node| {
-                parent_node.set_measured_size(Size { width, height }, &self.context);
+                let layout_state = parent_node.layout_parts().layout_state();
+                if moved_coordinators {
+                    layout_state.note_geometry_change(node_id, &self.context);
+                }
+                parent_node.set_measured_size(size, &self.context);
+                layout_state.set_content_offset(Some(node_id), content_offset);
                 parent_node
                     .layout_parts()
                     .note_child_placements(&placements);
@@ -1359,12 +1322,12 @@ impl LayoutBuilderState {
                 &looked_up
             };
             let policy_position = Point {
-                x: padding.left + placement.x,
-                y: padding.top + placement.y,
+                x: content_offset.x + placement.x,
+                y: content_offset.y + placement.y,
             };
             let retained_position = Point {
-                x: policy_position.x + child.offset.x,
-                y: policy_position.y + child.offset.y,
+                x: placement.x + child.offset.x,
+                y: placement.y + child.offset.y,
             };
             let retained = ChildPlacement::new(retained_position, placement.z_index);
             alignment_lines.merge(
@@ -1386,12 +1349,11 @@ impl LayoutBuilderState {
         node_handle.recycle_placement_scratch(placements);
 
         Ok(Some(
-            MeasuredNode::new(Size { width, height }, offset, Point::default())
-                .with_alignment_lines(
-                    alignment_lines
-                        .with_overrides(explicit_lines.translated(padding.top))
-                        .translated(offset.y),
-                ),
+            MeasuredNode::new(size, offset, content_offset).with_alignment_lines(
+                alignment_lines
+                    .translated(offset.y)
+                    .with_overrides(explicit_lines),
+            ),
         ))
     }
 
@@ -2192,82 +2154,6 @@ fn build_semantics_node_from_layout_box(layout_box: &LayoutBox, origin: Point) -
             rect,
         )
     }
-}
-
-fn subtract_padding(constraints: Constraints, padding: EdgeInsets) -> Constraints {
-    let horizontal = padding.horizontal_sum();
-    let vertical = padding.vertical_sum();
-    let min_width = (constraints.min_width - horizontal).max(0.0);
-    let mut max_width = constraints.max_width;
-    if max_width.is_finite() {
-        max_width = (max_width - horizontal).max(0.0);
-    }
-    let min_height = (constraints.min_height - vertical).max(0.0);
-    let mut max_height = constraints.max_height;
-    if max_height.is_finite() {
-        max_height = (max_height - vertical).max(0.0);
-    }
-    normalize_constraints(Constraints {
-        min_width,
-        max_width,
-        min_height,
-        max_height,
-    })
-}
-
-fn resolve_dimension(
-    base: f32,
-    explicit: DimensionConstraint,
-    min_override: Option<f32>,
-    max_override: Option<f32>,
-    min_limit: f32,
-    max_limit: f32,
-) -> f32 {
-    let mut min_bound = min_limit;
-    if let Some(min_value) = min_override {
-        min_bound = min_bound.max(min_value);
-    }
-
-    let mut max_bound = if max_limit.is_finite() {
-        max_limit
-    } else {
-        max_override.unwrap_or(max_limit)
-    };
-    if let Some(max_value) = max_override {
-        if max_bound.is_finite() {
-            max_bound = max_bound.min(max_value);
-        } else {
-            max_bound = max_value;
-        }
-    }
-    if max_bound < min_bound {
-        max_bound = min_bound;
-    }
-
-    let mut size = match explicit {
-        DimensionConstraint::Points(points) => points,
-        DimensionConstraint::Fraction(fraction) => {
-            if max_limit.is_finite() {
-                max_limit * fraction.clamp(0.0, 1.0)
-            } else {
-                base
-            }
-        }
-        DimensionConstraint::Unspecified => base,
-        DimensionConstraint::Intrinsic(_) => base,
-    };
-
-    size = clamp_dimension(size, min_bound, max_bound);
-    size = clamp_dimension(size, min_limit, max_limit);
-    size.max(0.0)
-}
-
-fn clamp_dimension(value: f32, min: f32, max: f32) -> f32 {
-    let mut result = value.max(min);
-    if max.is_finite() {
-        result = result.min(max);
-    }
-    result
 }
 
 fn normalize_constraints(mut constraints: Constraints) -> Constraints {

@@ -44,25 +44,44 @@ pub(super) fn push_lazy_list_placements(
         (viewport_size - config.before_content_padding - config.after_content_padding).max(0.0);
     let has_spare_space =
         total_item_size < available_main_axis && visible_items.len() == items_count;
+    // `LinearArrangement::Start` is the spec default and matches sequential
+    // placement from the reverse edge when `reverse_layout` is true; an
+    // explicit `SpacedBy` aligns to visual start under reverse layout as
+    // Compose's `Arrangement.spacedBy` does.
     let should_apply_arrangement = has_spare_space
-        && !matches!(
-            arrangement,
-            LinearArrangement::Start | LinearArrangement::SpacedBy(_)
-        );
+        && match arrangement {
+            LinearArrangement::Start => false,
+            LinearArrangement::SpacedBy(_) => config.reverse_layout,
+            _ => true,
+        };
 
     if should_apply_arrangement {
-        let content_offset = config.before_content_padding;
+        let content_start = if config.reverse_layout {
+            config.after_content_padding
+        } else {
+            config.before_content_padding
+        };
 
-        let sizes: SmallVec<[f32; 32]> = visible_items.iter().map(|i| i.main_axis_size).collect();
+        let sizes: SmallVec<[f32; 32]> = if config.reverse_layout {
+            visible_items
+                .iter()
+                .rev()
+                .map(|i| i.main_axis_size)
+                .collect()
+        } else {
+            visible_items.iter().map(|i| i.main_axis_size).collect()
+        };
         let mut positions: SmallVec<[f32; 32]> = SmallVec::from_elem(0.0, sizes.len());
         arrangement.arrange(density, available_main_axis, &sizes, &mut positions);
+        if config.reverse_layout {
+            positions.reverse();
+        }
 
         for (item, &pos) in visible_items.iter().zip(positions.iter()) {
-            let offset = content_offset + pos;
             push_lazy_item_placements(
                 placements,
                 item,
-                offset,
+                content_start + pos,
                 frame,
                 viewport_size,
                 layout_config,
@@ -70,14 +89,12 @@ pub(super) fn push_lazy_list_placements(
         }
     } else {
         for item in visible_items {
-            push_lazy_item_placements(
-                placements,
-                item,
-                item.offset,
-                frame,
-                viewport_size,
-                layout_config,
-            );
+            let start = if config.reverse_layout {
+                viewport_size - item.offset - item.main_axis_size
+            } else {
+                item.offset
+            };
+            push_lazy_item_placements(placements, item, start, frame, viewport_size, layout_config);
         }
     }
 }
@@ -85,7 +102,7 @@ pub(super) fn push_lazy_list_placements(
 fn push_lazy_item_placements(
     placements: &mut Vec<Placement>,
     item: &LazyListMeasuredItem,
-    offset: f32,
+    start: f32,
     frame: &LazyFrame,
     viewport_size: f32,
     layout_config: &LazyListLayoutConfig,
@@ -93,11 +110,6 @@ fn push_lazy_item_placements(
     let (axis, cross_axis_size) = (frame.axis, frame.cross_axis_size);
     let config = &layout_config.measure;
     let (cross_start, cross_end) = layout_config.cross_padding;
-    let start = if config.reverse_layout {
-        viewport_size - offset - item.main_axis_size
-    } else {
-        offset
-    };
     for (index, (&node_id, &offset)) in item
         .roots
         .node_ids

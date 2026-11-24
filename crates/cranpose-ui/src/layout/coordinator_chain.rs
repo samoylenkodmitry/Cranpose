@@ -61,6 +61,13 @@ fn plain_intrinsic(kind: IntrinsicKind) -> PlainIntrinsic {
     }
 }
 
+pub(super) trait CoordinatorLeaf {
+    fn density(&self) -> f32;
+    fn context(&self) -> &RefCell<LayoutNodeContext>;
+    fn measure_leaf(&self, chain: &CoordinatorChain, constraints: Constraints) -> Placeable;
+    fn intrinsic_leaf(&self, kind: IntrinsicKind) -> f32;
+}
+
 pub(super) struct CoordinatorFrame<'a> {
     measure_policy: &'a Rc<dyn MeasurePolicy>,
     scope: &'a dyn cranpose_ui_layout::MeasureScope,
@@ -96,19 +103,54 @@ impl<'a> CoordinatorFrame<'a> {
     }
 }
 
-struct CoordinatorLink<'chain, 'frame_ref, 'frame_data> {
+impl CoordinatorLeaf for CoordinatorFrame<'_> {
+    fn density(&self) -> f32 {
+        self.scope.density()
+    }
+
+    fn context(&self) -> &RefCell<LayoutNodeContext> {
+        &self.context
+    }
+
+    fn measure_leaf(&self, chain: &CoordinatorChain, constraints: Constraints) -> Placeable {
+        let mut placements = self.placements.borrow_mut();
+        let measurement = self.measure_policy.measure_into(
+            self.scope,
+            self.measurables,
+            constraints,
+            &mut placements,
+        );
+        chain.place(&chain.inner_size, measurement.size);
+        chain.inner_constraints.set(Some(constraints));
+        Placeable::value(
+            measurement.size.width,
+            measurement.size.height,
+            NodeId::default(),
+        )
+        .with_alignment_lines(
+            inherited_alignment_lines(
+                self.child_states,
+                &placements,
+                &mut self.placement_indices.borrow_mut(),
+            )
+            .with_overrides(measurement.alignment_lines),
+        )
+    }
+
+    fn intrinsic_leaf(&self, kind: IntrinsicKind) -> f32 {
+        policy_intrinsic(self.measure_policy.as_ref(), self.measurables, kind)
+    }
+}
+
+struct CoordinatorLink<'chain, 'frame_ref, L: CoordinatorLeaf> {
     chain: &'chain CoordinatorChain,
-    frame: &'frame_ref CoordinatorFrame<'frame_data>,
+    frame: &'frame_ref L,
     index: usize,
     alignment_lines: Cell<AlignmentLines>,
 }
 
-impl<'chain, 'frame_ref, 'frame_data> CoordinatorLink<'chain, 'frame_ref, 'frame_data> {
-    fn new(
-        chain: &'chain CoordinatorChain,
-        frame: &'frame_ref CoordinatorFrame<'frame_data>,
-        index: usize,
-    ) -> Self {
+impl<'chain, 'frame_ref, L: CoordinatorLeaf> CoordinatorLink<'chain, 'frame_ref, L> {
+    fn new(chain: &'chain CoordinatorChain, frame: &'frame_ref L, index: usize) -> Self {
         Self {
             chain,
             frame,
@@ -118,7 +160,7 @@ impl<'chain, 'frame_ref, 'frame_data> CoordinatorLink<'chain, 'frame_ref, 'frame
     }
 }
 
-impl Measurable for CoordinatorLink<'_, '_, '_> {
+impl<L: CoordinatorLeaf> Measurable for CoordinatorLink<'_, '_, L> {
     fn measure(&self, constraints: Constraints) -> Placeable {
         let placeable = self.chain.measure_from(self.index, self.frame, constraints);
         self.alignment_lines.set(placeable.alignment_lines());
@@ -284,6 +326,12 @@ impl SyncedInputs {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RootKind {
+    Node,
+    Window,
+}
+
 #[derive(Default)]
 pub(super) struct CoordinatorChain {
     nodes: Vec<CoordinatorNode>,
@@ -304,8 +352,28 @@ pub(super) struct CoordinatorChain {
 
 impl CoordinatorChain {
     pub(super) fn sync(&mut self, node: &LayoutNode) -> ModifierChainInputs {
-        let density = node.density();
-        let chain = node.modifier_chain();
+        let root = if node.is_window_root() {
+            RootKind::Window
+        } else {
+            RootKind::Node
+        };
+        self.sync_chain(node.density(), node.modifier_chain(), root)
+    }
+
+    pub(super) fn sync_subcompose(
+        &mut self,
+        density: crate::density::Density,
+        chain: &crate::modifier::ModifierChainHandle,
+    ) -> ModifierChainInputs {
+        self.sync_chain(density, chain, RootKind::Node)
+    }
+
+    fn sync_chain(
+        &mut self,
+        density: crate::density::Density,
+        chain: &crate::modifier::ModifierChainHandle,
+        root: RootKind,
+    ) -> ModifierChainInputs {
         let at = PrepareAt {
             density: density.density(),
             direction: chain.layout_direction(),
@@ -324,7 +392,7 @@ impl CoordinatorChain {
             }
             return synced.inputs(density);
         }
-        let inputs = self.walk(node, density, at);
+        let inputs = self.walk(chain, root, density, at);
         self.synced = Some(SyncedInputs::of(revision, inputs));
         // Other modifiers may place other coordinators.
         self.moved.set(true);
@@ -347,21 +415,19 @@ impl CoordinatorChain {
         }
     }
 
-    /// Syncs the nodes with the layout nodes of `node`'s chain and sums
-    /// its offsets.
     fn walk(
         &mut self,
-        node: &LayoutNode,
+        chain_handle: &crate::modifier::ModifierChainHandle,
+        root: RootKind,
         density: crate::density::Density,
         at: PrepareAt,
     ) -> ModifierChainInputs {
         let mut inputs = ModifierChainInputs {
             density,
-            window_root: node.is_window_root(),
+            window_root: root == RootKind::Window,
             offset: Point::default(),
             uses_chain: false,
         };
-        let chain_handle = node.modifier_chain();
         if !chain_handle.has_layout_nodes() {
             return inputs;
         }
@@ -465,35 +531,19 @@ impl CoordinatorChain {
             .is_some_and(|constraints| policy.ignores_child_sizes(measurables, constraints))
     }
 
-    pub(super) fn measure_from(
+    pub(super) fn record_leaf(&self, size: Size, constraints: Constraints) {
+        self.place(&self.inner_size, size);
+        self.inner_constraints.set(Some(constraints));
+    }
+
+    pub(super) fn measure_from<L: CoordinatorLeaf>(
         &self,
         index: usize,
-        frame: &CoordinatorFrame<'_>,
+        frame: &L,
         constraints: Constraints,
     ) -> Placeable {
         let Some(node) = self.nodes.get(index) else {
-            let mut placements = frame.placements.borrow_mut();
-            let measurement = frame.measure_policy.measure_into(
-                frame.scope,
-                frame.measurables,
-                constraints,
-                &mut placements,
-            );
-            self.place(&self.inner_size, measurement.size);
-            self.inner_constraints.set(Some(constraints));
-            return Placeable::value(
-                measurement.size.width,
-                measurement.size.height,
-                NodeId::default(),
-            )
-            .with_alignment_lines(
-                inherited_alignment_lines(
-                    frame.child_states,
-                    &placements,
-                    &mut frame.placement_indices.borrow_mut(),
-                )
-                .with_overrides(measurement.alignment_lines),
-            );
+            return frame.measure_leaf(self, constraints);
         };
 
         let wrapped = CoordinatorLink::new(self, frame, index + 1);
@@ -507,12 +557,12 @@ impl CoordinatorChain {
                 layout.map(|layout| layout.measure(words, context, &wrapped, constraints))
             }
         };
-        let measured = match frame.context.try_borrow_mut() {
+        let measured = match frame.context().try_borrow_mut() {
             Ok(mut context) => measure(&mut context),
             Err(_) => {
-                let mut temp = LayoutNodeContext::new(frame.scope.density());
+                let mut temp = LayoutNodeContext::new(frame.density());
                 let measured = measure(&mut temp);
-                if let Ok(mut context) = frame.context.try_borrow_mut() {
+                if let Ok(mut context) = frame.context().try_borrow_mut() {
                     for kind in temp.take_invalidations() {
                         context.invalidate(kind);
                     }
@@ -563,17 +613,17 @@ impl CoordinatorChain {
         )
     }
 
-    pub(super) fn intrinsic_from(
+    pub(super) fn intrinsic_from<L: CoordinatorLeaf>(
         &self,
         index: usize,
-        frame: &CoordinatorFrame<'_>,
+        frame: &L,
         kind: IntrinsicKind,
     ) -> f32 {
         let Some(node) = self.nodes.get(index) else {
-            return policy_intrinsic(frame.measure_policy.as_ref(), frame.measurables, kind);
+            return frame.intrinsic_leaf(kind);
         };
         let wrapped = CoordinatorLink::new(self, frame, index + 1);
-        let density = frame.scope.density();
+        let density = frame.density();
         match &node.source {
             Source::Node(held) => held.borrow().as_layout_node().map_or_else(
                 || measurable_intrinsic(&wrapped, kind),

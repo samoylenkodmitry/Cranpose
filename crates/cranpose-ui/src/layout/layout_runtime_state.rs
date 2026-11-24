@@ -63,6 +63,14 @@ impl LayoutRuntimeState {
         self.coordinator_chain.sync(node)
     }
 
+    pub(crate) fn bind_subcompose(
+        &mut self,
+        density: crate::density::Density,
+        chain: &crate::modifier::ModifierChainHandle,
+    ) -> ModifierChainInputs {
+        self.coordinator_chain.sync_subcompose(density, chain)
+    }
+
     pub(crate) fn measure_policy(&self) -> &dyn MeasurePolicy {
         &*self.measure_policy
     }
