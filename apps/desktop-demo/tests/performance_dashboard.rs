@@ -551,10 +551,35 @@ fn a_board_card_shows_the_firmware_size_for_its_selected_layout() {
     choose(&mut robot, "demo", 0);
     let texts = robot.get_all_text();
     assert!(shows(&texts, "0.50"), "{texts:?}");
-    assert!(!shows(&texts, "Slint"), "{texts:?}");
+    assert!(
+        shows(&texts, "This run recorded no measurement for Slint"),
+        "{texts:?}"
+    );
     choose(&mut robot, "dashboard", 0);
     let texts = robot.get_all_text();
     assert!(shows(&texts, "0.75") && shows(&texts, "1.00"), "{texts:?}");
+}
+
+#[test]
+fn a_framework_card_explains_an_unimplemented_layout() {
+    let index = r#"{"runs":[{"kind":"frameworks","device":"Apple M3 Pro","started_at":"2026-11-25",
+        "protocol":{"starts":["first","second"]},"subjects":[{"name":"compose","label":"Compose"},
+        {"name":"freya","label":"Freya"}],"scenarios":{"patchwork":{"legs":2,
+        "unimplemented":["freya"],"app_bytes":{"compose":1024}}}}]}"#;
+    let earlier = index
+        .replace("\"unimplemented\":[\"freya\"],", "")
+        .replace("\"protocol\":{", "\"protocol\":{\"max_other_cores\":0.5,");
+    for report in [index, earlier.as_str()] {
+        let mut robot = dashboard_of(report, FrameSource::Files(Rc::default()));
+        let texts = robot.get_all_text();
+        assert!(
+            shows(
+                &texts,
+                "The Freya benchmark app did not implement Patchwork in this run"
+            ),
+            "{texts:?}"
+        );
+    }
 }
 
 #[test]

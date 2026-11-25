@@ -1178,10 +1178,6 @@ def screen(text):
 
 def shows(name, scenario):
     """Only schedule screens implemented by the installed version."""
-    if name == 'freya':
-        return scenario in ('gauntlet', 'wall')
-    if name in ('vizia', 'makepad'):
-        return scenario == 'wall'
     if name != 'cranpose-release':
         return True
     known = RELEASE_SCREENS.read_text().split() if RELEASE_SCREENS.exists() else ['gauntlet']
@@ -1223,6 +1219,7 @@ def measure_screen(args, apps, server, stage, window):
                                             profile, start, idle, install)
                     legs += [{'subject': name, 'round': round_index, 'start': start, **leg} for leg in again]
     return {'scenario': args.scenario, 'extras': f'tier {args.tier}, {window}', 'legs': legs, 'failures': failures,
+            'unimplemented': skipped,
             'starts': {start: {'summary': summarize(legs, apps, start), 'verdicts': {}} for start in STARTS}}
 
 

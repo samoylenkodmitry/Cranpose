@@ -4,13 +4,34 @@ use perf_data::*;
 #[path = "../../wall-canvas/grid.rs"]
 mod grid;
 use grid::{BAR, Grid, HEADER};
+mod painter;
+#[path = "../../native-canvas/mod.rs"]
+mod scene;
 
 live_design! {
     use link::widgets::*;
     use link::shaders::*;
+    DrawBitmap = {{DrawBitmap}} {
+        texture image: texture2d
+        fn pixel(self)->vec4 {
+            let col=sample2d(self.image,self.pos);
+            if self.radius == 0. { return Pal::premul(col); }
+            let sdf=Sdf2d::viewport(self.pos*self.rect_size);
+            sdf.box(0.,0.,self.rect_size.x,self.rect_size.y,self.radius*0.5);
+            return sdf.fill(col);
+        }
+    }
+    DrawBand = {{DrawBand}} {
+        fn pixel(self)->vec4 {
+            let y=self.pos.y*self.rect_size.y+self.rect_pos.y;
+            let top=mix(self.left_y,self.right_y,self.pos.x);
+            let alpha=(1.-self.pos.y)*0.25*smoothstep(-0.5,0.5,y-top);
+            return Pal::premul(vec4(self.color.xyz,alpha));
+        }
+    }
     TileShape = {{TileShape}} {
         fn pixel(self) -> vec4 {
-            if self.radius == 0.0 && self.stroke == 0.0 { return self.color; }
+            if self.radius == 0.0 && self.stroke == 0.0 { return Pal::premul(self.color); }
             let sdf = Sdf2d::viewport(self.pos * self.rect_size);
             let inset = self.stroke * 0.5;
             // Sdf2d.box uses twice its radius parameter as the arc radius.
@@ -23,16 +44,51 @@ live_design! {
     Wall = {{Wall}} {
         width: Fill, height: Fill,
         shape: <TileShape> {}
+        line: {
+            fn pixel(self) -> vec4 {
+                let at = self.pos * self.rect_size - self.line_start;
+                let span = self.line_end - self.line_start;
+                let along = clamp(dot(at, span) / max(dot(span, span), 0.000001), 0., 1.);
+                let distance = length(at - along * span);
+                let pixel = max(length(dFdx(at)), length(dFdy(at)));
+                let coverage = clamp((self.half_line_width - distance) / pixel + 0.5, 0., 1.);
+                return Pal::premul(vec4(self.color.xyz, self.color.w * coverage));
+            }
+        }
+        band: <DrawBand> {}
+        bitmap: <DrawBitmap> {}
         regular: {text_style: {font_family: {latin = font("crate://self/fonts/Roboto-Regular.ttf", 0.0, 0.0)}}}
+        mono: {text_style: {font_family: {latin = font("crate://self/fonts/DejaVuSansMono.ttf", 0.0, 0.0)}}}
         bold: {text_style: {font_family: {latin = font("crate://self/fonts/Roboto-Bold.ttf", 0.0, 0.0)}}}
     }
     App = {{App}} {
         ui: <Root> { main_window = <Window> {
-            window: { inner_size: vec2(1280, 848), title:"Still wall" }
+            window: { inner_size: vec2(1280, 848), title:"Framework benchmark" }
             caption_bar = { visible: true, height: 28, caption_label = { label = { text: "Still wall" } } }
             body = <View> { <Wall> {} }
         } }
     }
+}
+
+#[derive(Live, LiveHook, LiveRegister)]
+#[repr(C)]
+struct DrawBitmap {
+    #[deref]
+    base: DrawQuad,
+    #[live]
+    radius: f32,
+}
+#[derive(Live, LiveHook, LiveRegister)]
+#[repr(C)]
+struct DrawBand {
+    #[deref]
+    base: DrawQuad,
+    #[live]
+    left_y: f32,
+    #[live]
+    right_y: f32,
+    #[live]
+    color: Vec4,
 }
 
 #[derive(Live, LiveHook, LiveRegister)]
@@ -76,6 +132,16 @@ struct Wall {
     regular: DrawText,
     #[live]
     bold: DrawText,
+    #[live]
+    mono: DrawText,
+    #[live]
+    line: DrawLine,
+    #[live]
+    bitmap: DrawBitmap,
+    #[live]
+    band: DrawBand,
+    #[rust]
+    other: Option<(scene::Workload, painter::Graphics)>,
     #[live]
     tiles: DrawList2d,
     #[rust]
@@ -136,44 +202,83 @@ impl Widget for Wall {
         let rect = cx.walk_turtle_with_area(&mut self.area, walk);
         let (tier, frame) = self.animation.get_or_insert_with(|| {
             let load = Launch::from_env();
-            assert_eq!(load.scenario, Scenario::Wall);
             (wall_tier(load.tier), FrameIndex::new(load.freeze))
         });
         let tier = *tier;
+        let previous = frame.get();
         let more = frame.advance();
         let k = frame.get();
         let (w, h) = (rect.size.x as f32, rect.size.y as f32);
-        let offset = HEADER + WALL_CLOCK_HEIGHT;
+        let load = perf_data::launch();
+        let offset = HEADER
+            + if load.scenario == Scenario::Gauntlet {
+                0.
+            } else {
+                WALL_CLOCK_HEIGHT
+            };
         let origin = rect.pos + dvec2(0., offset.into());
-        let grid = Grid::new(tier, w, h - offset);
         self.shape.stroke = 0.;
-        self.shape.rect(cx, rect.pos, w, h, WALL_BACKGROUND_RGB, 0.);
+        let background = if load.scenario == Scenario::Gauntlet {
+            GAUNTLET_BACKGROUND_RGB
+        } else {
+            WALL_BACKGROUND_RGB
+        };
+        self.shape.rect(cx, rect.pos, w, h, background, 0.);
         self.shape.rect(cx, rect.pos, w, HEADER, BAR, 0.);
+        self.bold.color = vec4(1., 1., 1., 1.);
         self.bold.text_style.font_size = 15.;
         self.bold
-            .draw_abs(cx, rect.pos + dvec2(16., 16.), "Still wall");
-        self.regular.text_style.font_size = WALL_CLOCK_TEXT * 0.75;
-        self.regular
-            .draw_abs(cx, rect.pos + dvec2(8., 59.), &wall_clock(k));
-        if self
-            .tiles
-            .begin_maybe(cx, self.size != Some(rect))
-            .is_redrawing()
-        {
-            self.tiles(cx, origin, grid);
-            self.tiles.end(cx);
-            self.size = Some(rect);
+            .draw_abs(cx, rect.pos + dvec2(16., 16.), load.scenario.title());
+        if load.scenario != Scenario::Gauntlet {
+            self.regular.color = vec4(1., 1., 1., 1.);
+            self.regular.text_style.font_size = WALL_CLOCK_TEXT * 0.75;
+            self.regular
+                .draw_abs(cx, rect.pos + dvec2(8., 59.), &wall_clock(k));
         }
-        let (x, y) = grid.origin(wall_cursor(k, grid.tiles));
-        self.shape.stroke = WALL_CURSOR_WIDTH;
-        self.shape.rect(
-            cx,
-            origin + dvec2(x.into(), y.into()),
-            grid.tier.tile_width,
-            grid.tier.tile_height,
-            WALL_INK_RGB,
-            WALL_CORNER,
-        );
+        if load.scenario != Scenario::Wall {
+            let (screen, gfx) = self.other.get_or_insert_with(|| {
+                (
+                    scene::Workload::new(load).unwrap(),
+                    painter::Graphics::new(cx, load.scenario),
+                )
+            });
+            let area = scene::Box2::new(origin.x as f32, origin.y as f32, w, h - offset);
+            let mut canvas = painter::Painter {
+                cx,
+                gfx,
+                shape: &mut self.shape,
+                regular: &mut self.regular,
+                bold: &mut self.bold,
+                mono: &mut self.mono,
+                line: &mut self.line,
+                bitmap: &mut self.bitmap,
+                band: &mut self.band,
+                transform: Mat4::identity(),
+                group: 0,
+            };
+            screen.draw(&mut canvas, area, k, previous != k);
+        } else {
+            let grid = Grid::new(tier, w, h - offset);
+            if self
+                .tiles
+                .begin_maybe(cx, self.size != Some(rect))
+                .is_redrawing()
+            {
+                self.tiles(cx, origin, grid);
+                self.tiles.end(cx);
+                self.size = Some(rect);
+            }
+            let (x, y) = grid.origin(wall_cursor(k, grid.tiles));
+            self.shape.stroke = WALL_CURSOR_WIDTH;
+            self.shape.rect(
+                cx,
+                origin + dvec2(x.into(), y.into()),
+                grid.tier.tile_width,
+                grid.tier.tile_height,
+                WALL_INK_RGB,
+                WALL_CORNER,
+            );
+        }
         if more {
             self.tick = cx.new_next_frame();
         }
@@ -200,6 +305,11 @@ impl LiveRegister for App {
 
 impl AppMain for App {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event) {
+        if matches!(event, Event::Startup) {
+            self.ui
+                .label(id!(main_window.caption_bar.caption_label.label))
+                .set_text(cx, perf_data::launch().scenario.title());
+        }
         self.ui.handle_event(cx, event, &mut Scope::empty());
     }
 }

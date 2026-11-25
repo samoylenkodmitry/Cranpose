@@ -254,7 +254,8 @@ desktop)
         # perf-data holds the pictures of the patchwork's chat.
         reads=("$app-app" perf-data chat-assets)
         case "$app" in
-            freya|vizia|makepad) reads+=(wall-canvas fonts) ;;
+            freya) reads+=(wall-canvas fonts) ;;
+            vizia|makepad) reads+=(wall-canvas native-canvas fonts) ;;
         esac
         # Dioxus draws with the web page's CSS.
         if [[ $app == dioxus ]]; then

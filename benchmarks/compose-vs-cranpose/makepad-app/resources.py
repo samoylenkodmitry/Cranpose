@@ -17,8 +17,8 @@ def install(destination):
                 shutil.copytree(resources, destination / crate / 'resources')
     fonts = destination / 'fonts'
     fonts.mkdir(parents=True)
-    for face in ('Regular', 'Bold'):
-        shutil.copy2(here.parent / 'fonts' / f'Roboto-{face}.ttf', fonts)
+    for file in ('Roboto-Regular.ttf', 'Roboto-Bold.ttf', 'DejaVuSansMono.ttf'):
+        shutil.copy2(here.parent / 'fonts' / file, fonts)
 
 
 if __name__ == '__main__':

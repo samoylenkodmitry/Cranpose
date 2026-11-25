@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, rc::Rc};
+use std::{borrow::Cow, collections::BTreeMap, rc::Rc};
 
 use freya::{
     elements::image::ImageHandle,
@@ -20,7 +20,7 @@ const DOWN_RGB: [u8; 3] = [0xDC, 0x26, 0x26];
 const LAYER_BACKGROUND: Color = Color::from_argb(0xC0, 0x1E, 0x29, 0x3B);
 const NESTED_BACKGROUND: Color = Color::from_argb(0xE6, 0xFF, 0xFF, 0xFF);
 
-const fn rgb(value: [u8; 3]) -> Color {
+pub(super) const fn rgb(value: [u8; 3]) -> Color {
     Color::from_rgb(value[0], value[1], value[2])
 }
 
@@ -32,13 +32,18 @@ fn palette(index: usize) -> Color {
 struct Shared {
     frame: State<u32>,
     anchor: State<ListAnchor>,
-    heights: State<HashMap<usize, f32>>,
+    heights: State<BTreeMap<usize, f32>>,
 }
 
 #[derive(Clone)]
 struct Avatars(Rc<Vec<ImageHandle>>);
 
-fn text(content: impl Into<Cow<'static, str>>, size: f32, color: Color, bold: bool) -> Label {
+pub(super) fn text(
+    content: impl Into<Cow<'static, str>>,
+    size: f32,
+    color: Color,
+    bold: bool,
+) -> Label {
     label()
         .text(content)
         .font_size(size)
@@ -93,7 +98,7 @@ pub(super) fn app() -> impl IntoElement {
             row: 0,
             top: 8.0 * s,
         }),
-        heights: State::create(HashMap::new()),
+        heights: State::create(BTreeMap::new()),
     });
     use_provide_context(|| shared);
     use_provide_context(|| {
