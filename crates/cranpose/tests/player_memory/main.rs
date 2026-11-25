@@ -16,6 +16,10 @@ use cranpose::{
 use cranpose_core::{Composition, MemoryApplier, location_key};
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 
+#[macro_use]
+#[path = "../../../coroflow/tests/support/main_thread_test.rs"]
+mod main_thread_test;
+
 #[path = "../player_test_support.rs"]
 mod player_test_support;
 
@@ -160,7 +164,9 @@ fn verify_100_swipe_feed_bounded_memory_and_decoders() {
     );
 }
 
-fn main() {
+fn player_steady_frames_and_100_swipe_feed_bound_memory() {
     verify_paused_steady_frame_zero_allocations();
     verify_100_swipe_feed_bounded_memory_and_decoders();
 }
+
+main_thread_test!(player_steady_frames_and_100_swipe_feed_bound_memory);
