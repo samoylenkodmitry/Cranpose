@@ -303,8 +303,7 @@ impl Framebuffer {
         }
         match phase {
             TouchPhase::Down => {
-                self.shell.set_cursor(x, y);
-                self.shell.pointer_pressed();
+                self.shell.pointer_pressed_at_position(x, y);
             }
             TouchPhase::Move => {
                 self.shell.set_cursor(x, y);

@@ -30,6 +30,10 @@ fn click_mode(robot: &cranpose::Robot, label: &str) {
     robot
         .click(x + width * 0.5, y + height * 0.5)
         .unwrap_or_else(|err| panic!("clicking mode button {label:?} failed: {err}"));
+    // Leave the button so its hover indication does not add a shape pass over the still baseline.
+    robot
+        .mouse_move(790.0, 590.0)
+        .unwrap_or_else(|err| panic!("moving pointer off mode button {label:?} failed: {err}"));
     std::thread::sleep(Duration::from_millis(350));
 }
 

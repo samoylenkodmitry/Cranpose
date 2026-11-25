@@ -103,17 +103,19 @@ public final class CranposeAccessibilityNavigationTest {
     /** Waits up to three seconds for a frame whose page background passes {@code expected}. */
     private static void awaitBackground(UiAutomation automation, IntPredicate expected, String message) {
         long deadline = SystemClock.uptimeMillis() + 3000;
+        int lastPixel = 0;
         do {
             Bitmap frame = automation.takeScreenshot();
             assertNotNull("The rendered page must be captured", frame);
             try {
-                if (expected.test(frame.getPixel(frame.getWidth() / 2, frame.getHeight() / 4))) return;
+                lastPixel = frame.getPixel(frame.getWidth() / 2, frame.getHeight() / 4);
+                if (expected.test(lastPixel)) return;
             } finally {
                 frame.recycle();
             }
             SystemClock.sleep(100);
         } while (SystemClock.uptimeMillis() < deadline);
-        throw new AssertionError(message);
+        throw new AssertionError(message + " (lastPixel=" + String.format("#%08x", lastPixel) + ")");
     }
 
     private static void awaitAccessibilityDisabled(Context context) {

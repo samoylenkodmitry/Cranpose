@@ -51,6 +51,26 @@ where
         result
     }
 
+    /// Presses the primary pointer button at `(x, y)` without sending a hover
+    /// move first, for platforms whose press events carry their own coordinates
+    /// and do not pair with hover exit on lift.
+    pub fn pointer_pressed_at_position(&mut self, x: f32, y: f32) -> bool {
+        let event_time = self.shell.app.realtime_pointer_event_time(None);
+        self.pointer_pressed_at_position_event_time(x, y, event_time)
+    }
+
+    /// Presses the primary pointer button at `(x, y)` with an already resolved
+    /// event timestamp, without sending a hover move first.
+    pub fn pointer_pressed_at_position_event_time(
+        &mut self,
+        x: f32,
+        y: f32,
+        event_time: PointerEventTime,
+    ) -> bool {
+        self.surface_mut().cursor = (x, y);
+        self.pointer_pressed_at_event_time(event_time)
+    }
+
     fn pointer_pressed_inner(&mut self, event_time: PointerEventTime) -> bool {
         self.activate();
         self.note_focus_moved_by_keyboard(false);
@@ -96,5 +116,22 @@ where
     /// Primary-surface form of [`SurfaceMut::pointer_pressed_at_event_time`].
     pub fn pointer_pressed_at_event_time(&mut self, event_time: PointerEventTime) -> bool {
         self.primary().pointer_pressed_at_event_time(event_time)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::pointer_pressed_at_position`].
+    pub fn pointer_pressed_at_position(&mut self, x: f32, y: f32) -> bool {
+        self.primary().pointer_pressed_at_position(x, y)
+    }
+
+    /// Primary-surface form of
+    /// [`SurfaceMut::pointer_pressed_at_position_event_time`].
+    pub fn pointer_pressed_at_position_event_time(
+        &mut self,
+        x: f32,
+        y: f32,
+        event_time: PointerEventTime,
+    ) -> bool {
+        self.primary()
+            .pointer_pressed_at_position_event_time(x, y, event_time)
     }
 }
