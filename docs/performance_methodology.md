@@ -73,8 +73,8 @@ also draws the dashboard in Slint and both other frameworks. LVGL and Slint draw
 the dashboard on the E32R35T. The firmware counts completed draws in each of
 the first ten seconds on the ESP timer clock. It writes the counts to the
 serial port after the tenth second. The report keeps the first boot after
-flashing and the next reset as separate starts. The browser emulator previews
-the animated bar on a virtual panel. [ESP32 demo](https://samoylenkodmitry.github.io/cranpose-esp32/)
+flashing and the next reset as separate starts. The browser page shows captures of both layouts and runs their firmware on a
+320 by 480 virtual panel. [ESP32 benchmark layouts](https://samoylenkodmitry.github.io/cranpose-esp32/benchmarks/)
 
 ### Mi TV Stick
 

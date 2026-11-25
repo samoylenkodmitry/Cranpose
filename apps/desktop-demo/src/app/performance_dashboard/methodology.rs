@@ -108,7 +108,7 @@ pub(super) fn MethodologyCard(palette: Palette) {
                 text_style(12.5, palette.muted, None),
             );
             Text(
-                "The ESP32 firmware counts completed frames each second. The emulator previews the demo layout.",
+                "The ESP32 firmware counts completed frames each second. The layout previews show the animated bar and dashboard on a 320 × 480 panel.",
                 Modifier::empty(),
                 text_style(12.5, palette.muted, None),
             );
@@ -141,8 +141,8 @@ pub(super) fn LayoutLinks(palette: Palette) {
             }
             LinkChip(
                 palette,
-                "ESP32 demo in browser",
-                "https://samoylenkodmitry.github.io/cranpose-esp32/",
+                "ESP32 benchmark layouts",
+                "https://samoylenkodmitry.github.io/cranpose-esp32/benchmarks/",
                 ChipStyle::Plain,
             );
         },

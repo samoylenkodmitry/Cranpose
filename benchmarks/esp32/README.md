@@ -75,7 +75,8 @@ build installed it.
 The nightly runs `just perf-esp32 BOARD OUTPUT` on the two boards attached to
 samarch-1. Each screen has its own application image. The JSON report keeps its
 byte size and the frame count of every second for both boots. The Performance
-tab reads the published report. [Measurement details](../../docs/performance_methodology.md)
+tab reads the published report. The browser runs each layout on a virtual ESP32-S3.
+[Benchmark layouts](https://samoylenkodmitry.github.io/cranpose-esp32/benchmarks/) · [Measurement details](../../docs/performance_methodology.md)
 
 ### Compare revisions
 

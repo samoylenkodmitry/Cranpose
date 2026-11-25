@@ -1080,7 +1080,7 @@ fn methodology_links_open_the_markdown_doc_and_harness_sources() {
         });
     });
 
-    click_on(&mut robot, "ESP32 demo in browser");
+    click_on(&mut robot, "ESP32 benchmark layouts");
     click_on(&mut robot, "Full methodology");
     click_on(&mut robot, "More details");
     click_on(&mut robot, "FrameCount.swift");
@@ -1089,7 +1089,7 @@ fn methodology_links_open_the_markdown_doc_and_harness_sources() {
     assert_eq!(
         uris,
         vec![
-            "https://samoylenkodmitry.github.io/cranpose-esp32/",
+            "https://samoylenkodmitry.github.io/cranpose-esp32/benchmarks/",
             "https://github.com/samoylenkodmitry/Cranpose/blob/main/docs/performance_methodology.md",
             "https://github.com/samoylenkodmitry/Cranpose/blob/main/benchmarks/compose-vs-cranpose/framecount/FrameCount.swift",
         ]
