@@ -920,6 +920,14 @@ fn RunView(
     let subjects = if subjects.iter().all(|(_, s)| measured.includes(&s.name)) {
         subjects
     } else {
+        for (_, subject) in subjects.iter().filter(|(_, s)| !measured.includes(&s.name)) {
+            let message = run.omission(&selection.scenario, subject);
+            Text(
+                message,
+                Modifier::empty(),
+                text_style(14.0, palette.text, None),
+            );
+        }
         Rc::new(
             subjects
                 .iter()
@@ -933,16 +941,11 @@ fn RunView(
         palette,
         focus,
         frames,
-        run_ms(&run),
+        run.duration_ms(),
         selection.clone(),
         lines.clone(),
     );
     SubjectBars(palette, focus, run, subjects, selection, lines);
-}
-
-/// The run's length in milliseconds from its launch.
-fn run_ms(run: &PerfRun) -> f64 {
-    run.protocol.run_s.unwrap_or(10.0) * 1000.0
 }
 
 /// A device's latest framework comparison: the chosen start and metric of

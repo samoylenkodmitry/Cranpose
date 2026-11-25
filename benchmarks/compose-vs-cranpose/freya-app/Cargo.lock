@@ -2755,6 +2755,7 @@ name = "perf-compare-freya"
 version = "0.1.0"
 dependencies = [
  "freya",
+ "gif",
  "perf-data",
 ]
 

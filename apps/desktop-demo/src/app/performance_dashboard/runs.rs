@@ -36,6 +36,9 @@ pub struct PerfProtocol {
     /// Seconds each launch was measured for, from its start.
     #[serde(default)]
     pub run_s: Option<f64>,
+    // The desktop sampler's limit on CPU use by other processes.
+    #[serde(default)]
+    pub max_other_cores: Option<f64>,
     /// The starts each round measured of every subject: its first after its
     /// install and its second. An older run did not keep them apart, and the
     /// dashboard leaves it out.
@@ -150,6 +153,9 @@ pub struct PerfScenario {
     /// Packaged app size in bytes for each subject that builds this screen.
     #[serde(default)]
     pub app_bytes: BTreeMap<String, u64>,
+    // Subjects whose benchmark app lacked this layout at the measured revision.
+    #[serde(default)]
+    pub unimplemented: Vec<String>,
     /// The results of each start, by its name in [`STARTS`].
     #[serde(default)]
     pub starts: BTreeMap<String, PerfStart>,
@@ -157,6 +163,9 @@ pub struct PerfScenario {
 
 impl PerfScenario {
     pub(super) fn includes(&self, name: &str) -> bool {
+        if self.unimplemented.iter().any(|subject| subject == name) {
+            return false;
+        }
         self.app_bytes.is_empty()
             || self.app_bytes.contains_key(name)
             || self
@@ -191,6 +200,32 @@ impl PerfRun {
     /// The day the run started, as its start time writes it.
     pub(super) fn date(&self) -> &str {
         self.started_at.get(..10).unwrap_or(&self.started_at)
+    }
+
+    pub(super) fn duration_ms(&self) -> f64 {
+        self.protocol.run_s.unwrap_or(10.0) * 1000.0
+    }
+
+    pub(super) fn omission(&self, scenario: &str, subject: &PerfSubject) -> String {
+        let measured = &self.scenarios[scenario];
+        // The desktop sampler first recorded only the app sizes of supported layouts.
+        let desktop = self.kind == "frameworks" && self.protocol.max_other_cores.is_some();
+        if measured.unimplemented.contains(&subject.name)
+            || (desktop && !measured.app_bytes.is_empty())
+        {
+            let layout = match scenario {
+                "gauntlet" => "Gauntlet",
+                "patchwork" => "Patchwork",
+                "wall" => "Still Wall",
+                name => name,
+            };
+            format!(
+                "{} had no {layout} implementation in this run",
+                subject.label
+            )
+        } else {
+            format!("No measurement was scheduled for {}", subject.label)
+        }
     }
 
     pub(super) fn start(&self, scenario: &str, start: &str) -> Option<&PerfStart> {

@@ -780,9 +780,9 @@ its display's link.
 | App | Stack |
 | --- | --- |
 | `electron` | Electron runs the same web layouts in its packaged Chromium runtime |
-| `freya` | Freya components on Gauntlet and a cached Skia tile layer on Still Wall |
-| `vizia` | Vizia labels and a cached Skia tile layer on Still Wall |
-| `makepad` | Makepad widgets with a retained tile draw list on Still Wall |
+| `freya` | Freya components on Gauntlet and Patchwork, including the scrolling chat. Still Wall uses a cached Skia tile layer. |
+| `vizia` | Vizia labels and custom views. The views use Vizia’s Skia canvas for Gauntlet and Patchwork. Still Wall caches its tiles. |
+| `makepad` | Makepad widgets draw all three layouts through Makepad’s text and GPU drawing APIs. Draw lists retain the static tiles and charts. |
 | `cranpose` | `cranpose-app`'s desktop binary |
 | `compose` | `compose-desktop-app`: Compose Multiplatform on the JVM, drawing the composables `compose-app` draws, from `shared-compose` |
 | `egui`, `slint` | the Android crates' desktop binaries; egui draws through eframe's default renderer, wgpu, where the phone's build uses glow |
