@@ -85,6 +85,8 @@ fn source() -> Option<Arc<dyn DecoderCapabilitySource>> {
         installed.or_else(|| Some(Arc::new(super::media_foundation_capabilities::Limits)));
     #[cfg(target_os = "linux")]
     let installed = installed.or_else(|| Some(Arc::new(super::vaapi_capabilities::Limits)));
+    #[cfg(all(feature = "video-web", target_arch = "wasm32", target_os = "unknown"))]
+    let installed = installed.or_else(|| Some(Arc::new(super::web_codecs_capabilities::Limits)));
     installed
 }
 

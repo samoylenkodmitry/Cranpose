@@ -462,3 +462,64 @@ fn parse_vui_video_signal_type(
     }
     Some(())
 }
+
+// Formats an RFC 6381 / WebCodecs codec string (`avc1.PPCCLL`, `hvc1...`, `av01...`) from an
+// Annex-B SPS NAL payload (no start code), falling back to a conservative profile/level default.
+#[cfg(any(
+    test,
+    all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
+))]
+pub(super) fn webcodecs_codec_string(codec: VideoCodec, sps: Option<&[u8]>) -> String {
+    match codec {
+        VideoCodec::H264 => {
+            if let Some(nal) = sps
+                && nal.len() >= 4
+            {
+                return format!("avc1.{:02x}{:02x}{:02x}", nal[1], nal[2], nal[3]);
+            }
+            "avc1.640028".into()
+        }
+        VideoCodec::Hevc => sps
+            .and_then(hevc_codec_string_from_sps)
+            .unwrap_or_else(|| "hvc1.1.6.L93.B0".into()),
+        VideoCodec::Av1 => "av01.0.04M.08".into(),
+    }
+}
+
+#[cfg(any(
+    test,
+    all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
+))]
+fn hevc_codec_string_from_sps(nal: &[u8]) -> Option<String> {
+    let mut reader = BitReader::new(nal.get(2..)?);
+    // sps_video_parameter_set_id(4) + sps_max_sub_layers_minus1(3) + temporal_id_nesting(1)
+    reader.skip_bits(8)?;
+    let profile_space = reader.read_bits(2)?;
+    let tier_flag = reader.read_flag()?;
+    let profile_idc = reader.read_bits(5)?;
+    let compat_flags = reader.read_bits(32)?;
+    let mut constraints = [0_u8; 6];
+    for byte in &mut constraints {
+        *byte = u8::try_from(reader.read_bits(8)?).ok()?;
+    }
+    let level_idc = reader.read_bits(8)?;
+    let space_prefix = match profile_space {
+        1 => "A",
+        2 => "B",
+        3 => "C",
+        _ => "",
+    };
+    let tier = if tier_flag { 'H' } else { 'L' };
+    let compat_rev = compat_flags.reverse_bits();
+    let mut out = format!("hvc1.{space_prefix}{profile_idc}.{compat_rev:X}.{tier}{level_idc}");
+    let last_nonzero = constraints.iter().rposition(|&b| b != 0).unwrap_or(0);
+    for &b in &constraints[..=last_nonzero] {
+        use std::fmt::Write as _;
+        write!(out, ".{b:02X}").ok()?;
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+#[path = "tests/sps_tests.rs"]
+mod tests;

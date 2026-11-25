@@ -26,20 +26,7 @@ mod system_languages;
     )
 ))]
 mod video_convert;
-#[cfg(any(
-    test,
-    all(
-        feature = "video",
-        feature = "renderer-wgpu",
-        any(
-            target_os = "macos",
-            target_os = "ios",
-            target_os = "windows",
-            target_os = "linux",
-            all(feature = "android", target_os = "android")
-        )
-    )
-))]
+#[cfg(any(test, cranpose_gpu_video))]
 mod video_transform;
 #[cfg(target_os = "windows")]
 mod windows;

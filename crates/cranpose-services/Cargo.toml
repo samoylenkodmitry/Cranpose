@@ -74,6 +74,8 @@ file-picker-web = [
     "dep:wasm-bindgen-futures",
     "dep:web-sys",
 ]
+# WebCodecs hardware video decoder and zero-copy browser video frames.
+video-web = ["dep:js-sys", "dep:wasm-bindgen", "dep:web-sys"]
 # Android (SAF) and iOS (UIDocumentPicker) pickers are provided by the cranpose
 # crate's platform backends, which register into `set_platform_file_picker`.
 
@@ -98,10 +100,12 @@ web-sys = { version = "0.3", features = [
     "Blob",
     "BlobPropertyBag",
     "Document",
+    "DomRectReadOnly",
     "Element",
     "File",
     "FileList",
     "HtmlElement",
+    "HtmlVideoElement",
     "Headers",
     "MediaQueryList",
     "ReadableStream",
@@ -112,6 +116,10 @@ web-sys = { version = "0.3", features = [
     "Response",
     "Storage",
     "Url",
+    "VideoColorPrimaries",
+    "VideoColorSpace",
+    "VideoFrame",
+    "VideoTransferCharacteristics",
     "Window",
 ], optional = true }
 

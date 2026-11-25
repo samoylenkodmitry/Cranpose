@@ -148,16 +148,7 @@ pub(crate) fn pump_with(
 }
 
 // The converter of the platform's decoded pictures: one pass that turns a picture into RGB
-#[cfg(all(
-    feature = "renderer-wgpu",
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "windows",
-        target_os = "linux",
-        all(feature = "android", target_os = "android")
-    )
-))]
+#[cfg(cranpose_gpu_video)]
 mod platform {
     #[cfg(all(feature = "android", target_os = "android"))]
     pub(super) use crate::android::ycbcr_converter::YcbcrConverter as Converter;
@@ -165,6 +156,8 @@ mod platform {
     pub(super) use crate::apple::nv12_converter::Nv12Converter as Converter;
     #[cfg(target_os = "linux")]
     pub(super) use crate::linux::video_converter::LinuxVideoConverter as Converter;
+    #[cfg(all(feature = "web", target_arch = "wasm32", target_os = "unknown"))]
+    pub(super) use crate::web::video_converter::WebVideoConverter as Converter;
     #[cfg(target_os = "windows")]
     pub(super) use crate::windows::d3d12_converter::D3d12Converter as Converter;
     use crate::{GpuContext, gpu_context};
@@ -183,16 +176,7 @@ mod platform {
 }
 
 // A build that cannot import a decoder's pictures converts none, so every picture drops.
-#[cfg(not(all(
-    feature = "renderer-wgpu",
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "windows",
-        target_os = "linux",
-        all(feature = "android", target_os = "android")
-    )
-)))]
+#[cfg(not(cranpose_gpu_video))]
 mod platform {
     use cranpose_services::VideoFrame;
     use cranpose_ui::ImageBitmap;

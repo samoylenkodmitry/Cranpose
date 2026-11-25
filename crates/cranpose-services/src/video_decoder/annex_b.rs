@@ -40,11 +40,12 @@ struct Nal {
             target_os = "macos",
             target_os = "ios",
             target_os = "windows",
-            target_os = "linux"
+            target_os = "linux",
+            all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
         )),
         expect(
             dead_code,
-            reason = "only targets with native hardware decoders read NAL payload slices"
+            reason = "only targets with hardware decoders read NAL payload slices"
         )
     )]
     end: usize,
@@ -146,7 +147,12 @@ impl AccessUnitNals {
     }
 
     // Whether the access unit holds a slice that a decoder can start with.
-    #[cfg(any(test, target_os = "macos", target_os = "ios"))]
+    #[cfg(any(
+        test,
+        target_os = "macos",
+        target_os = "ios",
+        all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
+    ))]
     pub(super) fn has_keyframe(&self) -> bool {
         self.nals
             .iter()
@@ -160,7 +166,8 @@ impl AccessUnitNals {
         target_os = "macos",
         target_os = "ios",
         target_os = "windows",
-        target_os = "linux"
+        target_os = "linux",
+        all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
     ))]
     pub(super) fn sequence_parameter_set<'a>(&self, data: &'a [u8]) -> Option<&'a [u8]> {
         self.nals

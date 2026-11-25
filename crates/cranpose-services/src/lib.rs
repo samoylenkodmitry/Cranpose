@@ -355,6 +355,8 @@ pub use uri_handler::{
     ProvideUriHandler, UriHandler, UriHandlerError, UriHandlerRef, clear_platform_uri_handler,
     default_uri_handler, local_uri_handler, set_platform_uri_handler,
 };
+#[cfg(all(feature = "video-web", target_arch = "wasm32", target_os = "unknown"))]
+pub use video_decoder::WebVideoSource;
 pub use video_decoder::{
     AccessUnit, ColorPrimaries, ColorRange, ColorTransfer, CropRect, DecodeOrder, DecodedFrames,
     DecoderCapabilities, DecoderCapabilitySource, DecoderConfig, DecoderError, DecoderOutput,

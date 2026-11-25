@@ -23,7 +23,7 @@ while it gains enough to justify the fork; each one is offered upstream.
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
-`cranpose-wgpu-hal` is at 30.0.24 for the catch-up barrier, the Metal
+`cranpose-wgpu-hal` is at 30.0.25 for the catch-up barrier, the Metal
 pipeline switch, the dedicated Vulkan allocations, the GL point size, the
 GL state tracker, the web surface usages, the boxed GL copy commands, the
 Vulkan command pools that give a burst's memory back, the GL shaders
@@ -31,12 +31,13 @@ without the branches their constants decide, the GL program status read
 only on failure, the GLSL templates, the GL link reads, the WebGL
 extensions, the GL varying minimum, the presentable image identities, the
 WebGL frames drawn into the canvas, the GL bindings a link already
-sets and the NUL after each GL debug string below. `cranpose-wgpu-core` is at
-30.0.27 to require those, to make
+sets, the NUL after each GL debug string and WebGL `VideoFrame` uploads
+without `web_sys_unstable_apis` below. `cranpose-wgpu-core` is at
+30.0.28 to require those, to make
 template modules, to configure a surface while another thread submits, to
 let Vulkan pipelines drop their shader modules, to hand presented
 images back as they presented and to encode a buffer copy without a heap
-list. `cranpose-wgpu` is at 30.0.31 for
+list. `cranpose-wgpu` is at 30.0.32 for
 the background compiles, the pipeline readiness and the kept swapchain
 images below and to require them.
 
@@ -550,6 +551,16 @@ and none with a NUL after the string. `glDebugMessageInsert` and
 its label as a `CString`, and a NUL follows each marker it records
 (`gles/debug_text.rs`). A label or marker ends at its first NUL, as the
 driver reads it. The label takes one allocation, as before.
+
+### WebGL uploads `VideoFrame` without `web_sys_unstable_apis`
+
+`glow` 0.18 and `web-sys` 0.3.107 expose WebGL2 `texSubImage2D` and
+`texSubImage3D` for WebCodecs `VideoFrame` on stable Rust without
+`--cfg=web_sys_unstable_apis`. Upstream `wgpu-hal` still gated those two
+`ExternalImageSource::VideoFrame` arms in `gles/queue.rs` on
+`web_sys_unstable_apis`, panicking with `unimplemented!` on standard web
+builds. Removing the stale cfg guards lets `Queue::copy_external_image_to_texture`
+import WebCodecs `VideoFrame` objects directly on both WebGPU and WebGL2.
 
 ### Update the fork
 

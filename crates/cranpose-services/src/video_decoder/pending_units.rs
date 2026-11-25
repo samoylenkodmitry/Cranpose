@@ -1,9 +1,8 @@
 //! The access units that a decoder holds, which find the metadata of each decoded picture.
 
-use std::{
-    collections::VecDeque,
-    time::{Duration, Instant},
-};
+use std::{collections::VecDeque, time::Duration};
+
+use web_time::Instant;
 
 use super::FrameInfo;
 
@@ -30,7 +29,8 @@ impl PendingUnit {
         target_os = "macos",
         target_os = "ios",
         target_os = "windows",
-        target_os = "linux"
+        target_os = "linux",
+        all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
     ))]
     pub(super) fn into_frame_info(unit: Option<Self>, pts_us: u64) -> FrameInfo {
         unit.map_or_else(
@@ -76,7 +76,8 @@ impl PendingUnits {
         test,
         target_os = "android",
         target_os = "windows",
-        target_os = "linux"
+        target_os = "linux",
+        all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
     ))]
     pub(super) fn take(&mut self, pts_us: u64) -> Option<PendingUnit> {
         let index = self.units.iter().position(|unit| unit.pts_us == pts_us)?;
@@ -92,7 +93,8 @@ impl PendingUnits {
         target_os = "macos",
         target_os = "ios",
         target_os = "windows",
-        target_os = "linux"
+        target_os = "linux",
+        all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
     ))]
     pub(super) fn remove(&mut self, pts_us: u64) -> Option<PendingUnit> {
         let index = self.units.iter().position(|unit| unit.pts_us == pts_us)?;
@@ -106,7 +108,8 @@ impl PendingUnits {
         target_os = "macos",
         target_os = "ios",
         target_os = "windows",
-        target_os = "linux"
+        target_os = "linux",
+        all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
     ))]
     pub(super) fn clear(&mut self) {
         self.units.clear();
