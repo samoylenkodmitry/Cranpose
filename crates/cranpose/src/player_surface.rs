@@ -1,37 +1,94 @@
-//! `PlayerSurface`: the pictures of a hardware video decoder, drawn in the layout.
+//! `PlayerSurface`: zero-copy GPU video pictures drawn in Compose layout for a [`Player`] or
+//! raw [`DecodedFrames`].
 
-use cranpose_core::{MutableState, rememberMutableStateOf};
-use cranpose_services::DecodedFrames;
+use cranpose_core::{
+    CollectEvents, MutableState, mutableStateOf, rememberEventStream, rememberKeyed,
+    rememberMutableStateOf,
+};
+use cranpose_services::{DecodedFrames, Player, PlayerEvent};
 use cranpose_ui::{
     Alignment, Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, ContentScale, Image,
     Modifier, Painter, composable,
 };
 
-/// Shows the pictures of a [`VideoDecoder`](crate::VideoDecoder) in the box that the layout gives
-/// it, scaled by `content_scale`, as Media3's `PlayerSurface` shows a player's video. `frames`
-/// are the pictures of a decoder whose output is
-/// [`DecoderOutput::Frames`](crate::DecoderOutput::Frames).
+/// Source of zero-copy GPU video frames rendered by [`PlayerSurface`].
+#[derive(Clone, PartialEq)]
+pub enum VideoSurfaceSource {
+    /// High-level [`Player`] whose active zero-copy GPU frame stream follows clip transitions.
+    Player(Player),
+    /// Low-level [`DecodedFrames`] queue from a [`VideoDecoder`](crate::VideoDecoder).
+    Frames(DecodedFrames),
+}
+
+impl From<Player> for VideoSurfaceSource {
+    fn from(player: Player) -> Self {
+        Self::Player(player)
+    }
+}
+
+impl From<DecodedFrames> for VideoSurfaceSource {
+    fn from(frames: DecodedFrames) -> Self {
+        Self::Frames(frames)
+    }
+}
+
+/// Renders zero-copy GPU video frames from a [`Player`] or raw [`DecodedFrames`] inside layout,
+/// scaled by `content_scale`, matching Media3's `PlayerSurface`.
 ///
-/// Media3's `PlayerSurface` takes a `Player`, and Cranpose has none: the pictures come from the
-/// decoder that the app feeds. The `content_scale` is Media3's `ContentFrame` parameter.
+/// The surface presents each newest decoded picture on the GPU without CPU pixel copies, holds
+/// the last presented picture while paused, and waits on decoder/player events so idle or paused
+/// frames do zero work. When given a [`Player`], it automatically switches streams across playlist
+/// transitions and marks the player's first rendered frame so [`ContentFrame`](crate::ContentFrame)
+/// shutters dismiss on the exact frame the first GPU picture appears.
 ///
-/// The surface draws the newest picture in the frame that follows its output, and shows the last
-/// picture again while no newer one comes. It drops the pictures that it did not show. It waits
-/// for the decoder: no work is done in a frame that has no new picture. A picture is converted
-/// once on the GPU, with no copy through the CPU, and the decoder's own buffer is the source.
-/// The surface keeps each picture until the GPU has read it, which takes up to three frames, so
-/// give the decoder a `depth` of 6 or more for a stream of 60 pictures a second. The decoder
-/// drops its oldest pictures first when the app falls behind, as it does while a window starts.
-///
-/// Platforms: macOS and iOS draw through Metal. Android draws through Vulkan: the `video` feature
-/// that brings this composable opens the app's device with the extensions that import a hardware
-/// buffer, which the GPU's driver offers on Android 8 and later. Where the device lacks them, or where Android renders with OpenGL ES, the
-/// surface draws nothing. No other platform has a hardware decoder that Cranpose drives. A box
-/// with no picture draws nothing and keeps its size.
+/// On CPU framebuffer targets (such as watchOS and `renderer-pixels`) or platforms without a GPU
+/// video importer (`video_surface_supported() == false`), the surface draws nothing and keeps its
+/// layout size.
 #[composable]
-pub fn PlayerSurface(frames: DecodedFrames, modifier: Modifier, content_scale: ContentScale) {
+pub fn PlayerSurface<S: Into<VideoSurfaceSource> + Clone + PartialEq + 'static>(
+    source: S,
+    modifier: Modifier,
+    content_scale: ContentScale,
+) {
+    match source.into() {
+        VideoSurfaceSource::Frames(frames) => {
+            let shown = rememberMutableStateOf(|| None::<Painter>);
+            pump(frames, None, shown);
+            Picture(shown, modifier, content_scale);
+        }
+        VideoSurfaceSource::Player(player) => {
+            PlayerBoundSurface(player, modifier, content_scale);
+        }
+    }
+}
+
+#[composable]
+fn PlayerBoundSurface(player: Player, modifier: Modifier, content_scale: ContentScale) {
     let shown = rememberMutableStateOf(|| None::<Painter>);
-    pump(frames, shown);
+    let active_frames = rememberKeyed(player.id(), |_| mutableStateOf(player.decoded_frames()));
+    let handle = player.clone();
+    let updates = rememberEventStream(player.id(), move |sender| {
+        let p = handle.clone();
+        handle.observe_events(move |event| {
+            if matches!(
+                event,
+                PlayerEvent::VideoFramesChanged
+                    | PlayerEvent::MediaItemTransition { .. }
+                    | PlayerEvent::PlaybackStateChanged(_)
+            ) {
+                sender.send(p.decoded_frames());
+            }
+        })
+    });
+    CollectEvents(updates, player.id(), move |frames| {
+        if frames.is_none() {
+            shown.set(None);
+        }
+        active_frames.set(frames);
+    });
+    if let Some(frames) = active_frames.value() {
+        pump(frames, Some(player), shown);
+    }
     Picture(shown, modifier, content_scale);
 }
 
@@ -68,13 +125,16 @@ pub(crate) fn Picture(
 
 // Takes each picture that the decoder outputs and puts its painter in `shown`.
 #[composable]
-fn pump(frames: DecodedFrames, shown: MutableState<Option<Painter>>) {
+fn pump(frames: DecodedFrames, player: Option<Player>, shown: MutableState<Option<Painter>>) {
     use crate::player_surface_intake::pump_with;
 
-    pump_with(frames, shown, |frames, presenter| {
+    pump_with(frames, shown, move |frames, presenter| {
         // A picture that is not shown drops, and the last one stays on the screen
-        if let Some(frame) = frames.latest_frame() {
-            presenter.present(frame, None).unwrap_or_default();
+        if let Some(frame) = frames.latest_frame()
+            && presenter.present(frame, None).is_ok()
+            && let Some(player) = &player
+        {
+            player.notify_rendered_first_frame();
         }
     });
 }

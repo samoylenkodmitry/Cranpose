@@ -33,3 +33,7 @@ mod native_view;
     )
 ))]
 mod player_surface;
+#[cfg(feature = "video")]
+mod player_test_support;
+#[cfg(feature = "video")]
+mod player_ui_integration;

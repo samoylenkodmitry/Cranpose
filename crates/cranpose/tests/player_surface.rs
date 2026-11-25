@@ -622,3 +622,73 @@ fn a_surface_presents_b_frame_streams_in_presentation_order() {
     let expected: Vec<u64> = (0..BFRAMES_H264_PTS.len() as u64).collect();
     assert_eq!(*shown_order.borrow(), expected);
 }
+
+#[test]
+fn content_frame_shows_shutter_then_hardware_decoded_player_frames() {
+    use std::sync::Arc;
+
+    use cranpose::{
+        Box, BoxSpec, Color, ContentFrame, Player as MediaPlayerHandle, PlayerBackendFactory,
+    };
+
+    let factory = crate::player_test_support::TestFactory::new();
+    let handle = MediaPlayerHandle::builder()
+        .with_backend_factory(Arc::clone(&factory) as Arc<dyn PlayerBackendFactory>)
+        .build()
+        .expect("player");
+    let sink = factory.sink();
+
+    let decoder = VideoDecoder::new(DecoderConfig::new(
+        VideoCodec::H264,
+        WIDTH,
+        HEIGHT,
+        DecoderOutput::Frames { depth: 6 },
+    ))
+    .expect("decoder");
+    sink.set_decoded_frames(Some(decoder.frames()));
+
+    let mut view = AppLauncher::new()
+        .create_embedded_view(WIDTH, HEIGHT, 1.0, {
+            let p = handle.clone();
+            move || {
+                ContentFrame(
+                    p.clone(),
+                    Modifier::empty().fill_max_size(),
+                    ContentScale::FillBounds,
+                    || {
+                        Box(
+                            Modifier::empty()
+                                .fill_max_size()
+                                .background(Color::rgba(0.1, 0.2, 0.9, 1.0)),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    },
+                );
+            }
+        })
+        .expect("GPU embedded component");
+
+    let mut pixels = Vec::new();
+    draw_settled(&mut view, &mut pixels);
+    // Before first frame, the blue shutter covers the surface.
+    let shutter_px = pixel(&pixels, WIDTH, 50, 330);
+    assert!(
+        shutter_px[2] > 180 && shutter_px[0] < 80,
+        "expected blue shutter before first frame, got {shutter_px:?}"
+    );
+    assert!(!handle.rendered_first_frame());
+
+    // Feed a real H.264 frame: PlayerSurface presents it zero-copy and dismisses the shutter.
+    let mut player = Player {
+        decoder,
+        view,
+        width: WIDTH,
+        pixels,
+        units: split_access_units(VideoCodec::H264, H264_CLIP),
+        fed: 0,
+    };
+    player.show_next();
+    assert!(handle.rendered_first_frame());
+    assert_bars(&player, "ContentFrame after first GPU frame");
+}
