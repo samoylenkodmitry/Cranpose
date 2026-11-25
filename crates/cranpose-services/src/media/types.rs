@@ -85,17 +85,79 @@ impl MediaMetadata {
     }
 }
 
+/// Clipped playback window within a [`MediaItem`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClippingConfiguration {
+    /// Start offset within the source media.
+    pub start_position: Duration,
+    /// Optional end offset within the source media (`None` plays to end of stream).
+    pub end_position: Option<Duration>,
+}
+
+/// External sidecar subtitle or caption track attached to a [`MediaItem`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SubtitleConfiguration {
+    /// Source URI of the subtitle resource (for example `.vtt` or `.srt`).
+    pub uri: String,
+    /// Optional MIME type hint (`text/vtt`, `application/x-subrip`).
+    pub mime_type: Option<String>,
+    /// Optional BCP-47 language tag (for example `"en"`, `"es"`).
+    pub language: Option<String>,
+    /// Optional human-readable track label.
+    pub label: Option<String>,
+}
+
+impl SubtitleConfiguration {
+    /// Creates a subtitle configuration for `uri`.
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            uri: uri.into(),
+            ..Self::default()
+        }
+    }
+
+    /// Sets the subtitle MIME type hint.
+    pub fn with_mime_type(mut self, mime_type: impl Into<String>) -> Self {
+        self.mime_type = Some(mime_type.into());
+        self
+    }
+
+    /// Sets the BCP-47 language tag.
+    pub fn with_language(mut self, language: impl Into<String>) -> Self {
+        self.language = Some(language.into());
+        self
+    }
+
+    /// Sets the human-readable label.
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+}
+
 /// One playable item.
 ///
 /// The source is a URI because that is the one form every platform media stack
 /// takes: `file:` and `content:` on Android, `file:` on desktop and iOS,
 /// `blob:` for a file the browser handed over, `http:` and `https:` everywhere.
 /// Handing the platform a URI is also what keeps a streamed item streaming
-/// instead of being read into memory first.
+/// instead of being read into memory first. In-memory byte sources are also
+/// supported via [`MediaItem::from_bytes`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MediaItem {
     /// The source of the item, such as `file:`, `content:`, `blob:`, `http:` or `https:`.
     pub uri: String,
+    /// Optional MIME type hint (for example `"video/mp4"`, `"application/x-mpegURL"`,
+    /// `"application/dash+xml"`).
+    pub mime_type: Option<String>,
+    /// Custom HTTP request headers sent when opening remote manifests or media streams.
+    pub headers: Vec<(String, String)>,
+    /// Optional start/end clipping window.
+    pub clipping: Option<ClippingConfiguration>,
+    /// External sidecar subtitle tracks associated with this item.
+    pub subtitle_configurations: Vec<SubtitleConfiguration>,
+    /// Optional in-memory encoded media bytes when playing from memory rather than a URI.
+    pub bytes: Option<Arc<[u8]>>,
     /// The title, artist and artwork that the platform media session shows for the item.
     pub metadata: MediaMetadata,
 }
@@ -105,13 +167,56 @@ impl MediaItem {
     pub fn new(uri: impl Into<String>) -> Self {
         Self {
             uri: uri.into(),
-            metadata: MediaMetadata::default(),
+            ..Self::default()
+        }
+    }
+
+    /// An item backed directly by in-memory encoded bytes and a MIME type hint.
+    pub fn from_bytes(bytes: impl Into<Arc<[u8]>>, mime_type: impl Into<String>) -> Self {
+        Self {
+            mime_type: Some(mime_type.into()),
+            bytes: Some(bytes.into()),
+            ..Self::default()
         }
     }
 
     /// The same item with metadata attached.
     pub fn with_metadata(mut self, metadata: MediaMetadata) -> Self {
         self.metadata = metadata;
+        self
+    }
+
+    /// The same item with a MIME type hint attached.
+    pub fn with_mime_type(mut self, mime_type: impl Into<String>) -> Self {
+        self.mime_type = Some(mime_type.into());
+        self
+    }
+
+    /// Appends one custom HTTP request header for remote streaming requests.
+    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.push((name.into(), value.into()));
+        self
+    }
+
+    /// Appends multiple custom HTTP request headers.
+    pub fn with_headers(
+        mut self,
+        headers: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        self.headers
+            .extend(headers.into_iter().map(|(k, v)| (k.into(), v.into())));
+        self
+    }
+
+    /// Sets the clipping start/end window.
+    pub fn with_clipping(mut self, clipping: ClippingConfiguration) -> Self {
+        self.clipping = Some(clipping);
+        self
+    }
+
+    /// Attaches an external sidecar subtitle track.
+    pub fn with_subtitle(mut self, subtitle: SubtitleConfiguration) -> Self {
+        self.subtitle_configurations.push(subtitle);
         self
     }
 
