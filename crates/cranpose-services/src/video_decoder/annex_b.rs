@@ -39,7 +39,8 @@ struct Nal {
             target_os = "android",
             target_os = "macos",
             target_os = "ios",
-            target_os = "windows"
+            target_os = "windows",
+            target_os = "linux"
         )),
         expect(
             dead_code,
@@ -158,7 +159,8 @@ impl AccessUnitNals {
         target_os = "android",
         target_os = "macos",
         target_os = "ios",
-        target_os = "windows"
+        target_os = "windows",
+        target_os = "linux"
     ))]
     pub(super) fn sequence_parameter_set<'a>(&self, data: &'a [u8]) -> Option<&'a [u8]> {
         self.nals

@@ -29,7 +29,8 @@ impl PendingUnit {
         target_os = "android",
         target_os = "macos",
         target_os = "ios",
-        target_os = "windows"
+        target_os = "windows",
+        target_os = "linux"
     ))]
     pub(super) fn into_frame_info(unit: Option<Self>, pts_us: u64) -> FrameInfo {
         unit.map_or_else(
@@ -71,7 +72,12 @@ impl PendingUnits {
     // Takes the unit that the picture at `pts_us` came from. The units before it produced no
     // picture, such as a unit of parameter sets, so they go too. A timestamp that no unit has
     // takes nothing.
-    #[cfg(any(test, target_os = "android", target_os = "windows"))]
+    #[cfg(any(
+        test,
+        target_os = "android",
+        target_os = "windows",
+        target_os = "linux"
+    ))]
     pub(super) fn take(&mut self, pts_us: u64) -> Option<PendingUnit> {
         let index = self.units.iter().position(|unit| unit.pts_us == pts_us)?;
         self.units.drain(..index);
@@ -85,7 +91,8 @@ impl PendingUnits {
         target_os = "android",
         target_os = "macos",
         target_os = "ios",
-        target_os = "windows"
+        target_os = "windows",
+        target_os = "linux"
     ))]
     pub(super) fn remove(&mut self, pts_us: u64) -> Option<PendingUnit> {
         let index = self.units.iter().position(|unit| unit.pts_us == pts_us)?;
@@ -98,7 +105,8 @@ impl PendingUnits {
         target_os = "android",
         target_os = "macos",
         target_os = "ios",
-        target_os = "windows"
+        target_os = "windows",
+        target_os = "linux"
     ))]
     pub(super) fn clear(&mut self) {
         self.units.clear();

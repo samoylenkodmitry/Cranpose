@@ -10,15 +10,17 @@
 //! stream must have no B-frames. [`DecodeOrder::Presentation`] reorders B-frames into ascending
 //! presentation-timestamp order and carries stream color primaries, range, transfer function,
 //! display rotation, and clean aperture (`CropRect`) on every [`VideoFrame`]. Android decodes
-//! through `MediaCodec`. macOS and iOS decode through VideoToolbox, and Windows decodes through
-//! Media Foundation into D3D11 shared textures, outputting [`VideoFrame`]s only. Other platforms
-//! report the decoder as unavailable.
+//! through `MediaCodec`. macOS and iOS decode through VideoToolbox, Windows decodes through
+//! Media Foundation into D3D11 shared textures, and Linux decodes through VA-API DMABUF (with
+//! explicit software fallback), outputting [`VideoFrame`]s only. Other platforms report the
+//! decoder as unavailable.
 
 #[cfg(any(
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    target_os = "windows"
+    target_os = "windows",
+    target_os = "linux"
 ))]
 mod admission;
 mod annex_b;
@@ -37,11 +39,16 @@ mod frame;
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    target_os = "windows"
+    target_os = "windows",
+    target_os = "linux"
 ))]
 mod frame_queue;
 #[cfg(target_os = "android")]
 mod image_reader;
+#[cfg(target_os = "linux")]
+mod linux_decoder;
+#[cfg(target_os = "linux")]
+mod linux_frame;
 #[cfg(target_os = "android")]
 mod media_codec;
 #[cfg(target_os = "windows")]
@@ -55,7 +62,8 @@ mod media_foundation_transform;
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    target_os = "windows"
+    target_os = "windows",
+    target_os = "linux"
 ))]
 mod pending_units;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -68,7 +76,8 @@ mod split_access_units;
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    target_os = "windows"
+    target_os = "windows",
+    target_os = "linux"
 ))]
 mod sps;
 mod stats;
@@ -76,13 +85,20 @@ mod stats;
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    target_os = "windows"
+    target_os = "windows",
+    target_os = "linux"
 )))]
 mod unavailable;
+#[cfg(target_os = "linux")]
+mod vaapi_capabilities;
+#[cfg(target_os = "linux")]
+mod vaapi_loader;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod video_toolbox;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod video_toolbox_capabilities;
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+mod worker_mailbox;
 
 pub use capabilities::{
     DecoderCapabilities, DecoderCapabilitySource, set_platform_decoder_capabilities,
@@ -95,5 +111,9 @@ pub use d3d11_frame::{DxgiPixelFormat, DxgiSharedFrame};
 pub use decoder::{DecodedFrames, VideoDecoder};
 pub use error::DecoderError;
 pub use frame::{CropRect, FrameInfo, VideoFrame};
+#[cfg(target_os = "linux")]
+pub use linux_frame::{
+    DmaBufFrame, DmaBufPlane, LinuxFrameMemory, LinuxPixelFormat, SoftwareBiPlanarPlanes,
+};
 pub use split_access_units::split_access_units;
 pub use stats::DecoderStats;

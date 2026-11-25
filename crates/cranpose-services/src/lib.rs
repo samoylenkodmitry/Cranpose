@@ -346,6 +346,10 @@ pub use video_decoder::{
     DecoderStats, FrameInfo, VideoCodec, VideoColorInfo, VideoDecoder, VideoFrame, VideoRotation,
     set_platform_decoder_capabilities, split_access_units,
 };
+#[cfg(target_os = "linux")]
+pub use video_decoder::{
+    DmaBufFrame, DmaBufPlane, LinuxFrameMemory, LinuxPixelFormat, SoftwareBiPlanarPlanes,
+};
 #[cfg(target_os = "windows")]
 pub use video_decoder::{DxgiPixelFormat, DxgiSharedFrame};
 pub use wearable::{

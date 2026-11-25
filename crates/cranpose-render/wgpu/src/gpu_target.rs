@@ -76,6 +76,10 @@ pub fn optional_device_features(adapter: &wgpu::Adapter) -> wgpu::Features {
         | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
         | wgpu::Features::TEXTURE_FORMAT_NV12
         | wgpu::Features::TEXTURE_FORMAT_P010;
+    #[cfg(target_os = "linux")]
+    {
+        wanted |= wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF;
+    }
     if matches!(
         adapter.get_info().device_type,
         wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::Cpu

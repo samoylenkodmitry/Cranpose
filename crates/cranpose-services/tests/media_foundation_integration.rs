@@ -17,19 +17,22 @@ const BFRAMES_H264: &[u8] = include_bytes!("../../cranpose/tests/assets/test_bfr
 const BFRAMES_H264_PTS: [u64; 12] = [0, 4, 2, 1, 3, 8, 6, 5, 7, 11, 9, 10];
 const STEP: Duration = Duration::from_micros(16_667);
 
-fn wait_frames(frames: &DecodedFrames, expected: usize) -> Vec<Duration> {
-    let mut timestamps = Vec::with_capacity(expected);
+fn drain_available(frames: &DecodedFrames, timestamps: &mut Vec<Duration>) {
+    while let Some(frame) = frames.next_frame() {
+        assert!(!frame.dxgi_shared_frame().texture_handle.is_null());
+        assert!(!frame.dxgi_shared_frame().fence_handle.is_null());
+        timestamps.push(frame.info().timestamp);
+    }
+}
+
+fn wait_frames(frames: &DecodedFrames, timestamps: &mut Vec<Duration>, expected: usize) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while timestamps.len() < expected && Instant::now() < deadline {
-        if let Some(frame) = frames.next_frame() {
-            assert!(!frame.dxgi_shared_frame().texture_handle.is_null());
-            assert!(!frame.dxgi_shared_frame().fence_handle.is_null());
-            timestamps.push(frame.info().timestamp);
-        } else {
+        drain_available(frames, timestamps);
+        if timestamps.len() < expected {
             thread::sleep(Duration::from_millis(2));
         }
     }
-    timestamps
 }
 
 #[test]
@@ -46,12 +49,13 @@ fn media_foundation_decodes_b_frames_in_presentation_order_and_drains() {
         VideoCodec::H264,
         640,
         360,
-        DecoderOutput::Frames { depth: 8 },
+        DecoderOutput::Frames { depth: 16 },
     )
     .with_order(DecodeOrder::Presentation)
     .with_rotation(VideoRotation::Degrees90);
     let mut decoder = VideoDecoder::new(config).expect("Media Foundation H.264 decoder");
     let frames = decoder.frames();
+    let mut got = Vec::with_capacity(BFRAMES_H264_PTS.len());
 
     let units = split_access_units(VideoCodec::H264, BFRAMES_H264);
     assert_eq!(units.len(), BFRAMES_H264_PTS.len());
@@ -62,10 +66,11 @@ fn media_foundation_decodes_b_frames_in_presentation_order_and_drains() {
             metadata: pts_index,
         };
         decoder.submit(unit).expect("submit access unit");
+        drain_available(&frames, &mut got);
     }
     decoder.drain().expect("drain remaining reordered pictures");
+    wait_frames(&frames, &mut got, BFRAMES_H264_PTS.len());
 
-    let got = wait_frames(&frames, BFRAMES_H264_PTS.len());
     let expected: Vec<Duration> = (0..BFRAMES_H264_PTS.len())
         .map(|i| STEP * u32::try_from(i).expect("small"))
         .collect();

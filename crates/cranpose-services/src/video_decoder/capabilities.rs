@@ -75,7 +75,7 @@ pub fn set_platform_decoder_capabilities(source: Option<Arc<dyn DecoderCapabilit
 }
 
 // The source that a platform backend installed, or the built-in probe on platforms whose decoder
-// lives in this crate (Apple VideoToolbox and Windows Media Foundation).
+// lives in this crate (Apple VideoToolbox, Windows Media Foundation, and Linux VA-API/FFmpeg).
 fn source() -> Option<Arc<dyn DecoderCapabilitySource>> {
     let installed = PLATFORM.get();
     #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -83,6 +83,8 @@ fn source() -> Option<Arc<dyn DecoderCapabilitySource>> {
     #[cfg(target_os = "windows")]
     let installed =
         installed.or_else(|| Some(Arc::new(super::media_foundation_capabilities::Limits)));
+    #[cfg(target_os = "linux")]
+    let installed = installed.or_else(|| Some(Arc::new(super::vaapi_capabilities::Limits)));
     installed
 }
 
