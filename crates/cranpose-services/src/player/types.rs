@@ -273,6 +273,8 @@ pub enum PlayerEvent {
     },
     /// Video dimensions or orientation changed.
     VideoSizeChanged(VideoSize),
+    /// The zero-copy GPU frame stream backing `PlayerSurface` was attached, replaced, or cleared.
+    VideoFramesChanged,
     /// The first GPU video frame for the active item has been rendered.
     RenderedFirstFrame,
     /// Available or selected tracks changed.

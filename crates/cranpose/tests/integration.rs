@@ -28,3 +28,7 @@ mod native_view;
     any(target_os = "macos", target_os = "ios", target_os = "windows")
 ))]
 mod player_surface;
+#[cfg(feature = "video")]
+mod player_test_support;
+#[cfg(feature = "video")]
+mod player_ui_integration;

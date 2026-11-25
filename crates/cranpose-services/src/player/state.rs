@@ -491,8 +491,20 @@ impl PlayerCore {
     }
 
     pub(super) fn on_backend_frames(&self, frames: Option<DecodedFrames>) {
-        if !self.is_released() {
-            self.state.lock().decoded_frames = frames;
+        if self.is_released() {
+            return;
+        }
+        let changed = {
+            let mut snap = self.state.lock();
+            if snap.decoded_frames == frames {
+                false
+            } else {
+                snap.decoded_frames = frames;
+                true
+            }
+        };
+        if changed {
+            self.emit(&[PlayerEvent::VideoFramesChanged]);
         }
     }
 

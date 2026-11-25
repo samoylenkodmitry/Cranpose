@@ -798,6 +798,14 @@ impl Player {
         self.core.state.lock().decoded_frames.clone()
     }
 
+    /// Marks the first GPU video frame for the active item as rendered (idempotent per item).
+    ///
+    /// Called by `PlayerSurface` on first GPU presentation so shutters in `ContentFrame` dismiss
+    /// cleanly even when a backend delivers frames purely through [`DecodedFrames`].
+    pub fn notify_rendered_first_frame(&self) {
+        self.core.on_backend_first_frame();
+    }
+
     /// Active index in the playlist (`0` when empty).
     pub fn current_media_item_index(&self) -> usize {
         self.core.state.lock().current_index

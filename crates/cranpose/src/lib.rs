@@ -9,6 +9,8 @@ mod async_image;
 mod player_surface;
 #[cfg(feature = "video")]
 mod player_surface_intake;
+#[cfg(feature = "video")]
+mod player_ui;
 #[cfg(feature = "localization")]
 mod system_languages;
 #[cfg(all(
@@ -291,11 +293,13 @@ pub use cranpose_services::isSystemInDarkTheme;
 pub use cranpose_services::*;
 pub use cranpose_ui::*;
 #[cfg(feature = "video")]
-pub use player_surface::PlayerSurface;
+pub use player_surface::{PlayerSurface, VideoSurfaceSource};
 #[cfg(feature = "video")]
 pub use player_surface_intake::{
     FramePresenter, PlayerSurfaceIntake, PresentError, video_surface_supported,
 };
+#[cfg(feature = "video")]
+pub use player_ui::*;
 
 static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
@@ -437,9 +441,11 @@ pub mod prelude {
     #[cfg(feature = "image-loading")]
     pub use crate::async_image::AsyncImage;
     #[cfg(feature = "video")]
-    pub use crate::player_surface::PlayerSurface;
+    pub use crate::player_surface::{PlayerSurface, VideoSurfaceSource};
     #[cfg(feature = "video")]
     pub use crate::player_surface_intake::video_surface_supported;
+    #[cfg(feature = "video")]
+    pub use crate::player_ui::*;
     #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
     pub use crate::{
         AndroidHostWindowPositionError, AndroidHostWindowSizeError, AndroidHostWindowSizeStatus,
