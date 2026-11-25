@@ -23,6 +23,7 @@ mod network_request_integration;
 mod opened_links_delivery;
 mod persistence_regressions;
 mod player_integration;
+mod player_pool_cache_integration;
 mod saver_forms;
 mod split_access_units_integration;
 mod theme_integration;
