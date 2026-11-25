@@ -187231,6 +187231,128 @@
      }
     }
    }
+  },
+  {
+   "file": "runs/2026-11-25-esp32-891523352-ES3C35P.json",
+   "kind": "esp32",
+   "started_at": "2026-11-25T06:39:54+00:00",
+   "device": "ES3C35P",
+   "main": "891523352aaa4a48b48f53653989387f9a2fff1a",
+   "release": null,
+   "subjects": [
+    {
+     "name": "cranpose",
+     "label": "Cranpose 891523352",
+     "source": "apps/esp32-demo/src/main.rs"
+    },
+    {
+     "name": "lvgl",
+     "label": "LVGL 9.3.0",
+     "source": "benchmarks/esp32/lvgl-app/main/main.c"
+    },
+    {
+     "name": "slint",
+     "label": "Slint 1.18.1",
+     "source": "benchmarks/esp32/slint-app/ui/dashboard.slint"
+    }
+   ],
+   "duration_s": null,
+   "protocol": {
+    "run_s": 10,
+    "starts": [
+     "first",
+     "second"
+    ]
+   },
+   "scenarios": {
+    "demo": {
+     "legs": 4,
+     "app_bytes": {
+      "cranpose": 3476848,
+      "lvgl": 534160
+     },
+     "starts": {
+      "first": {
+       "summary": {
+        "cranpose": {
+         "fps": 58.2,
+         "first_frame_s": 0.284
+        },
+        "lvgl": {
+         "fps": 60.6,
+         "first_frame_s": 0.286
+        }
+       },
+       "verdicts": {},
+       "failures": {},
+       "confirmed": []
+      },
+      "second": {
+       "summary": {
+        "cranpose": {
+         "fps": 57.6,
+         "first_frame_s": 0.332
+        },
+        "lvgl": {
+         "fps": 59.9,
+         "first_frame_s": 0.336
+        }
+       },
+       "verdicts": {},
+       "failures": {},
+       "confirmed": []
+      }
+     }
+    },
+    "dashboard": {
+     "legs": 6,
+     "app_bytes": {
+      "cranpose": 3926464,
+      "lvgl": 580672,
+      "slint": 1279856
+     },
+     "starts": {
+      "first": {
+       "summary": {
+        "cranpose": {
+         "fps": 40.9,
+         "first_frame_s": 0.341
+        },
+        "lvgl": {
+         "fps": 34.4,
+         "first_frame_s": 0.462
+        },
+        "slint": {
+         "fps": 13.3,
+         "first_frame_s": 0.417
+        }
+       },
+       "verdicts": {},
+       "failures": {},
+       "confirmed": []
+      },
+      "second": {
+       "summary": {
+        "cranpose": {
+         "fps": 40.5,
+         "first_frame_s": 0.389
+        },
+        "lvgl": {
+         "fps": 34.0,
+         "first_frame_s": 0.511
+        },
+        "slint": {
+         "fps": 13.2,
+         "first_frame_s": 0.466
+        }
+       },
+       "verdicts": {},
+       "failures": {},
+       "confirmed": []
+      }
+     }
+    }
+   }
   }
  ]
 }
