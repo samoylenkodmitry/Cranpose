@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use super::VideoCodec;
+use super::{VideoCodec, VideoColorInfo, VideoRotation};
 use crate::ExternalSurface;
 
 // How long `submit` waits for the decoder to take an access unit before it reports `Full`.
@@ -39,6 +39,20 @@ pub enum DecoderOutput {
     },
 }
 
+/// Whether a decoder outputs pictures immediately or reorders B-frames into presentation order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DecodeOrder {
+    /// Outputs each picture as soon as the hardware finishes it, with no reordering delay. The
+    /// stream must contain no B-frames, and access unit timestamps must rise monotonically.
+    #[default]
+    LowLatency,
+    /// Reorders B-frames so decoded pictures leave the decoder in ascending presentation
+    /// timestamp order. Access units arrive in decode order, so their presentation timestamps need
+    /// not rise monotonically. Call [`VideoDecoder::drain`](super::VideoDecoder::drain) at end of
+    /// stream to release the remaining buffered pictures.
+    Presentation,
+}
+
 /// What [`VideoDecoder::new`](super::VideoDecoder::new) makes a decoder from.
 #[derive(Debug)]
 pub struct DecoderConfig {
@@ -56,11 +70,19 @@ pub struct DecoderConfig {
     /// of its own and never from its frame loop. [`Duration::ZERO`] makes `submit` report `Full`
     /// at once where the decoder has no room.
     pub input_wait: Duration,
+    /// Whether the decoder emits pictures immediately or reorders B-frames into presentation
+    /// order.
+    pub order: DecodeOrder,
+    /// Clockwise display rotation carried from container metadata.
+    pub rotation: VideoRotation,
+    /// Fallback color metadata carried from container metadata when the elementary stream omits
+    /// VUI color information.
+    pub color: Option<VideoColorInfo>,
 }
 
 impl DecoderConfig {
     /// A configuration for a stream of `width` by `height` pixels in `codec` with the default
-    /// input wait of 30 milliseconds.
+    /// input wait of 30 milliseconds, low-latency decode order, and upright rotation.
     pub const fn new(codec: VideoCodec, width: u32, height: u32, output: DecoderOutput) -> Self {
         Self {
             codec,
@@ -68,7 +90,28 @@ impl DecoderConfig {
             height,
             output,
             input_wait: INPUT_WAIT,
+            order: DecodeOrder::LowLatency,
+            rotation: VideoRotation::Degrees0,
+            color: None,
         }
+    }
+
+    /// Sets the picture output order (low-latency or presentation-order B-frame reordering).
+    pub const fn with_order(mut self, order: DecodeOrder) -> Self {
+        self.order = order;
+        self
+    }
+
+    /// Sets the clockwise display rotation applied to decoded pictures.
+    pub const fn with_rotation(mut self, rotation: VideoRotation) -> Self {
+        self.rotation = rotation;
+        self
+    }
+
+    /// Sets fallback color metadata for streams that omit bitstream color tags.
+    pub const fn with_color(mut self, color: VideoColorInfo) -> Self {
+        self.color = Some(color);
+        self
     }
 }
 
@@ -78,8 +121,10 @@ pub struct AccessUnit<'a> {
     /// The bytes of one picture: Annex-B NAL units for H.264 and HEVC, which may start with the
     /// parameter sets, or one temporal unit of OBUs for AV1.
     pub data: &'a [u8],
-    /// The presentation time. It must rise from one access unit to the next: the decoder finds
-    /// the picture's metadata by it. The decoder keeps it to the microsecond.
+    /// The presentation time. In [`DecodeOrder::LowLatency`] it must rise from one access unit to
+    /// the next; in [`DecodeOrder::Presentation`] access units arrive in decode order and
+    /// presentation times may move out of order across B-frames. The decoder keeps it to the
+    /// microsecond.
     pub timestamp: Duration,
     /// A value of the app that returns with the decoded picture, such as a frame index that
     /// maps to a render pose.

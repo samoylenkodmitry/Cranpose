@@ -7,10 +7,29 @@ extern crate self as cranpose;
 mod async_image;
 #[cfg(feature = "video")]
 mod player_surface;
-#[cfg(all(feature = "video", not(target_arch = "wasm32")))]
+#[cfg(feature = "video")]
 mod player_surface_intake;
 #[cfg(feature = "localization")]
 mod system_languages;
+#[cfg(all(
+    feature = "video",
+    feature = "renderer-wgpu",
+    any(target_os = "macos", target_os = "ios")
+))]
+mod video_convert;
+#[cfg(any(
+    test,
+    all(
+        feature = "video",
+        feature = "renderer-wgpu",
+        any(
+            target_os = "macos",
+            target_os = "ios",
+            all(feature = "android", target_os = "android")
+        )
+    )
+))]
+mod video_transform;
 #[cfg(feature = "localization")]
 pub use system_languages::{
     ProvideApplicationLocalization, local_system_languages, system_languages,
@@ -270,8 +289,10 @@ pub use cranpose_services::*;
 pub use cranpose_ui::*;
 #[cfg(feature = "video")]
 pub use player_surface::PlayerSurface;
-#[cfg(all(feature = "video", not(target_arch = "wasm32")))]
-pub use player_surface_intake::{FramePresenter, PlayerSurfaceIntake, PresentError};
+#[cfg(feature = "video")]
+pub use player_surface_intake::{
+    FramePresenter, PlayerSurfaceIntake, PresentError, video_surface_supported,
+};
 
 static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
@@ -414,6 +435,8 @@ pub mod prelude {
     pub use crate::async_image::AsyncImage;
     #[cfg(feature = "video")]
     pub use crate::player_surface::PlayerSurface;
+    #[cfg(feature = "video")]
+    pub use crate::player_surface_intake::video_surface_supported;
     #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
     pub use crate::{
         AndroidHostWindowPositionError, AndroidHostWindowSizeError, AndroidHostWindowSizeStatus,

@@ -6,8 +6,18 @@ use cranpose_ui::{
     BitmapRegionPainter, ContentScale, ImageSampling, Modifier, Painter, Rect, composable,
 };
 
-use self::platform::{Converter, Gpu, converter_of, gpu};
+use self::platform::{Converter, Gpu, SUPPORTED, converter_of, gpu};
 use crate::player_surface::Picture;
+
+/// Whether this build can import decoded [`VideoFrame`]s directly onto the GPU for
+/// [`PlayerSurface`](crate::PlayerSurface) and [`PlayerSurfaceIntake`].
+///
+/// Returns `true` on GPU-backed targets with a zero-copy video importer and `false` on CPU
+/// framebuffer targets (such as watchOS and `renderer-pixels`) or platforms without a GPU video
+/// importer.
+pub const fn video_surface_supported() -> bool {
+    SUPPORTED
+}
 
 /// Shows in the box that the layout gives it the pictures that `intake` presents. The app decides
 /// what happens to each picture that the decoder outputs: which one is shown, which part of it,
@@ -57,9 +67,9 @@ impl FramePresenter {
         frame: VideoFrame,
         part: Option<CropRect>,
     ) -> Result<(), PresentError> {
-        let crop = frame.crop();
+        let display_size = frame.display_size();
         let region = match part {
-            Some(part) if !inside(part, (crop.width, crop.height)) => {
+            Some(part) if !inside(part, display_size) => {
                 return Err(PresentError::PartOutside);
             }
             Some(part) => Some(Rect {
@@ -153,6 +163,8 @@ mod platform {
     pub(super) use crate::apple::nv12_converter::Nv12Converter as Converter;
     use crate::{GpuContext, gpu_context};
 
+    pub(super) const SUPPORTED: bool = true;
+
     pub(super) type Gpu = Option<GpuContext>;
 
     pub(super) fn gpu() -> Gpu {
@@ -176,6 +188,8 @@ mod platform {
 mod platform {
     use cranpose_services::VideoFrame;
     use cranpose_ui::ImageBitmap;
+
+    pub(super) const SUPPORTED: bool = false;
 
     pub(super) struct Converter;
 

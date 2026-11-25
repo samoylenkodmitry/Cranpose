@@ -17,8 +17,14 @@ fn shared(waiting: u64) -> Shared {
         pending: Mutex::new(PendingUnits::new()),
         room: Condvar::new(),
         queue: Arc::new(FrameQueue::new(2, 0)),
+        reorder: Mutex::new(ReorderBuffer::new(0)),
         live: LivePictures::default(),
         depth: 2,
+        order: DecodeOrder::LowLatency,
+        rotation: VideoRotation::Degrees0,
+        config_color: None,
+        stream_meta: Mutex::new(StreamMetadata::default()),
+        discard_output: AtomicBool::new(false),
         session_lost: AtomicBool::new(false),
     };
     for pts_us in 0..waiting {

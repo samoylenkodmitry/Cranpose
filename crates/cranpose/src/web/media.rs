@@ -447,6 +447,7 @@ impl MediaPlayer for WebMediaPlayer {
             session: media_session().is_some(),
             equalizer: true,
             probing: false,
+            video: false,
         }
     }
 

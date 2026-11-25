@@ -64,7 +64,6 @@ limit = 1000
 "crates/cranpose-render/wgpu/src/run_store.rs" = 1574
 "crates/cranpose-render/wgpu/src/scene_pass.rs" = 1441
 "crates/cranpose-services/src/http.rs" = 1348
-"crates/cranpose-services/src/media.rs" = 1299
 "crates/cranpose-testing/src/robot_helpers.rs" = 1430
 "crates/cranpose-ui-graphics/src/geometry.rs" = 1868
 "crates/cranpose-ui-graphics/src/record.rs" = 1719

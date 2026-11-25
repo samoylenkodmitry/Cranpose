@@ -571,3 +571,20 @@ fn a_delay_wakes_a_resting_host_and_its_change_shows() {
     }
     sleeps_after_its_trim(&mut app, frame_time);
 }
+
+#[cfg(feature = "video")]
+#[test]
+fn video_capabilities_report_unavailable_on_watchos_and_pixels_renderer() {
+    assert!(!video_surface_supported());
+    assert!(!media_capabilities().video);
+    let mut app = Application::new(80, 60, 1.0, || {
+        Spacer(
+            Modifier::empty()
+                .fill_max_size()
+                .background(Color(0.0, 0.0, 0.0, 1.0)),
+        );
+    })
+    .expect("valid surface");
+    app.set_active(true);
+    assert!(app.tick(1));
+}

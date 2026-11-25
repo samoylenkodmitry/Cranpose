@@ -13,6 +13,9 @@ impl DecoderCapabilitySource for Device {
             max_width: Some(4096),
             max_height: Some(2304),
             max_bitrate: Some(100_000_000),
+            b_frame_reordering: true,
+            hdr_10bit: Some(true),
+            zero_copy_gpu: true,
         })
     }
 

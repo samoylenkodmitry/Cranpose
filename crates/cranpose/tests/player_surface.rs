@@ -5,9 +5,9 @@ use std::{
 };
 
 use cranpose::{
-    AccessUnit, AppLauncher, CropRect, DecodedFrames, DecoderConfig, DecoderOutput, PlayerSurface,
-    PlayerSurfaceIntake, PresentError, VideoCodec, VideoDecoder, embedded_view::EmbeddedView,
-    prelude::*, split_access_units,
+    AccessUnit, AppLauncher, CropRect, DecodeOrder, DecodedFrames, DecoderConfig, DecoderOutput,
+    PlayerSurface, PlayerSurfaceIntake, PresentError, VideoCodec, VideoDecoder, VideoRotation,
+    embedded_view::EmbeddedView, prelude::*, split_access_units, video_surface_supported,
 };
 
 use crate::gpu_support::{draw_settled, pixel};
@@ -19,6 +19,10 @@ const HEVC_CLIP: &[u8] = include_bytes!("../../../apps/xr-demo/assets/test_clip.
 // bars of the clips above hide the difference.
 const TONES_601_LIMITED: &[u8] = include_bytes!("assets/test_tones_601_limited.h264");
 const TONES_709_FULL: &[u8] = include_bytes!("assets/test_tones_709_full.h264");
+const TONES_2020_PQ: &[u8] = include_bytes!("assets/test_tones_2020_pq.h265");
+const TONES_2020_HLG: &[u8] = include_bytes!("assets/test_tones_2020_hlg.h265");
+const BFRAMES_H264: &[u8] = include_bytes!("assets/test_bframes.h264");
+const BFRAMES_H264_PTS: [u64; 12] = [0, 4, 2, 1, 3, 8, 6, 5, 7, 11, 9, 10];
 // The middle of each band, with its color
 const TONES: [((u32, u32), [u8; 3]); 5] = [
     ((64, 180), [64, 64, 64]),
@@ -428,4 +432,193 @@ fn a_picture_that_comes_while_the_intake_runs_reaches_its_next_call() {
         std::thread::sleep(Duration::from_millis(1));
     }
     assert_eq!(*taken.borrow(), [0, 1]);
+}
+
+#[test]
+fn a_surface_rotates_pictures_clockwise_and_swaps_axes() {
+    assert!(video_surface_supported());
+    for (rotation, view_size, clock_at, red_bar_at, cyan_bar_at) in [
+        // 90 deg CW: source (x, y) -> target (360 - 1 - y, x)
+        (
+            VideoRotation::Degrees90,
+            (HEIGHT, WIDTH),
+            (HEIGHT - 1 - 14, 20),
+            (HEIGHT - 1 - 330, 50),
+            (HEIGHT - 1 - 330, 600),
+        ),
+        // 180 deg: source (x, y) -> target (640 - 1 - x, 360 - 1 - y)
+        (
+            VideoRotation::Degrees180,
+            (WIDTH, HEIGHT),
+            (WIDTH - 1 - 20, HEIGHT - 1 - 14),
+            (WIDTH - 1 - 50, HEIGHT - 1 - 330),
+            (WIDTH - 1 - 600, HEIGHT - 1 - 330),
+        ),
+        // 270 deg CW: source (x, y) -> target (y, 640 - 1 - x)
+        (
+            VideoRotation::Degrees270,
+            (HEIGHT, WIDTH),
+            (14, WIDTH - 1 - 20),
+            (330, WIDTH - 1 - 50),
+            (330, WIDTH - 1 - 600),
+        ),
+    ] {
+        let config = DecoderConfig::new(
+            VideoCodec::H264,
+            WIDTH,
+            HEIGHT,
+            DecoderOutput::Frames { depth: 6 },
+        )
+        .with_rotation(rotation);
+        let decoder = VideoDecoder::new(config).expect("rotated decoder");
+        let frames = decoder.frames();
+        let mut view = AppLauncher::new()
+            .create_embedded_view(view_size.0, view_size.1, 1.0, move || {
+                PlayerSurface(
+                    frames.clone(),
+                    Modifier::empty().fill_max_size(),
+                    ContentScale::FillBounds,
+                );
+            })
+            .expect("GPU embedded component");
+        let mut pixels = Vec::new();
+        draw_settled(&mut view, &mut pixels);
+        let mut player = Player {
+            decoder,
+            view,
+            width: view_size.0,
+            pixels,
+            units: split_access_units(VideoCodec::H264, H264_CLIP),
+            fed: 0,
+        };
+        player.show_next();
+        let [red, green, blue] = player.color(clock_at.0, clock_at.1);
+        assert!(
+            red > green && green > blue && red < 160,
+            "{rotation:?}: rotated clock corner at {clock_at:?} is {:?}",
+            [red, green, blue]
+        );
+        assert_points(
+            &player,
+            &format!("{rotation:?} rotated bars"),
+            &[(red_bar_at, [255, 0, 0]), (cyan_bar_at, [0, 255, 255])],
+            14,
+        );
+    }
+}
+
+#[test]
+fn a_surface_tone_maps_10bit_hdr_pq_and_hlg_streams() {
+    for (clip, what, mid_grey_expected, white_expected) in [
+        (TONES_2020_PQ, "10-bit BT.2020 PQ", 181_u8, 252_u8),
+        (TONES_2020_HLG, "10-bit BT.2020 HLG", 125_u8, 227_u8),
+    ] {
+        let decoder = VideoDecoder::new(DecoderConfig::new(
+            VideoCodec::Hevc,
+            320,
+            180,
+            DecoderOutput::Frames { depth: 6 },
+        ))
+        .expect("10-bit HEVC decoder");
+        let frames = decoder.frames();
+        let mut view = AppLauncher::new()
+            .create_embedded_view(320, 180, 1.0, move || {
+                PlayerSurface(
+                    frames.clone(),
+                    Modifier::empty().fill_max_size(),
+                    ContentScale::FillBounds,
+                );
+            })
+            .expect("GPU embedded component");
+        let mut pixels = Vec::new();
+        draw_settled(&mut view, &mut pixels);
+        let mut player = Player {
+            decoder,
+            view,
+            width: 320,
+            pixels,
+            units: split_access_units(VideoCodec::Hevc, clip),
+            fed: 0,
+        };
+        player.show_next();
+        // Band 0: black, Band 1: tone-mapped 50% encoded grey, Band 2: tone-mapped 75% white
+        assert_points(
+            &player,
+            what,
+            &[
+                ((32, 90), [0, 0, 0]),
+                ((96, 90), [mid_grey_expected; 3]),
+                ((160, 90), [white_expected; 3]),
+            ],
+            14,
+        );
+        // Band 3: saturated BT.2020 red mapped to sRGB; Band 4: saturated BT.2020 blue
+        let red_band = player.color(224, 90);
+        assert!(
+            red_band[0] > 210 && red_band[1] < 80 && red_band[2] < 80,
+            "{what}: red band is {red_band:?}"
+        );
+        let blue_band = player.color(288, 90);
+        assert!(
+            blue_band[2] > 210 && blue_band[0] < 80,
+            "{what}: blue band is {blue_band:?}"
+        );
+    }
+}
+
+#[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "waits for the hardware decoder thread to deliver reordered B-frames"
+)]
+fn a_surface_presents_b_frame_streams_in_presentation_order() {
+    let config = DecoderConfig::new(
+        VideoCodec::H264,
+        160,
+        96,
+        DecoderOutput::Frames { depth: 16 },
+    )
+    .with_order(DecodeOrder::Presentation);
+    let mut decoder = VideoDecoder::new(config).expect("B-frame decoder");
+    let units = split_access_units(VideoCodec::H264, BFRAMES_H264);
+    let shown_order = Rc::new(RefCell::new(Vec::new()));
+    let frames = decoder.frames();
+    let mut view = AppLauncher::new()
+        .create_embedded_view(160, 96, 1.0, {
+            let log = Rc::clone(&shown_order);
+            move || {
+                let log = Rc::clone(&log);
+                PlayerSurfaceIntake(
+                    frames.clone(),
+                    Modifier::empty().fill_max_size(),
+                    ContentScale::FillBounds,
+                    move |frames, presenter| {
+                        while let Some(frame) = frames.next_frame() {
+                            log.borrow_mut().push(frame.info().metadata);
+                            presenter.present(frame, None).expect("shown b-frame");
+                        }
+                    },
+                );
+            }
+        })
+        .expect("GPU embedded component");
+    let mut pixels = Vec::new();
+    draw_settled(&mut view, &mut pixels);
+    for (data, pts_index) in units.iter().zip(BFRAMES_H264_PTS) {
+        decoder
+            .submit(AccessUnit {
+                data,
+                timestamp: STEP * u32::try_from(pts_index).expect("small"),
+                metadata: pts_index,
+            })
+            .expect("b-frame unit");
+    }
+    decoder.drain().expect("drain b-frames");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while shown_order.borrow().len() < BFRAMES_H264_PTS.len() && Instant::now() < deadline {
+        view.draw(&mut pixels).expect("frame");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let expected: Vec<u64> = (0..BFRAMES_H264_PTS.len() as u64).collect();
+    assert_eq!(*shown_order.borrow(), expected);
 }

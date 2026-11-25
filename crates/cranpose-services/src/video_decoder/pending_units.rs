@@ -51,11 +51,17 @@ impl PendingUnits {
     }
 
     // Takes the unit at `pts_us` and leaves the others, for a decoder that answers each unit
-    // alone and may answer out of order.
-    #[cfg(any(test, target_os = "macos", target_os = "ios"))]
+    // alone and may answer out of order (including B-frame presentation reordering).
+    #[cfg(any(test, target_os = "android", target_os = "macos", target_os = "ios"))]
     pub(super) fn remove(&mut self, pts_us: u64) -> Option<PendingUnit> {
         let index = self.units.iter().position(|unit| unit.pts_us == pts_us)?;
         self.units.remove(index)
+    }
+
+    // Discards all pending units on flush.
+    #[cfg(any(test, target_os = "android", target_os = "macos", target_os = "ios"))]
+    pub(super) fn clear(&mut self) {
+        self.units.clear();
     }
 
     // The units that wait for their pictures.

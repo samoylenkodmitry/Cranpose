@@ -19,8 +19,12 @@ use super::{
 /// thread of the decoder drains the pictures, so a picture is ready as soon as the hardware has
 /// it. [`frames`](Self::frames) gives the handle that receives them.
 ///
-/// The decoder holds no picture back for reordering, so the stream must have no B-frames.
-/// Dropping the decoder stops it. It never waits for the app's threads.
+/// With [`DecodeOrder::LowLatency`](super::DecodeOrder::LowLatency) the decoder holds no picture
+/// back for reordering, so the stream must have no B-frames. With
+/// [`DecodeOrder::Presentation`](super::DecodeOrder::Presentation) the decoder reorders B-frames
+/// into presentation-timestamp order; call [`drain`](Self::drain) at end of stream to release the
+/// tail of the reorder queue and [`flush`](Self::flush) before a seek. Dropping the decoder stops
+/// it. It never waits for the app's threads.
 pub struct VideoDecoder {
     backend: Backend,
 }
@@ -52,6 +56,20 @@ impl VideoDecoder {
     /// this from the thread that feeds the decoder and never from its frame loop.
     pub fn submit(&mut self, unit: AccessUnit<'_>) -> Result<(), DecoderError> {
         self.backend.submit(unit)
+    }
+
+    /// Signals end of stream so pictures held for B-frame reordering finish decoding and enter
+    /// [`DecodedFrames`] in presentation order. Resets timestamp admission so a subsequent stream
+    /// segment may start at any presentation timestamp. Call from the feeding thread, never from
+    /// the frame loop.
+    pub fn drain(&mut self) -> Result<(), DecoderError> {
+        self.backend.drain()
+    }
+
+    /// Discards pending input, reordered pictures, and queued output frames, resetting timestamp
+    /// admission so playback can resume cleanly at a new keyframe (for example after a seek).
+    pub fn flush(&mut self) -> Result<(), DecoderError> {
+        self.backend.flush()
     }
 
     /// The handle that receives the decoded pictures. It stays usable after the decoder drops,

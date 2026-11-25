@@ -71,7 +71,9 @@ impl GpuTarget {
 /// binary; intersecting with the adapter's own features keeps the request
 /// valid on adapters without them.
 pub fn optional_device_features(adapter: &wgpu::Adapter) -> wgpu::Features {
-    let mut wanted = wgpu::Features::PIPELINE_CACHE | wgpu::Features::TIMESTAMP_QUERY;
+    let mut wanted = wgpu::Features::PIPELINE_CACHE
+        | wgpu::Features::TIMESTAMP_QUERY
+        | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM;
     if matches!(
         adapter.get_info().device_type,
         wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::Cpu

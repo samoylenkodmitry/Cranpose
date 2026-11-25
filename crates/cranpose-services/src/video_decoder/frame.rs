@@ -8,6 +8,7 @@ use super::image_reader::Image;
 use super::pixel_buffer::Image;
 #[cfg(not(any(target_os = "android", target_os = "macos", target_os = "ios")))]
 use super::unavailable::Image;
+use super::{VideoColorInfo, VideoRotation};
 
 /// What the decoder reports about one decoded picture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,16 +45,27 @@ pub struct VideoFrame {
     info: FrameInfo,
     size: (u32, u32),
     crop: CropRect,
+    color: VideoColorInfo,
+    rotation: VideoRotation,
     image: Image,
 }
 
 impl VideoFrame {
     #[cfg(any(target_os = "android", target_os = "macos", target_os = "ios"))]
-    pub(super) fn new(info: FrameInfo, size: (u32, u32), crop: CropRect, image: Image) -> Self {
+    pub(super) fn new(
+        info: FrameInfo,
+        size: (u32, u32),
+        crop: CropRect,
+        color: VideoColorInfo,
+        rotation: VideoRotation,
+        image: Image,
+    ) -> Self {
         Self {
             info,
             size,
             crop,
+            color,
+            rotation,
             image,
         }
     }
@@ -71,6 +83,26 @@ impl VideoFrame {
     /// The part of the buffer that holds the picture.
     pub fn crop(&self) -> CropRect {
         self.crop
+    }
+
+    /// The primaries, range, and transfer function of the picture.
+    pub fn color(&self) -> VideoColorInfo {
+        self.color
+    }
+
+    /// The clockwise rotation to apply when displaying the picture.
+    pub fn rotation(&self) -> VideoRotation {
+        self.rotation
+    }
+
+    /// The visible width and height of the picture after applying [`crop`](Self::crop) and
+    /// [`rotation`](Self::rotation).
+    pub fn display_size(&self) -> (u32, u32) {
+        if self.rotation.swaps_axes() {
+            (self.crop.height, self.crop.width)
+        } else {
+            (self.crop.width, self.crop.height)
+        }
     }
 
     /// The picture's native buffer as a pointer: an `AHardwareBuffer*`, which a renderer imports
@@ -98,6 +130,8 @@ impl std::fmt::Debug for VideoFrame {
             .field("info", &self.info)
             .field("size", &self.size)
             .field("crop", &self.crop)
+            .field("color", &self.color)
+            .field("rotation", &self.rotation)
             .finish_non_exhaustive()
     }
 }
