@@ -24,7 +24,7 @@ default = ["renderer-wgpu", "desktop"]
 renderer-wgpu = ["cranpose/renderer-wgpu"]
 desktop = ["renderer-wgpu", "cranpose/desktop", "dep:env_logger"]
 android = ["renderer-wgpu", "cranpose/android"]
-web = ["renderer-wgpu", "cranpose/web", "dep:wasm-bindgen", "dep:wasm-bindgen-futures"]
+web = ["renderer-wgpu", "cranpose/web", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
 
 [package.metadata.cargo-shear]
 ignored = ["wasm-bindgen-futures"]
@@ -36,3 +36,5 @@ env_logger = { version = "0.11", optional = true }
 log = "0.4"
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4.80", optional = true }
+web-sys = { version = "0.3", optional = true, features = ["Window", "Location"] }
+web-time = { workspace = true }

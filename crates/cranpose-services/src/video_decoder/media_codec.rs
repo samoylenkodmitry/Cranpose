@@ -88,6 +88,7 @@ struct Shared {
     pending: Mutex<PendingUnits>,
     queue: Arc<FrameQueue>,
     stop: AtomicBool,
+    failed: AtomicBool,
     flush_epoch: AtomicU64,
     // The most pictures that wait for the app
     depth: usize,
@@ -153,31 +154,15 @@ impl Backend {
             rotation,
             color,
         } = config;
-        let (reader, depth) = match &output {
-            DecoderOutput::Surface(_) => (None, 0),
-            DecoderOutput::Frames { depth } => {
-                let depth = (*depth).max(2);
-                (Some(Arc::new(Reader::new(width, height, depth)?)), depth)
-            }
-        };
-        let window = match (&output, &reader) {
-            (DecoderOutput::Surface(surface), _) => surface.window(),
-            (_, Some(reader)) => reader.window(),
-            (_, None) => return Err(DecoderError::Unavailable),
-        };
         let input_limit = (width as usize) * (height as usize);
-        let codec = Arc::new(Codec(Mutex::new(configure(
-            kind,
-            width,
-            height,
-            input_limit,
-            order,
-            window,
-        )?)));
+        let (reader, depth, codec) =
+            open_codec_and_reader(kind, width, height, input_limit, order, &output)?;
+        let codec = Arc::new(Codec(Mutex::new(codec)));
         let shared = Arc::new(Shared {
             pending: Mutex::new(PendingUnits::new()),
             queue: Arc::new(FrameQueue::new(depth, REPORTS)),
             stop: AtomicBool::new(false),
+            failed: AtomicBool::new(false),
             flush_epoch: AtomicU64::new(0),
             depth,
             order,
@@ -223,13 +208,12 @@ impl Backend {
         }
         let deadline = Instant::now() + self.input_wait;
         loop {
+            self.ensure_alive()?;
             let result = {
                 let codec = self.codec.0.lock();
-                match codec
-                    .dequeue_input_buffer(Duration::ZERO)
-                    .map_err(|error| DecoderError::Failed(error.to_string()))?
-                {
-                    DequeuedInputBufferResult::Buffer(mut buffer) => {
+                self.ensure_alive()?;
+                match codec.dequeue_input_buffer(Duration::ZERO) {
+                    Ok(DequeuedInputBufferResult::Buffer(mut buffer)) => {
                         let room = buffer.buffer_mut().len();
                         // Register before queuing so output thread always finds the pending unit.
                         self.shared.pending.lock().push(PendingUnit {
@@ -244,9 +228,10 @@ impl Backend {
                         } else {
                             0
                         };
-                        codec
-                            .queue_input_buffer(buffer, 0, size, pts_us, 0)
-                            .map_err(|error| DecoderError::Failed(error.to_string()))?;
+                        if let Err(error) = codec.queue_input_buffer(buffer, 0, size, pts_us, 0) {
+                            self.mark_failed();
+                            return Err(DecoderError::Failed(error.to_string()));
+                        }
                         if size < unit.data.len() {
                             Some(Err(DecoderError::AccessUnitTooLarge {
                                 size: unit.data.len(),
@@ -256,7 +241,11 @@ impl Backend {
                             Some(Ok(()))
                         }
                     }
-                    DequeuedInputBufferResult::TryAgainLater => None,
+                    Ok(DequeuedInputBufferResult::TryAgainLater) => None,
+                    Err(error) => {
+                        self.mark_failed();
+                        return Err(DecoderError::Failed(error.to_string()));
+                    }
                 }
             };
             if let Some(done) = result {
@@ -279,23 +268,30 @@ impl Backend {
     }
 
     pub(super) fn drain(&mut self) -> Result<(), DecoderError> {
+        self.ensure_alive()?;
         *self.shared.eos_seen.lock() = false;
         let wait = self.input_wait.max(Duration::from_millis(200));
         let deadline = Instant::now() + wait;
         loop {
+            self.ensure_alive()?;
             let queued = {
                 let codec = self.codec.0.lock();
-                match codec
-                    .dequeue_input_buffer(Duration::ZERO)
-                    .map_err(|error| DecoderError::Failed(error.to_string()))?
-                {
-                    DequeuedInputBufferResult::Buffer(buffer) => {
-                        codec
-                            .queue_input_buffer(buffer, 0, 0, 0, BUFFER_FLAG_END_OF_STREAM)
-                            .map_err(|error| DecoderError::Failed(error.to_string()))?;
+                self.ensure_alive()?;
+                match codec.dequeue_input_buffer(Duration::ZERO) {
+                    Ok(DequeuedInputBufferResult::Buffer(buffer)) => {
+                        if let Err(error) =
+                            codec.queue_input_buffer(buffer, 0, 0, 0, BUFFER_FLAG_END_OF_STREAM)
+                        {
+                            self.mark_failed();
+                            return Err(DecoderError::Failed(error.to_string()));
+                        }
                         true
                     }
-                    DequeuedInputBufferResult::TryAgainLater => false,
+                    Ok(DequeuedInputBufferResult::TryAgainLater) => false,
+                    Err(error) => {
+                        self.mark_failed();
+                        return Err(DecoderError::Failed(error.to_string()));
+                    }
                 }
             };
             if queued {
@@ -314,7 +310,7 @@ impl Backend {
 
         let eos_deadline = Instant::now() + DRAIN_WAIT;
         let mut eos = self.shared.eos_seen.lock();
-        while !*eos {
+        while !*eos && !self.shared.failed.load(Ordering::Acquire) {
             if self
                 .shared
                 .eos_changed
@@ -325,6 +321,7 @@ impl Backend {
             }
         }
         drop(eos);
+        self.ensure_alive()?;
         // Reset the codec after EOS while keeping the drained frames in the output queue.
         self.flush_codec(FlushTarget::CodecOnly)
     }
@@ -334,11 +331,15 @@ impl Backend {
     }
 
     fn flush_codec(&mut self, target: FlushTarget) -> Result<(), DecoderError> {
+        self.ensure_alive()?;
         let result = {
             let codec = self.codec.0.lock();
-            codec
-                .flush()
-                .map_err(|error| DecoderError::Failed(error.to_string()))
+            self.ensure_alive().and_then(|()| {
+                codec.flush().map_err(|error| {
+                    self.mark_failed();
+                    DecoderError::Failed(error.to_string())
+                })
+            })
         };
         self.shared.flush_epoch.fetch_add(1, Ordering::Release);
         self.shared.pending.lock().clear();
@@ -350,6 +351,23 @@ impl Backend {
         self.shared.input_ready.notify_all();
         self.shared.work_ready.notify_all();
         result
+    }
+
+    fn ensure_alive(&self) -> Result<(), DecoderError> {
+        if self.shared.failed.load(Ordering::Acquire) || self.shared.stop.load(Ordering::Acquire) {
+            Err(DecoderError::Failed(
+                "video decoder entered error state".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn mark_failed(&self) {
+        self.shared.failed.store(true, Ordering::Release);
+        self.shared.work_ready.notify_all();
+        self.shared.input_ready.notify_all();
+        self.shared.eos_changed.notify_all();
     }
 
     pub(super) fn frames(&self) -> Frames {
@@ -370,6 +388,49 @@ impl Drop for Backend {
         self.shared.stop.store(true, Ordering::Release);
         self.shared.work_ready.notify_all();
         self.shared.input_ready.notify_all();
+    }
+}
+
+// Opens the output image reader (when outputting frames) and starts the hardware codec.
+// Some mobile OMX drivers (for example HiSilicon Kirin `OMX.hisi.video.decoder.avc`) cap output
+// port buffer counts below `requested_depth + codec_min_buffers`; stepping `depth` down preserves
+// zero-copy hardware decode instead of failing configuration.
+fn open_codec_and_reader(
+    kind: VideoCodec,
+    width: u32,
+    height: u32,
+    input_limit: usize,
+    order: DecodeOrder,
+    output: &DecoderOutput,
+) -> Result<(Option<Arc<Reader>>, usize, MediaCodec), DecoderError> {
+    match output {
+        DecoderOutput::Surface(surface) => {
+            let codec = configure(kind, width, height, input_limit, order, surface.window())?;
+            Ok((None, 0, codec))
+        }
+        DecoderOutput::Frames { depth } => {
+            let requested = (*depth).max(2);
+            let mut last_err = None;
+            let mut prev = usize::MAX;
+            for candidate in [requested, 4, 3, 2] {
+                let try_depth = candidate.min(requested);
+                if try_depth >= prev {
+                    continue;
+                }
+                prev = try_depth;
+                let reader = Arc::new(Reader::new(width, height, try_depth)?);
+                match configure(kind, width, height, input_limit, order, reader.window()) {
+                    Ok(codec) => return Ok((Some(reader), try_depth, codec)),
+                    Err(err) => {
+                        log::warn!(
+                            "video decoder: configure failed at image-reader depth {try_depth}: {err}"
+                        );
+                        last_err = Some(err);
+                    }
+                }
+            }
+            Err(last_err.unwrap_or(DecoderError::Unavailable))
+        }
     }
 }
 
@@ -464,16 +525,26 @@ impl Output {
                 }
             }
         }
-        let codec = self.codec.0.lock();
-        if let Err(error) = codec.stop() {
-            log::warn!("video decoder: stop: {error}");
+        if !self.shared.failed.load(Ordering::Acquire) {
+            let codec = self.codec.0.lock();
+            if !self.shared.failed.load(Ordering::Acquire)
+                && let Err(error) = codec.stop()
+            {
+                log::warn!("video decoder: stop: {error}");
+            }
         }
     }
 
     fn poll_codec_outputs(&self, released: &mut VecDeque<Rendered>) -> (bool, bool, bool) {
+        if self.shared.failed.load(Ordering::Acquire) {
+            return (false, false, true);
+        }
         let mut did_work = false;
         let mut hit_eos = false;
         let codec = self.codec.0.lock();
+        if self.shared.failed.load(Ordering::Acquire) {
+            return (false, false, true);
+        }
         for _ in 0..8 {
             match codec.dequeue_output_buffer(Duration::ZERO) {
                 Ok(DequeuedOutputBufferInfoResult::Buffer(buffer)) => {
@@ -490,6 +561,9 @@ impl Output {
                 Ok(DequeuedOutputBufferInfoResult::TryAgainLater) => break,
                 Ok(_) => {}
                 Err(error) => {
+                    self.shared.failed.store(true, Ordering::Release);
+                    self.shared.input_ready.notify_all();
+                    self.shared.eos_changed.notify_all();
                     log::error!("video decoder: output: {error}");
                     return (did_work, hit_eos, true);
                 }

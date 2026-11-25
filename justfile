@@ -638,6 +638,14 @@ layout-parity out="target/layout-parity": _benchmark-python layout-parity-check
 steady-ledger *args:
     scripts/perf/steady_ledger.sh {{args}}
 
+# Video playback steady-frame 0-allocation and 100-swipe vertical feed memory gate.
+test-player-memory:
+    cargo test --locked --profile ci -p cranpose --features desktop,renderer-wgpu,video --test player_memory -- --nocapture
+
+# Live Linux VA-API DMABUF + FFmpeg zero-copy Player e2e (MP4 TTFF, seek, HLS headers, HDR PQ/HLG).
+test-video-linux:
+    cargo test --locked --profile ci -p cranpose --features desktop,renderer-wgpu,video --test linux_player -- --nocapture
+
 # The shop app benchmark's Everbloom app (benchmarks/shopbench), a Cargo
 # project of its own: Everbloom.app for an iPhone, or for the Simulator with
 # target=aarch64-apple-ios-sim. CODESIGN_IDENTITY and PROVISIONING_PROFILE

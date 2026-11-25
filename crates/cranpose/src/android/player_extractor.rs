@@ -52,6 +52,7 @@ type DataSourceSetCloseFn = unsafe extern "C" fn(*mut AMediaDataSource, AMediaDa
 type SetDataSourceCustomFn =
     unsafe extern "C" fn(*mut AMediaExtractor, *mut AMediaDataSource) -> media_status_t;
 type GetCachedDurationFn = unsafe extern "C" fn(*mut AMediaExtractor) -> i64;
+type GetSampleSizeFn = unsafe extern "C" fn(*mut AMediaExtractor) -> isize;
 
 struct DataSourceSymbols {
     new: DataSourceNewFn,
@@ -62,6 +63,7 @@ struct DataSourceSymbols {
     set_close: DataSourceSetCloseFn,
     set_custom: SetDataSourceCustomFn,
     get_cached_duration: Option<GetCachedDurationFn>,
+    get_sample_size: Option<GetSampleSizeFn>,
 }
 
 fn data_source_symbols() -> Option<&'static DataSourceSymbols> {
@@ -83,6 +85,8 @@ fn data_source_symbols() -> Option<&'static DataSourceSymbols> {
             let set_custom = resolve_sym(lib, c"AMediaExtractor_setDataSourceCustom")?;
             let get_cached_duration = resolve_sym(lib, c"AMediaExtractor_getCachedDuration")
                 .map(|p| std::mem::transmute::<*mut c_void, GetCachedDurationFn>(p));
+            let get_sample_size = resolve_sym(lib, c"AMediaExtractor_getSampleSize")
+                .map(|p| std::mem::transmute::<*mut c_void, GetSampleSizeFn>(p));
             Some(DataSourceSymbols {
                 new: std::mem::transmute::<*mut c_void, DataSourceNewFn>(new),
                 delete: std::mem::transmute::<*mut c_void, DataSourceDeleteFn>(delete),
@@ -96,6 +100,7 @@ fn data_source_symbols() -> Option<&'static DataSourceSymbols> {
                 set_close: std::mem::transmute::<*mut c_void, DataSourceSetCloseFn>(set_close),
                 set_custom: std::mem::transmute::<*mut c_void, SetDataSourceCustomFn>(set_custom),
                 get_cached_duration,
+                get_sample_size,
             })
         }
     })
@@ -453,8 +458,15 @@ impl MediaExtractor {
         if track_idx < 0 {
             return None;
         }
-        if buf.len() < 1024 * 1024 {
-            buf.resize(1024 * 1024, 0);
+        let needed = data_source_symbols()
+            .and_then(|s| s.get_sample_size)
+            .and_then(|f| {
+                // SAFETY: `self.raw` is live and `f` was resolved from `libmediandk.so`.
+                usize::try_from(unsafe { f(self.raw.as_ptr()) }).ok()
+            })
+            .map_or(256 * 1024, |sz| sz.max(64 * 1024));
+        if buf.len() < needed {
+            buf.resize(needed, 0);
         }
         // SAFETY: `buf` has writable capacity `buf.len()`.
         let read = unsafe {

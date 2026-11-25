@@ -120,6 +120,11 @@ fn player_pool_100_swipe_feed_bounds_decoders_hands_off_and_arbitrates_audio() {
     let preloaded_1 = pool.player_for("clip-1").expect("clip-1 preloaded");
     assert!(!preloaded_1.play_when_ready());
     assert!(preloaded_1.is_muted());
+    assert_eq!(
+        preloaded_1.audio_role(),
+        AudioRole::Primary,
+        "preloaded feed slots must keep Primary audio role so promoting them can unmute and drive OS controls"
+    );
 
     // Swiping to clip-1 reuses the preloaded player with zero extra open (instant handoff).
     let opens_before_swipe = factory.opens.load(Ordering::Acquire);
