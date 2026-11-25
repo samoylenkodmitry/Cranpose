@@ -1,30 +1,9 @@
 use makepad_widgets::*;
 
 use crate::{
-    TileShape,
+    DrawBand, DrawBitmap, TileShape,
     scene::{self, Box2, Face, Font, ImageId, Pictures, Rgb},
 };
-
-#[derive(Live, LiveHook, LiveRegister)]
-#[repr(C)]
-pub struct DrawBitmap {
-    #[deref]
-    base: DrawQuad,
-    #[live]
-    radius: f32,
-}
-#[derive(Live, LiveHook, LiveRegister)]
-#[repr(C)]
-pub struct DrawBand {
-    #[deref]
-    base: DrawQuad,
-    #[live]
-    left_y: f32,
-    #[live]
-    right_y: f32,
-    #[live]
-    color: Vec4,
-}
 
 pub(super) struct Graphics {
     images: Pictures<Texture>,

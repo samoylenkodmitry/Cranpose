@@ -7,7 +7,6 @@ use grid::{BAR, Grid, HEADER};
 mod painter;
 #[path = "../../native-canvas/mod.rs"]
 mod scene;
-use painter::{DrawBand, DrawBitmap};
 
 live_design! {
     use link::widgets::*;
@@ -57,6 +56,27 @@ live_design! {
             body = <View> { <Wall> {} }
         } }
     }
+}
+
+#[derive(Live, LiveHook, LiveRegister)]
+#[repr(C)]
+struct DrawBitmap {
+    #[deref]
+    base: DrawQuad,
+    #[live]
+    radius: f32,
+}
+#[derive(Live, LiveHook, LiveRegister)]
+#[repr(C)]
+struct DrawBand {
+    #[deref]
+    base: DrawQuad,
+    #[live]
+    left_y: f32,
+    #[live]
+    right_y: f32,
+    #[live]
+    color: Vec4,
 }
 
 #[derive(Live, LiveHook, LiveRegister)]
