@@ -131,7 +131,7 @@ pub(super) fn LayoutLinks(palette: Palette) {
             if let Some(active) = active {
                 for tab in [DemoTab::Gauntlet, DemoTab::StillWall, DemoTab::Patchwork] {
                     ActionChip(palette, tab.label(), ChipStyle::Plain, move || {
-                        active.set(tab)
+                        active.set(tab);
                     });
                 }
             }
