@@ -10,6 +10,13 @@
 // the rows it shows from a model that makes a row when asked, and the frame
 // sets its offset. The paragraph is one text. The charts and the still patch
 // have no binding on the frame.
+//
+// The still and chart patches draw into cached layers. Each row of the
+// recolor and deep patches draws into a layer too, with a model of its own.
+// Each row of the scroll list also draws into a layer, as the list moves by
+// whole rows. A frame draws again only the layers whose rows it changed. The
+// cards draw without a layer. A card stops between pixels, but a layer puts
+// its edges on whole pixels.
 
 import { ListView } from "std-widgets.slint";
 import { WallClock, WallTile, TileBox } from "wall.slint";
@@ -37,6 +44,16 @@ export struct PlacedTile {
 
 export struct TileRow {
     tiles: [WallTile],
+}
+
+/// A row of the recolor patch's fills.
+export struct FillRow {
+    fills: [color],
+}
+
+/// A row of the deep patch's digits.
+export struct NestRow {
+    values: [string],
 }
 
 /// What every patch shares, set once.
@@ -74,8 +91,19 @@ component Patch inherits Rectangle {
     clip: true;
 }
 
+/// Row `index` of a patch, `pitch` tall, drawn into a cached layer of its own.
+component RowLayer inherits Rectangle {
+    in property <int> index;
+    in property <length> pitch;
+    y: index * pitch;
+    height: pitch;
+    cache-rendering-hint: true;
+    @children
+}
+
 component Still inherits Patch {
     in property <[WallTile]> tiles;
+    cache-rendering-hint: true;
     for t[index] in tiles: PatchTile {
         x: 1px + Math.mod(index, Metrics.columns) * (Metrics.tile-width + 1px);
         y: 1px + floor(index / Metrics.columns) * (Metrics.tile-height + 1px);
@@ -87,6 +115,7 @@ component Still inherits Patch {
 
 component Charts inherits Patch {
     in property <[ChartData]> charts;
+    cache-rendering-hint: true;
     for chart[index] in charts: Path {
         x: 1px + Math.mod(index, Metrics.pair-columns) * (2 * Metrics.tile-width + 2px);
         y: 1px + floor(index / Metrics.pair-columns) * (2 * Metrics.tile-height + 2px);
@@ -102,14 +131,20 @@ component Charts inherits Patch {
 
 component Recolor inherits Patch {
     in property <[WallTile]> tiles;
-    in property <[color]> fills;
-    for t[index] in tiles: PatchTile {
-        x: 1px + Math.mod(index, Metrics.columns) * (Metrics.tile-width + 1px);
-        y: 1px + floor(index / Metrics.columns) * (Metrics.tile-height + 1px);
-        width: Metrics.tile-width;
-        height: Metrics.tile-height;
-        tile: t;
-        fill: fills[index];
+    in property <[FillRow]> rows;
+    // A frame recolors one row. The renderer draws that row's layer alone
+    // again.
+    for fill-row[row] in rows: RowLayer {
+        index: row;
+        pitch: Metrics.tile-height + 1px;
+        for f[column] in fill-row.fills: PatchTile {
+            x: 1px + column * (Metrics.tile-width + 1px);
+            y: 1px;
+            width: Metrics.tile-width;
+            height: Metrics.tile-height;
+            tile: tiles[row * Metrics.columns + column];
+            fill: f;
+        }
     }
 }
 
@@ -183,14 +218,20 @@ component Nest inherits Rectangle {
 }
 
 component Deep inherits Patch {
-    in property <[string]> values;
-    for v[at] in values: Nest {
-        x: 1px + Math.mod(at, Metrics.pair-columns) * (2 * Metrics.tile-width + 2px);
-        y: 1px + floor(at / Metrics.pair-columns) * (2 * Metrics.tile-height + 2px);
-        width: 2 * Metrics.tile-width + 1px;
-        height: 2 * Metrics.tile-height + 1px;
-        index: at;
-        value: v;
+    in property <[NestRow]> rows;
+    // A frame writes the digits of one row of nests. The renderer draws that
+    // row's layer alone again.
+    for nest-row[row] in rows: RowLayer {
+        index: row;
+        pitch: 2 * Metrics.tile-height + 2px;
+        for v[column] in nest-row.values: Nest {
+            x: 1px + column * (2 * Metrics.tile-width + 2px);
+            y: 1px;
+            width: 2 * Metrics.tile-width + 1px;
+            height: 2 * Metrics.tile-height + 1px;
+            index: row * Metrics.pair-columns + column;
+            value: v;
+        }
     }
 }
 
@@ -202,6 +243,8 @@ component Scroll inherits Patch {
         height: parent.height;
         for row in rows: Rectangle {
             height: Metrics.tile-height + 1px;
+            // A row's tiles never change while the list moves it.
+            cache-rendering-hint: true;
             for t[column] in row.tiles: PatchTile {
                 x: 1px + column * (Metrics.tile-width + 1px);
                 y: 1px;
@@ -241,12 +284,12 @@ component Pile inherits Patch {
 
 export component PatchworkWindow inherits Window {
     in property <[WallTile]> tiles;
-    in property <[color]> recolor-fills;
+    in property <[FillRow]> recolor-rows;
     in property <[color]> pile-fills;
     in property <[ChartData]> charts;
     in property <[PatchCard]> cards;
     in property <[PlacedTile]> placed;
-    in property <[string]> nests;
+    in property <[NestRow]> nest-rows;
     in property <[TileRow]> scroll-rows;
     in-out property <length> scroll-offset <=> scroll.offset;
     in property <string> paragraph;
@@ -297,7 +340,7 @@ export component PatchworkWindow inherits Window {
                 x: 2 * Metrics.patch-width;
                 y: 0;
                 tiles: tiles;
-                fills: recolor-fills;
+                rows: recolor-rows;
             }
             Cards {
                 x: 0;
@@ -312,7 +355,7 @@ export component PatchworkWindow inherits Window {
             Deep {
                 x: 2 * Metrics.patch-width;
                 y: Metrics.patch-height;
-                values: nests;
+                rows: nest-rows;
             }
             scroll := Scroll {
                 x: 0;

@@ -5,6 +5,8 @@
 // In Slint's declarative idiom the tiles come from a Rust model, made once,
 // each placed by its index. The clock's text and the cursor are the only
 // bindings on the frame, so a frame re-evaluates those two and nothing else.
+// The tiles draw once into a cached layer. A frame draws only the clock and
+// the cursor over it.
 
 export struct WallTile {
     label: string,
@@ -97,16 +99,21 @@ export component WallWindow inherits Window {
             }
         }
         Rectangle {
-            for t[index] in tiles: TileBox {
-                x: 1px + Math.mod(index, columns) * (tile-width + 1px);
-                y: 1px + floor(index / columns) * (tile-height + 1px);
-                width: tile-width;
-                height: tile-height;
-                tile: t;
-                pad: pad;
-                label-size: label-size;
-                value-size: value-size;
-                dot: dot;
+            // The tiles never change. The renderer draws them once into a
+            // layer and composites that layer every frame.
+            Rectangle {
+                cache-rendering-hint: true;
+                for t[index] in tiles: TileBox {
+                    x: 1px + Math.mod(index, columns) * (tile-width + 1px);
+                    y: 1px + floor(index / columns) * (tile-height + 1px);
+                    width: tile-width;
+                    height: tile-height;
+                    tile: t;
+                    pad: pad;
+                    label-size: label-size;
+                    value-size: value-size;
+                    dot: dot;
+                }
             }
             Rectangle {
                 x: 1px + Math.mod(cursor, columns) * (tile-width + 1px);

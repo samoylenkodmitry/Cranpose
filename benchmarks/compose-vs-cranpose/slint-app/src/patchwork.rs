@@ -21,14 +21,55 @@ use slint::{
 };
 
 use super::{
-    ChartData, Metrics, PatchCard, PatchworkWindow, PlacedTile, TileRow, WallClock,
-    chat::ChatModel, color, wall_tile,
+    ChartData, FillRow, Metrics, NestRow, PatchCard, PatchworkWindow, PlacedTile, TileRow,
+    WallClock, chat::ChatModel, color, wall_tile,
 };
 
 /// The tile row `frame` changes of `rows` rows of an `InTurn`: its step grows
 /// for the items of one row each frame.
 fn row_in_turn(frame: u32, rows: usize) -> usize {
     (rows - frame as usize % rows) % rows
+}
+
+// The values of an `InTurn` grid, a model for each row. Slint marks every
+// reader of a model dirty when any of its rows changes. Writing one row's
+// model leaves the other rows' layers clean.
+struct RowsInTurn<T> {
+    turn: InTurn,
+    rows: Vec<Rc<VecModel<T>>>,
+}
+
+impl<T: Clone + 'static> RowsInTurn<T> {
+    fn new(turn: InTurn, value: impl Fn(usize) -> T) -> Self {
+        let rows = (0..turn.rows)
+            .map(|row| {
+                Rc::new(VecModel::from(
+                    (row * turn.columns..(row + 1) * turn.columns)
+                        .map(&value)
+                        .collect::<Vec<_>>(),
+                ))
+            })
+            .collect();
+        Self { turn, rows }
+    }
+
+    fn models<R: Clone + 'static>(&self, wrap: impl Fn(ModelRc<T>) -> R) -> ModelRc<R> {
+        ModelRc::new(VecModel::from(
+            self.rows
+                .iter()
+                .map(|row| wrap(row.clone().into()))
+                .collect::<Vec<_>>(),
+        ))
+    }
+
+    // Writes the row that frame `frame` changes.
+    fn write(&self, frame: u32, value: impl Fn(usize, InTurn) -> T) {
+        let columns = self.turn.columns;
+        let row = row_in_turn(frame, self.turn.rows);
+        for column in 0..columns {
+            self.rows[row].set_row_data(column, value(row * columns + column, self.turn));
+        }
+    }
 }
 
 /// The path commands of chart `index` in a `width` by `height` box.
@@ -228,10 +269,8 @@ impl CardStack {
 
 /// What the frame loop writes after each frame: the patches' models.
 struct Patches {
-    recolor: Rc<VecModel<Color>>,
-    recolor_turn: InTurn,
-    nests: Rc<VecModel<SharedString>>,
-    nest_turn: InTurn,
+    recolor: RowsInTurn<Color>,
+    nests: RowsInTurn<SharedString>,
     pile: Rc<VecModel<Color>>,
     pile_opaque: usize,
     pile_colors: Vec<Color>,
@@ -249,26 +288,16 @@ struct Patches {
 impl Patches {
     // Writes frame `frame`: the rows that differ from frame `frame - 1`.
     fn advance(&mut self, window: &PatchworkWindow, frame: u32) {
-        let columns = self.recolor_turn.columns;
-        let row = row_in_turn(frame, self.recolor_turn.rows);
-        for index in row * columns..(row + 1) * columns {
-            self.recolor.set_row_data(
-                index,
-                color(patchwork_recolor_rgb(index, frame, self.recolor_turn)),
-            );
-        }
+        self.recolor.write(frame, |index, turn| {
+            color(patchwork_recolor_rgb(index, frame, turn))
+        });
 
         self.cards.advance(frame);
         self.reorder.advance(frame);
 
-        let columns = self.nest_turn.columns;
-        let row = row_in_turn(frame, self.nest_turn.rows);
-        for index in row * columns..(row + 1) * columns {
-            self.nests.set_row_data(
-                index,
-                patchwork_deep_value(index, frame, self.nest_turn).into(),
-            );
-        }
+        self.nests.write(frame, |index, turn| {
+            patchwork_deep_value(index, frame, turn).into()
+        });
 
         window.set_scroll_offset(
             -(patchwork_scroll_first(frame, self.scroll_rows, self.visible_rows) as f32)
@@ -381,12 +410,10 @@ impl Patches {
     fn new(window: &PatchworkWindow, layout: &Layout) -> Self {
         let tiles = layout.tiles;
         let recolor_turn = tiles.in_turn();
-        let recolor = Rc::new(VecModel::from(
-            (0..tiles.count())
-                .map(|index| color(patchwork_recolor_rgb(index, 0, recolor_turn)))
-                .collect::<Vec<_>>(),
-        ));
-        window.set_recolor_fills(recolor.clone().into());
+        let recolor = RowsInTurn::new(recolor_turn, |index| {
+            color(patchwork_recolor_rgb(index, 0, recolor_turn))
+        });
+        window.set_recolor_rows(recolor.models(|fills| FillRow { fills }));
 
         let cards = Cards::new(tiles.columns, tiles.rows, tiles.height, layout.patch_height);
         window.global::<Metrics>().on_card_top(move |id, frame| {
@@ -409,12 +436,10 @@ impl Patches {
             columns: pair_columns,
             rows: pair_rows,
         };
-        let nests = Rc::new(VecModel::from(
-            (0..pair_columns * pair_rows)
-                .map(|index| SharedString::from(patchwork_deep_value(index, 0, nest_turn)))
-                .collect::<Vec<_>>(),
-        ));
-        window.set_nests(nests.clone().into());
+        let nests = RowsInTurn::new(nest_turn, |index| {
+            SharedString::from(patchwork_deep_value(index, 0, nest_turn))
+        });
+        window.set_nest_rows(nests.models(|values| NestRow { values }));
 
         let scroll_rows = patchwork_scroll_rows(tiles.columns);
         window.set_scroll_rows(ModelRc::new(ScrollRows {
@@ -442,9 +467,7 @@ impl Patches {
         let words = patchwork_paragraph_words(tiles.count());
         let mut patches = Self {
             recolor,
-            recolor_turn,
             nests,
-            nest_turn,
             pile,
             pile_opaque,
             pile_colors,

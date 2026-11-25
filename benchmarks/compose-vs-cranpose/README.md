@@ -240,8 +240,9 @@ composes again; the clock is the one composable that reads the frame, and
 the cursor moves in a graphics layer. egui paints every tile each frame from
 text it laid out once. iced builds the wall `lazy` on its grid. GPUI renders
 the tiles as a view of their own, embedded `cached`. Flutter builds the tiles
-once inside a `RepaintBoundary`. Slint makes the tiles from a model once and
-binds only the clock and the cursor to the frame. The web page builds the
+once inside a `RepaintBoundary`. Slint makes the tiles from a model once,
+draws them into one cached layer and binds only the clock and the cursor to
+the frame. The web page builds the
 tiles' elements once in a CSS grid and moves the cursor by a transform in a
 layer of its own; Tauri shows that page in WKWebView, and Dioxus renders the
 same grid from a tiles component that reads no signal. Xilem memoizes the
@@ -364,7 +365,9 @@ and Fyne make their controls and canvas objects once, set the brushes or
 texts of the row that changed and move the cards whole; Avalonia's lists
 recycle their rows. Slint binds only the changing values to the frame and
 writes the rows of its models that changed; Rust wraps its reorder row, as
-Slint has no flow layout. GPUI embeds each row, patch and chat part as a
+Slint has no flow layout. Slint draws the still patches, the scroll list's
+rows and each recolor and deep row into cached layers; each of those rows
+has a model of its own. GPUI embeds each row, patch and chat part as a
 cached view and notifies the views that changed. Xilem memoizes a row on how
 often it changed, a card on its number and a block on how much of it shows.
 Rune memoizes the same parts and draws what stays as cached layers. FerroUI
