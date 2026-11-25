@@ -30,13 +30,20 @@ impl BootFrames {
             self.first_ms.get_or_insert(now.as_millis() as u64);
             *count += 1;
         } else {
-            if let Some(ms) = self.first_ms {
-                log::info!("BENCH first_ms {ms}");
-            }
-            for (second, frames) in self.counts.iter().enumerate() {
-                log::info!("BENCH second {second} frames {frames}");
-            }
+            self.report();
             self.reported = true;
+        }
+    }
+
+    // The serial report runs once. Keep its formatting out of the frame loop's IRAM.
+    #[cold]
+    #[inline(never)]
+    fn report(&self) {
+        if let Some(ms) = self.first_ms {
+            log::info!("BENCH first_ms {ms}");
+        }
+        for (second, frames) in self.counts.iter().enumerate() {
+            log::info!("BENCH second {second} frames {frames}");
         }
     }
 }
