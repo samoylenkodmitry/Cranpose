@@ -13,7 +13,9 @@ live_design! {
             if self.radius == 0.0 && self.stroke == 0.0 { return self.color; }
             let sdf = Sdf2d::viewport(self.pos * self.rect_size);
             let inset = self.stroke * 0.5;
-            sdf.box(inset, inset, self.rect_size.x - 2.0*inset, self.rect_size.y - 2.0*inset, self.radius);
+            // Sdf2d.box uses twice its radius parameter as the arc radius.
+            let corner = max(self.radius - inset, 0.0) * 0.5;
+            sdf.box(inset, inset, self.rect_size.x - 2.0*inset, self.rect_size.y - 2.0*inset, corner);
             if self.stroke > 0.0 { return sdf.stroke(self.color, self.stroke); }
             return sdf.fill(self.color);
         }
