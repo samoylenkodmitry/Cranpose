@@ -47,10 +47,9 @@ pub(super) use counters::StatsCounters;
     target_os = "linux"
 ))]
 mod counters {
-    use std::{
-        sync::atomic::{AtomicU64, Ordering::Relaxed},
-        time::Duration,
-    };
+    use std::time::Duration;
+
+    use portable_atomic::{AtomicU64, Ordering::Relaxed};
 
     use super::DecoderStats;
 
