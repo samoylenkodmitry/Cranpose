@@ -30,6 +30,14 @@ pub struct DecoderCapabilities {
     /// The highest bit rate in bits a second that the decoder takes, or `None` when the platform
     /// does not say.
     pub max_bitrate: Option<u32>,
+    /// Whether the decoder supports [`DecodeOrder::Presentation`](super::DecodeOrder::Presentation)
+    /// B-frame reordering on this platform.
+    pub b_frame_reordering: bool,
+    /// Whether the decoder can output 10-bit HDR pictures (such as P010), or `None` when the
+    /// platform does not report bit-depth support ahead of time.
+    pub hdr_10bit: Option<bool>,
+    /// Whether decoded pictures stay in GPU memory without a CPU pixel copy on this platform.
+    pub zero_copy_gpu: bool,
 }
 
 impl DecoderCapabilities {

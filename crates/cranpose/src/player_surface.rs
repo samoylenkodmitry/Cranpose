@@ -67,7 +67,6 @@ pub(crate) fn Picture(
 }
 
 // Takes each picture that the decoder outputs and puts its painter in `shown`.
-#[cfg(not(target_arch = "wasm32"))]
 #[composable]
 fn pump(frames: DecodedFrames, shown: MutableState<Option<Painter>>) {
     use crate::player_surface_intake::pump_with;
@@ -79,8 +78,3 @@ fn pump(frames: DecodedFrames, shown: MutableState<Option<Painter>>) {
         }
     });
 }
-
-// A web page has no decoder.
-#[cfg(target_arch = "wasm32")]
-#[composable]
-fn pump(_frames: DecodedFrames, _shown: MutableState<Option<Painter>>) {}

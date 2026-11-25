@@ -29,14 +29,17 @@ use ndk::{
     },
     native_window::NativeWindow,
 };
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 
 use super::{
-    AccessUnit, DecoderConfig, DecoderError, DecoderOutput, FrameInfo, VideoCodec, VideoFrame,
+    AccessUnit, ColorPrimaries, ColorRange, ColorTransfer, DecodeOrder, DecoderConfig,
+    DecoderError, DecoderOutput, FrameInfo, VideoCodec, VideoColorInfo, VideoFrame, VideoRotation,
     admission::Admission,
+    annex_b::AccessUnitNals,
     frame_queue::{FrameQueue, Frames},
     image_reader::{Acquired, Reader},
     pending_units::{PendingUnit, PendingUnits},
+    sps::StreamMetadata,
 };
 
 // How long the draining thread waits for an output before it checks that the decoder is still
@@ -50,6 +53,12 @@ const IMAGE_WAIT: Duration = Duration::from_millis(1);
 
 // How long a rendered picture's image may take before the decoder counts the picture as dropped.
 const IMAGE_LIMIT: Duration = Duration::from_millis(100);
+
+// Maximum time `drain` waits for the hardware codec to emit its end-of-stream output buffer.
+const DRAIN_WAIT: Duration = Duration::from_secs(2);
+
+// Android `AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM`.
+const BUFFER_FLAG_END_OF_STREAM: u32 = 4;
 
 // The reports of the pictures sent to a surface that the decoder keeps for the app.
 const REPORTS: usize = 32;
@@ -66,6 +75,22 @@ unsafe impl Send for Codec {}
 // SAFETY: as for Send
 unsafe impl Sync for Codec {}
 
+// Color fields parsed from Android's `AMediaFormat` output format.
+#[derive(Clone, Copy, Default)]
+struct FormatColor {
+    primaries: Option<ColorPrimaries>,
+    range: Option<ColorRange>,
+    transfer: Option<ColorTransfer>,
+}
+
+// Handshake that pauses the draining thread outside `AMediaCodec` while `flush` resets the codec.
+#[derive(Default)]
+struct FlushState {
+    requested: bool,
+    paused: bool,
+    exited: bool,
+}
+
 // What the feeding thread, the draining thread and the app's handles share.
 struct Shared {
     pending: Mutex<PendingUnits>,
@@ -73,12 +98,50 @@ struct Shared {
     stop: AtomicBool,
     // The most pictures that wait for the app
     depth: usize,
+    order: DecodeOrder,
+    rotation: VideoRotation,
+    config_color: Option<VideoColorInfo>,
+    stream_meta: Mutex<StreamMetadata>,
+    format_color: Mutex<FormatColor>,
+    flush: Mutex<FlushState>,
+    flush_changed: Condvar,
+    eos_seen: Mutex<bool>,
+    eos_changed: Condvar,
+}
+
+impl Shared {
+    fn resolve_color(&self, height: u32) -> VideoColorInfo {
+        let format = *self.format_color.lock();
+        let stream = *self.stream_meta.lock();
+        let primaries = format
+            .primaries
+            .or(stream.primaries)
+            .or_else(|| self.config_color.map(|c| c.primaries))
+            .unwrap_or_else(|| ColorPrimaries::default_for_height(height));
+        let range = format
+            .range
+            .or(stream.range)
+            .or_else(|| self.config_color.map(|c| c.range))
+            .unwrap_or(ColorRange::Limited);
+        let transfer = format
+            .transfer
+            .or(stream.transfer)
+            .or_else(|| self.config_color.map(|c| c.transfer))
+            .unwrap_or(ColorTransfer::Sdr);
+        VideoColorInfo {
+            primaries,
+            range,
+            transfer,
+        }
+    }
 }
 
 // The feeding side of a decoder.
 pub(super) struct Backend {
     codec: Arc<Codec>,
     shared: Arc<Shared>,
+    codec_kind: VideoCodec,
+    nals: AccessUnitNals,
     admission: Admission,
     input_wait: Duration,
 }
@@ -91,6 +154,9 @@ impl Backend {
             height,
             output,
             input_wait,
+            order,
+            rotation,
+            color,
         } = config;
         let (reader, depth) = match &output {
             DecoderOutput::Surface(_) => (None, 0),
@@ -105,12 +171,28 @@ impl Backend {
             (_, None) => return Err(DecoderError::Unavailable),
         };
         let input_limit = (width as usize) * (height as usize);
-        let codec = Arc::new(Codec(configure(kind, width, height, input_limit, window)?));
+        let codec = Arc::new(Codec(configure(
+            kind,
+            width,
+            height,
+            input_limit,
+            order,
+            window,
+        )?));
         let shared = Arc::new(Shared {
             pending: Mutex::new(PendingUnits::new()),
             queue: Arc::new(FrameQueue::new(depth, REPORTS)),
             stop: AtomicBool::new(false),
             depth,
+            order,
+            rotation,
+            config_color: color,
+            stream_meta: Mutex::new(StreamMetadata::default()),
+            format_color: Mutex::new(FormatColor::default()),
+            flush: Mutex::new(FlushState::default()),
+            flush_changed: Condvar::new(),
+            eos_seen: Mutex::new(false),
+            eos_changed: Condvar::new(),
         });
         let output = Output {
             codec: Arc::clone(&codec),
@@ -124,13 +206,23 @@ impl Backend {
         Ok(Self {
             codec,
             shared,
-            admission: Admission::new(input_limit),
+            codec_kind: kind,
+            nals: AccessUnitNals::default(),
+            admission: Admission::new(input_limit, order),
             input_wait,
         })
     }
 
     pub(super) fn submit(&mut self, unit: AccessUnit<'_>) -> Result<(), DecoderError> {
         let pts_us = self.admission.check(&unit)?;
+        if self.codec_kind != VideoCodec::Av1 {
+            self.nals.parse(self.codec_kind, unit.data);
+            if let Some(sps) = self.nals.sequence_parameter_set(unit.data)
+                && let Some(meta) = StreamMetadata::parse_sps(self.codec_kind, sps)
+            {
+                *self.shared.stream_meta.lock() = meta;
+            }
+        }
         let mut buffer = match self
             .codec
             .0
@@ -172,9 +264,83 @@ impl Backend {
         Ok(())
     }
 
+    pub(super) fn drain(&mut self) -> Result<(), DecoderError> {
+        *self.shared.eos_seen.lock() = false;
+        let wait = self.input_wait.max(Duration::from_millis(200));
+        match self
+            .codec
+            .0
+            .dequeue_input_buffer(wait)
+            .map_err(|error| DecoderError::Failed(error.to_string()))?
+        {
+            DequeuedInputBufferResult::Buffer(buffer) => {
+                self.codec
+                    .0
+                    .queue_input_buffer(buffer, 0, 0, 0, BUFFER_FLAG_END_OF_STREAM)
+                    .map_err(|error| DecoderError::Failed(error.to_string()))?;
+            }
+            DequeuedInputBufferResult::TryAgainLater => return Err(DecoderError::Full),
+        }
+        let deadline = Instant::now() + DRAIN_WAIT;
+        let mut eos = self.shared.eos_seen.lock();
+        while !*eos {
+            if self
+                .shared
+                .eos_changed
+                .wait_until(&mut eos, deadline)
+                .timed_out()
+            {
+                break;
+            }
+        }
+        drop(eos);
+        // Reset the codec after EOS while keeping the drained frames in the output queue.
+        self.flush_codec(FlushTarget::CodecOnly)
+    }
+
+    pub(super) fn flush(&mut self) -> Result<(), DecoderError> {
+        self.flush_codec(FlushTarget::CodecAndQueue)
+    }
+
+    fn flush_codec(&mut self, target: FlushTarget) -> Result<(), DecoderError> {
+        let mut flush = self.shared.flush.lock();
+        if !flush.exited {
+            flush.requested = true;
+            while !flush.paused && !flush.exited {
+                self.shared.flush_changed.wait(&mut flush);
+            }
+        }
+        drop(flush);
+
+        let result = self
+            .codec
+            .0
+            .flush()
+            .map_err(|error| DecoderError::Failed(error.to_string()));
+        self.shared.pending.lock().clear();
+        if target == FlushTarget::CodecAndQueue {
+            self.shared.queue.frames.lock().clear();
+            self.shared.queue.reports.lock().clear();
+        }
+        self.admission.reset();
+
+        let mut flush = self.shared.flush.lock();
+        flush.requested = false;
+        flush.paused = false;
+        self.shared.flush_changed.notify_all();
+        drop(flush);
+        result
+    }
+
     pub(super) fn frames(&self) -> Frames {
         Frames(Arc::clone(&self.shared.queue))
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FlushTarget {
+    CodecOnly,
+    CodecAndQueue,
 }
 
 impl Drop for Backend {
@@ -182,6 +348,7 @@ impl Drop for Backend {
         // The draining thread stops the codec when it sees the flag, and ends. The drop does
         // not wait for it.
         self.shared.stop.store(true, Ordering::Release);
+        self.shared.flush_changed.notify_all();
     }
 }
 
@@ -192,10 +359,15 @@ fn configure(
     width: u32,
     height: u32,
     input_limit: usize,
+    order: DecodeOrder,
     window: &NativeWindow,
 ) -> Result<MediaCodec, DecoderError> {
     let mut failure = String::new();
-    for with_rate in [true, false] {
+    let rates: &[bool] = match order {
+        DecodeOrder::LowLatency => &[true, false],
+        DecodeOrder::Presentation => &[false],
+    };
+    for &with_rate in rates {
         let codec =
             MediaCodec::from_decoder_type(kind.mime()).ok_or(DecoderError::NoDecoder(kind))?;
         let mut format = MediaFormat::new();
@@ -203,8 +375,8 @@ fn configure(
         format.set_i32("width", width as i32);
         format.set_i32("height", height as i32);
         format.set_i32("max-input-size", input_limit as i32);
-        // The decoder outputs each picture at once and does not wait to reorder
-        format.set_i32("low-latency", 1);
+        let low_latency = i32::from(order == DecodeOrder::LowLatency);
+        format.set_i32("low-latency", low_latency);
         format.set_i32("priority", 0);
         if with_rate {
             format.set_i32("operating-rate", OPERATING_RATE);
@@ -244,6 +416,9 @@ impl Output {
         // The pictures that left the codec and wait for their images, with their reports
         let mut released: VecDeque<Rendered> = VecDeque::with_capacity(self.shared.depth + 4);
         while !self.shared.stop.load(Ordering::Acquire) {
+            if self.pause_for_flush(&mut released) {
+                break;
+            }
             let wait = if released.is_empty() {
                 OUTPUT_WAIT
             } else {
@@ -252,6 +427,9 @@ impl Output {
             match self.codec.0.dequeue_output_buffer(wait) {
                 Ok(DequeuedOutputBufferInfoResult::Buffer(buffer)) => {
                     self.release(buffer, &mut released);
+                }
+                Ok(DequeuedOutputBufferInfoResult::OutputFormatChanged) => {
+                    self.read_output_format();
                 }
                 Ok(DequeuedOutputBufferInfoResult::TryAgainLater) => self.collect(&mut released),
                 Ok(_) => {}
@@ -265,12 +443,70 @@ impl Output {
         if let Err(error) = self.codec.0.stop() {
             log::warn!("video decoder: stop: {error}");
         }
+        let mut flush = self.shared.flush.lock();
+        flush.exited = true;
+        self.shared.flush_changed.notify_all();
+    }
+
+    fn pause_for_flush(&self, released: &mut VecDeque<Rendered>) -> bool {
+        let mut flush = self.shared.flush.lock();
+        if !flush.requested {
+            return false;
+        }
+        released.clear();
+        flush.paused = true;
+        self.shared.flush_changed.notify_all();
+        while flush.requested && !self.shared.stop.load(Ordering::Acquire) {
+            self.shared.flush_changed.wait(&mut flush);
+        }
+        self.shared.stop.load(Ordering::Acquire)
+    }
+
+    fn read_output_format(&self) {
+        let format = self.codec.0.output_format();
+        let primaries = match format.i32("color-standard") {
+            Some(1) => Some(ColorPrimaries::Bt709),
+            Some(2 | 4) => Some(ColorPrimaries::Bt601),
+            Some(6) => Some(ColorPrimaries::Bt2020),
+            _ => None,
+        };
+        let range = match format.i32("color-range") {
+            Some(1) => Some(ColorRange::Full),
+            Some(2) => Some(ColorRange::Limited),
+            _ => None,
+        };
+        let transfer = match format.i32("color-transfer") {
+            Some(1 | 3) => Some(ColorTransfer::Sdr),
+            Some(6) => Some(ColorTransfer::Pq),
+            Some(7) => Some(ColorTransfer::Hlg),
+            _ => None,
+        };
+        *self.shared.format_color.lock() = FormatColor {
+            primaries,
+            range,
+            transfer,
+        };
     }
 
     // Renders the picture of `buffer` and records it.
     fn release(&self, buffer: OutputBuffer<'_>, released: &mut VecDeque<Rendered>) {
+        let flags = buffer.info().flags();
+        let eos = (flags & BUFFER_FLAG_END_OF_STREAM) != 0;
+        let has_bytes = buffer.info().size() > 0;
         let pts_us = u64::try_from(buffer.info().presentation_time_us()).unwrap_or(0);
-        let unit = self.shared.pending.lock().take(pts_us);
+        if !has_bytes && eos {
+            let _ = self.codec.0.release_output_buffer(buffer, false);
+            self.drain_rendered(released);
+            self.signal_eos();
+            return;
+        }
+        let unit = {
+            let mut pending = self.shared.pending.lock();
+            match self.shared.order {
+                DecodeOrder::LowLatency => pending.take(pts_us),
+                DecodeOrder::Presentation => pending.remove(pts_us),
+            }
+        };
         let info = unit.map_or_else(
             || orphan(pts_us),
             |unit| FrameInfo {
@@ -282,6 +518,9 @@ impl Output {
         if let Err(error) = self.codec.0.release_output_buffer(buffer, true) {
             log::error!("video decoder: render: {error}");
             self.shared.queue.stats.dropped();
+            if eos {
+                self.signal_eos();
+            }
             return;
         }
         self.shared.queue.stats.decoded(info.decode_time);
@@ -291,6 +530,9 @@ impl Output {
                 reports.pop_front();
             }
             reports.push_back(info);
+            if eos {
+                self.signal_eos();
+            }
             return;
         }
         if released.len() == released.capacity() {
@@ -308,6 +550,31 @@ impl Output {
         if released.iter().any(|rendered| rendered.pts_us == pts_us) {
             self.shared.queue.stats.late();
         }
+        if eos {
+            self.drain_rendered(released);
+            self.signal_eos();
+        }
+    }
+
+    fn drain_rendered(&self, released: &mut VecDeque<Rendered>) {
+        let deadline = Instant::now() + IMAGE_LIMIT;
+        while !released.is_empty()
+            && !self.shared.stop.load(Ordering::Acquire)
+            && Instant::now() < deadline
+        {
+            self.collect(released);
+            if !released.is_empty() {
+                let mut flush = self.shared.flush.lock();
+                if !self.shared.stop.load(Ordering::Acquire) {
+                    self.shared.flush_changed.wait_for(&mut flush, IMAGE_WAIT);
+                }
+            }
+        }
+    }
+
+    fn signal_eos(&self) {
+        *self.shared.eos_seen.lock() = true;
+        self.shared.eos_changed.notify_all();
     }
 
     // Takes the images that the decoder rendered into the reader, and queues them for the app
@@ -320,7 +587,11 @@ impl Output {
             match reader.acquire() {
                 Acquired::Image(image) => {
                     let info = take_info(released, image.timestamp_ns());
-                    let frame = VideoFrame::new(info, image.size(), image.crop(), image);
+                    let size = image.size();
+                    let crop = image.crop();
+                    let color = self.shared.resolve_color(crop.height.max(size.1));
+                    let frame =
+                        VideoFrame::new(info, size, crop, color, self.shared.rotation, image);
                     let mut frames = self.shared.queue.frames.lock();
                     if frames.len() >= self.shared.depth {
                         frames.pop_front();

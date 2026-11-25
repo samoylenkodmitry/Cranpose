@@ -47,6 +47,17 @@ fn bytes_before_the_first_start_code_belong_to_no_unit() {
 }
 
 #[test]
+fn leading_parameter_sets_before_a_delimiter_stay_with_their_picture() {
+    let stream = [
+        0, 0, 0, 1, 0x67, 1, 0, 0, 0, 1, 0x68, 2, 0, 0, 0, 1, 0x09, 0xf0, 0, 0, 0, 1, 0x65, 0x88,
+        3, 0, 0, 0, 1, 0x09, 0xf0, 0, 0, 0, 1, 0x41, 0x9a, 4,
+    ];
+    let units = split_access_units(VideoCodec::H264, &stream);
+    assert_eq!(units.len(), 2);
+    assert_eq!(units.concat(), stream);
+}
+
+#[test]
 fn a_stream_with_no_unit_gives_no_units() {
     assert!(split_access_units(VideoCodec::H264, &[1, 2, 3]).is_empty());
     assert!(split_access_units(VideoCodec::Hevc, &[]).is_empty());

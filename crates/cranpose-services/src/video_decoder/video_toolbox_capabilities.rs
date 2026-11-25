@@ -29,6 +29,9 @@ impl DecoderCapabilitySource for Limits {
             max_width: None,
             max_height: None,
             max_bitrate: None,
+            b_frame_reordering: true,
+            hdr_10bit: Some(codec == VideoCodec::Hevc),
+            zero_copy_gpu: true,
         })
     }
 

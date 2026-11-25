@@ -34,10 +34,10 @@ enum Role {
 struct Nal {
     start: usize,
     #[cfg_attr(
-        not(any(test, target_os = "macos", target_os = "ios")),
+        not(any(test, target_os = "android", target_os = "macos", target_os = "ios")),
         expect(
             dead_code,
-            reason = "only a decoder that rewrites the units reads their ends"
+            reason = "only targets with native hardware decoders read NAL payload slices"
         )
     )]
     end: usize,
@@ -107,8 +107,7 @@ impl AccessUnitNals {
         for (index, nal) in self.nals.iter().enumerate() {
             let begins = index == 0
                 || match nal.kind {
-                    Kind::Delimiter => true,
-                    Kind::ParameterSet(_) => in_picture,
+                    Kind::Delimiter | Kind::ParameterSet(_) => in_picture,
                     Kind::Slice { first, .. } => first && in_picture,
                     Kind::Other | Kind::Skipped => false,
                 };
@@ -145,6 +144,15 @@ impl AccessUnitNals {
         self.nals
             .iter()
             .any(|nal| matches!(nal.kind, Kind::Slice { key: true, .. }))
+    }
+
+    // The first sequence parameter set NAL payload in the parsed access unit, if any.
+    #[cfg(any(test, target_os = "android", target_os = "macos", target_os = "ios"))]
+    pub(super) fn sequence_parameter_set<'a>(&self, data: &'a [u8]) -> Option<&'a [u8]> {
+        self.nals
+            .iter()
+            .find(|nal| nal.kind == Kind::ParameterSet(Role::Sequence))
+            .map(|nal| &data[nal.start..nal.end])
     }
 
     // The parameter sets in the order of the access unit, if it holds a full set: a sequence

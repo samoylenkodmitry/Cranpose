@@ -15,6 +15,7 @@ use std::{
 };
 
 use ash::vk;
+use cranpose_services::{ColorPrimaries, ColorRange, ColorTransfer, VideoColorInfo};
 
 use super::{crop_window::WINDOW_SIZE, raw_device::RawDevice};
 
@@ -40,10 +41,15 @@ pub(super) struct YcbcrFormat {
     x_offset: vk::ChromaLocation,
     y_offset: vk::ChromaLocation,
     chroma_filter: vk::Filter,
+    transfer: ColorTransfer,
+    gamut_2020: bool,
 }
 
 impl YcbcrFormat {
-    pub(super) fn of(properties: &vk::AndroidHardwareBufferFormatPropertiesANDROID<'_>) -> Self {
+    pub(super) fn of(
+        properties: &vk::AndroidHardwareBufferFormatPropertiesANDROID<'_>,
+        color: VideoColorInfo,
+    ) -> Self {
         // The sampler reads the chroma samples with the filter that the format can do. Its own
         // filters equal it, because a format that cannot filter apart from the chroma samples
         // needs equal filters.
@@ -55,11 +61,29 @@ impl YcbcrFormat {
         } else {
             vk::Filter::NEAREST
         };
+        let (model, range) =
+            if properties.suggested_ycbcr_model == vk::SamplerYcbcrModelConversion::RGB_IDENTITY {
+                (
+                    properties.suggested_ycbcr_model,
+                    properties.suggested_ycbcr_range,
+                )
+            } else {
+                let model = match color.primaries {
+                    ColorPrimaries::Bt601 => vk::SamplerYcbcrModelConversion::YCBCR_601,
+                    ColorPrimaries::Bt709 => vk::SamplerYcbcrModelConversion::YCBCR_709,
+                    ColorPrimaries::Bt2020 => vk::SamplerYcbcrModelConversion::YCBCR_2020,
+                };
+                let range = match color.range {
+                    ColorRange::Full => vk::SamplerYcbcrRange::ITU_FULL,
+                    ColorRange::Limited => vk::SamplerYcbcrRange::ITU_NARROW,
+                };
+                (model, range)
+            };
         Self {
             format: properties.format,
             external_format: properties.external_format,
-            model: properties.suggested_ycbcr_model,
-            range: properties.suggested_ycbcr_range,
+            model,
+            range,
             components: [
                 properties.sampler_ycbcr_conversion_components.r,
                 properties.sampler_ycbcr_conversion_components.g,
@@ -69,6 +93,8 @@ impl YcbcrFormat {
             x_offset: properties.suggested_x_chroma_offset,
             y_offset: properties.suggested_y_chroma_offset,
             chroma_filter,
+            transfer: color.transfer,
+            gamut_2020: matches!(color.primaries, ColorPrimaries::Bt2020),
         }
     }
 }
@@ -205,6 +231,30 @@ impl YcbcrPipeline {
         let device = &self.raw.device;
         let vertex = ShaderModule::new(device, VERTEX_SHADER)?;
         let fragment = ShaderModule::new(device, FRAGMENT_SHADER)?;
+        let transfer_id: u32 = match self.format.transfer {
+            ColorTransfer::Sdr => 0,
+            ColorTransfer::Pq => 1,
+            ColorTransfer::Hlg => 2,
+        };
+        let gamut_id: u32 = u32::from(self.format.gamut_2020);
+        let mut spec_bytes = [0_u8; 8];
+        spec_bytes[..4].copy_from_slice(&transfer_id.to_ne_bytes());
+        spec_bytes[4..].copy_from_slice(&gamut_id.to_ne_bytes());
+        let spec_entries = [
+            vk::SpecializationMapEntry {
+                constant_id: 0,
+                offset: 0,
+                size: 4,
+            },
+            vk::SpecializationMapEntry {
+                constant_id: 1,
+                offset: 4,
+                size: 4,
+            },
+        ];
+        let spec_info = vk::SpecializationInfo::default()
+            .map_entries(&spec_entries)
+            .data(&spec_bytes);
         let stages = [
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::VERTEX)
@@ -213,7 +263,8 @@ impl YcbcrPipeline {
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::FRAGMENT)
                 .module(fragment.raw)
-                .name(c"main"),
+                .name(c"main")
+                .specialization_info(&spec_info),
         ];
         let vertex_input = vk::PipelineVertexInputStateCreateInfo::default();
         let assembly = vk::PipelineInputAssemblyStateCreateInfo::default()

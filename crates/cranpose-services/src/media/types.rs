@@ -154,6 +154,8 @@ pub struct MediaCapabilities {
     /// playing it. A playlist that shows durations for entries nobody has
     /// opened needs this; one that does not, does not.
     pub probing: bool,
+    /// Whether this media player backend renders video frames in addition to audio.
+    pub video: bool,
 }
 
 impl MediaCapabilities {
@@ -167,6 +169,7 @@ impl MediaCapabilities {
         session: false,
         equalizer: false,
         probing: false,
+        video: false,
     };
 }
 

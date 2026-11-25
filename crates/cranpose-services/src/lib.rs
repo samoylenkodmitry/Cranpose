@@ -341,9 +341,10 @@ pub use uri_handler::{
     default_uri_handler, local_uri_handler, set_platform_uri_handler,
 };
 pub use video_decoder::{
-    AccessUnit, CropRect, DecodedFrames, DecoderCapabilities, DecoderCapabilitySource,
-    DecoderConfig, DecoderError, DecoderOutput, DecoderStats, FrameInfo, VideoCodec, VideoDecoder,
-    VideoFrame, set_platform_decoder_capabilities, split_access_units,
+    AccessUnit, ColorPrimaries, ColorRange, ColorTransfer, CropRect, DecodeOrder, DecodedFrames,
+    DecoderCapabilities, DecoderCapabilitySource, DecoderConfig, DecoderError, DecoderOutput,
+    DecoderStats, FrameInfo, VideoCodec, VideoColorInfo, VideoDecoder, VideoFrame, VideoRotation,
+    set_platform_decoder_capabilities, split_access_units,
 };
 pub use wearable::{
     WearableError, WearableEvent, WearableLink, WearablePeer, WearableReceiver, WearableStream,

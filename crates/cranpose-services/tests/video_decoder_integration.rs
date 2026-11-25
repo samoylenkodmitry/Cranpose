@@ -2,7 +2,9 @@
 
 #![cfg(not(any(target_os = "android", target_os = "macos", target_os = "ios")))]
 
-use cranpose_services::{DecoderConfig, DecoderError, DecoderOutput, VideoCodec, VideoDecoder};
+use cranpose_services::{
+    DecoderConfig, DecoderError, DecoderOutput, MediaCapabilities, VideoCodec, VideoDecoder,
+};
 
 #[test]
 fn a_platform_without_a_hardware_decoder_reports_it_unavailable() {
@@ -12,5 +14,10 @@ fn a_platform_without_a_hardware_decoder_reports_it_unavailable() {
             VideoDecoder::new(config),
             Err(DecoderError::Unavailable)
         ));
+        assert!(matches!(
+            VideoDecoder::capabilities(codec),
+            Err(DecoderError::Unavailable)
+        ));
     }
+    assert!(!MediaCapabilities::default().video);
 }

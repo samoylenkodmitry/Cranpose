@@ -24,6 +24,14 @@ impl Backend {
         match self.0 {}
     }
 
+    pub(super) fn drain(&mut self) -> Result<(), DecoderError> {
+        match self.0 {}
+    }
+
+    pub(super) fn flush(&mut self) -> Result<(), DecoderError> {
+        match self.0 {}
+    }
+
     pub(super) fn frames(&self) -> Frames {
         match self.0 {}
     }
