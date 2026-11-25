@@ -57,7 +57,7 @@ pub(crate) mod frame_work;
 #[cfg(any(test, feature = "renderer-wgpu"))]
 pub(crate) mod haptics_queue;
 #[cfg(all(feature = "video", feature = "renderer-wgpu", target_os = "android"))]
-mod hardware_buffer_device;
+pub(crate) mod hardware_buffer_device;
 #[cfg(any(
     test,
     all(feature = "video", feature = "renderer-wgpu", target_os = "android")

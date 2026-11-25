@@ -700,12 +700,12 @@ impl Player {
         }
         let backend = self.core.backend.lock().take();
         self.core.system_observers.lock().clear();
-        let _ = ACTIVE_PRIMARY_PLAYER_ID.compare_exchange(
-            self.core.id.0,
-            0,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        );
+        if ACTIVE_PRIMARY_PLAYER_ID
+            .compare_exchange(self.core.id.0, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            log::debug!("player {}: released primary media slot", self.core.id.0);
+        }
         let events = self.core.halt_to_idle(true);
         self.core.emit(&events);
         if let Some(backend) = backend {

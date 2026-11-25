@@ -211,6 +211,7 @@ media-backend = ["dep:cranpose-media", "dep:objc2-media-player"]
 video = [
     "audio",
     "dep:pollster",
+    "dep:portable-atomic",
     "dep:objc2",
     "dep:objc2-av-foundation",
     "dep:objc2-core-foundation",
@@ -428,6 +429,9 @@ serde_json = { version = "1.0.154", optional = true }
 inventory = { version = "0.3.25", optional = true }
 cranpose-macros = { workspace = true }
 sys-locale = { version = "0.3.2", features = ["js"], optional = true }
+
+[target.'cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))'.dependencies]
+portable-atomic = { workspace = true, optional = true }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 console_error_panic_hook = "0.1"
@@ -978,6 +982,12 @@ path = "tests/integration.rs"
 name = "apple_player"
 path = "tests/apple_player/main.rs"
 required-features = ["desktop", "renderer-wgpu", "video"]
+harness = false
+
+[[test]]
+name = "android_player"
+path = "tests/android_player/main.rs"
+required-features = ["android", "renderer-wgpu", "video"]
 harness = false
 
 [[test]]

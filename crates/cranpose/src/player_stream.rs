@@ -16,10 +16,12 @@ use std::{
 
 use cranpose_services::{
     AbrVariant, DashAdaptationSet, DashManifest, HlsMasterPlaylist, HlsMediaPlaylist,
-    HttpClientRef, HttpControl, HttpRequest, HttpResponse, MediaItem, SubtitleTrack,
-    TrackSelectionParameters, TrackType, default_http_client, parse_dash_mpd, parse_hls_master,
-    parse_hls_media, parse_subtitles, select_abr_variant,
+    HttpClientRef, HttpControl, HttpRequest, HttpResponse, MediaItem, SubtitleTrack, TrackEntry,
+    TrackFormat, TrackGroup, TrackSelectionParameters, TrackType, Tracks, default_http_client,
+    parse_dash_mpd, parse_hls_master, parse_hls_media, parse_subtitles, select_abr_variant,
 };
+
+use crate::player_control::select_track_index;
 
 const FORWARD_SKIP_LIMIT: u64 = 256 * 1024;
 const DEFAULT_BANDWIDTH_BPS: u32 = 4_000_000;
@@ -738,4 +740,48 @@ pub(crate) fn load_sidecar_subtitles(
         }
     }
     loaded
+}
+
+pub(crate) fn choose_subtitle_index(
+    subtitles: &[LoadedSubtitle],
+    params: &TrackSelectionParameters,
+) -> Option<usize> {
+    select_track_index(
+        subtitles.len(),
+        |idx| subtitles[idx].language.as_deref(),
+        TrackType::Text,
+        "sidecar-text",
+        params,
+    )
+}
+
+pub(crate) fn merge_sidecar_tracks(
+    mut tracks: Tracks,
+    subtitles: &[LoadedSubtitle],
+    active_subtitle: Option<usize>,
+) -> Tracks {
+    if !subtitles.is_empty() {
+        let entries = subtitles
+            .iter()
+            .enumerate()
+            .map(|(idx, sub)| TrackEntry {
+                format: TrackFormat {
+                    id: format!("sidecar-text-{idx}"),
+                    label: sub.label.clone(),
+                    language: sub.language.clone(),
+                    mime_type: Some("text/vtt".into()),
+                    ..TrackFormat::default()
+                },
+                supported: true,
+                selected: active_subtitle == Some(idx),
+            })
+            .collect();
+        tracks.groups.push(TrackGroup {
+            id: "sidecar-text".into(),
+            track_type: TrackType::Text,
+            tracks: entries,
+            adaptive_supported: false,
+        });
+    }
+    tracks
 }

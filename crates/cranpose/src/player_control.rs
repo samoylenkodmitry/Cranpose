@@ -126,14 +126,11 @@ impl WorkerControl {
             .wake_lock
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if self.has_pending() || extra_ready() {
-            drop(wake_guard);
-            return;
-        }
-        if let Some(timeout) = active_wait {
-            drop(self.wake_cv.wait_timeout(wake_guard, timeout));
-        } else {
-            drop(self.wake_cv.wait(wake_guard));
+        if !(self.has_pending() || extra_ready()) {
+            match active_wait {
+                Some(timeout) => drop(self.wake_cv.wait_timeout(wake_guard, timeout)),
+                None => drop(self.wake_cv.wait(wake_guard)),
+            }
         }
     }
 

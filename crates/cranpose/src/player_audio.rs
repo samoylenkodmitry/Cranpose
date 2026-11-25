@@ -9,7 +9,7 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
     time::Duration,
 };
@@ -21,6 +21,7 @@ use cranpose_audio::{
     ring,
 };
 use cranpose_services::{FrameTiming, MasterClock};
+use portable_atomic::AtomicU64;
 
 #[cfg(feature = "audio")]
 const RING_BUFFER_SECONDS: usize = 1;
@@ -207,6 +208,7 @@ pub(crate) struct PcmAudioOutput {
     producer: Option<ring::Producer<f32>>,
     has_audio_track: bool,
     device_failed: bool,
+    sink_suspended: bool,
     playing: bool,
     speed: f32,
     resample_prev: Vec<f32>,
@@ -229,6 +231,7 @@ impl PcmAudioOutput {
             producer: None,
             has_audio_track: false,
             device_failed: false,
+            sink_suspended: false,
             playing: false,
             speed: clamped_speed,
             resample_prev: Vec::new(),
@@ -272,14 +275,20 @@ impl PcmAudioOutput {
             self.clock.resume();
             self.ensure_connected();
             #[cfg(feature = "audio")]
-            if let Some(sink) = &self.sink {
+            if self.sink_suspended
+                && let Some(sink) = &self.sink
+            {
                 sink.resume();
+                self.sink_suspended = false;
             }
         } else {
             self.clock.pause();
             #[cfg(feature = "audio")]
-            if let Some(sink) = &self.sink {
+            if !self.sink_suspended
+                && let Some(sink) = &self.sink
+            {
                 sink.suspend();
+                self.sink_suspended = true;
             }
         }
     }
@@ -367,6 +376,7 @@ impl PcmAudioOutput {
                     self.producer = Some(producer);
                     self.shared.paused.store(!self.playing, Ordering::Release);
                     self.device_failed = false;
+                    self.sink_suspended = false;
                 }
                 Err(error) => {
                     log::warn!(
@@ -486,6 +496,7 @@ impl PcmAudioOutput {
             self.sink = None;
             self.producer = None;
         }
+        self.sink_suspended = false;
         self.pending_out.clear();
         self.pending_cursor = 0;
     }

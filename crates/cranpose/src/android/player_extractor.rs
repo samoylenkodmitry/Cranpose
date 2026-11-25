@@ -26,13 +26,13 @@ use ndk_sys::{
     AMediaCodec_queueInputBuffer, AMediaCodec_releaseOutputBuffer, AMediaCodec_start,
     AMediaCodec_stop, AMediaCodecBufferInfo, AMediaDataSource, AMediaDataSourceClose,
     AMediaDataSourceGetSize, AMediaDataSourceReadAt, AMediaExtractor, AMediaExtractor_advance,
-    AMediaExtractor_delete, AMediaExtractor_getCachedDuration, AMediaExtractor_getSampleFlags,
-    AMediaExtractor_getSampleTime, AMediaExtractor_getSampleTrackIndex,
-    AMediaExtractor_getTrackCount, AMediaExtractor_getTrackFormat, AMediaExtractor_new,
-    AMediaExtractor_readSampleData, AMediaExtractor_seekTo, AMediaExtractor_selectTrack,
-    AMediaExtractor_setDataSource, AMediaExtractor_setDataSourceFd, AMediaExtractor_unselectTrack,
-    AMediaFormat, AMediaFormat_delete, AMediaFormat_getBuffer, AMediaFormat_getInt32,
-    AMediaFormat_getInt64, AMediaFormat_getString, SeekMode, media_status_t, off64_t,
+    AMediaExtractor_delete, AMediaExtractor_getSampleFlags, AMediaExtractor_getSampleTime,
+    AMediaExtractor_getSampleTrackIndex, AMediaExtractor_getTrackCount,
+    AMediaExtractor_getTrackFormat, AMediaExtractor_new, AMediaExtractor_readSampleData,
+    AMediaExtractor_seekTo, AMediaExtractor_selectTrack, AMediaExtractor_setDataSource,
+    AMediaExtractor_setDataSourceFd, AMediaExtractor_unselectTrack, AMediaFormat,
+    AMediaFormat_delete, AMediaFormat_getBuffer, AMediaFormat_getInt32, AMediaFormat_getInt64,
+    AMediaFormat_getString, SeekMode, media_status_t, off64_t,
 };
 
 use crate::player_stream::HttpRangeReader;
@@ -51,6 +51,7 @@ type DataSourceSetGetSizeFn = unsafe extern "C" fn(*mut AMediaDataSource, AMedia
 type DataSourceSetCloseFn = unsafe extern "C" fn(*mut AMediaDataSource, AMediaDataSourceClose);
 type SetDataSourceCustomFn =
     unsafe extern "C" fn(*mut AMediaExtractor, *mut AMediaDataSource) -> media_status_t;
+type GetCachedDurationFn = unsafe extern "C" fn(*mut AMediaExtractor) -> i64;
 
 struct DataSourceSymbols {
     new: DataSourceNewFn,
@@ -60,6 +61,7 @@ struct DataSourceSymbols {
     set_get_size: DataSourceSetGetSizeFn,
     set_close: DataSourceSetCloseFn,
     set_custom: SetDataSourceCustomFn,
+    get_cached_duration: Option<GetCachedDurationFn>,
 }
 
 fn data_source_symbols() -> Option<&'static DataSourceSymbols> {
@@ -79,6 +81,8 @@ fn data_source_symbols() -> Option<&'static DataSourceSymbols> {
             let set_get_size = resolve_sym(lib, c"AMediaDataSource_setGetSize")?;
             let set_close = resolve_sym(lib, c"AMediaDataSource_setClose")?;
             let set_custom = resolve_sym(lib, c"AMediaExtractor_setDataSourceCustom")?;
+            let get_cached_duration = resolve_sym(lib, c"AMediaExtractor_getCachedDuration")
+                .map(|p| std::mem::transmute::<*mut c_void, GetCachedDurationFn>(p));
             Some(DataSourceSymbols {
                 new: std::mem::transmute::<*mut c_void, DataSourceNewFn>(new),
                 delete: std::mem::transmute::<*mut c_void, DataSourceDeleteFn>(delete),
@@ -91,6 +95,7 @@ fn data_source_symbols() -> Option<&'static DataSourceSymbols> {
                 ),
                 set_close: std::mem::transmute::<*mut c_void, DataSourceSetCloseFn>(set_close),
                 set_custom: std::mem::transmute::<*mut c_void, SetDataSourceCustomFn>(set_custom),
+                get_cached_duration,
             })
         }
     })
@@ -454,19 +459,20 @@ impl MediaExtractor {
     }
 
     pub(crate) fn cached_duration(&self) -> Option<Duration> {
-        // SAFETY: `self.raw` is live.
-        let us = unsafe { AMediaExtractor_getCachedDuration(self.raw.as_ptr()) };
+        let f = data_source_symbols()?.get_cached_duration?;
+        // SAFETY: `self.raw` is live and `f` was resolved from `libmediandk.so`.
+        let us = unsafe { f(self.raw.as_ptr()) };
         (us >= 0).then(|| Duration::from_micros(us.cast_unsigned()))
     }
 
-    pub(crate) fn read_sample(&mut self, buf: &mut Vec<u8>) -> Option<DemuxedSample> {
+    pub(crate) fn peek_sample(&mut self, buf: &mut Vec<u8>) -> Option<DemuxedSample> {
         // SAFETY: `self.raw` is live.
         let track_idx = unsafe { AMediaExtractor_getSampleTrackIndex(self.raw.as_ptr()) };
         if track_idx < 0 {
             return None;
         }
-        if buf.len() < 256 * 1024 {
-            buf.resize(256 * 1024, 0);
+        if buf.len() < 1024 * 1024 {
+            buf.resize(1024 * 1024, 0);
         }
         // SAFETY: `buf` has writable capacity `buf.len()`.
         let read = unsafe {
@@ -478,15 +484,19 @@ impl MediaExtractor {
         let size = read.cast_unsigned();
         let pts_us = unsafe { AMediaExtractor_getSampleTime(self.raw.as_ptr()) };
         let flags = unsafe { AMediaExtractor_getSampleFlags(self.raw.as_ptr()) };
-        unsafe {
-            AMediaExtractor_advance(self.raw.as_ptr());
-        }
         Some(DemuxedSample {
             track_index: usize::try_from(track_idx).unwrap_or(0),
             pts: Duration::from_micros(pts_us.max(0).cast_unsigned()),
             is_sync: (flags & SAMPLE_FLAG_SYNC) != 0,
             size,
         })
+    }
+
+    pub(crate) fn advance(&mut self) {
+        // SAFETY: `self.raw` is live.
+        unsafe {
+            AMediaExtractor_advance(self.raw.as_ptr());
+        }
     }
 }
 
@@ -567,8 +577,9 @@ impl AudioCodecDecoder {
     }
 
     fn queue_buffer(&mut self, data: &[u8], pts: Duration, flags: u32) -> bool {
-        // SAFETY: `self.raw` is a started `AMediaCodec`.
-        let idx = unsafe { AMediaCodec_dequeueInputBuffer(self.raw.as_ptr(), 2_000) };
+        // SAFETY: `self.raw` is a started `AMediaCodec`; timeout 0 avoids Android 10
+        // `mActivityNotify` aborts on timed synchronous dequeues.
+        let idx = unsafe { AMediaCodec_dequeueInputBuffer(self.raw.as_ptr(), 0) };
         if idx < 0 {
             return false;
         }
@@ -900,6 +911,21 @@ fn append_annex_b_csd(dst: &mut Vec<u8>, bytes: &[u8]) {
         dst.extend_from_slice(&[0, 0, 0, 1]);
         dst.extend_from_slice(bytes);
     }
+}
+
+pub(crate) fn ndk_has_decoder(mime: &str) -> bool {
+    let Ok(c_mime) = CString::new(mime) else {
+        return false;
+    };
+    // SAFETY: `c_mime` is NUL-terminated; immediately delete any created probe codec.
+    let codec = unsafe { AMediaCodec_createDecoderByType(c_mime.as_ptr()) };
+    if codec.is_null() {
+        return false;
+    }
+    unsafe {
+        AMediaCodec_delete(codec);
+    }
+    true
 }
 
 pub(crate) fn video_size_of(info: &VideoTrackInfo) -> VideoSize {

@@ -14,9 +14,8 @@ use cranpose_services::{
     AccessUnit, AudioRole, CueGroup, DecodeOrder, DecodedFrames, DecoderConfig, DecoderError,
     DecoderOutput, FrameProducer, FrameTiming, LoadControl, MediaItem, MediaProperties,
     PlaybackParameters, PlayerBackend, PlayerBackendFactory, PlayerCapabilities, PlayerError,
-    PlayerSink, PlayerState, TrackEntry, TrackFormat, TrackGroup, TrackSelectionParameters,
-    TrackType, Tracks, VideoCodec, VideoContainer, VideoDecoder, VideoFrame,
-    set_platform_player_factory,
+    PlayerSink, PlayerState, TrackSelectionParameters, TrackType, VideoCodec, VideoContainer,
+    VideoDecoder, VideoFrame, set_platform_player_factory,
 };
 
 use super::{
@@ -31,12 +30,13 @@ use crate::{
     player_audio::PcmAudioOutput,
     player_control::{WorkerBackend, WorkerControl, select_track_index},
     player_stream::{
-        AdaptiveStream, FetchCancel, HttpRangeReader, LoadedSubtitle, detect_manifest_kind,
-        is_http_uri, load_sidecar_subtitles, local_path_from_uri,
+        AdaptiveStream, FetchCancel, HttpRangeReader, LoadedSubtitle, choose_subtitle_index,
+        detect_manifest_kind, is_http_uri, load_sidecar_subtitles, local_path_from_uri,
+        merge_sidecar_tracks,
     },
 };
 
-const FRAME_QUEUE_DEPTH: usize = 4;
+const FRAME_QUEUE_DEPTH: usize = 8;
 const ACTIVE_STEP_WAIT: Duration = Duration::from_millis(4);
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(120);
 const AUDIO_TARGET_BUFFER: Duration = Duration::from_millis(250);
@@ -103,6 +103,11 @@ fn probe_android_capabilities() -> PlayerCapabilities {
             )) {
                 hdr_10bit = true;
             }
+        } else if super::player_extractor::ndk_has_decoder(codec.mime()) {
+            supported_video_codecs.push(codec);
+            if matches!(codec, VideoCodec::Hevc | VideoCodec::Vp9 | VideoCodec::Av1) {
+                hdr_10bit = true;
+            }
         }
     }
     if supported_video_codecs.is_empty() {
@@ -147,9 +152,10 @@ struct ActiveSession {
     last_progress_at: Instant,
     demux_buf: Vec<u8>,
     packet_buf: Vec<u8>,
-    demux_eos: bool,
+    demux_eos_at: Option<Instant>,
     ended: bool,
     seek_target: Option<Duration>,
+    last_pre_seek_frame: Option<VideoFrame>,
     focus_held: bool,
 }
 
@@ -352,7 +358,7 @@ impl AndroidPlayerWorker {
 
         let subtitles = load_sidecar_subtitles(item, cancel);
         let active_subtitle_index = choose_subtitle_index(&subtitles, &self.track_selection);
-        let tracks = merge_tracks(extracted.tracks, &subtitles, active_subtitle_index);
+        let tracks = merge_sidecar_tracks(extracted.tracks, &subtitles, active_subtitle_index);
         self.sink.set_tracks(tracks);
         self.sink.set_media_properties(MediaProperties {
             duration: effective_duration,
@@ -393,9 +399,10 @@ impl AndroidPlayerWorker {
                 .unwrap_or_else(Instant::now),
             demux_buf: Vec::new(),
             packet_buf: Vec::new(),
-            demux_eos: false,
+            demux_eos_at: None,
             ended: false,
             seek_target: Some(initial_target),
+            last_pre_seek_frame: None,
             focus_held: false,
         };
         if initial_target > Duration::ZERO {
@@ -536,8 +543,9 @@ impl AndroidPlayerWorker {
         };
         let absolute = session.clip_start.saturating_add(position);
         session.ended = false;
-        session.demux_eos = false;
+        session.demux_eos_at = None;
         session.pending_video_frames.clear();
+        session.last_pre_seek_frame = None;
         session.video_frames_out.clear();
         session.need_csd_prepend = true;
         session.seek_target = Some(absolute);
@@ -632,7 +640,10 @@ impl AndroidPlayerWorker {
         let abs_pos = session.audio_output.position();
         let rel_pos = abs_pos.saturating_sub(session.clip_start);
         let hit_clip_end = session.clip_end.is_some_and(|end| abs_pos >= end);
-        let drained = session.demux_eos
+        let drained = session.seek_target.is_none()
+            && session
+                .demux_eos_at
+                .is_some_and(|at| at.elapsed() >= Duration::from_millis(150))
             && session.pending_video_frames.is_empty()
             && session.audio_output.buffered_duration() < Duration::from_millis(15);
 
@@ -725,71 +736,106 @@ fn build_video_decoder(
 }
 
 fn feed_next_sample(session: &mut ActiveSession, selection: &TrackSelectionParameters) -> bool {
-    let Some(sample) = session.extractor.read_sample(&mut session.demux_buf) else {
-        if let Some(adaptive) = session.adaptive.as_mut()
-            && let Ok(Some(seg)) = adaptive.next_segment(selection)
-            && let Ok(mut next_ext) = MediaExtractor::from_bytes(seg.bytes)
-        {
-            reselect_tracks(
-                &mut next_ext,
-                session.video_info.as_ref(),
-                &session.audio_tracks,
-                session.active_audio_idx,
-            );
-            session.extractor = next_ext;
-            session.segment_base_pts = seg.start_pts;
-            session.need_csd_prepend = true;
-            return true;
-        }
-        session.demux_eos = true;
-        if let Some(dec) = session.video_decoder.as_mut() {
-            drop(dec.drain());
-        }
-        if let Some(audio) = session.audio_decoder.as_mut() {
-            let _: bool = audio.queue_eos();
-        }
-        return false;
+    let Some(sample) = session.extractor.peek_sample(&mut session.demux_buf) else {
+        return handle_demux_eof(session, selection);
     };
     let pts = session.segment_base_pts.saturating_add(sample.pts);
-    let payload = &session.demux_buf[..sample.size];
-
-    if let Some(video_info) = &session.video_info
-        && sample.track_index == video_info.track_index
+    if session
+        .video_info
+        .as_ref()
+        .is_some_and(|v| v.track_index == sample.track_index)
     {
-        if let Some(decoder) = session.video_decoder.as_mut() {
-            let needs_csd = matches!(video_info.codec, VideoCodec::H264 | VideoCodec::Hevc)
-                && !video_info.csd.is_empty()
-                && (session.need_csd_prepend || sample.is_sync);
-            let unit_bytes = if needs_csd {
-                session.packet_buf.clear();
-                session.packet_buf.extend_from_slice(&video_info.csd);
-                session.packet_buf.extend_from_slice(payload);
-                session.need_csd_prepend = false;
-                session.packet_buf.as_slice()
-            } else {
-                payload
-            };
-            let submit = decoder.submit(AccessUnit {
-                data: unit_bytes,
-                timestamp: pts,
-                metadata: 0,
-            });
-            if matches!(submit, Err(DecoderError::Full)) {
-                return false;
-            }
-        }
+        return feed_video_sample(session, sample.size, pts, sample.is_sync);
+    }
+    if session
+        .active_audio_idx
+        .and_then(|idx| session.audio_tracks.get(idx))
+        .is_some_and(|a| a.track_index == sample.track_index)
+    {
+        return feed_audio_sample(session, sample.size, pts);
+    }
+    session.extractor.advance();
+    true
+}
+
+fn handle_demux_eof(session: &mut ActiveSession, selection: &TrackSelectionParameters) -> bool {
+    if let Some(adaptive) = session.adaptive.as_mut()
+        && let Ok(Some(seg)) = adaptive.next_segment(selection)
+        && let Ok(mut next_ext) = MediaExtractor::from_bytes(seg.bytes)
+    {
+        reselect_tracks(
+            &mut next_ext,
+            session.video_info.as_ref(),
+            &session.audio_tracks,
+            session.active_audio_idx,
+        );
+        session.extractor = next_ext;
+        session.segment_base_pts = seg.start_pts;
+        session.need_csd_prepend = true;
         return true;
     }
+    session.demux_eos_at = Some(Instant::now());
+    if let Some(dec) = session.video_decoder.as_mut() {
+        drop(dec.drain());
+    }
+    if let Some(audio) = session.audio_decoder.as_mut() {
+        let _: bool = audio.queue_eos();
+    }
+    false
+}
 
-    if let Some(active_idx) = session.active_audio_idx
-        && let Some(audio_track) = session.audio_tracks.get(active_idx)
-        && sample.track_index == audio_track.track_index
+fn feed_video_sample(
+    session: &mut ActiveSession,
+    size: usize,
+    pts: Duration,
+    is_sync: bool,
+) -> bool {
+    let payload = &session.demux_buf[..size];
+    if let (Some(video_info), Some(decoder)) = (&session.video_info, session.video_decoder.as_mut())
     {
-        if let Some(audio_dec) = session.audio_decoder.as_mut() {
-            return audio_dec.queue_input(payload, pts);
+        let needs_csd = matches!(video_info.codec, VideoCodec::H264 | VideoCodec::Hevc)
+            && !video_info.csd.is_empty()
+            && (session.need_csd_prepend || is_sync);
+        let unit_bytes = if needs_csd {
+            session.packet_buf.clear();
+            session.packet_buf.extend_from_slice(&video_info.csd);
+            session.packet_buf.extend_from_slice(payload);
+            session.packet_buf.as_slice()
+        } else {
+            payload
+        };
+        match decoder.submit(AccessUnit {
+            data: unit_bytes,
+            timestamp: pts,
+            metadata: 0,
+        }) {
+            Ok(()) => {}
+            Err(DecoderError::Full) => return false,
+            Err(err) => log::warn!("android player: video submit error: {err}"),
         }
+        if needs_csd {
+            session.need_csd_prepend = false;
+        }
+    }
+    session.extractor.advance();
+    true
+}
+
+fn feed_audio_sample(session: &mut ActiveSession, size: usize, pts: Duration) -> bool {
+    if session
+        .seek_target
+        .is_some_and(|target| pts.saturating_add(Duration::from_millis(25)) < target)
+    {
+        session.extractor.advance();
         return true;
     }
+    let payload = &session.demux_buf[..size];
+    if let Some(audio_dec) = session.audio_decoder.as_mut()
+        && !audio_dec.queue_input(payload, pts)
+    {
+        return false;
+    }
+    session.extractor.advance();
     true
 }
 
@@ -834,7 +880,7 @@ fn pump_demuxer(session: &mut ActiveSession, selection: &TrackSelectionParameter
         session.video_decoder.is_some() && session.pending_video_frames.len() < FRAME_QUEUE_DEPTH;
     let need_more_audio = session.audio_decoder.is_some()
         && session.audio_output.buffered_duration() < AUDIO_TARGET_BUFFER;
-    if session.demux_eos || (!need_more_video && !need_more_audio) {
+    if session.demux_eos_at.is_some() || (!need_more_video && !need_more_audio) {
         return;
     }
     for _ in 0..6 {
@@ -846,25 +892,27 @@ fn pump_demuxer(session: &mut ActiveSession, selection: &TrackSelectionParameter
 
 fn advance_presentation(session: &mut ActiveSession, want_play: bool) {
     if let Some(target) = session.seek_target {
-        if let Some(frame) = pop_seek_frame(&mut session.pending_video_frames, target) {
-            session.video_frames_out.push(frame);
-            session.seek_target = None;
-        } else if session.demux_eos && session.pending_video_frames.is_empty() {
+        while let Some(front) = session.pending_video_frames.pop_front() {
+            if front.info().timestamp >= target {
+                session.last_pre_seek_frame = None;
+                session.video_frames_out.push(front);
+                session.seek_target = None;
+                return;
+            }
+            session.last_pre_seek_frame = Some(front);
+        }
+        if session
+            .demux_eos_at
+            .is_some_and(|at| at.elapsed() >= Duration::from_millis(150))
+        {
+            if let Some(frame) = session.last_pre_seek_frame.take() {
+                session.video_frames_out.push(frame);
+            }
             session.seek_target = None;
         }
     } else if want_play {
         present_due_frames(session);
     }
-}
-
-fn pop_seek_frame(queue: &mut VecDeque<VideoFrame>, target: Duration) -> Option<VideoFrame> {
-    while let Some(front) = queue.front() {
-        if front.info().timestamp >= target || queue.len() == 1 {
-            return queue.pop_front();
-        }
-        drop(queue.pop_front());
-    }
-    None
 }
 
 fn present_due_frames(session: &mut ActiveSession) {
@@ -911,48 +959,4 @@ fn choose_audio_track(
         "audio",
         params,
     )
-}
-
-fn choose_subtitle_index(
-    subtitles: &[LoadedSubtitle],
-    params: &TrackSelectionParameters,
-) -> Option<usize> {
-    select_track_index(
-        subtitles.len(),
-        |idx| subtitles[idx].language.as_deref(),
-        TrackType::Text,
-        "sidecar-text",
-        params,
-    )
-}
-
-fn merge_tracks(
-    mut tracks: Tracks,
-    subtitles: &[LoadedSubtitle],
-    active_subtitle: Option<usize>,
-) -> Tracks {
-    if !subtitles.is_empty() {
-        let entries = subtitles
-            .iter()
-            .enumerate()
-            .map(|(idx, sub)| TrackEntry {
-                format: TrackFormat {
-                    id: format!("sidecar-text-{idx}"),
-                    label: sub.label.clone(),
-                    language: sub.language.clone(),
-                    mime_type: Some("text/vtt".into()),
-                    ..TrackFormat::default()
-                },
-                supported: true,
-                selected: active_subtitle == Some(idx),
-            })
-            .collect();
-        tracks.groups.push(TrackGroup {
-            id: "sidecar-text".into(),
-            track_type: TrackType::Text,
-            tracks: entries,
-            adaptive_supported: false,
-        });
-    }
-    tracks
 }

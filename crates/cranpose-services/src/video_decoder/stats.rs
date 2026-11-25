@@ -57,6 +57,8 @@ mod counters {
             target_os = "android",
             target_os = "macos",
             target_os = "ios",
+            target_os = "windows",
+            target_os = "linux",
             all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
         ))]
         pub(crate) fn submitted(&self) {
@@ -67,6 +69,8 @@ mod counters {
             target_os = "android",
             target_os = "macos",
             target_os = "ios",
+            target_os = "windows",
+            target_os = "linux",
             all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
         ))]
         pub(crate) fn refused(&self) {
