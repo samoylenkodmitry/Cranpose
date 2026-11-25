@@ -55,7 +55,9 @@ subprojects {
     val cargoNdk = tasks.register<Exec>("cargoNdk") {
         workingDir = projectDir
         doFirst {
-            environment("ANDROID_NDK_HOME", sdk.ndkDirectory.get().asFile.path)
+            val ndk = sdk.ndkDirectory.get().asFile.path
+            environment("ANDROID_NDK_HOME", ndk)
+            environment("ANDROID_NDK", ndk)
             // Build scripts that compile Java, such as Slint's, use the app's platform.
             environment("ANDROID_JAR", sdk.bootClasspath.get().first().asFile.path)
         }
