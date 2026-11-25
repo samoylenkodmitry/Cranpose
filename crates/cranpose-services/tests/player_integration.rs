@@ -10,13 +10,14 @@ use cranpose_macros::composable;
 use cranpose_services::{
     AbrVariant, AudioFocus, AudioRole, ClippingConfiguration, Cue, CueAlignment, CueGroup,
     DUCKED_GAIN, FrameTiming, HlsRenditionType, LIP_SYNC_TOLERANCE, LoadControl, ManifestError,
-    MasterClock, MediaCommand, MediaItem, MediaProperties, PlaybackParameters, Player,
-    PlayerBackend, PlayerBackendFactory, PlayerCommand, PlayerError, PlayerEvent, PlayerSink,
-    PlayerState, PositionDiscontinuityReason, RepeatMode, SubtitleConfiguration, TrackEntry,
-    TrackFormat, TrackGroup, TrackSelectionOverride, TrackSelectionParameters, TrackType, Tracks,
-    VideoSize, parse_dash_mpd, parse_hls_master, parse_hls_media, parse_srt, parse_subtitles,
-    parse_webvtt, publish_audio_focus, publish_media_command, rememberIsLoading, rememberIsPlaying,
-    rememberPlayerError, rememberPlayerState, select_abr_variant,
+    MasterClock, MediaCommand, MediaItem, MediaMetadata, MediaProperties, PlaybackParameters,
+    PlaybackState, Player, PlayerBackend, PlayerBackendFactory, PlayerCommand, PlayerError,
+    PlayerEvent, PlayerSink, PlayerState, PositionDiscontinuityReason, RepeatMode,
+    SubtitleConfiguration, TrackEntry, TrackFormat, TrackGroup, TrackSelectionOverride,
+    TrackSelectionParameters, TrackType, Tracks, VideoSize, current_media_item, parse_dash_mpd,
+    parse_hls_master, parse_hls_media, parse_srt, parse_subtitles, parse_webvtt, playback_progress,
+    playback_state, publish_audio_focus, publish_media_command, rememberIsLoading,
+    rememberIsPlaying, rememberPlayerError, rememberPlayerState, select_abr_variant,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -179,6 +180,7 @@ fn player_lifecycle_commands_and_error_recovery() {
 fn player_video_size_tracks_cues_first_frame_and_release() {
     let (factory, calls) = FakeFactory::new();
     let player = Player::builder()
+        .with_audio_role(AudioRole::Secondary)
         .with_backend_factory(Arc::clone(&factory) as Arc<dyn PlayerBackendFactory>)
         .build()
         .expect("player builds");
@@ -259,6 +261,7 @@ fn player_video_size_tracks_cues_first_frame_and_release() {
 fn playlist_repeat_shuffle_and_seek_rules() {
     let (factory, calls) = FakeFactory::new();
     let player = Player::builder()
+        .with_audio_role(AudioRole::Secondary)
         .with_seek_back_increment(Duration::from_secs(10))
         .with_seek_forward_increment(Duration::from_secs(20))
         .with_backend_factory(Arc::clone(&factory) as Arc<dyn PlayerBackendFactory>)
@@ -410,6 +413,7 @@ fn ObservePlayer(
 fn compose_hooks_recompose_only_on_matching_transitions() {
     let (factory, _) = FakeFactory::new();
     let player = Player::builder()
+        .with_audio_role(AudioRole::Secondary)
         .with_backend_factory(Arc::clone(&factory) as Arc<dyn PlayerBackendFactory>)
         .build()
         .expect("player builds");
@@ -728,11 +732,11 @@ fn repeat_mode_cycles_in_standard_order() {
     );
 }
 
-static GLOBAL_MEDIA_LOCK: Mutex<()> = Mutex::new(());
+use crate::media_support::one_media_player_at_a_time;
 
 #[test]
 fn audio_focus_ducks_pauses_and_resumes_primary_player_only() {
-    let _guard = lock(&GLOBAL_MEDIA_LOCK);
+    let _guard = one_media_player_at_a_time();
     publish_audio_focus(AudioFocus::Gained);
     let (primary_factory, primary_calls) = FakeFactory::new();
     let (secondary_factory, secondary_calls) = FakeFactory::new();
@@ -790,7 +794,7 @@ fn audio_focus_ducks_pauses_and_resumes_primary_player_only() {
 
 #[test]
 fn os_media_commands_control_active_primary_player() {
-    let _guard = lock(&GLOBAL_MEDIA_LOCK);
+    let _guard = one_media_player_at_a_time();
     publish_audio_focus(AudioFocus::Gained);
     let (factory, _calls) = FakeFactory::new();
     let player = Player::builder()
@@ -825,4 +829,95 @@ fn os_media_commands_control_active_primary_player() {
     publish_media_command(MediaCommand::Next);
     assert_eq!(player.current_media_item_index(), 1);
     player.release();
+}
+
+#[test]
+fn primary_player_publishes_os_media_session_state_metadata_and_progress() {
+    let _guard = one_media_player_at_a_time();
+    publish_audio_focus(AudioFocus::Gained);
+    let (primary_factory, _primary_calls) = FakeFactory::new();
+    let (muted_factory, _muted_calls) = FakeFactory::new();
+
+    let primary = Player::builder()
+        .with_audio_role(AudioRole::Primary)
+        .with_backend_factory(Arc::clone(&primary_factory) as Arc<dyn PlayerBackendFactory>)
+        .build()
+        .expect("primary player");
+    let muted = Player::builder()
+        .with_audio_role(AudioRole::Muted)
+        .with_backend_factory(Arc::clone(&muted_factory) as Arc<dyn PlayerBackendFactory>)
+        .build()
+        .expect("muted feed preload player");
+
+    let item = MediaItem::new("https://example.com/os-session.mp4").with_metadata(MediaMetadata {
+        title: "Now Playing Clip".into(),
+        artist: "Cranpose".into(),
+        ..MediaMetadata::default()
+    });
+    primary.set_media_item(item);
+    primary.prepare();
+    primary.play();
+    primary_factory
+        .sink()
+        .set_media_properties(MediaProperties {
+            duration: Some(Duration::from_secs(90)),
+            is_live: false,
+            is_seekable: true,
+        });
+    primary_factory
+        .sink()
+        .set_playback_state(PlayerState::Ready);
+    primary_factory
+        .sink()
+        .set_progress(Duration::from_secs(15), Duration::from_secs(40));
+
+    let active_item = current_media_item().expect("primary player publishes current media item");
+    assert_eq!(
+        active_item.metadata.title, "Now Playing Clip",
+        "OS media session should expose primary player metadata"
+    );
+    assert_eq!(
+        playback_state(),
+        PlaybackState::Playing,
+        "OS media session should publish Playing state"
+    );
+    let prog = playback_progress();
+    assert_eq!(
+        prog.duration,
+        Some(Duration::from_secs(90)),
+        "OS media session should publish duration"
+    );
+    assert!(
+        prog.buffered >= Duration::from_secs(40),
+        "OS media session should publish buffered position"
+    );
+
+    // Muted preload players must never clobber the active OS media session.
+    muted.set_media_item(MediaItem::new("https://example.com/muted-preload.mp4"));
+    muted.prepare();
+    muted_factory.sink().set_playback_state(PlayerState::Ready);
+    assert_eq!(
+        current_media_item().map(|i| i.uri),
+        Some("https://example.com/os-session.mp4".to_owned()),
+        "muted player must not overwrite primary OS media session"
+    );
+
+    primary.pause();
+    assert_eq!(
+        playback_state(),
+        PlaybackState::Paused,
+        "pausing primary player should publish Paused to OS media session"
+    );
+
+    primary.release();
+    muted.release();
+    assert_eq!(
+        playback_state(),
+        PlaybackState::Idle,
+        "releasing primary player should reset OS media session to Idle"
+    );
+    assert!(
+        current_media_item().is_none(),
+        "releasing primary player should clear active OS media item"
+    );
 }

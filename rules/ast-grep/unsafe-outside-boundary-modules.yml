@@ -162,5 +162,8 @@ ignores:
   - crates/cranpose/src/web/heap.rs
   - crates/cranpose/src/desktop/windows_cursor.rs
   - crates/cranpose/src/desktop/windows_menu.rs
+  - crates/cranpose/src/linux/player_demux.rs
+  - crates/cranpose/src/linux/player_ffmpeg.rs
   - crates/cranpose/src/linux/video_converter.rs
   - crates/cranpose/src/windows/d3d12_converter.rs
+  - crates/cranpose/src/windows/player_source.rs

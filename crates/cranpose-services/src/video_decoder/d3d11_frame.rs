@@ -43,7 +43,7 @@ use windows::{
     core::{Interface, PCWSTR},
 };
 
-use super::DecoderError;
+use super::{CropRect, DecoderError, FrameInfo, VideoColorInfo, VideoFrame, VideoRotation};
 
 // Count of decoded pictures currently held by the queue or the application.
 pub(super) type LivePictures = Arc<AtomicUsize>;
@@ -389,5 +389,111 @@ impl SharedSurfacePool {
             height,
             format,
         })
+    }
+}
+
+/// Per-frame timing, crop, color, and rotation metadata for [`D3d11SurfaceExporter`].
+#[derive(Clone, Copy, Debug)]
+pub struct D3d11FrameDescriptor {
+    /// Timestamp, metadata, and decode duration of the picture.
+    pub info: FrameInfo,
+    /// Clean aperture inside the surface buffer.
+    pub crop: CropRect,
+    /// Color primaries, range, and transfer function.
+    pub color: VideoColorInfo,
+    /// Clockwise display rotation.
+    pub rotation: VideoRotation,
+}
+
+/// Zero-copy Windows D3D11/DXGI surface exporter for Media Foundation `IMFSourceReader` backends.
+///
+/// Owns a D3D11 video device, an `IMFDXGIDeviceManager` bound to it, and a recycled pool of
+/// single-slice `NV12`/`P010` shared textures + `ID3D11Fence` so decoded pictures stay in GPU
+/// memory into Cranpose's D3D12 renderer.
+pub struct D3d11SurfaceExporter {
+    pool: SharedSurfacePool,
+    manager: IMFDXGIDeviceManager,
+    live: LivePictures,
+}
+
+// SAFETY: `D3d11SurfaceExporter` is owned and driven by one player worker thread; its underlying
+// D3D11 device enables multithread protection and shared slots synchronize via `ID3D11Fence`.
+unsafe impl Send for D3d11SurfaceExporter {}
+
+impl D3d11SurfaceExporter {
+    /// Creates a hardware D3D11 video device and Media Foundation DXGI device manager.
+    pub fn new() -> Result<Self, DecoderError> {
+        let (pool, manager) = SharedSurfacePool::new()?;
+        Ok(Self {
+            pool,
+            manager,
+            live: Arc::new(AtomicUsize::new(0)),
+        })
+    }
+
+    /// Raw `IMFDXGIDeviceManager*` pointer valid for as long as this exporter lives.
+    pub fn dxgi_device_manager_ptr(&self) -> *mut c_void {
+        self.manager.as_raw()
+    }
+
+    /// Copies one decoded subresource of a D3D11 `ID3D11Texture2D*` on the GPU into a recycled
+    /// shared texture slot, signals the shared fence, and wraps it as a [`VideoFrame`].
+    ///
+    /// # Safety
+    /// `texture_ptr` must be a valid non-null `ID3D11Texture2D*` allocated on this exporter's
+    /// D3D11 device.
+    pub unsafe fn export_gpu_texture_ptr(
+        &mut self,
+        texture_ptr: *mut c_void,
+        subresource: u32,
+        desc: D3d11FrameDescriptor,
+    ) -> Result<VideoFrame, DecoderError> {
+        if texture_ptr.is_null() {
+            return Err(DecoderError::Failed("null ID3D11Texture2D pointer".into()));
+        }
+        // SAFETY: caller guarantees `texture_ptr` is a live `ID3D11Texture2D*` for this call.
+        let Some(src) = (unsafe { ID3D11Texture2D::from_raw_borrowed(&texture_ptr) }) else {
+            return Err(DecoderError::Failed(
+                "invalid ID3D11Texture2D pointer".into(),
+            ));
+        };
+        let (image, size) = self.pool.copy_gpu_texture(src, subresource, &self.live)?;
+        Ok(VideoFrame::new(
+            desc.info,
+            size,
+            desc.crop,
+            desc.color,
+            desc.rotation,
+            image,
+        ))
+    }
+
+    /// Uploads a CPU-resident `NV12` or `P010` buffer from a software MFT fallback into a
+    /// recycled shared GPU texture slot and wraps it as a [`VideoFrame`].
+    ///
+    /// # Safety
+    /// `src` must point to at least `row_pitch * size.1 * 3 / 2` readable bytes of `format` data.
+    pub unsafe fn export_cpu_buffer(
+        &mut self,
+        src: *const u8,
+        row_pitch: u32,
+        size: (u32, u32),
+        format: DxgiPixelFormat,
+        desc: D3d11FrameDescriptor,
+    ) -> Result<VideoFrame, DecoderError> {
+        if src.is_null() || size.0 == 0 || size.1 == 0 {
+            return Err(DecoderError::Failed("empty CPU video buffer".into()));
+        }
+        let image = self
+            .pool
+            .upload_cpu_buffer(src, row_pitch, size, format, &self.live)?;
+        Ok(VideoFrame::new(
+            desc.info,
+            size,
+            desc.crop,
+            desc.color,
+            desc.rotation,
+            image,
+        ))
     }
 }

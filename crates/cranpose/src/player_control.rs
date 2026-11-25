@@ -1,15 +1,29 @@
 //! Shared off-UI command mailbox, wake condvar, [`PlayerBackend`] front-end, and track-selection
 //! resolver reused across native player backends (Apple, Android, Linux, Windows).
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::{
     sync::{Arc, Condvar, Mutex, PoisonError},
     time::Duration,
 };
 
-use cranpose_services::{
-    MediaItem, PlaybackParameters, PlayerBackend, TrackSelectionParameters, TrackType,
-};
+#[cfg(any(
+    all(feature = "android", target_os = "android"),
+    target_os = "linux",
+    target_os = "windows",
+    all(
+        feature = "web",
+        feature = "renderer-wgpu",
+        target_arch = "wasm32",
+        target_os = "unknown"
+    )
+))]
+use cranpose_services::{AbrVariant, DashAdaptationSet, select_abr_variant};
+#[cfg(not(target_arch = "wasm32"))]
+use cranpose_services::{MediaItem, PlaybackParameters, PlayerBackend};
+use cranpose_services::{TrackSelectionParameters, TrackType};
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct CommandBatch {
     pub(crate) open: Option<(MediaItem, Duration)>,
     pub(crate) play: Option<bool>,
@@ -20,6 +34,7 @@ pub(crate) struct CommandBatch {
     pub(crate) track_selection: Option<TrackSelectionParameters>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct PendingCommands {
     open: Option<(MediaItem, Duration)>,
     want_play: bool,
@@ -35,6 +50,7 @@ struct PendingCommands {
     released: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Default for PendingCommands {
     fn default() -> Self {
         Self {
@@ -54,8 +70,10 @@ impl Default for PendingCommands {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 type InterruptHook = Arc<dyn Fn() + Send + Sync>;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct WorkerControl {
     commands: Mutex<PendingCommands>,
     wake_lock: Arc<Mutex<()>>,
@@ -63,6 +81,7 @@ pub(crate) struct WorkerControl {
     on_interrupt: Option<InterruptHook>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl WorkerControl {
     pub(crate) fn new(on_interrupt: Option<InterruptHook>) -> Self {
         Self {
@@ -145,22 +164,26 @@ impl WorkerControl {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct WorkerBackend {
     control: Arc<WorkerControl>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl WorkerBackend {
     pub(crate) fn new(control: Arc<WorkerControl>) -> Self {
         Self { control }
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for WorkerBackend {
     fn drop(&mut self) {
         self.release();
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl PlayerBackend for WorkerBackend {
     fn open(&self, item: &MediaItem, start_position: Duration) {
         self.control.interrupt();
@@ -288,4 +311,34 @@ pub(crate) fn select_track_index<'a>(
         }
     }
     Some(0)
+}
+
+#[cfg(any(
+    all(feature = "android", target_os = "android"),
+    target_os = "linux",
+    target_os = "windows",
+    all(
+        feature = "web",
+        feature = "renderer-wgpu",
+        target_arch = "wasm32",
+        target_os = "unknown"
+    )
+))]
+pub(crate) fn choose_dash_representation(
+    set: &DashAdaptationSet,
+    bandwidth_bps: u32,
+    selection: &TrackSelectionParameters,
+) -> usize {
+    let abr: Vec<AbrVariant> = set
+        .representations
+        .iter()
+        .enumerate()
+        .map(|(index, rep)| AbrVariant {
+            index,
+            bitrate: rep.bandwidth,
+            width: rep.width,
+            height: rep.height,
+        })
+        .collect();
+    select_abr_variant(&abr, bandwidth_bps, selection).unwrap_or(0)
 }

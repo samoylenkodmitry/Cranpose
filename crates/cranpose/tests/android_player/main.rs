@@ -42,18 +42,14 @@ mod android_e2e {
         fs,
         path::{Path, PathBuf},
         sync::atomic::Ordering,
-        thread,
         time::{Duration, Instant},
     };
 
-    use cranpose::{
-        AudioRole, Color, MediaItem, PlaybackParameters, Player, PlayerState,
-        SubtitleConfiguration, TrackType, VideoCodec, VideoContainer, install_player,
-        player_capabilities, uri_for_path, video_surface_supported,
-    };
-
     use super::support::{
-        HEIGHT, WIDTH, create_shutter_view, pixel_rgba, spawn_static_http_server,
+        AudioRole, Color, HEIGHT, MediaItem, PlaybackParameters, Player, PlayerState,
+        SubtitleConfiguration, TrackType, VideoCodec, VideoContainer, WIDTH, create_shutter_view,
+        install_player, pixel_rgba, player_capabilities, spawn_static_http_server, uri_for_path,
+        video_surface_supported, wait_polling,
     };
 
     const WAIT_TIMEOUT: Duration = Duration::from_secs(12);
@@ -94,19 +90,8 @@ mod android_e2e {
         }
     }
 
-    fn wait_until(mut cond: impl FnMut() -> bool) -> bool {
-        let deadline = Instant::now() + WAIT_TIMEOUT;
-        while Instant::now() < deadline {
-            if cond() {
-                return true;
-            }
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "device integration test polling backend worker completion"
-            )]
-            thread::sleep(Duration::from_millis(8));
-        }
-        cond()
+    fn wait_until(cond: impl FnMut() -> bool) -> bool {
+        wait_polling(WAIT_TIMEOUT, cond)
     }
 
     fn capabilities_probe_reports_containers_and_codecs() {

@@ -110,7 +110,9 @@ pub use codec::VideoCodec;
 pub use color::{ColorPrimaries, ColorRange, ColorTransfer, VideoColorInfo, VideoRotation};
 pub use config::{AccessUnit, DecodeOrder, DecoderConfig, DecoderOutput};
 #[cfg(target_os = "windows")]
-pub use d3d11_frame::{DxgiPixelFormat, DxgiSharedFrame};
+pub use d3d11_frame::{
+    D3d11FrameDescriptor, D3d11SurfaceExporter, DxgiPixelFormat, DxgiSharedFrame,
+};
 pub use decoder::{DecodedFrames, VideoDecoder};
 pub use error::DecoderError;
 pub use frame::{CropRect, FrameInfo, VideoFrame};

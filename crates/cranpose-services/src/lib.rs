@@ -367,12 +367,14 @@ pub use video_decoder::{
     DecoderStats, FrameInfo, FrameProducer, VideoCodec, VideoColorInfo, VideoDecoder, VideoFrame,
     VideoRotation, set_platform_decoder_capabilities, split_access_units,
 };
+#[cfg(target_os = "windows")]
+pub use video_decoder::{
+    D3d11FrameDescriptor, D3d11SurfaceExporter, DxgiPixelFormat, DxgiSharedFrame,
+};
 #[cfg(target_os = "linux")]
 pub use video_decoder::{
     DmaBufFrame, DmaBufPlane, LinuxFrameMemory, LinuxPixelFormat, SoftwareBiPlanarPlanes,
 };
-#[cfg(target_os = "windows")]
-pub use video_decoder::{DxgiPixelFormat, DxgiSharedFrame};
 pub use wearable::{
     WearableError, WearableEvent, WearableLink, WearablePeer, WearableReceiver, WearableStream,
     open_on_wearable_peer, open_wearable_stream, publish_wearable_event, send_wearable_message,

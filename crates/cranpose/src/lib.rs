@@ -7,18 +7,45 @@ extern crate self as cranpose;
 mod async_image;
 #[cfg(target_os = "linux")]
 mod linux;
-#[cfg(all(feature = "video", feature = "android", target_os = "android"))]
+#[cfg(all(
+    feature = "video",
+    any(
+        all(feature = "android", target_os = "android"),
+        target_os = "linux",
+        target_os = "windows"
+    )
+))]
 mod player_audio;
 #[cfg(all(
     feature = "video",
     any(
         target_os = "macos",
         target_os = "ios",
-        all(feature = "android", target_os = "android")
+        all(feature = "android", target_os = "android"),
+        target_os = "linux",
+        target_os = "windows",
+        all(
+            feature = "web",
+            feature = "renderer-wgpu",
+            target_arch = "wasm32",
+            target_os = "unknown"
+        )
     )
 ))]
 mod player_control;
-#[cfg(all(feature = "video", feature = "android", target_os = "android"))]
+#[cfg(all(
+    feature = "video",
+    any(all(feature = "android", target_os = "android"), target_os = "linux")
+))]
+mod player_demux_engine;
+#[cfg(all(
+    feature = "video",
+    any(
+        all(feature = "android", target_os = "android"),
+        target_os = "linux",
+        target_os = "windows"
+    )
+))]
 mod player_stream;
 #[cfg(feature = "video")]
 mod player_surface;
@@ -26,6 +53,15 @@ mod player_surface;
 mod player_surface_intake;
 #[cfg(feature = "video")]
 mod player_ui;
+#[cfg(all(
+    feature = "video",
+    any(
+        all(feature = "android", target_os = "android"),
+        target_os = "linux",
+        target_os = "windows"
+    )
+))]
+mod player_worker;
 #[cfg(feature = "localization")]
 mod system_languages;
 #[cfg(all(
@@ -320,6 +356,17 @@ pub fn install_player() {
     apple::player::register();
     #[cfg(all(feature = "android", target_os = "android"))]
     android::player::register();
+    #[cfg(target_os = "linux")]
+    linux::player::register();
+    #[cfg(target_os = "windows")]
+    windows::player::register();
+    #[cfg(all(
+        feature = "web",
+        feature = "renderer-wgpu",
+        target_arch = "wasm32",
+        target_os = "unknown"
+    ))]
+    web::player::register();
 }
 
 static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =

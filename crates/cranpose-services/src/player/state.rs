@@ -9,6 +9,7 @@ use std::{
 };
 
 use parking_lot::Mutex;
+use portable_atomic::AtomicU64;
 
 use super::{
     AudioRole, AvailableCommands, CueGroup, LoadControl, MasterClock, MediaProperties,
@@ -17,9 +18,14 @@ use super::{
     VideoSize,
 };
 use crate::{
-    media::{AudioFocus, DUCKED_GAIN, MediaItem, MediaObserver, audio_focus},
+    media::{
+        AudioFocus, DUCKED_GAIN, MediaError, MediaItem, MediaObserver, PlaybackProgress,
+        PlaybackState, audio_focus, publish_player_session,
+    },
     video_decoder::DecodedFrames,
 };
+
+static ACTIVE_PRIMARY_PLAYER_ID: AtomicU64 = AtomicU64::new(0);
 
 pub(super) type EventObserverFn = dyn Fn(PlayerEvent) + Send + Sync;
 
@@ -275,6 +281,51 @@ impl PlayerCore {
         }
     }
 
+    pub(super) fn claim_primary(&self) {
+        if self.audio_role == AudioRole::Primary {
+            ACTIVE_PRIMARY_PLAYER_ID.store(self.id.0, Ordering::Release);
+            self.sync_os_session();
+        }
+    }
+
+    pub(super) fn is_active_primary(&self) -> bool {
+        self.audio_role == AudioRole::Primary
+            && ACTIVE_PRIMARY_PLAYER_ID.load(Ordering::Acquire) == self.id.0
+    }
+
+    pub(super) fn release_primary(&self) {
+        if self.audio_role == AudioRole::Primary
+            && ACTIVE_PRIMARY_PLAYER_ID
+                .compare_exchange(self.id.0, 0, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        {
+            publish_player_session(None, PlaybackState::Idle, PlaybackProgress::default());
+        }
+    }
+
+    pub(super) fn sync_os_session(&self) {
+        if !self.is_active_primary() {
+            return;
+        }
+        let snap = self.state.lock();
+        let item = snap.playlist.get(snap.current_index).cloned();
+        let state = match (&snap.error, snap.playback_state, snap.play_when_ready) {
+            (Some(err), _, _) => PlaybackState::Failed(MediaError::Failed(err.to_string())),
+            (None, PlayerState::Idle, _) => PlaybackState::Idle,
+            (None, PlayerState::Buffering, _) => PlaybackState::Loading,
+            (None, PlayerState::Ready, true) => PlaybackState::Playing,
+            (None, PlayerState::Ready, false) => PlaybackState::Paused,
+            (None, PlayerState::Ended, _) => PlaybackState::Ended,
+        };
+        let progress = PlaybackProgress {
+            position: self.clock.position(),
+            duration: snap.properties.duration,
+            buffered: snap.buffered_position,
+        };
+        drop(snap);
+        publish_player_session(item.as_ref(), state, progress);
+    }
+
     pub(super) fn on_audio_focus(&self, focus: AudioFocus) {
         if self.released.load(Ordering::Acquire) || self.audio_role != AudioRole::Primary {
             return;
@@ -498,6 +549,7 @@ impl PlayerCore {
             }
         }
         self.emit(&events);
+        self.sync_os_session();
         if let Some((item, start)) = auto_advance {
             self.open_active_item(&item, Duration::ZERO, start);
         }
@@ -541,6 +593,7 @@ impl PlayerCore {
         }
         self.clock.sync_audio(position);
         self.state.lock().buffered_position = buffered;
+        self.sync_os_session();
     }
 
     pub(super) fn on_backend_video_size(&self, size: VideoSize) {

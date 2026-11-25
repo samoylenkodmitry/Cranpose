@@ -210,6 +210,7 @@ media-backend = ["dep:cranpose-media", "dep:objc2-media-player"]
 # brings what makes a picture's IOSurface a Metal texture.
 video = [
     "audio",
+    "cranpose-services/http-native",
     "dep:pollster",
     "dep:portable-atomic",
     "dep:objc2",
@@ -226,6 +227,7 @@ video = [
     "dep:objc2-metal",
     "dep:windows",
     "cranpose-services/video-web",
+    "dep:windows-core",
 ]
 renderer-pixels = ["cranpose-render-pixels"]
 # A composition the CPU draws into an RGBA framebuffer that the host
@@ -390,6 +392,12 @@ web-sys = { version = "0.3", optional = true, features = [
     "HtmlMediaElement",
     "HtmlAudioElement",
     "HtmlVideoElement",
+    "Headers",
+    "MediaError",
+    "Request",
+    "RequestInit",
+    "RequestMode",
+    "Response",
     "DomRectReadOnly",
     "VideoColorPrimaries",
     "VideoColorSpace",
@@ -521,9 +529,18 @@ windows = { version = "0.62", optional = true, features = [
     "Media",
     "Storage_Streams",
     "Win32_Foundation",
+    "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Media_Audio",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
     "Win32_System_WinRT",
 ] }
+windows-core = { version = "0.62", optional = true }
 wgpu = { workspace = true, optional = true, features = [
     "std",
     "parking_lot",
@@ -981,6 +998,12 @@ path = "tests/integration.rs"
 [[test]]
 name = "apple_player"
 path = "tests/apple_player/main.rs"
+required-features = ["desktop", "renderer-wgpu", "video"]
+harness = false
+
+[[test]]
+name = "linux_player"
+path = "tests/linux_player/main.rs"
 required-features = ["desktop", "renderer-wgpu", "video"]
 harness = false
 

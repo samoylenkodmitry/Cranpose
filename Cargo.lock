@@ -1294,6 +1294,7 @@ dependencies = [
  "web-sys",
  "web-time",
  "windows",
+ "windows-core",
  "windows-sys 0.61.2",
  "winit",
  "wry",
