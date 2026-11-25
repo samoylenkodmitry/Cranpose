@@ -392,43 +392,21 @@ fn parse_hls_variant(base_url: &str, attrs: &str, uri: &str) -> Option<HlsVarian
     })
 }
 
-fn find_attr<'a>(attrs: &'a str, target_key: &str) -> Option<&'a str> {
-    let bytes = attrs.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        while i < bytes.len() && (bytes[i] == b',' || bytes[i] == b' ') {
-            i += 1;
-        }
-        let key_start = i;
-        while i < bytes.len() && bytes[i] != b'=' {
-            i += 1;
-        }
-        if i >= bytes.len() {
-            break;
-        }
-        let key = attrs[key_start..i].trim();
-        i += 1;
-        let val = if i < bytes.len() && bytes[i] == b'"' {
-            i += 1;
-            let val_start = i;
-            while i < bytes.len() && bytes[i] != b'"' {
-                i += 1;
-            }
-            let slice = &attrs[val_start..i];
-            if i < bytes.len() {
-                i += 1;
-            }
-            slice
+fn find_attr<'a>(mut rest: &'a str, target_key: &str) -> Option<&'a str> {
+    while !rest.is_empty() {
+        rest = rest.trim_start_matches([',', ' ']);
+        let (key, after_eq) = rest.split_once('=')?;
+        let (val, next) = if let Some(quoted) = after_eq.strip_prefix('"') {
+            quoted.split_once('"').unwrap_or((quoted, ""))
         } else {
-            let val_start = i;
-            while i < bytes.len() && bytes[i] != b',' {
-                i += 1;
-            }
-            attrs[val_start..i].trim()
+            after_eq
+                .split_once(',')
+                .map_or_else(|| (after_eq.trim(), ""), |(v, r)| (v.trim(), r))
         };
-        if key == target_key {
+        if key.trim() == target_key {
             return Some(val);
         }
+        rest = next;
     }
     None
 }
@@ -554,7 +532,7 @@ fn expand_segment_template(
             .attribute("r")
             .and_then(|v| v.parse::<i64>().ok())
             .filter(|&r| r >= 0)
-            .map_or(0, |r| r as u64);
+            .map_or(0, i64::cast_unsigned);
         let count = repeat.saturating_add(1).min(4096);
         let duration = Duration::from_secs_f64(d as f64 / timescale as f64);
         for _ in 0..count {

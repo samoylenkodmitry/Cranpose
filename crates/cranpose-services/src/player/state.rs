@@ -134,6 +134,16 @@ impl Snapshot {
         cmds
     }
 
+    pub(super) fn refresh_commands(&mut self, released: bool) -> Option<PlayerEvent> {
+        let next = self.compute_commands(released);
+        if next != self.commands {
+            self.commands = next;
+            Some(PlayerEvent::AvailableCommandsChanged(next))
+        } else {
+            None
+        }
+    }
+
     pub(super) fn rebuild_shuffle_order(&mut self) {
         let len = self.playlist.len();
         self.shuffle_order.clear();
@@ -263,12 +273,8 @@ impl PlayerCore {
         }
     }
 
-    pub(super) fn refresh_commands(&self, snap: &mut Snapshot, events: &mut Vec<PlayerEvent>) {
-        let next = snap.compute_commands(self.released.load(Ordering::Acquire));
-        if next != snap.commands {
-            snap.commands = next;
-            events.push(PlayerEvent::AvailableCommandsChanged(next));
-        }
+    pub(super) fn is_released(&self) -> bool {
+        self.released.load(Ordering::Acquire)
     }
 
     pub(super) fn backend(&self) -> Option<Arc<dyn PlayerBackend>> {
@@ -276,25 +282,24 @@ impl PlayerCore {
     }
 
     pub(super) fn halt_to_idle(&self, clear_frames: bool) -> Vec<PlayerEvent> {
-        let mut events = Vec::new();
-        let mut snap = self.state.lock();
-        let prev_playing = snap.effective_is_playing();
-        snap.play_when_ready = false;
-        snap.is_loading = false;
-        snap.rendered_first_frame = false;
-        if clear_frames {
-            snap.decoded_frames = None;
-        }
-        self.clock.pause();
-        if snap.playback_state != PlayerState::Idle {
+        let released = self.is_released();
+        let (prev_playing, state_changed, cmd_event) = {
+            let mut snap = self.state.lock();
+            let prev_playing = snap.effective_is_playing();
+            snap.play_when_ready = false;
+            snap.is_loading = false;
+            snap.rendered_first_frame = false;
+            if clear_frames {
+                snap.decoded_frames = None;
+            }
+            let state_changed = snap.playback_state != PlayerState::Idle;
             snap.playback_state = PlayerState::Idle;
-            events.push(PlayerEvent::PlaybackStateChanged(PlayerState::Idle));
-        }
-        if prev_playing {
-            events.push(PlayerEvent::IsPlayingChanged(false));
-        }
-        self.refresh_commands(&mut snap, &mut events);
-        events
+            let cmd_event = snap.refresh_commands(released);
+            drop(snap);
+            (prev_playing, state_changed, cmd_event)
+        };
+        self.clock.pause();
+        idle_events(state_changed, prev_playing, None, cmd_event)
     }
 
     pub(super) fn open_active_item(
@@ -323,11 +328,12 @@ impl PlayerCore {
     }
 
     pub(super) fn on_backend_state(&self, next_state: PlayerState) {
-        if self.released.load(Ordering::Acquire) {
+        if self.is_released() {
             return;
         }
         let mut events = Vec::new();
         let mut auto_advance: Option<(MediaItem, StartPlayback)> = None;
+        let clock_action;
         {
             let mut snap = self.state.lock();
             if next_state == PlayerState::Ended {
@@ -338,10 +344,11 @@ impl PlayerCore {
                     snap.video_size = VideoSize::ZERO;
                     snap.buffered_position = Duration::ZERO;
                     snap.playback_state = PlayerState::Buffering;
-                    self.clock.seek(Duration::ZERO);
-                    self.clock.pause();
                     let next_item = snap.playlist[next_idx].clone();
                     let start = StartPlayback::from_play_when_ready(snap.play_when_ready);
+                    let cmd_ev = snap.refresh_commands(false);
+                    drop(snap);
+                    clock_action = Some((true, false));
                     events.push(PlayerEvent::MediaItemTransition { index: next_idx });
                     events.push(PlayerEvent::PositionDiscontinuity {
                         reason: PositionDiscontinuityReason::AutoTransition,
@@ -351,36 +358,54 @@ impl PlayerCore {
                     if prev_playing {
                         events.push(PlayerEvent::IsPlayingChanged(false));
                     }
-                    self.refresh_commands(&mut snap, &mut events);
+                    if let Some(ev) = cmd_ev {
+                        events.push(ev);
+                    }
                     auto_advance = Some((next_item, start));
                 } else {
                     let prev_playing = snap.effective_is_playing();
-                    if snap.playback_state != PlayerState::Ended {
-                        snap.playback_state = PlayerState::Ended;
-                        self.clock.pause();
+                    let changed = snap.playback_state != PlayerState::Ended;
+                    snap.playback_state = PlayerState::Ended;
+                    let cmd_ev = snap.refresh_commands(false);
+                    drop(snap);
+                    clock_action = Some((false, false));
+                    if changed {
                         events.push(PlayerEvent::PlaybackStateChanged(PlayerState::Ended));
                     }
                     if prev_playing {
                         events.push(PlayerEvent::IsPlayingChanged(false));
                     }
-                    self.refresh_commands(&mut snap, &mut events);
+                    if let Some(ev) = cmd_ev {
+                        events.push(ev);
+                    }
                 }
             } else {
                 let prev_playing = snap.effective_is_playing();
-                if snap.playback_state != next_state {
-                    snap.playback_state = next_state;
-                    events.push(PlayerEvent::PlaybackStateChanged(next_state));
-                }
+                let changed = snap.playback_state != next_state;
+                snap.playback_state = next_state;
                 let now_playing = snap.effective_is_playing();
-                if now_playing {
-                    self.clock.resume();
-                } else {
-                    self.clock.pause();
+                let cmd_ev = snap.refresh_commands(false);
+                drop(snap);
+                clock_action = Some((false, now_playing));
+                if changed {
+                    events.push(PlayerEvent::PlaybackStateChanged(next_state));
                 }
                 if now_playing != prev_playing {
                     events.push(PlayerEvent::IsPlayingChanged(now_playing));
                 }
-                self.refresh_commands(&mut snap, &mut events);
+                if let Some(ev) = cmd_ev {
+                    events.push(ev);
+                }
+            }
+        }
+        if let Some((reset_zero, running)) = clock_action {
+            if reset_zero {
+                self.clock.seek(Duration::ZERO);
+            }
+            if running {
+                self.clock.resume();
+            } else {
+                self.clock.pause();
             }
         }
         self.emit(&events);
@@ -390,35 +415,39 @@ impl PlayerCore {
     }
 
     pub(super) fn on_backend_loading(&self, loading: bool) {
-        if self.released.load(Ordering::Acquire) {
+        if self.is_released() {
             return;
         }
-        let mut events = Vec::new();
-        {
+        let changed = {
             let mut snap = self.state.lock();
             if snap.is_loading != loading {
                 snap.is_loading = loading;
-                events.push(PlayerEvent::IsLoadingChanged(loading));
+                true
+            } else {
+                false
             }
+        };
+        if changed {
+            self.emit(&[PlayerEvent::IsLoadingChanged(loading)]);
         }
-        self.emit(&events);
     }
 
     pub(super) fn on_backend_properties(&self, properties: MediaProperties) {
-        if self.released.load(Ordering::Acquire) {
+        if self.is_released() {
             return;
         }
-        let mut events = Vec::new();
-        {
+        let cmd_ev = {
             let mut snap = self.state.lock();
             snap.properties = properties;
-            self.refresh_commands(&mut snap, &mut events);
+            snap.refresh_commands(false)
+        };
+        if let Some(ev) = cmd_ev {
+            self.emit(&[ev]);
         }
-        self.emit(&events);
     }
 
     pub(super) fn on_backend_progress(&self, position: Duration, buffered: Duration) {
-        if self.released.load(Ordering::Acquire) {
+        if self.is_released() {
             return;
         }
         self.clock.sync_audio(position);
@@ -426,22 +455,25 @@ impl PlayerCore {
     }
 
     pub(super) fn on_backend_video_size(&self, size: VideoSize) {
-        if self.released.load(Ordering::Acquire) {
+        if self.is_released() {
             return;
         }
-        let mut events = Vec::new();
-        {
+        let changed = {
             let mut snap = self.state.lock();
             if snap.video_size != size {
                 snap.video_size = size;
-                events.push(PlayerEvent::VideoSizeChanged(size));
+                true
+            } else {
+                false
             }
+        };
+        if changed {
+            self.emit(&[PlayerEvent::VideoSizeChanged(size)]);
         }
-        self.emit(&events);
     }
 
     pub(super) fn on_backend_first_frame(&self) {
-        if self.released.load(Ordering::Acquire) {
+        if self.is_released() {
             return;
         }
         let should_emit = {
@@ -459,62 +491,86 @@ impl PlayerCore {
     }
 
     pub(super) fn on_backend_frames(&self, frames: Option<DecodedFrames>) {
-        if !self.released.load(Ordering::Acquire) {
+        if !self.is_released() {
             self.state.lock().decoded_frames = frames;
         }
     }
 
     pub(super) fn on_backend_tracks(&self, tracks: Tracks) {
-        if self.released.load(Ordering::Acquire) {
+        if self.is_released() {
             return;
         }
-        let mut events = Vec::new();
-        {
+        let changed = {
             let mut snap = self.state.lock();
             if snap.tracks != tracks {
                 snap.tracks = tracks.clone();
-                events.push(PlayerEvent::TracksChanged(tracks));
+                true
+            } else {
+                false
             }
+        };
+        if changed {
+            self.emit(&[PlayerEvent::TracksChanged(tracks)]);
         }
-        self.emit(&events);
     }
 
     pub(super) fn on_backend_cues(&self, cues: CueGroup) {
-        if self.released.load(Ordering::Acquire) {
+        if self.is_released() {
             return;
         }
-        let mut events = Vec::new();
-        {
+        let changed = {
             let mut snap = self.state.lock();
             if snap.cues != cues {
                 snap.cues = cues.clone();
-                events.push(PlayerEvent::CuesChanged(cues));
+                true
+            } else {
+                false
             }
+        };
+        if changed {
+            self.emit(&[PlayerEvent::CuesChanged(cues)]);
         }
-        self.emit(&events);
     }
 
     pub(super) fn on_backend_error(&self, error: PlayerError) {
-        if self.released.load(Ordering::Acquire) {
+        if self.is_released() {
             return;
         }
-        let mut events = Vec::new();
-        {
+        let (prev_playing, state_changed, cmd_ev) = {
             let mut snap = self.state.lock();
             let prev_playing = snap.effective_is_playing();
             snap.error = Some(error.clone());
             snap.is_loading = false;
-            self.clock.pause();
-            if snap.playback_state != PlayerState::Idle {
-                snap.playback_state = PlayerState::Idle;
-                events.push(PlayerEvent::PlaybackStateChanged(PlayerState::Idle));
-            }
-            if prev_playing {
-                events.push(PlayerEvent::IsPlayingChanged(false));
-            }
-            events.push(PlayerEvent::Error(error));
-            self.refresh_commands(&mut snap, &mut events);
-        }
+            let state_changed = snap.playback_state != PlayerState::Idle;
+            snap.playback_state = PlayerState::Idle;
+            let cmd_ev = snap.refresh_commands(false);
+            drop(snap);
+            (prev_playing, state_changed, cmd_ev)
+        };
+        self.clock.pause();
+        let events = idle_events(state_changed, prev_playing, Some(error), cmd_ev);
         self.emit(&events);
     }
+}
+
+fn idle_events(
+    state_changed: bool,
+    prev_playing: bool,
+    error: Option<PlayerError>,
+    cmd_ev: Option<PlayerEvent>,
+) -> Vec<PlayerEvent> {
+    let mut events = Vec::new();
+    if state_changed {
+        events.push(PlayerEvent::PlaybackStateChanged(PlayerState::Idle));
+    }
+    if prev_playing {
+        events.push(PlayerEvent::IsPlayingChanged(false));
+    }
+    if let Some(err) = error {
+        events.push(PlayerEvent::Error(err));
+    }
+    if let Some(ev) = cmd_ev {
+        events.push(ev);
+    }
+    events
 }

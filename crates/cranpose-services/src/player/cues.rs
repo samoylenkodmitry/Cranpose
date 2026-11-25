@@ -237,8 +237,8 @@ fn parse_timing_line(line: &str) -> Option<(Duration, Duration, &str)> {
     let (lhs, rhs_all) = line.split_once("-->")?;
     let start = parse_timestamp(lhs.trim())?;
     let rhs_trimmed = rhs_all.trim_start();
-    let (end_token, settings) = match rhs_trimmed.find(char::is_whitespace) {
-        Some(idx) => (&rhs_trimmed[..idx], rhs_trimmed[idx..].trim()),
+    let (end_token, settings) = match rhs_trimmed.split_once(char::is_whitespace) {
+        Some((end, rest)) => (end, rest.trim()),
         None => (rhs_trimmed, ""),
     };
     let end = parse_timestamp(end_token)?;
