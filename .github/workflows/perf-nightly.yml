@@ -89,8 +89,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
-          # The release tags, to build the newest one main contains.
+          # Use the same triggering revision as the board jobs, with its release tags.
           fetch-depth: 0
 
       - name: Configure machine-local SDK and cache paths
@@ -284,8 +283,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
-          # The release tags, to find the newest one main contains.
+          # The APKs and firmware must describe the same revision even if main advances.
           fetch-depth: 0
 
       - name: Name the run's folder
