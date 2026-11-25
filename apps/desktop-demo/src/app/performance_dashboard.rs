@@ -263,7 +263,7 @@ impl Metric {
                  macOS."
             }
             Self::GpuClock => "Mean GPU clock over the run.",
-            Self::AppSize => "App size counts the installed APKs, desktop build and supplied assets, browser distribution or board application image.",
+            Self::AppSize => "App size counts the Android APKs, desktop build and supplied assets, browser distribution or board application image.",
         }
     }
 

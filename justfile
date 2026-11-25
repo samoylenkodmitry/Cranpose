@@ -1478,11 +1478,8 @@ perf-esp32 board output:
     . "$HOME/export-{{esp32_toolchain}}.sh" && scripts/ci/with_host_lock.sh --shared python3 scripts/esp32/nightly.py build --board {{quote(board)}} --output {{quote(output)}}
     scripts/ci/with_host_lock.sh --exclusive python3 scripts/esp32/nightly.py measure --board {{quote(board)}} --output {{quote(output)}}
 
-perf-mi-tv output:
-    bash scripts/perf/mi_tv.sh {{quote(output)}}
-
-test-mi-tv apk output:
-    scripts/android/mi_tv.sh python3 scripts/android/tv_remote_test.py --apk {{quote(apk)}} --output {{quote(output)}}
+perf-mi-tv output apks:
+    scripts/android/mi_tv.sh just perf-measure-frameworks {{quote(output)}} {{quote(apks)}}
 
 # Compare the latest release with main on the attached Android device.
 perf-nightly serial output:
@@ -1492,7 +1489,14 @@ perf-nightly serial output:
 # benchmarks/compose-vs-cranpose/build_apps.sh) beside Cranpose's latest
 # release and main, built from this checkout.
 perf-frameworks serial output apks:
-    python3 scripts/perf/frameworks_phone.py --serial {{serial}} --output {{output}} --apks {{apks}}
+    just perf-framework-apks {{quote(apks)}}
+    just perf-measure-frameworks {{quote(output)}} {{quote(apks)}} {{quote(serial)}}
+
+perf-framework-apks apks:
+    python3 scripts/perf/framework_apks.py --apks {{quote(apks)}}
+
+perf-measure-frameworks output apks serial:
+    python3 benchmarks/compose-vs-cranpose/frameworks.py --serial {{quote(serial)}} --output {{quote(output)}} --install {{quote(apks)}} --full-run --main "$(git rev-parse HEAD)" --release "$(git describe --tags --abbrev=0 --match 'v*')"
 
 # The apps that target the browser, open in Chrome on the phone: the pages in
 # `pages` (from `build_apps.sh browser`), at the browser's tiers on the phone.

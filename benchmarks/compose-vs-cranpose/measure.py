@@ -17,6 +17,7 @@ the rest of the run does, and the frames of every second are kept.
 
 import argparse
 import json
+import os
 import re
 import shlex
 import statistics
@@ -163,9 +164,8 @@ class Device:
                                       timeout=timeout)
             except subprocess.TimeoutExpired:
                 if attempt == 1:
-                    raise RuntimeError(f'adb {" ".join(args)} hung for {timeout} s twice, '
-                                       'with a restart of the adb server between') from None
-                print(f'adb {" ".join(args[:2])} hung for {timeout} s; restarting the adb server', flush=True)
+                    raise RuntimeError(f'adb {" ".join(args)} hung for {timeout} s twice') from None
+                print(f'adb {" ".join(args[:2])} hung for {timeout} s; reconnecting', flush=True)
                 self.restart_adb()
 
     def restart_adb(self):
@@ -173,11 +173,16 @@ class Device:
         waits for the phone and opens its reversed ports again: the server
         that ended took them with it, and on 2026-10-27 every page Chrome
         opened after a restart found no server."""
-        try:
-            subprocess.run(['adb', 'kill-server'], capture_output=True, timeout=30)
-        except subprocess.TimeoutExpired:
-            subprocess.run(['pkill', '-KILL', '-f', 'adb .*fork-server'], capture_output=True)
-        subprocess.run(['adb', 'start-server'], capture_output=True, timeout=30)
+        if os.environ.get('ADB_SERVER_SOCKET') and ':' in self.serial:
+            # The SSH relay shares its ADB server with other devices.
+            subprocess.run(['adb', 'disconnect', self.serial], capture_output=True, timeout=30)
+            subprocess.run(['adb', 'connect', self.serial], check=True, capture_output=True, timeout=30)
+        else:
+            try:
+                subprocess.run(['adb', 'kill-server'], capture_output=True, timeout=30)
+            except subprocess.TimeoutExpired:
+                subprocess.run(['pkill', '-KILL', '-f', 'adb .*fork-server'], capture_output=True)
+            subprocess.run(['adb', 'start-server'], capture_output=True, timeout=30)
         subprocess.run(['adb', '-s', self.serial, 'wait-for-device'], capture_output=True,
                        timeout=RECONNECT_TIMEOUT_S)
         for port in self.reversed:

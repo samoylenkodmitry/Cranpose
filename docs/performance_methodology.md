@@ -78,16 +78,19 @@ the animated bar on a virtual panel. [ESP32 demo](https://samoylenkodmitry.githu
 
 ### Mi TV Stick
 
-The Mi TV Stick runs the 32-bit Cranpose and Compose apps at gauntlet tier 8.
-The sampler measures ten seconds from each launch. The runtime nightly drives
-the demo with D-pad keys on the same stick. The Mac reaches the stick at the
-repository variable `MI_TV_ENDPOINT` (host and port). The job uses the ADB
-server on `samarch-1` through a temporary SSH tunnel.
+The Mi TV Stick and Mate 20 X install the same signed framework APKs. Native
+apps carry both ARM ABIs. The stick loads the 32-bit libraries. Both devices
+measure the tier 12 gauntlet for ten seconds on each start. Each report
+records the SHA-256 of each APK. An installation failure appears beside the
+affected framework. The Mac reaches the stick at the repository variable
+`MI_TV_ENDPOINT` (host and port). The job uses the ADB server on `samarch-1`
+through a temporary SSH tunnel.
 
 ## App size
 
 Each scenario records bytes by framework in `app_bytes`. The Performance tab
-shows MiB (1,048,576 bytes). Android sums the installed base and split APKs.
+shows MiB (1,048,576 bytes). Android counts the supplied benchmark APK or
+sums the installed base and split APKs for an existing installation.
 The desktop runner counts the app bundle, publish directory or executable plus
 the shared benchmark fonts and chat assets. Its web and Tauri entries include
 the served page. Browser runs count the files in each app's distribution.

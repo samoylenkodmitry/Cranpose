@@ -609,8 +609,9 @@ release (`cranpose-release`, once a release draws the gauntlet) and main.
    macm3's Android builds beside Cranpose's release and main and runs
    `frameworks.py`. `just perf-browser` then opens macm3's browser builds in
    Chrome on the phone at tier 8, then at tier 10 (below).
-3. The Mi TV Stick runs the tier 8 gauntlet in Cranpose and Compose for ten
-   seconds on each start.
+3. The Mi TV Stick installs the same signed APKs as the Mate 20 X. Each
+   device runs every framework on the tier 12 gauntlet for ten seconds on
+   each start. The report includes each APK's SHA-256 and size.
 4. The ES3C35P and E32R35T boards run the animated demo and dashboard
    firmware. The [board comparison](../esp32/README.md) lists the frameworks
    for each layout.

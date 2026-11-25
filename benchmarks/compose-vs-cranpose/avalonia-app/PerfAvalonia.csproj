@@ -15,7 +15,7 @@
 		<ApplicationVersion>1</ApplicationVersion>
 		<ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
 		<SupportedOSPlatformVersion>28</SupportedOSPlatformVersion>
-		<RuntimeIdentifier>android-arm64</RuntimeIdentifier>
+		<RuntimeIdentifiers>android-arm;android-arm64</RuntimeIdentifiers>
 		<AndroidManifest>Android/AndroidManifest.xml</AndroidManifest>
 		<MonoAndroidResourcePrefix>Android/Resources</MonoAndroidResourcePrefix>
 	</PropertyGroup>

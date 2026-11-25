@@ -1,0 +1,10 @@
+// The release's build file can set its own ABI list. Apply the benchmark
+// devices' ABIs after that file and before AGP configures its variants.
+gradle.beforeProject { project ->
+    project.afterEvaluate {
+        def cranpose = project.extensions.findByName("cranpose")
+        if (cranpose != null) {
+            cranpose.releaseAbis.set(["arm64-v8a", "armeabi-v7a"])
+        }
+    }
+}

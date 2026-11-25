@@ -25,4 +25,4 @@ if [[ $model != MiTV-AYFR0 ]]; then
     exit 1
 fi
 export ANDROID_DEVICE_LOCK_ID="$MI_TV_ENDPOINT"
-"$@" --serial "$serial"
+"$@" "$serial"

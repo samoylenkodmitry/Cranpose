@@ -13,7 +13,7 @@
 		<ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
 		<ApplicationVersion>1</ApplicationVersion>
 		<SupportedOSPlatformVersion>28.0</SupportedOSPlatformVersion>
-		<RuntimeIdentifier>android-arm64</RuntimeIdentifier>
+		<RuntimeIdentifiers>android-arm;android-arm64</RuntimeIdentifiers>
 	</PropertyGroup>
 
 	<!-- What ships, at its best: trimmed, and fully AOT-compiled as the

@@ -8,7 +8,7 @@ plugins {
 /** The activity each app's framework runs in: `game` or `native`. */
 val activities = mapOf("egui" to "game", "slint" to "native")
 
-// Every Rust app the same way: its crate built for arm64 in release by
+// Each release contains native libraries for both Android benchmark devices, built by
 // cargo-ndk, loaded by the activity its framework runs in, whose launch
 // activity hands the native side the `am start` extras.
 subprojects {
@@ -61,7 +61,7 @@ subprojects {
         }
         // The library alone: each crate's binary is its desktop app.
         commandLine(
-            "cargo", "ndk", "--platform", "28", "-t", "arm64-v8a",
+            "cargo", "ndk", "--platform", "28", "-t", "arm64-v8a", "-t", "armeabi-v7a",
             "-o", rust.get().asFile.path, "build", "--release", "--lib",
         )
     }
