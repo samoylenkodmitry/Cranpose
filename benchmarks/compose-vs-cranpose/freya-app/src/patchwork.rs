@@ -134,10 +134,11 @@ impl Panel {
         let cards = Cards::new(t.columns, t.rows, t.height, self.height);
         rect().expanded().children(
             (0..cards.places())
-                .filter_map(|place| cards.place(place, k))
-                .map(|card| {
+                .filter_map(|place| cards.place(place, k).map(|card| (place, card)))
+                .map(|(place, card)| {
                     rect()
                         .key(card.id)
+                        .layer(Layer::OverlayLevel((place + 1) as u8))
                         .position(Position::new_absolute().left(WALL_GAP).top(card.top))
                         .child(Card {
                             id: card.id,
@@ -234,7 +235,10 @@ impl Component for Panel {
                     } else {
                         Color::from_argb(PATCHWORK_PILE_ALPHA, r, g, b)
                     };
+                    // Two adjacent rows overlap. Each tile paints its text before the next fill.
+                    let order = 2 * (i / columns) + i % columns;
                     rect()
+                        .layer(Layer::Relative((order * 8) as i16))
                         .position(Position::new_absolute().left(x).top(y))
                         .child(Tile {
                             width: pw,
@@ -331,11 +335,13 @@ impl Component for Nest {
         )
         .max_lines(1)
         .into_element();
+        let scale = *Platform::get().current_window().scale_factor.read() as f32;
+        let pad = (wall_padding(self.unit) * scale).round() / scale;
         for level in (0..PATCHWORK_DEPTH).rev() {
             inner = rect()
                 .expanded()
                 .background(rgb(patchwork_deep_rgb(self.index, level)))
-                .padding(Gaps::new_all(wall_padding(self.unit)))
+                .padding(Gaps::new_all(pad))
                 .child(inner)
                 .into_element();
         }

@@ -4,26 +4,6 @@ use crate::{
     TileShape,
     scene::{self, Box2, Face, Font, ImageId, Pictures, Rgb},
 };
-live_design! {
-    use link::shaders::*;
-    pub DrawBitmap = {{DrawBitmap}} {
-        texture image: texture2d
-        fn pixel(self)->vec4 {
-            let col=sample2d(self.image,self.pos);
-            let sdf=Sdf2d::viewport(self.pos*self.rect_size);
-            sdf.box(0.,0.,self.rect_size.x,self.rect_size.y,self.radius*0.5);
-            return sdf.fill(col);
-        }
-    }
-    pub DrawBand = {{DrawBand}} {
-        fn pixel(self)->vec4 {
-            let y=self.pos.y*self.rect_size.y+self.rect_pos.y;
-            let top=mix(self.left_y,self.right_y,self.pos.x);
-            let alpha=(1.-self.pos.y)*0.25*smoothstep(-0.5,0.5,y-top);
-            return Pal::premul(vec4(self.color.xyz,alpha));
-        }
-    }
-}
 
 #[derive(Live, LiveHook, LiveRegister)]
 #[repr(C)]
@@ -119,7 +99,7 @@ impl Painter<'_, '_, '_> {
         f: Font,
         w: Option<f32>,
     ) -> std::rc::Rc<makepad_draw::text::layouter::LaidoutText> {
-        self.face(f);
+        self.face(f).text_style.line_spacing = if w.is_some() { 1.4 / 1.17 } else { 1. };
         let draw = match f.face {
             Face::Regular => &self.regular,
             Face::Bold => &self.bold,
@@ -129,6 +109,9 @@ impl Painter<'_, '_, '_> {
     }
 }
 impl scene::Painter for Painter<'_, '_, '_> {
+    fn scale(&self) -> f32 {
+        self.cx.current_dpi_factor() as f32
+    }
     fn rect(&mut self, b: Box2, c: Rgb, a: u8, r: f32) {
         self.shape.color = color(c, a);
         self.shape.radius = r.min(b.w / 2.).min(b.h / 2.);
@@ -202,10 +185,10 @@ impl scene::Painter for Painter<'_, '_, '_> {
         let old = self.transform;
         let rotate = Mat4::rotation(vec3(0., 0., deg.to_radians()));
         let local = Mat4::mul(
-            &Mat4::translation(vec3(x, y, 0.)),
-            &Mat4::mul(&rotate, &Mat4::translation(vec3(-x, -y, 0.))),
+            &Mat4::translation(vec3(-x, -y, 0.)),
+            &Mat4::mul(&rotate, &Mat4::translation(vec3(x, y, 0.))),
         );
-        self.transform = Mat4::mul(&old, &local);
+        self.transform = Mat4::mul(&local, &old);
         let list = &mut self.gfx.groups[slot];
         list.begin_always(self.cx);
         list.set_view_transform(self.cx, &self.transform);

@@ -60,6 +60,7 @@ pub(crate) enum ImageId {
 }
 
 pub(crate) trait Painter: Sized {
+    fn scale(&self) -> f32;
     fn rect(&mut self, area: Box2, color: Rgb, alpha: u8, radius: f32);
     fn image(&mut self, area: Box2, id: ImageId, radius: f32);
     fn size(&mut self, text: &str, font: Font, width: Option<f32>) -> (f32, f32);

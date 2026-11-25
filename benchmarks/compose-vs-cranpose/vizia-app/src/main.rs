@@ -37,7 +37,7 @@ impl View for BenchView {
         match &mut *self.screen.borrow_mut() {
             Screen::Wall(wall) => wall.draw(canvas, w, h, scale, frame.get()),
             Screen::Other(scene, gfx) => scene.draw(
-                &mut gfx.painter(canvas),
+                &mut gfx.painter(canvas, scale),
                 scene::Box2::new(0., 0., w, h),
                 frame.get(),
                 changed,

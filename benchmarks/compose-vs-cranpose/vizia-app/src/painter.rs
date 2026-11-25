@@ -48,9 +48,10 @@ impl Graphics {
             layers: Default::default(),
         }
     }
-    pub fn painter<'a>(&'a mut self, canvas: &'a sk::Canvas) -> Painter<'a> {
+    pub fn painter<'a>(&'a mut self, canvas: &'a sk::Canvas, scale: f32) -> Painter<'a> {
         Painter {
             canvas,
+            scale,
             gfx: self,
             recording: None,
         }
@@ -61,6 +62,7 @@ pub(super) struct Painter<'a> {
     canvas: &'a sk::Canvas,
     gfx: &'a mut Graphics,
     recording: Option<sk::PictureRecorder>,
+    scale: f32,
 }
 impl Painter<'_> {
     fn canvas(&mut self) -> &sk::Canvas {
@@ -82,7 +84,9 @@ impl Painter<'_> {
     fn paragraph(&self, text: &str, font: Font, width: f32) -> para::Paragraph {
         let mut style = para::TextStyle::new();
         style
-            .set_font_size(font.size)
+            .set_font_size(font.size * self.scale)
+            .set_height(1.4)
+            .set_height_override(true)
             .set_color(color(font.color, 255))
             .set_font_families(&[if font.face == Face::Mono {
                 "DejaVu Sans Mono"
@@ -99,11 +103,14 @@ impl Painter<'_> {
         let mut builder = para::ParagraphBuilder::new(&options, self.gfx.fonts.clone());
         builder.add_text(text);
         let mut paragraph = builder.build();
-        paragraph.layout(width.max(1.));
+        paragraph.layout(width.max(1.) * self.scale);
         paragraph
     }
 }
 impl scene::Painter for Painter<'_> {
+    fn scale(&self) -> f32 {
+        self.scale
+    }
     fn rect(&mut self, b: Box2, c: Rgb, a: u8, r: f32) {
         self.canvas().draw_round_rect(bounds(b), r, r, &paint(c, a));
     }
@@ -120,7 +127,7 @@ impl scene::Painter for Painter<'_> {
     fn size(&mut self, text: &str, font: Font, width: Option<f32>) -> (f32, f32) {
         if let Some(w) = width {
             let p = self.paragraph(text, font, w);
-            (p.longest_line(), p.height())
+            (p.longest_line() / self.scale, p.height() / self.scale)
         } else {
             let f = self.font(font);
             let (_, m) = f.metrics();
@@ -133,10 +140,12 @@ impl scene::Painter for Painter<'_> {
         }
         if wrap {
             let p = self.paragraph(text, font, b.w);
+            let point = 1. / self.scale;
             let c = self.canvas();
             c.save();
             c.clip_rect(bounds(b), None, false);
-            p.paint(c, (b.x, b.y));
+            c.translate((b.x, b.y)).scale((point, point));
+            p.paint(c, (0., 0.));
             c.restore();
         } else {
             let f = self.font(font);

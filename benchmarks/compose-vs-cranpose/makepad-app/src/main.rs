@@ -12,7 +12,23 @@ use painter::{DrawBand, DrawBitmap};
 live_design! {
     use link::widgets::*;
     use link::shaders::*;
-    use crate::painter::*;
+    DrawBitmap = {{DrawBitmap}} {
+        texture image: texture2d
+        fn pixel(self)->vec4 {
+            let col=sample2d(self.image,self.pos);
+            let sdf=Sdf2d::viewport(self.pos*self.rect_size);
+            sdf.box(0.,0.,self.rect_size.x,self.rect_size.y,self.radius*0.5);
+            return sdf.fill(col);
+        }
+    }
+    DrawBand = {{DrawBand}} {
+        fn pixel(self)->vec4 {
+            let y=self.pos.y*self.rect_size.y+self.rect_pos.y;
+            let top=mix(self.left_y,self.right_y,self.pos.x);
+            let alpha=(1.-self.pos.y)*0.25*smoothstep(-0.5,0.5,y-top);
+            return Pal::premul(vec4(self.color.xyz,alpha));
+        }
+    }
     TileShape = {{TileShape}} {
         fn pixel(self) -> vec4 {
             if self.radius == 0.0 && self.stroke == 0.0 { return Pal::premul(self.color); }
@@ -169,7 +185,6 @@ impl Widget for Wall {
                 WALL_CLOCK_HEIGHT
             };
         let origin = rect.pos + dvec2(0., offset.into());
-        let grid = Grid::new(tier, w, h - offset);
         self.shape.stroke = 0.;
         let background = if load.scenario == Scenario::Gauntlet {
             GAUNTLET_BACKGROUND_RGB
@@ -178,10 +193,12 @@ impl Widget for Wall {
         };
         self.shape.rect(cx, rect.pos, w, h, background, 0.);
         self.shape.rect(cx, rect.pos, w, HEADER, BAR, 0.);
+        self.bold.color = vec4(1., 1., 1., 1.);
         self.bold.text_style.font_size = 15.;
         self.bold
             .draw_abs(cx, rect.pos + dvec2(16., 16.), load.scenario.title());
         if load.scenario != Scenario::Gauntlet {
+            self.regular.color = vec4(1., 1., 1., 1.);
             self.regular.text_style.font_size = WALL_CLOCK_TEXT * 0.75;
             self.regular
                 .draw_abs(cx, rect.pos + dvec2(8., 59.), &wall_clock(k));
@@ -209,6 +226,7 @@ impl Widget for Wall {
             };
             screen.draw(&mut canvas, area, k, previous != k);
         } else {
+            let grid = Grid::new(tier, w, h - offset);
             if self
                 .tiles
                 .begin_maybe(cx, self.size != Some(rect))
@@ -250,7 +268,6 @@ struct App {
 impl LiveRegister for App {
     fn live_register(cx: &mut Cx) {
         makepad_widgets::live_design(cx);
-        painter::live_design(cx);
     }
 }
 

@@ -170,11 +170,12 @@ impl Panel {
                 }
             }
             Patch::Deep => {
+                let pad = (wall_padding(t.height) * p.scale()).round() / p.scale();
                 for i in 0..pairs * rows {
                     let mut b = self.cell(i, pairs, dw, dh);
                     for level in 0..PATCHWORK_DEPTH {
                         p.rect(b, patchwork_deep_rgb(i, level), 255, 0.);
-                        b = b.inset(wall_padding(t.height));
+                        b = b.inset(pad);
                     }
                     p.text(
                         b,

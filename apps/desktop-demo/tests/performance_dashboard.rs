@@ -552,7 +552,7 @@ fn a_board_card_shows_the_firmware_size_for_its_selected_layout() {
     let texts = robot.get_all_text();
     assert!(shows(&texts, "0.50"), "{texts:?}");
     assert!(
-        shows(&texts, "No measurement was scheduled for Slint"),
+        shows(&texts, "This run recorded no measurement for Slint"),
         "{texts:?}"
     );
     choose(&mut robot, "dashboard", 0);
@@ -573,7 +573,10 @@ fn a_framework_card_explains_an_unimplemented_layout() {
         let mut robot = dashboard_of(report, FrameSource::Files(Rc::default()));
         let texts = robot.get_all_text();
         assert!(
-            shows(&texts, "Freya had no Patchwork implementation in this run"),
+            shows(
+                &texts,
+                "The Freya benchmark app did not implement Patchwork in this run"
+            ),
             "{texts:?}"
         );
     }

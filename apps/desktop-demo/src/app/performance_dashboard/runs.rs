@@ -220,11 +220,11 @@ impl PerfRun {
                 name => name,
             };
             format!(
-                "{} had no {layout} implementation in this run",
+                "The {} benchmark app did not implement {layout} in this run",
                 subject.label
             )
         } else {
-            format!("No measurement was scheduled for {}", subject.label)
+            format!("This run recorded no measurement for {}", subject.label)
         }
     }
 
