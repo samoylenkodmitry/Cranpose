@@ -690,19 +690,17 @@ pub(crate) fn on_lifecycle(event: LifecycleEvent) {
 }
 
 pub(crate) fn publish_player_session(
-    item: Option<MediaItem>,
+    item: Option<&MediaItem>,
     state: PlaybackState,
     progress: PlaybackProgress,
 ) {
-    let mut item_changed = false;
-    {
-        let mut current = CURRENT_ITEM.lock();
-        if *current != item {
-            *current = item.clone();
-            item_changed = true;
-        }
+    let mut current = CURRENT_ITEM.lock();
+    let item_changed = current.as_ref() != item;
+    if item_changed {
+        *current = item.cloned();
     }
-    if item_changed && let Some(active) = &item {
+    drop(current);
+    if item_changed && let Some(active) = item {
         if let Some(player) = media_player()
             && player.capabilities().session
         {

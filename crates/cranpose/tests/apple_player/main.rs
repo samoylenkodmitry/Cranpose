@@ -20,25 +20,27 @@ mod support;
 mod macos {
     use std::{
         fs,
-        path::{Path, PathBuf},
-        process::Command,
+        path::Path,
         sync::atomic::Ordering,
         time::{Duration, Instant},
     };
 
-    use cranpose::{
-        AudioRole, Color, MediaItem, PlaybackParameters, Player, PlayerState,
-        SubtitleConfiguration, TrackType, VideoCodec, VideoContainer, install_player,
-        player_capabilities, uri_for_path, video_surface_supported,
-    };
     use objc2_foundation::{NSDate, NSRunLoop};
 
     use super::support::{
-        HEIGHT, WIDTH, create_shutter_view as make_shutter_view, pixel_rgba,
-        spawn_static_http_server,
+        AudioRole, Color, HEIGHT, MediaItem, PlaybackParameters, Player, PlayerState,
+        SubtitleConfiguration, TrackType, VideoCodec, VideoContainer, WIDTH,
+        create_shutter_view as make_shutter_view, ffmpeg_binary, generate_hdr_hevc_mp4,
+        generate_two_color_mp4, generate_vod_hls, install_player, pixel_rgba, player_capabilities,
+        spawn_static_http_server, temp_test_dir as make_temp_dir, uri_for_path,
+        video_surface_supported,
     };
 
     const WAIT_TIMEOUT: Duration = Duration::from_secs(10);
+
+    fn temp_test_dir(tag: &str) -> std::path::PathBuf {
+        make_temp_dir("cranpose-apple-player", tag)
+    }
 
     pub(super) fn run_all() {
         capabilities_probe_reports_containers_and_codecs();
@@ -63,114 +65,6 @@ mod macos {
             pump_main_runloop(Duration::from_millis(8));
         }
         cond()
-    }
-
-    fn ffmpeg_binary() -> Option<PathBuf> {
-        for candidate in [
-            "/opt/homebrew/bin/ffmpeg",
-            "/usr/local/bin/ffmpeg",
-            "ffmpeg",
-        ] {
-            if Command::new(candidate)
-                .arg("-version")
-                .output()
-                .is_ok_and(|out| out.status.success())
-            {
-                return Some(PathBuf::from(candidate));
-            }
-        }
-        None
-    }
-
-    fn temp_test_dir(tag: &str) -> PathBuf {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-output")
-            .join(format!(
-                "cranpose-apple-player-{tag}-{}",
-                std::process::id()
-            ));
-        drop(fs::remove_dir_all(&dir));
-        fs::create_dir_all(&dir).expect("create test media dir");
-        dir
-    }
-
-    fn generate_two_color_mp4(ffmpeg: &Path, out_path: &Path) {
-        let status = Command::new(ffmpeg)
-            .args([
-                "-y",
-                "-loglevel",
-                "error",
-                "-f",
-                "lavfi",
-                "-i",
-                "color=c=0x00ff00:s=320x180:d=1:r=30",
-                "-f",
-                "lavfi",
-                "-i",
-                "color=c=0xff0000:s=320x180:d=1:r=30",
-                "-f",
-                "lavfi",
-                "-i",
-                "sine=frequency=440:duration=2",
-                "-filter_complex",
-                "[0:v][1:v]concat=n=2:v=1:a=0[v]",
-                "-map",
-                "[v]",
-                "-map",
-                "2:a",
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-g",
-                "15",
-                "-c:a",
-                "aac",
-                "-movflags",
-                "+faststart",
-            ])
-            .arg(out_path)
-            .status()
-            .expect("run ffmpeg mp4");
-        assert!(status.success(), "ffmpeg mp4 generation failed");
-    }
-
-    fn generate_vod_hls(ffmpeg: &Path, dir: &Path) -> PathBuf {
-        let playlist = dir.join("stream.m3u8");
-        let seg_pattern = dir.join("seg%03d.ts");
-        let status = Command::new(ffmpeg)
-            .args([
-                "-y",
-                "-loglevel",
-                "error",
-                "-f",
-                "lavfi",
-                "-i",
-                "color=c=0x0066ff:s=320x180:d=2:r=30",
-                "-f",
-                "lavfi",
-                "-i",
-                "sine=frequency=440:duration=2",
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-g",
-                "15",
-                "-c:a",
-                "aac",
-                "-hls_time",
-                "1",
-                "-hls_playlist_type",
-                "vod",
-                "-hls_segment_filename",
-            ])
-            .arg(&seg_pattern)
-            .arg(&playlist)
-            .status()
-            .expect("run ffmpeg hls");
-        assert!(status.success(), "ffmpeg hls generation failed");
-        playlist
     }
 
     fn capabilities_probe_reports_containers_and_codecs() {
@@ -390,36 +284,7 @@ mod macos {
             ("HLG", "0x00ccff", "arib-std-b67", false, true),
         ] {
             let clip_path = dir.join(format!("hdr_{label}.mp4"));
-            let status = Command::new(ffmpeg)
-                .args([
-                    "-y",
-                    "-loglevel",
-                    "error",
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    &format!("color=c={color_hex}:s={WIDTH}x{HEIGHT}:d=1:r=30"),
-                    "-c:v",
-                    "libx265",
-                    "-tag:v",
-                    "hvc1",
-                    "-pix_fmt",
-                    "yuv420p10le",
-                    "-x265-params",
-                    &format!("colorprim=bt2020:transfer={trc}:colormatrix=bt2020nc"),
-                    "-color_primaries",
-                    "bt2020",
-                    "-color_trc",
-                    trc,
-                    "-colorspace",
-                    "bt2020nc",
-                    "-movflags",
-                    "+faststart",
-                ])
-                .arg(&clip_path)
-                .status()
-                .expect("run ffmpeg HDR clip");
-            if !status.success() {
+            if !generate_hdr_hevc_mp4(ffmpeg, &clip_path, color_hex, trc) {
                 continue;
             }
             let player = Player::builder()

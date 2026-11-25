@@ -16,8 +16,8 @@ use std::{
 };
 
 use cranpose_services::{
-    ColorPrimaries, ColorRange, ColorTransfer, TrackEntry, TrackFormat, TrackGroup, TrackType,
-    Tracks, VideoCodec, VideoColorInfo, VideoRotation, VideoSize,
+    ColorPrimaries, ColorRange, ColorTransfer, TrackEntry, TrackFormat, Tracks, VideoCodec,
+    VideoColorInfo, VideoRotation,
 };
 use ndk_sys::{
     AMediaCodec, AMediaCodec_configure, AMediaCodec_createDecoderByType, AMediaCodec_delete,
@@ -206,11 +206,7 @@ unsafe extern "C" fn custom_close(_userdata: *mut c_void) {}
 #[derive(Clone, Debug)]
 pub(crate) struct VideoTrackInfo {
     pub(crate) track_index: usize,
-    pub(crate) codec: VideoCodec,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) rotation: VideoRotation,
-    pub(crate) color: Option<VideoColorInfo>,
+    pub(crate) spec: crate::player_demux_engine::VideoDecoderSpec,
     pub(crate) csd: Vec<u8>,
 }
 
@@ -373,30 +369,16 @@ impl MediaExtractor {
             }
         }
 
-        let mut groups = Vec::new();
-        if !video_entries.is_empty() {
-            groups.push(TrackGroup {
-                id: "video".into(),
-                track_type: TrackType::Video,
-                tracks: video_entries,
-                adaptive_supported: false,
-            });
-        }
-        if !audio_entries.is_empty() {
-            groups.push(TrackGroup {
-                id: "audio".into(),
-                track_type: TrackType::Audio,
-                tracks: audio_entries,
-                adaptive_supported: false,
-            });
-        }
         let duration =
             (max_duration_us > 0).then(|| Duration::from_micros(max_duration_us.cast_unsigned()));
         ExtractedTracks {
             video,
             audio_tracks,
             duration,
-            tracks: Tracks { groups },
+            tracks: crate::player_demux_engine::build_video_audio_tracks(
+                video_entries,
+                audio_entries,
+            ),
         }
     }
 
@@ -743,11 +725,13 @@ fn parse_video_track(
     }
     let info = (selected && width > 0 && height > 0).then_some(VideoTrackInfo {
         track_index: idx,
-        codec,
-        width,
-        height,
-        rotation,
-        color,
+        spec: crate::player_demux_engine::VideoDecoderSpec {
+            codec,
+            width,
+            height,
+            rotation,
+            color,
+        },
         csd,
     });
     let entry = TrackEntry {
@@ -891,14 +875,7 @@ fn read_format_color(fmt: *mut AMediaFormat) -> Option<VideoColorInfo> {
         Some(7) => Some(ColorTransfer::Hlg),
         _ => None,
     };
-    if primaries.is_none() && range.is_none() && transfer.is_none() {
-        return None;
-    }
-    Some(VideoColorInfo {
-        primaries: primaries.unwrap_or(ColorPrimaries::Bt709),
-        range: range.unwrap_or(ColorRange::Limited),
-        transfer: transfer.unwrap_or(ColorTransfer::Sdr),
-    })
+    crate::player_demux_engine::assemble_color_info(primaries, range, transfer)
 }
 
 fn append_annex_b_csd(dst: &mut Vec<u8>, bytes: &[u8]) {
@@ -926,8 +903,4 @@ pub(crate) fn ndk_has_decoder(mime: &str) -> bool {
         AMediaCodec_delete(codec);
     }
     true
-}
-
-pub(crate) fn video_size_of(info: &VideoTrackInfo) -> VideoSize {
-    VideoSize::new(info.width, info.height)
 }

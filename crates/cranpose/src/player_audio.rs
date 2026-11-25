@@ -416,6 +416,7 @@ impl PcmAudioOutput {
         }
     }
 
+    #[cfg(target_os = "android")]
     pub(crate) fn push_pcm_i16(&mut self, pcm: &[i16], src_rate: u32, src_channels: usize) {
         self.push_pcm_samples(
             pcm.len() / src_channels.max(1),
@@ -544,6 +545,7 @@ fn sample_channel_f32(frame: &[f32], dst_ch: usize, src_channels: usize) -> f32 
     }
 }
 
+#[cfg(target_os = "android")]
 fn sample_i16_frame(pcm: &[i16], frame: usize, dst_ch: usize, src_channels: usize) -> f32 {
     let base = frame * src_channels;
     let raw = if src_channels == 1 {

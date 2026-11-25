@@ -307,25 +307,23 @@ impl PlayerCore {
         if !self.is_active_primary() {
             return;
         }
-        let (item, state, progress) = {
-            let snap = self.state.lock();
-            let item = snap.playlist.get(snap.current_index).cloned();
-            let state = match (&snap.error, snap.playback_state, snap.play_when_ready) {
-                (Some(err), _, _) => PlaybackState::Failed(MediaError::Failed(err.to_string())),
-                (None, PlayerState::Idle, _) => PlaybackState::Idle,
-                (None, PlayerState::Buffering, _) => PlaybackState::Loading,
-                (None, PlayerState::Ready, true) => PlaybackState::Playing,
-                (None, PlayerState::Ready, false) => PlaybackState::Paused,
-                (None, PlayerState::Ended, _) => PlaybackState::Ended,
-            };
-            let progress = PlaybackProgress {
-                position: self.clock.position(),
-                duration: snap.properties.duration,
-                buffered: snap.buffered_position,
-            };
-            (item, state, progress)
+        let snap = self.state.lock();
+        let item = snap.playlist.get(snap.current_index).cloned();
+        let state = match (&snap.error, snap.playback_state, snap.play_when_ready) {
+            (Some(err), _, _) => PlaybackState::Failed(MediaError::Failed(err.to_string())),
+            (None, PlayerState::Idle, _) => PlaybackState::Idle,
+            (None, PlayerState::Buffering, _) => PlaybackState::Loading,
+            (None, PlayerState::Ready, true) => PlaybackState::Playing,
+            (None, PlayerState::Ready, false) => PlaybackState::Paused,
+            (None, PlayerState::Ended, _) => PlaybackState::Ended,
         };
-        publish_player_session(item, state, progress);
+        let progress = PlaybackProgress {
+            position: self.clock.position(),
+            duration: snap.properties.duration,
+            buffered: snap.buffered_position,
+        };
+        drop(snap);
+        publish_player_session(item.as_ref(), state, progress);
     }
 
     pub(super) fn on_audio_focus(&self, focus: AudioFocus) {

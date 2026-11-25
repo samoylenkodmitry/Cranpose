@@ -1,380 +1,36 @@
-//! Runtime-`dlopen` FFmpeg (`libavformat` + `libavcodec` + `libavutil`) container demuxer,
-//! Annex-B bitstream filter, and PCM audio decoder for Linux [`Player`](crate::Player).
-//!
-//! Avoids compile-time C headers and probes `AVFormatContext` / `AVStream` / `AVCodecContext`
-//! offsets at startup so a single binary runs cleanly across FFmpeg 5, 6, 7, 8, and 9 distros.
+//! FFmpeg (`libavformat` + `libavcodec`) container demuxer, Annex-B bitstream filter, and PCM
+//! audio decoder for Linux [`Player`](crate::Player).
 #![expect(
     unsafe_code,
-    reason = "dlopen/dlsym and C ABI FFI for Linux libavformat, libavcodec, and libavutil"
+    reason = "C ABI FFI calls into runtime-loaded Linux libavformat, libavcodec, and libavutil"
 )]
 
 use std::{
-    ffi::{CStr, CString, c_char, c_int, c_void},
-    io::{Read, Seek, SeekFrom},
+    ffi::{CString, c_int, c_void},
     path::Path,
     ptr,
-    sync::{Arc, OnceLock},
+    sync::Arc,
     time::Duration,
 };
 
-use cranpose_services::{
-    ColorPrimaries, ColorRange, ColorTransfer, TrackEntry, TrackFormat, TrackGroup, TrackType,
-    Tracks, VideoCodec, VideoColorInfo, VideoRotation, VideoSize,
+use cranpose_services::{TrackEntry, TrackFormat, Tracks, VideoCodec, VideoRotation};
+
+pub(crate) use super::player_ffmpeg::avformat_available;
+use super::player_ffmpeg::{
+    AV_NOPTS_VALUE, AV_PKT_FLAG_KEY, AV_SAMPLE_FMT_DBL, AV_SAMPLE_FMT_DBLP, AV_SAMPLE_FMT_FLT,
+    AV_SAMPLE_FMT_FLTP, AV_SAMPLE_FMT_S16, AV_SAMPLE_FMT_S16P, AV_SAMPLE_FMT_S32,
+    AV_SAMPLE_FMT_S32P, AV_SAMPLE_FMT_U8, AV_SAMPLE_FMT_U8P, AV_TIME_BASE, AVERROR_EAGAIN,
+    AVERROR_EOF, AVIO_BUF_SIZE, AVMEDIA_TYPE_AUDIO, AVMEDIA_TYPE_VIDEO, AVSEEK_FLAG_BACKWARD,
+    AVSEEK_SIZE, AvFrameHead, AvPacketHead, AvRational, FfmpegApi, codec_name_of, ffmpeg_api,
+    probe_codec_props, read_opt_channels, read_opt_u32, read_stream_metadata,
+    rotation_from_degrees, video_codec_from_name,
 };
-
 use crate::player_stream::HttpRangeReader;
-
-const AV_NOPTS_VALUE: i64 = i64::MIN;
-const AV_TIME_BASE: f64 = 1_000_000.0;
-const AVMEDIA_TYPE_VIDEO: c_int = 0;
-const AVMEDIA_TYPE_AUDIO: c_int = 1;
-const AV_PKT_FLAG_KEY: c_int = 1;
-const AVSEEK_FLAG_BACKWARD: c_int = 1;
-const AVSEEK_SIZE: c_int = 0x1_0000;
-const AVERROR_EOF: c_int = -(i32::from_le_bytes(*b"EOF "));
-const AVERROR_EAGAIN: c_int = -libc::EAGAIN;
-const AV_OPT_SEARCH_CHILDREN: c_int = 1;
-const AVIO_BUF_SIZE: usize = 64 * 1024;
-
-const AV_SAMPLE_FMT_U8: c_int = 0;
-const AV_SAMPLE_FMT_S16: c_int = 1;
-const AV_SAMPLE_FMT_S32: c_int = 2;
-const AV_SAMPLE_FMT_FLT: c_int = 3;
-const AV_SAMPLE_FMT_DBL: c_int = 4;
-const AV_SAMPLE_FMT_U8P: c_int = 5;
-const AV_SAMPLE_FMT_S16P: c_int = 6;
-const AV_SAMPLE_FMT_S32P: c_int = 7;
-const AV_SAMPLE_FMT_FLTP: c_int = 8;
-const AV_SAMPLE_FMT_DBLP: c_int = 9;
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct AvRational {
-    num: c_int,
-    den: c_int,
-}
-
-#[repr(C)]
-struct AvPacketHead {
-    buf: *mut c_void,
-    pts: i64,
-    dts: i64,
-    data: *mut u8,
-    size: c_int,
-    stream_index: c_int,
-    flags: c_int,
-}
-
-#[repr(C)]
-struct AvFrameHead {
-    data: [*mut u8; 8],
-    linesize: [c_int; 8],
-    extended_data: *mut *mut u8,
-    width: c_int,
-    height: c_int,
-    nb_samples: c_int,
-    format: c_int,
-}
-
-#[repr(C)]
-struct AvDictEntry {
-    key: *const c_char,
-    value: *const c_char,
-}
-
-type AvioReadFn = unsafe extern "C" fn(*mut c_void, *mut u8, c_int) -> c_int;
-type AvioSeekFn = unsafe extern "C" fn(*mut c_void, i64, c_int) -> i64;
-
-struct AvLayout {
-    fmt_pb: usize,
-    fmt_nb_streams: usize,
-    fmt_streams: usize,
-    fmt_duration: usize,
-    stream_codecpar: usize,
-    stream_time_base: usize,
-    stream_duration: usize,
-    stream_metadata: usize,
-}
-
-struct FfmpegApi {
-    _libavformat: *mut c_void,
-    _libavcodec: *mut c_void,
-    _libavutil: *mut c_void,
-    layout: AvLayout,
-    avformat_alloc_context: unsafe extern "C" fn() -> *mut c_void,
-    avformat_free_context: unsafe extern "C" fn(*mut c_void),
-    avformat_open_input:
-        unsafe extern "C" fn(*mut *mut c_void, *const c_char, *const c_void, *mut *mut c_void) -> c_int,
-    avformat_close_input: unsafe extern "C" fn(*mut *mut c_void),
-    avformat_find_stream_info: unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> c_int,
-    av_read_frame: unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int,
-    av_seek_frame: unsafe extern "C" fn(*mut c_void, c_int, i64, c_int) -> c_int,
-    avio_alloc_context: unsafe extern "C" fn(
-        *mut u8,
-        c_int,
-        c_int,
-        *mut c_void,
-        Option<AvioReadFn>,
-        Option<AvioReadFn>,
-        Option<AvioSeekFn>,
-    ) -> *mut c_void,
-    avio_context_free: unsafe extern "C" fn(*mut *mut c_void),
-    avcodec_get_name: unsafe extern "C" fn(u32) -> *const c_char,
-    avcodec_find_decoder: unsafe extern "C" fn(u32) -> *const c_void,
-    avcodec_alloc_context3: unsafe extern "C" fn(*const c_void) -> *mut c_void,
-    avcodec_free_context: unsafe extern "C" fn(*mut *mut c_void),
-    avcodec_parameters_to_context: unsafe extern "C" fn(*mut c_void, *const c_void) -> c_int,
-    avcodec_parameters_copy: unsafe extern "C" fn(*mut c_void, *const c_void) -> c_int,
-    avcodec_open2: unsafe extern "C" fn(*mut c_void, *const c_void, *mut *mut c_void) -> c_int,
-    avcodec_send_packet: unsafe extern "C" fn(*mut c_void, *const c_void) -> c_int,
-    avcodec_receive_frame: unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int,
-    avcodec_flush_buffers: unsafe extern "C" fn(*mut c_void),
-    av_packet_alloc: unsafe extern "C" fn() -> *mut c_void,
-    av_packet_free: unsafe extern "C" fn(*mut *mut c_void),
-    av_packet_unref: unsafe extern "C" fn(*mut c_void),
-    av_bsf_get_by_name: unsafe extern "C" fn(*const c_char) -> *const c_void,
-    av_bsf_alloc: unsafe extern "C" fn(*const c_void, *mut *mut c_void) -> c_int,
-    av_bsf_init: unsafe extern "C" fn(*mut c_void) -> c_int,
-    av_bsf_send_packet: unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int,
-    av_bsf_receive_packet: unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int,
-    av_bsf_flush: unsafe extern "C" fn(*mut c_void),
-    av_bsf_free: unsafe extern "C" fn(*mut *mut c_void),
-    av_frame_alloc: unsafe extern "C" fn() -> *mut c_void,
-    av_frame_free: unsafe extern "C" fn(*mut *mut c_void),
-    av_frame_unref: unsafe extern "C" fn(*mut c_void),
-    av_malloc: unsafe extern "C" fn(usize) -> *mut c_void,
-    av_free: unsafe extern "C" fn(*mut c_void),
-    av_dict_get:
-        unsafe extern "C" fn(*const c_void, *const c_char, *const AvDictEntry, c_int) -> *const AvDictEntry,
-    av_opt_get_int: unsafe extern "C" fn(*mut c_void, *const c_char, c_int, *mut i64) -> c_int,
-    av_opt_get: unsafe extern "C" fn(*mut c_void, *const c_char, c_int, *mut *mut u8) -> c_int,
-}
-
-// SAFETY: process-wide immutable dlopen library handles and C function pointers.
-unsafe impl Send for FfmpegApi {}
-// SAFETY: as for Send.
-unsafe impl Sync for FfmpegApi {}
-
-fn dlopen_any(names: &[&CStr]) -> *mut c_void {
-    for name in names {
-        // SAFETY: `name` is NUL-terminated.
-        let handle = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL) };
-        if !handle.is_null() {
-            return handle;
-        }
-    }
-    ptr::null_mut()
-}
-
-unsafe fn load_sym<T>(lib: *mut c_void, name: &CStr) -> Option<T> {
-    let raw = unsafe { libc::dlsym(lib, name.as_ptr()) };
-    if raw.is_null() {
-        return None;
-    }
-    // SAFETY: caller matches the exact C signature of `name` in FFmpeg's public headers.
-    Some(unsafe { std::mem::transmute_copy(&raw) })
-}
-
-fn ffmpeg_api() -> Option<&'static FfmpegApi> {
-    static API: OnceLock<Option<FfmpegApi>> = OnceLock::new();
-    API.get_or_init(load_ffmpeg_api).as_ref()
-}
-
-pub(crate) fn avformat_available() -> bool {
-    ffmpeg_api().is_some()
-}
-
-fn load_ffmpeg_api() -> Option<FfmpegApi> {
-    let libavutil = dlopen_any(&[
-        c"libavutil.so.61",
-        c"libavutil.so.60",
-        c"libavutil.so.59",
-        c"libavutil.so.58",
-        c"libavutil.so.57",
-        c"libavutil.so.56",
-        c"libavutil.so",
-    ]);
-    let libavcodec = dlopen_any(&[
-        c"libavcodec.so.63",
-        c"libavcodec.so.62",
-        c"libavcodec.so.61",
-        c"libavcodec.so.60",
-        c"libavcodec.so.59",
-        c"libavcodec.so.58",
-        c"libavcodec.so",
-    ]);
-    let libavformat = dlopen_any(&[
-        c"libavformat.so.63",
-        c"libavformat.so.62",
-        c"libavformat.so.61",
-        c"libavformat.so.60",
-        c"libavformat.so.59",
-        c"libavformat.so.58",
-        c"libavformat.so",
-    ]);
-    if libavutil.is_null() || libavcodec.is_null() || libavformat.is_null() {
-        return None;
-    }
-
-    // SAFETY: resolves documented public FFmpeg C API symbols.
-    unsafe {
-        let avformat_version: unsafe extern "C" fn() -> u32 =
-            load_sym(libavformat, c"avformat_version")?;
-        let avformat_alloc_context: unsafe extern "C" fn() -> *mut c_void =
-            load_sym(libavformat, c"avformat_alloc_context")?;
-        let avformat_free_context: unsafe extern "C" fn(*mut c_void) =
-            load_sym(libavformat, c"avformat_free_context")?;
-        let avformat_new_stream: unsafe extern "C" fn(*mut c_void, *const c_void) -> *mut c_void =
-            load_sym(libavformat, c"avformat_new_stream")?;
-        let layout = probe_layout(
-            avformat_version() >> 16,
-            avformat_alloc_context,
-            avformat_free_context,
-            avformat_new_stream,
-        )?;
-        Some(FfmpegApi {
-            _libavformat: libavformat,
-            _libavcodec: libavcodec,
-            _libavutil: libavutil,
-            layout,
-            avformat_alloc_context,
-            avformat_free_context,
-            avformat_open_input: load_sym(libavformat, c"avformat_open_input")?,
-            avformat_close_input: load_sym(libavformat, c"avformat_close_input")?,
-            avformat_find_stream_info: load_sym(libavformat, c"avformat_find_stream_info")?,
-            av_read_frame: load_sym(libavformat, c"av_read_frame")?,
-            av_seek_frame: load_sym(libavformat, c"av_seek_frame")?,
-            avio_alloc_context: load_sym(libavformat, c"avio_alloc_context")?,
-            avio_context_free: load_sym(libavformat, c"avio_context_free")?,
-            avcodec_get_name: load_sym(libavcodec, c"avcodec_get_name")?,
-            avcodec_find_decoder: load_sym(libavcodec, c"avcodec_find_decoder")?,
-            avcodec_alloc_context3: load_sym(libavcodec, c"avcodec_alloc_context3")?,
-            avcodec_free_context: load_sym(libavcodec, c"avcodec_free_context")?,
-            avcodec_parameters_to_context: load_sym(libavcodec, c"avcodec_parameters_to_context")?,
-            avcodec_parameters_copy: load_sym(libavcodec, c"avcodec_parameters_copy")?,
-            avcodec_open2: load_sym(libavcodec, c"avcodec_open2")?,
-            avcodec_send_packet: load_sym(libavcodec, c"avcodec_send_packet")?,
-            avcodec_receive_frame: load_sym(libavcodec, c"avcodec_receive_frame")?,
-            avcodec_flush_buffers: load_sym(libavcodec, c"avcodec_flush_buffers")?,
-            av_packet_alloc: load_sym(libavcodec, c"av_packet_alloc")?,
-            av_packet_free: load_sym(libavcodec, c"av_packet_free")?,
-            av_packet_unref: load_sym(libavcodec, c"av_packet_unref")?,
-            av_bsf_get_by_name: load_sym(libavcodec, c"av_bsf_get_by_name")?,
-            av_bsf_alloc: load_sym(libavcodec, c"av_bsf_alloc")?,
-            av_bsf_init: load_sym(libavcodec, c"av_bsf_init")?,
-            av_bsf_send_packet: load_sym(libavcodec, c"av_bsf_send_packet")?,
-            av_bsf_receive_packet: load_sym(libavcodec, c"av_bsf_receive_packet")?,
-            av_bsf_flush: load_sym(libavcodec, c"av_bsf_flush")?,
-            av_bsf_free: load_sym(libavcodec, c"av_bsf_free")?,
-            av_frame_alloc: load_sym(libavutil, c"av_frame_alloc")?,
-            av_frame_free: load_sym(libavutil, c"av_frame_free")?,
-            av_frame_unref: load_sym(libavutil, c"av_frame_unref")?,
-            av_malloc: load_sym(libavutil, c"av_malloc")?,
-            av_free: load_sym(libavutil, c"av_free")?,
-            av_dict_get: load_sym(libavutil, c"av_dict_get")?,
-            av_opt_get_int: load_sym(libavutil, c"av_opt_get_int")?,
-            av_opt_get: load_sym(libavutil, c"av_opt_get")?,
-        })
-    }
-}
-
-unsafe fn probe_layout(
-    major: u32,
-    alloc_ctx: unsafe extern "C" fn() -> *mut c_void,
-    free_ctx: unsafe extern "C" fn(*mut c_void),
-    new_stream: unsafe extern "C" fn(*mut c_void, *const c_void) -> *mut c_void,
-) -> Option<AvLayout> {
-    let ctx = unsafe { alloc_ctx() };
-    if ctx.is_null() {
-        return None;
-    }
-    let stream = unsafe { new_stream(ctx, ptr::null()) };
-    if stream.is_null() {
-        unsafe { free_ctx(ctx) };
-        return None;
-    }
-    let ptr_sz = size_of::<*const c_void>();
-    let fmt_pb = 4 * ptr_sz;
-    let (fmt_nb_streams, fmt_streams) = unsafe { find_streams_offsets(ctx, stream) }?;
-    let fmt_duration = unsafe { find_nopts_pair_second(ctx, 256) }.unwrap_or(104);
-    let (stream_codecpar, stream_time_base, stream_duration, stream_metadata) = if major >= 61 {
-        (2 * ptr_sz, 4 * ptr_sz, 6 * ptr_sz, 10 * ptr_sz)
-    } else {
-        let codecpar = unsafe { find_codecpar_offset(stream) }?;
-        (codecpar, 2 * ptr_sz, 4 * ptr_sz, 8 * ptr_sz)
-    };
-    unsafe { free_ctx(ctx) };
-    Some(AvLayout {
-        fmt_pb,
-        fmt_nb_streams,
-        fmt_streams,
-        fmt_duration,
-        stream_codecpar,
-        stream_time_base,
-        stream_duration,
-        stream_metadata,
-    })
-}
-
-unsafe fn find_streams_offsets(ctx: *mut c_void, stream: *mut c_void) -> Option<(usize, usize)> {
-    let base = ctx.cast::<u8>();
-    let ptr_sz = size_of::<*const c_void>();
-    let mut off = 4 * ptr_sz;
-    while off + 16 <= 128 {
-        let nb = unsafe { ptr::read_unaligned(base.add(off).cast::<u32>()) };
-        let streams_off = (off + 4).next_multiple_of(ptr_sz);
-        let streams_ptr = unsafe { ptr::read_unaligned(base.add(streams_off).cast::<*const *mut c_void>()) };
-        if nb == 1 && !streams_ptr.is_null() {
-            let first = unsafe { *streams_ptr };
-            if first == stream {
-                return Some((off, streams_off));
-            }
-        }
-        off += 4;
-    }
-    None
-}
-
-unsafe fn find_nopts_pair_second(ctx: *mut c_void, limit: usize) -> Option<usize> {
-    let base = ctx.cast::<u8>();
-    let mut off = 64;
-    while off + 16 <= limit {
-        let a = unsafe { ptr::read_unaligned(base.add(off).cast::<i64>()) };
-        let b = unsafe { ptr::read_unaligned(base.add(off + 8).cast::<i64>()) };
-        if a == AV_NOPTS_VALUE && b == AV_NOPTS_VALUE {
-            return Some(off + 8);
-        }
-        off += 8;
-    }
-    None
-}
-
-unsafe fn find_codecpar_offset(stream: *mut c_void) -> Option<usize> {
-    let base = stream.cast::<u8>();
-    let ptr_sz = size_of::<*const c_void>();
-    let mut off = 12 * ptr_sz;
-    while off + ptr_sz <= 320 {
-        let candidate = unsafe { ptr::read_unaligned(base.add(off).cast::<*const c_int>()) };
-        if !candidate.is_null() && (candidate as usize).is_multiple_of(4) {
-            let codec_type = unsafe { *candidate };
-            let codec_id = unsafe { *candidate.add(1) };
-            if codec_type == -1 && codec_id == 0 {
-                return Some(off);
-            }
-        }
-        off += ptr_sz;
-    }
-    None
-}
 
 #[derive(Clone)]
 pub(crate) struct VideoTrackInfo {
     pub(crate) stream_index: usize,
-    pub(crate) codec: VideoCodec,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) rotation: VideoRotation,
-    pub(crate) color: Option<VideoColorInfo>,
+    pub(crate) spec: crate::player_demux_engine::VideoDecoderSpec,
 }
 
 #[derive(Clone)]
@@ -404,8 +60,14 @@ pub(crate) struct DecodedAudio {
 }
 
 enum CustomIo {
-    Memory { bytes: Arc<[u8]>, pos: usize },
-    Http(Box<HttpRangeReader>),
+    Memory {
+        bytes: Arc<[u8]>,
+        pos: usize,
+    },
+    Http {
+        reader: Box<HttpRangeReader>,
+        pos: u64,
+    },
 }
 
 struct AvioBacking {
@@ -449,9 +111,12 @@ unsafe extern "C" fn custom_avio_read(opaque: *mut c_void, buf: *mut u8, buf_siz
             *pos += count;
             count
         }
-        CustomIo::Http(reader) => match reader.read(dst) {
+        CustomIo::Http { reader, pos } => match reader.read_at(*pos, dst) {
             Ok(0) => return AVERROR_EOF,
-            Ok(n) => n,
+            Ok(n) => {
+                *pos = pos.saturating_add(n as u64);
+                n
+            }
             Err(_) => return AVERROR_EOF,
         },
     };
@@ -467,8 +132,8 @@ unsafe extern "C" fn custom_avio_seek(opaque: *mut c_void, offset: i64, whence: 
     if (whence & AVSEEK_SIZE) != 0 {
         return match io {
             CustomIo::Memory { bytes, .. } => i64::try_from(bytes.len()).unwrap_or(-1),
-            CustomIo::Http(reader) => reader
-                .total_len()
+            CustomIo::Http { reader, .. } => reader
+                .size()
                 .and_then(|n| i64::try_from(n).ok())
                 .unwrap_or(-1),
         };
@@ -489,18 +154,20 @@ unsafe extern "C" fn custom_avio_seek(opaque: *mut c_void, offset: i64, whence: 
             *pos = usize::try_from(target).unwrap_or(bytes.len());
             i64::try_from(*pos).unwrap_or(-1)
         }
-        CustomIo::Http(reader) => {
-            let seek_from = match origin {
-                libc::SEEK_SET => SeekFrom::Start(u64::try_from(offset).unwrap_or(0)),
-                libc::SEEK_CUR => SeekFrom::Current(offset),
-                libc::SEEK_END => SeekFrom::End(offset),
+        CustomIo::Http { reader, pos } => {
+            let base = match origin {
+                libc::SEEK_SET => 0_i128,
+                libc::SEEK_CUR => i128::from(*pos),
+                libc::SEEK_END => i128::from(reader.size().unwrap_or(0)),
                 _ => return -1,
             };
-            reader
-                .seek(seek_from)
-                .ok()
-                .and_then(|pos| i64::try_from(pos).ok())
-                .unwrap_or(-1)
+            let target = base + i128::from(offset);
+            if target < 0 {
+                return -1;
+            }
+            let next = u64::try_from(target).unwrap_or(u64::MAX);
+            *pos = next;
+            i64::try_from(next).unwrap_or(-1)
         }
     }
 }
@@ -546,7 +213,8 @@ impl Drop for Demuxer {
 
 impl Demuxer {
     pub(crate) fn from_file(path: &Path) -> Result<Self, String> {
-        let api = ffmpeg_api().ok_or_else(|| "libavformat is unavailable on this host".to_owned())?;
+        let api =
+            ffmpeg_api().ok_or_else(|| "libavformat is unavailable on this host".to_owned())?;
         let c_path = CString::new(path.to_string_lossy().as_bytes())
             .map_err(|_| "media path contains interior NUL byte".to_owned())?;
         let mut fmt_ctx: *mut c_void = ptr::null_mut();
@@ -565,11 +233,15 @@ impl Demuxer {
     }
 
     pub(crate) fn from_http(reader: HttpRangeReader) -> Result<Self, String> {
-        Self::from_custom_io(CustomIo::Http(Box::new(reader)))
+        Self::from_custom_io(CustomIo::Http {
+            reader: Box::new(reader),
+            pos: 0,
+        })
     }
 
     fn from_custom_io(io: CustomIo) -> Result<Self, String> {
-        let api = ffmpeg_api().ok_or_else(|| "libavformat is unavailable on this host".to_owned())?;
+        let api =
+            ffmpeg_api().ok_or_else(|| "libavformat is unavailable on this host".to_owned())?;
         // SAFETY: allocates AVFormatContext and custom AVIOContext with owned buffer and userdata.
         let mut fmt_ctx = unsafe { (api.avformat_alloc_context)() };
         if fmt_ctx.is_null() {
@@ -726,17 +398,16 @@ impl Demuxer {
         self.time_bases.clear();
         self.time_bases.reserve(count);
         for idx in 0..count {
-            let tb = self.stream_ptr(idx).map_or(
-                AvRational { num: 1, den: 1_000 },
-                |stream| unsafe {
-                    ptr::read_unaligned(
-                        stream
-                            .cast::<u8>()
-                            .add(self.api.layout.stream_time_base)
-                            .cast::<AvRational>(),
-                    )
-                },
-            );
+            let tb =
+                self.stream_ptr(idx)
+                    .map_or(AvRational { num: 1, den: 1_000 }, |stream| unsafe {
+                        ptr::read_unaligned(
+                            stream
+                                .cast::<u8>()
+                                .add(self.api.layout.stream_time_base)
+                                .cast::<AvRational>(),
+                        )
+                    });
             self.time_bases.push(tb);
         }
     }
@@ -775,79 +446,48 @@ impl Demuxer {
                 if selected && props.width > 0 && props.height > 0 {
                     video = Some(VideoTrackInfo {
                         stream_index: idx,
-                        codec,
-                        width: props.width,
-                        height: props.height,
-                        rotation,
-                        color: props.color,
+                        spec: crate::player_demux_engine::VideoDecoderSpec {
+                            codec,
+                            width: props.width,
+                            height: props.height,
+                            rotation,
+                            color: props.color,
+                        },
                     });
                     self.setup_video_bsf(idx, codec, par);
                 }
-                video_entries.push(TrackEntry {
-                    format: TrackFormat {
-                        id: format!("video-{idx}"),
-                        label: None,
-                        language,
-                        mime_type: Some(codec.mime().to_owned()),
-                        codecs: Some(codec_name),
-                        bitrate: props.bitrate,
-                        width: (props.width > 0).then_some(props.width),
-                        height: (props.height > 0).then_some(props.height),
-                        frame_rate: None,
-                        channel_count: None,
-                        sample_rate: None,
-                    },
-                    supported: true,
-                    selected,
-                });
+                let selection = if selected {
+                    TrackSelection::Selected
+                } else {
+                    TrackSelection::Unselected
+                };
+                video_entries.push(build_video_track_entry(
+                    idx, codec, codec_name, language, &props, selection,
+                ));
             } else if codec_type == AVMEDIA_TYPE_AUDIO {
-                let selected = audio_tracks.is_empty();
+                let selection = if audio_tracks.is_empty() {
+                    TrackSelection::Selected
+                } else {
+                    TrackSelection::Unselected
+                };
                 audio_tracks.push(AudioTrackInfo {
                     stream_index: idx,
                     language: language.clone(),
                 });
-                audio_entries.push(TrackEntry {
-                    format: TrackFormat {
-                        id: format!("audio-{idx}"),
-                        label: None,
-                        language,
-                        mime_type: Some(format!("audio/{codec_name}")),
-                        codecs: Some(codec_name),
-                        bitrate: props.bitrate,
-                        width: None,
-                        height: None,
-                        frame_rate: None,
-                        channel_count: props.channels.and_then(|c| u16::try_from(c).ok()),
-                        sample_rate: props.sample_rate,
-                    },
-                    supported: true,
-                    selected,
-                });
+                audio_entries.push(build_audio_track_entry(
+                    idx, codec_name, language, &props, selection,
+                ));
             }
         }
 
-        let mut groups = Vec::new();
-        if !video_entries.is_empty() {
-            groups.push(TrackGroup {
-                id: "video".into(),
-                track_type: TrackType::Video,
-                tracks: video_entries,
-                adaptive_supported: false,
-            });
-        }
-        if !audio_entries.is_empty() {
-            groups.push(TrackGroup {
-                id: "audio".into(),
-                track_type: TrackType::Audio,
-                tracks: audio_entries,
-                adaptive_supported: false,
-            });
-        }
         DemuxedTracks {
             video,
             audio_tracks,
             duration: self.container_duration(),
-            tracks: Tracks { groups },
+            tracks: crate::player_demux_engine::build_video_audio_tracks(
+                video_entries,
+                audio_entries,
+            ),
         }
     }
 
@@ -876,10 +516,11 @@ impl Demuxer {
                         .cast::<i64>(),
                 )
             };
-            let tb = self.time_bases.get(idx).copied().unwrap_or(AvRational {
-                num: 1,
-                den: 1_000,
-            });
+            let tb = self
+                .time_bases
+                .get(idx)
+                .copied()
+                .unwrap_or(AvRational { num: 1, den: 1_000 });
             if sdur > 0 && sdur != AV_NOPTS_VALUE && tb.den > 0 {
                 let secs = (sdur as f64) * (f64::from(tb.num) / f64::from(tb.den));
                 if secs.is_finite() && secs > 0.0 {
@@ -911,7 +552,10 @@ impl Demuxer {
             if (self.api.av_bsf_alloc)(filter, &mut bsf) < 0 || bsf.is_null() {
                 return;
             }
-            let par_in = *(bsf.cast::<u8>().add(3 * size_of::<*const c_void>()).cast::<*mut c_void>());
+            let par_in = *(bsf
+                .cast::<u8>()
+                .add(3 * size_of::<*const c_void>())
+                .cast::<*mut c_void>());
             if (self.api.avcodec_parameters_copy)(par_in, par) < 0
                 || (self.api.av_bsf_init)(bsf) < 0
             {
@@ -1073,7 +717,9 @@ impl AudioDecoder {
         // SAFETY: opens audio decoder from stream `AVCodecParameters`.
         let decoder = unsafe { (api.avcodec_find_decoder)(codec_id) };
         if decoder.is_null() {
-            return Err(format!("no libavcodec audio decoder for codec_id {codec_id}"));
+            return Err(format!(
+                "no libavcodec audio decoder for codec_id {codec_id}"
+            ));
         }
         let mut ctx = unsafe { (api.avcodec_alloc_context3)(decoder) };
         if ctx.is_null() {
@@ -1161,7 +807,6 @@ unsafe fn convert_audio_frame(head: &AvFrameHead, nb_samples: usize, channels: u
         return Vec::new();
     }
     let total = nb_samples.saturating_mul(channels);
-    let mut out = Vec::with_capacity(total);
     let planes = if !head.extended_data.is_null() {
         head.extended_data
     } else {
@@ -1169,12 +814,24 @@ unsafe fn convert_audio_frame(head: &AvFrameHead, nb_samples: usize, channels: u
     };
     let p0 = unsafe { *planes };
     if p0.is_null() {
-        return out;
+        return Vec::new();
     }
     match head.format {
+        AV_SAMPLE_FMT_FLT | AV_SAMPLE_FMT_S16 | AV_SAMPLE_FMT_S32 | AV_SAMPLE_FMT_U8
+        | AV_SAMPLE_FMT_DBL => unsafe { convert_packed_audio(head.format, p0, total) },
+        AV_SAMPLE_FMT_FLTP | AV_SAMPLE_FMT_S16P | AV_SAMPLE_FMT_S32P | AV_SAMPLE_FMT_U8P
+        | AV_SAMPLE_FMT_DBLP => unsafe {
+            convert_planar_audio(head.format, planes, nb_samples, channels)
+        },
+        _ => Vec::new(),
+    }
+}
+
+unsafe fn convert_packed_audio(format: c_int, p0: *const u8, total: usize) -> Vec<f32> {
+    let mut out = Vec::with_capacity(total);
+    match format {
         AV_SAMPLE_FMT_FLT => {
-            let src = unsafe { std::slice::from_raw_parts(p0.cast::<f32>(), total) };
-            out.extend_from_slice(src);
+            out.extend_from_slice(unsafe { std::slice::from_raw_parts(p0.cast::<f32>(), total) });
         }
         AV_SAMPLE_FMT_S16 => {
             let src = unsafe { std::slice::from_raw_parts(p0.cast::<i16>(), total) };
@@ -1192,212 +849,96 @@ unsafe fn convert_audio_frame(head: &AvFrameHead, nb_samples: usize, channels: u
             let src = unsafe { std::slice::from_raw_parts(p0.cast::<f64>(), total) };
             out.extend(src.iter().map(|&s| s as f32));
         }
-        AV_SAMPLE_FMT_FLTP | AV_SAMPLE_FMT_S16P | AV_SAMPLE_FMT_S32P | AV_SAMPLE_FMT_U8P
-        | AV_SAMPLE_FMT_DBLP => {
-            out.resize(total, 0.0);
-            for ch in 0..channels {
-                let plane = unsafe { *planes.add(ch) };
-                if plane.is_null() {
-                    continue;
-                }
-                for frame in 0..nb_samples {
-                    let sample = match head.format {
-                        AV_SAMPLE_FMT_FLTP => unsafe { *plane.cast::<f32>().add(frame) },
-                        AV_SAMPLE_FMT_S16P => {
-                            f32::from(unsafe { *plane.cast::<i16>().add(frame) }) / 32_768.0
-                        }
-                        AV_SAMPLE_FMT_S32P => {
-                            (unsafe { *plane.cast::<i32>().add(frame) } as f32) / 2_147_483_648.0
-                        }
-                        AV_SAMPLE_FMT_U8P => {
-                            (f32::from(unsafe { *plane.add(frame) }) - 128.0) / 128.0
-                        }
-                        AV_SAMPLE_FMT_DBLP => unsafe { *plane.cast::<f64>().add(frame) } as f32,
-                        _ => 0.0,
-                    };
-                    out[frame * channels + ch] = sample;
-                }
-            }
-        }
         _ => {}
     }
     out
 }
 
-#[derive(Default)]
-struct CodecProps {
-    width: u32,
-    height: u32,
-    bitrate: Option<u32>,
-    color: Option<VideoColorInfo>,
-    sample_rate: Option<u32>,
-    channels: Option<usize>,
-}
-
-fn probe_codec_props(api: &'static FfmpegApi, par: *const c_void) -> CodecProps {
-    // SAFETY: copies parameters into a temporary AVCodecContext so fields can be queried via
-    // `av_opt_get_int` without relying on version-dependent struct offsets.
-    let mut ctx = unsafe { (api.avcodec_alloc_context3)(ptr::null()) };
-    if ctx.is_null() {
-        return CodecProps::default();
-    }
-    let ok = unsafe { (api.avcodec_parameters_to_context)(ctx, par) } >= 0;
-    let props = if ok {
-        let width = read_opt_u32(api, ctx, c"width").unwrap_or(0);
-        let height = read_opt_u32(api, ctx, c"height").unwrap_or(0);
-        let bitrate = read_opt_u32(api, ctx, c"b");
-        let color = read_opt_color(api, ctx);
-        let sample_rate = read_opt_u32(api, ctx, c"ar");
-        let channels = read_opt_channels(api, ctx);
-        CodecProps {
-            width,
-            height,
-            bitrate,
-            color,
-            sample_rate,
-            channels,
+unsafe fn convert_planar_audio(
+    format: c_int,
+    planes: *mut *mut u8,
+    nb_samples: usize,
+    channels: usize,
+) -> Vec<f32> {
+    let mut out = vec![0.0_f32; nb_samples.saturating_mul(channels)];
+    for ch in 0..channels {
+        let plane = unsafe { *planes.add(ch) };
+        if plane.is_null() {
+            continue;
         }
-    } else {
-        CodecProps::default()
-    };
-    unsafe { (api.avcodec_free_context)(&mut ctx) };
-    props
-}
-
-fn read_opt_i64(api: &'static FfmpegApi, obj: *mut c_void, name: &CStr) -> Option<i64> {
-    let mut val: i64 = 0;
-    // SAFETY: `obj` is an AVClass-backed FFmpeg object and `name` is NUL-terminated.
-    let rc = unsafe { (api.av_opt_get_int)(obj, name.as_ptr(), AV_OPT_SEARCH_CHILDREN, &mut val) };
-    (rc >= 0).then_some(val)
-}
-
-fn read_opt_u32(api: &'static FfmpegApi, obj: *mut c_void, name: &CStr) -> Option<u32> {
-    read_opt_i64(api, obj, name)
-        .filter(|&v| v > 0)
-        .and_then(|v| u32::try_from(v).ok())
-}
-
-fn read_opt_channels(api: &'static FfmpegApi, ctx: *mut c_void) -> Option<usize> {
-    if let Some(ch) = read_opt_u32(api, ctx, c"ac") {
-        return usize::try_from(ch).ok();
+        for frame in 0..nb_samples {
+            out[frame * channels + ch] = unsafe { read_planar_sample(format, plane, frame) };
+        }
     }
-    let mut out: *mut u8 = ptr::null_mut();
-    // SAFETY: queries `ch_layout` string (e.g. "stereo", "mono", "5.1", "2 channels").
-    let rc = unsafe { (api.av_opt_get)(ctx, c"ch_layout".as_ptr(), AV_OPT_SEARCH_CHILDREN, &mut out) };
-    if rc < 0 || out.is_null() {
-        return None;
-    }
-    let text = unsafe { CStr::from_ptr(out.cast::<c_char>()) }
-        .to_string_lossy()
-        .into_owned();
-    unsafe { (api.av_free)(out.cast()) };
-    parse_channel_layout_count(&text)
+    out
 }
 
-fn parse_channel_layout_count(text: &str) -> Option<usize> {
-    match text.trim() {
-        "mono" => Some(1),
-        "stereo" | "downmix" => Some(2),
-        "2.1" | "3.0" => Some(3),
-        "quad" | "4.0" => Some(4),
-        "5.0" | "5.0(side)" => Some(5),
-        "5.1" | "5.1(side)" => Some(6),
-        "6.1" => Some(7),
-        "7.1" => Some(8),
-        other => other
-            .split_whitespace()
-            .next()
-            .and_then(|tok| tok.parse::<usize>().ok())
-            .filter(|&n| n > 0),
+unsafe fn read_planar_sample(format: c_int, plane: *const u8, frame: usize) -> f32 {
+    match format {
+        AV_SAMPLE_FMT_FLTP => unsafe { *plane.cast::<f32>().add(frame) },
+        AV_SAMPLE_FMT_S16P => f32::from(unsafe { *plane.cast::<i16>().add(frame) }) / 32_768.0,
+        AV_SAMPLE_FMT_S32P => (unsafe { *plane.cast::<i32>().add(frame) } as f32) / 2_147_483_648.0,
+        AV_SAMPLE_FMT_U8P => (f32::from(unsafe { *plane.add(frame) }) - 128.0) / 128.0,
+        AV_SAMPLE_FMT_DBLP => (unsafe { *plane.cast::<f64>().add(frame) }) as f32,
+        _ => 0.0,
     }
 }
 
-fn read_opt_color(api: &'static FfmpegApi, ctx: *mut c_void) -> Option<VideoColorInfo> {
-    let primaries = match read_opt_i64(api, ctx, c"color_primaries") {
-        Some(1) => Some(ColorPrimaries::Bt709),
-        Some(5 | 6) => Some(ColorPrimaries::Bt601),
-        Some(9) => Some(ColorPrimaries::Bt2020),
-        _ => None,
-    };
-    let range = match read_opt_i64(api, ctx, c"color_range") {
-        Some(1) => Some(ColorRange::Limited),
-        Some(2) => Some(ColorRange::Full),
-        _ => None,
-    };
-    let transfer = match read_opt_i64(api, ctx, c"color_trc") {
-        Some(1 | 6 | 13) => Some(ColorTransfer::Sdr),
-        Some(16) => Some(ColorTransfer::Pq),
-        Some(18) => Some(ColorTransfer::Hlg),
-        _ => None,
-    };
-    if primaries.is_none() && range.is_none() && transfer.is_none() {
-        return None;
-    }
-    Some(VideoColorInfo {
-        primaries: primaries.unwrap_or(ColorPrimaries::Bt709),
-        range: range.unwrap_or(ColorRange::Limited),
-        transfer: transfer.unwrap_or(ColorTransfer::Sdr),
-    })
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TrackSelection {
+    Selected,
+    Unselected,
 }
 
-fn codec_name_of(api: &'static FfmpegApi, codec_id: u32) -> String {
-    // SAFETY: `avcodec_get_name` always returns a valid static NUL-terminated string.
-    let ptr = unsafe { (api.avcodec_get_name)(codec_id) };
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe { CStr::from_ptr(ptr) }
-        .to_string_lossy()
-        .into_owned()
-}
-
-fn video_codec_from_name(name: &str) -> Option<VideoCodec> {
-    match name {
-        "h264" => Some(VideoCodec::H264),
-        "hevc" => Some(VideoCodec::Hevc),
-        "vp9" => Some(VideoCodec::Vp9),
-        "av1" => Some(VideoCodec::Av1),
-        _ => None,
+fn build_video_track_entry(
+    idx: usize,
+    codec: VideoCodec,
+    codec_name: String,
+    language: Option<String>,
+    props: &super::player_ffmpeg::CodecProps,
+    selection: TrackSelection,
+) -> TrackEntry {
+    TrackEntry {
+        format: TrackFormat {
+            id: format!("video-{idx}"),
+            label: None,
+            language,
+            mime_type: Some(codec.mime().to_owned()),
+            codecs: Some(codec_name),
+            bitrate: props.bitrate,
+            width: (props.width > 0).then_some(props.width),
+            height: (props.height > 0).then_some(props.height),
+            frame_rate: None,
+            channel_count: None,
+            sample_rate: None,
+        },
+        supported: true,
+        selected: selection == TrackSelection::Selected,
     }
 }
 
-fn read_stream_metadata(api: &'static FfmpegApi, stream: *mut c_void, key: &CStr) -> Option<String> {
-    // SAFETY: `stream_metadata` is the verified offset of `AVStream::metadata`.
-    let dict = unsafe {
-        ptr::read_unaligned(
-            stream
-                .cast::<u8>()
-                .add(api.layout.stream_metadata)
-                .cast::<*const c_void>(),
-        )
-    };
-    if dict.is_null() {
-        return None;
+fn build_audio_track_entry(
+    idx: usize,
+    codec_name: String,
+    language: Option<String>,
+    props: &super::player_ffmpeg::CodecProps,
+    selection: TrackSelection,
+) -> TrackEntry {
+    TrackEntry {
+        format: TrackFormat {
+            id: format!("audio-{idx}"),
+            label: None,
+            language,
+            mime_type: Some(format!("audio/{codec_name}")),
+            codecs: Some(codec_name),
+            bitrate: props.bitrate,
+            width: None,
+            height: None,
+            frame_rate: None,
+            channel_count: props.channels.and_then(|c| u16::try_from(c).ok()),
+            sample_rate: props.sample_rate,
+        },
+        supported: true,
+        selected: selection == TrackSelection::Selected,
     }
-    let entry = unsafe { (api.av_dict_get)(dict, key.as_ptr(), ptr::null(), 0) };
-    if entry.is_null() {
-        return None;
-    }
-    let val = unsafe { (*entry).value };
-    if val.is_null() {
-        return None;
-    }
-    Some(
-        unsafe { CStr::from_ptr(val) }
-            .to_string_lossy()
-            .into_owned(),
-    )
-}
-
-fn rotation_from_degrees(degrees: i32) -> VideoRotation {
-    match degrees.rem_euclid(360) {
-        90 => VideoRotation::Degrees90,
-        180 => VideoRotation::Degrees180,
-        270 => VideoRotation::Degrees270,
-        _ => VideoRotation::Degrees0,
-    }
-}
-
-pub(crate) fn video_size_of(info: &VideoTrackInfo) -> VideoSize {
-    VideoSize::new(info.width, info.height)
 }
