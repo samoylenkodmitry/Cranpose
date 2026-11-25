@@ -25,6 +25,7 @@ impl DecoderCapabilitySource for Limits {
         let name = match codec {
             VideoCodec::H264 => "webcodecs/h264",
             VideoCodec::Hevc => "webcodecs/hevc",
+            VideoCodec::Vp9 => "webcodecs/vp9",
             VideoCodec::Av1 => "webcodecs/av1",
         };
         Some(DecoderCapabilities {

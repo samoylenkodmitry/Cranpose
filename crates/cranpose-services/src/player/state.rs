@@ -16,7 +16,10 @@ use super::{
     PlayerState, PositionDiscontinuityReason, RepeatMode, TrackSelectionParameters, Tracks,
     VideoSize,
 };
-use crate::{media::MediaItem, video_decoder::DecodedFrames};
+use crate::{
+    media::{AudioFocus, DUCKED_GAIN, MediaItem, MediaObserver, audio_focus},
+    video_decoder::DecodedFrames,
+};
 
 pub(super) type EventObserverFn = dyn Fn(PlayerEvent) + Send + Sync;
 
@@ -50,6 +53,8 @@ pub(super) struct Snapshot {
     pub(super) repeat_mode: RepeatMode,
     pub(super) shuffle_mode: bool,
     pub(super) volume: f32,
+    pub(super) focus_gain: f32,
+    pub(super) paused_by_focus: bool,
     pub(super) muted: bool,
     pub(super) video_size: VideoSize,
     pub(super) rendered_first_frame: bool,
@@ -68,6 +73,12 @@ enum StepDirection {
 
 impl Snapshot {
     pub(super) fn new(audio_role: AudioRole) -> Self {
+        let focus_gain = if audio_role == AudioRole::Primary && audio_focus() == AudioFocus::Ducked
+        {
+            DUCKED_GAIN
+        } else {
+            1.0
+        };
         let mut snap = Self {
             playlist: Vec::new(),
             shuffle_order: Vec::new(),
@@ -82,6 +93,8 @@ impl Snapshot {
             repeat_mode: RepeatMode::Off,
             shuffle_mode: false,
             volume: 1.0,
+            focus_gain,
+            paused_by_focus: false,
             muted: audio_role == AudioRole::Muted,
             video_size: VideoSize::ZERO,
             rendered_first_frame: false,
@@ -100,7 +113,11 @@ impl Snapshot {
     }
 
     pub(super) fn effective_volume(&self) -> f32 {
-        if self.muted { 0.0 } else { self.volume }
+        if self.muted {
+            0.0
+        } else {
+            (self.volume * self.focus_gain).clamp(0.0, 1.0)
+        }
     }
 
     pub(super) fn compute_commands(&self, released: bool) -> AvailableCommands {
@@ -232,6 +249,7 @@ pub(super) struct PlayerCore {
     pub(super) state: Mutex<Snapshot>,
     pub(super) backend: Mutex<Option<Arc<dyn PlayerBackend>>>,
     pub(super) observers: Mutex<Vec<(u64, Arc<EventObserverFn>)>>,
+    pub(super) system_observers: Mutex<Vec<MediaObserver>>,
 }
 
 impl PlayerCore {
@@ -253,6 +271,77 @@ impl PlayerCore {
             state: Mutex::new(Snapshot::new(audio_role)),
             backend: Mutex::new(None),
             observers: Mutex::new(Vec::new()),
+            system_observers: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub(super) fn on_audio_focus(&self, focus: AudioFocus) {
+        if self.released.load(Ordering::Acquire) || self.audio_role != AudioRole::Primary {
+            return;
+        }
+        let mut events = Vec::new();
+        let (volume_out, backend_action) = {
+            let mut snap = self.state.lock();
+            snap.focus_gain = if focus == AudioFocus::Ducked {
+                DUCKED_GAIN
+            } else {
+                1.0
+            };
+            let prev_playing = snap.effective_is_playing();
+            let action = match focus {
+                AudioFocus::Gained => {
+                    if snap.paused_by_focus {
+                        snap.paused_by_focus = false;
+                        if !snap.play_when_ready {
+                            snap.play_when_ready = true;
+                            events.push(PlayerEvent::PlayWhenReadyChanged(true));
+                        }
+                        Some(StartPlayback::Play)
+                    } else {
+                        None
+                    }
+                }
+                AudioFocus::Ducked => None,
+                AudioFocus::LostTransient => {
+                    if snap.play_when_ready {
+                        snap.paused_by_focus = true;
+                        snap.play_when_ready = false;
+                        events.push(PlayerEvent::PlayWhenReadyChanged(false));
+                        Some(StartPlayback::Paused)
+                    } else {
+                        None
+                    }
+                }
+                AudioFocus::Lost => {
+                    snap.paused_by_focus = false;
+                    if snap.play_when_ready {
+                        snap.play_when_ready = false;
+                        events.push(PlayerEvent::PlayWhenReadyChanged(false));
+                        Some(StartPlayback::Paused)
+                    } else {
+                        None
+                    }
+                }
+            };
+            let now_playing = snap.effective_is_playing();
+            if now_playing {
+                self.clock.resume();
+            } else {
+                self.clock.pause();
+            }
+            if now_playing != prev_playing {
+                events.push(PlayerEvent::IsPlayingChanged(now_playing));
+            }
+            (snap.effective_volume(), action)
+        };
+        self.emit(&events);
+        if let Some(backend) = self.backend() {
+            backend.set_volume(volume_out);
+            match backend_action {
+                Some(StartPlayback::Play) => backend.play(),
+                Some(StartPlayback::Paused) => backend.pause(),
+                None => {}
+            }
         }
     }
 

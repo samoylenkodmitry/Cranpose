@@ -8,14 +8,15 @@ use std::{
 use cranpose_core::{Composition, MemoryApplier, location_key};
 use cranpose_macros::composable;
 use cranpose_services::{
-    AbrVariant, AudioRole, ClippingConfiguration, Cue, CueAlignment, CueGroup, FrameTiming,
-    HlsRenditionType, LIP_SYNC_TOLERANCE, LoadControl, ManifestError, MasterClock, MediaItem,
-    MediaProperties, PlaybackParameters, Player, PlayerBackend, PlayerBackendFactory,
-    PlayerCommand, PlayerError, PlayerEvent, PlayerSink, PlayerState, PositionDiscontinuityReason,
-    RepeatMode, SubtitleConfiguration, TrackEntry, TrackFormat, TrackGroup, TrackSelectionOverride,
-    TrackSelectionParameters, TrackType, Tracks, VideoSize, parse_dash_mpd, parse_hls_master,
-    parse_hls_media, parse_srt, parse_subtitles, parse_webvtt, rememberIsLoading,
-    rememberIsPlaying, rememberPlayerError, rememberPlayerState, select_abr_variant,
+    AbrVariant, AudioFocus, AudioRole, ClippingConfiguration, Cue, CueAlignment, CueGroup,
+    DUCKED_GAIN, FrameTiming, HlsRenditionType, LIP_SYNC_TOLERANCE, LoadControl, ManifestError,
+    MasterClock, MediaCommand, MediaItem, MediaProperties, PlaybackParameters, Player,
+    PlayerBackend, PlayerBackendFactory, PlayerCommand, PlayerError, PlayerEvent, PlayerSink,
+    PlayerState, PositionDiscontinuityReason, RepeatMode, SubtitleConfiguration, TrackEntry,
+    TrackFormat, TrackGroup, TrackSelectionOverride, TrackSelectionParameters, TrackType, Tracks,
+    VideoSize, parse_dash_mpd, parse_hls_master, parse_hls_media, parse_srt, parse_subtitles,
+    parse_webvtt, publish_audio_focus, publish_media_command, rememberIsLoading, rememberIsPlaying,
+    rememberPlayerError, rememberPlayerState, select_abr_variant,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -725,4 +726,103 @@ fn repeat_mode_cycles_in_standard_order() {
         PositionDiscontinuityReason::AutoTransition,
         PositionDiscontinuityReason::AutoTransition
     );
+}
+
+static GLOBAL_MEDIA_LOCK: Mutex<()> = Mutex::new(());
+
+#[test]
+fn audio_focus_ducks_pauses_and_resumes_primary_player_only() {
+    let _guard = lock(&GLOBAL_MEDIA_LOCK);
+    publish_audio_focus(AudioFocus::Gained);
+    let (primary_factory, primary_calls) = FakeFactory::new();
+    let (secondary_factory, secondary_calls) = FakeFactory::new();
+    let primary = Player::builder()
+        .with_audio_role(AudioRole::Primary)
+        .with_backend_factory(Arc::clone(&primary_factory) as Arc<dyn PlayerBackendFactory>)
+        .build()
+        .expect("primary player");
+    let secondary = Player::builder()
+        .with_audio_role(AudioRole::Secondary)
+        .with_backend_factory(Arc::clone(&secondary_factory) as Arc<dyn PlayerBackendFactory>)
+        .build()
+        .expect("secondary player");
+
+    primary.set_media_item(MediaItem::new("https://example.com/p.mp4"));
+    primary.prepare();
+    primary.play();
+    primary_factory
+        .sink()
+        .set_playback_state(PlayerState::Ready);
+    secondary.set_media_item(MediaItem::new("https://example.com/s.mp4"));
+    secondary.prepare();
+    secondary.play();
+    secondary_factory
+        .sink()
+        .set_playback_state(PlayerState::Ready);
+
+    publish_audio_focus(AudioFocus::Ducked);
+    assert_eq!(
+        lock(&primary_calls).last(),
+        Some(&BackendCall::Volume(DUCKED_GAIN))
+    );
+    assert_ne!(
+        lock(&secondary_calls).last(),
+        Some(&BackendCall::Volume(DUCKED_GAIN))
+    );
+
+    publish_audio_focus(AudioFocus::LostTransient);
+    assert!(!primary.is_playing());
+    assert!(secondary.is_playing());
+
+    publish_audio_focus(AudioFocus::Gained);
+    assert!(primary.is_playing());
+    assert_eq!(lock(&primary_calls).last(), Some(&BackendCall::Play));
+
+    // Manual pause during focus loss must not auto-resume on subsequent Gained.
+    publish_audio_focus(AudioFocus::LostTransient);
+    primary.pause();
+    publish_audio_focus(AudioFocus::Gained);
+    assert!(!primary.is_playing());
+
+    primary.release();
+    secondary.release();
+}
+
+#[test]
+fn os_media_commands_control_active_primary_player() {
+    let _guard = lock(&GLOBAL_MEDIA_LOCK);
+    publish_audio_focus(AudioFocus::Gained);
+    let (factory, _calls) = FakeFactory::new();
+    let player = Player::builder()
+        .with_audio_role(AudioRole::Primary)
+        .with_backend_factory(Arc::clone(&factory) as Arc<dyn PlayerBackendFactory>)
+        .build()
+        .expect("primary player");
+    player.set_media_items(
+        vec![
+            MediaItem::new("https://example.com/0.mp4"),
+            MediaItem::new("https://example.com/1.mp4"),
+        ],
+        0,
+        Duration::ZERO,
+    );
+    player.prepare();
+    player.play();
+    factory.sink().set_media_properties(MediaProperties {
+        duration: Some(Duration::from_secs(30)),
+        is_live: false,
+        is_seekable: true,
+    });
+    factory.sink().set_playback_state(PlayerState::Ready);
+    assert!(player.is_playing());
+
+    publish_media_command(MediaCommand::Pause);
+    assert!(!player.is_playing());
+    publish_media_command(MediaCommand::TogglePlayPause);
+    assert!(player.is_playing());
+    publish_media_command(MediaCommand::SeekTo(Duration::from_secs(12)));
+    assert!(player.current_position() >= Duration::from_secs(12));
+    publish_media_command(MediaCommand::Next);
+    assert_eq!(player.current_media_item_index(), 1);
+    player.release();
 }

@@ -61,6 +61,7 @@ fn the_limits_of_a_codec_and_its_frame_rate_at_a_size_come_from_the_platform() {
 fn each_codec_names_the_mime_type_of_the_platform_s_codec_list() {
     assert_eq!(VideoCodec::H264.mime(), "video/avc");
     assert_eq!(VideoCodec::Hevc.mime(), "video/hevc");
+    assert_eq!(VideoCodec::Vp9.mime(), "video/x-vnd.on2.vp9");
     assert_eq!(VideoCodec::Av1.mime(), "video/av01");
 }
 

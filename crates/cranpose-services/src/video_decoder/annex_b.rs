@@ -253,7 +253,7 @@ fn classify(codec: VideoCodec, nal: &[u8]) -> Kind {
             10..=12 => Kind::Skipped,
             _ => Kind::Other,
         },
-        VideoCodec::Hevc | VideoCodec::Av1 => match (header >> 1) & 0x3f {
+        VideoCodec::Hevc | VideoCodec::Av1 | VideoCodec::Vp9 => match (header >> 1) & 0x3f {
             kind @ 0..=31 => Kind::Slice {
                 // Slices of random access pictures
                 key: (16..=23).contains(&kind),

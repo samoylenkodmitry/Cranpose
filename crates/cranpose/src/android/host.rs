@@ -266,6 +266,8 @@ pub(crate) fn install_activity(app: android_activity::AndroidApp) {
         ..process.clone()
     }));
     crate::pipeline_cache_file::publish();
+    #[cfg(feature = "video")]
+    crate::install_player();
 }
 
 #[unsafe(no_mangle)]

@@ -3,6 +3,8 @@ use std::path::Path;
 const FALLBACK_APPLICATION_ID: &str = "cranpose-app";
 
 pub(crate) fn register(configured: Option<&str>) {
+    #[cfg(feature = "video")]
+    crate::install_player();
     let executable = std::env::current_exe().ok();
     let application_id = resolve(configured, executable.as_deref());
     if let Err(error) = cranpose_services::set_application_id(&application_id) {

@@ -13,7 +13,7 @@ use super::{VideoCodec, annex_b::AccessUnitNals};
 ///
 /// [`AccessUnit::data`]: crate::AccessUnit::data
 pub fn split_access_units(codec: VideoCodec, stream: &[u8]) -> Vec<&[u8]> {
-    if codec == VideoCodec::Av1 {
+    if matches!(codec, VideoCodec::Av1 | VideoCodec::Vp9) {
         return vec![stream];
     }
     let mut nals = AccessUnitNals::default();

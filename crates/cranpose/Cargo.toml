@@ -210,7 +210,13 @@ media-backend = ["dep:cranpose-media", "dep:objc2-media-player"]
 # brings what makes a picture's IOSurface a Metal texture.
 video = [
     "dep:objc2",
+    "dep:objc2-av-foundation",
+    "dep:objc2-core-foundation",
+    "dep:objc2-core-media",
     "dep:objc2-core-video",
+    "dep:objc2-video-toolbox",
+    "dep:block2",
+    "dep:dispatch2",
     "objc2-core-video/CVPixelBufferIOSurface",
     "objc2-core-video/objc2-io-surface",
     "dep:objc2-io-surface",
@@ -543,6 +549,10 @@ objc2-io-surface = { version = "0.3", default-features = false, optional = true,
     "objc2",
     "objc2-core-foundation",
 ] }
+objc2-video-toolbox = { version = "0.3", default-features = false, optional = true, features = [
+    "std",
+    "VTUtilities",
+] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 accesskit_macos = "0.27.2"
@@ -551,7 +561,7 @@ accesskit_macos = "0.27.2"
 # The collection types below that are the camera's (`camera-desktop`): this
 # entry is not optional, so the classes it names are listed here rather than
 # added by the feature.
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSBundle", "NSDictionary", "NSEnumerator", "NSError", "NSObject", "NSGeometry", "NSProcessInfo", "NSString", "NSURL", "NSUserDefaults", "NSValue", "NSData"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSAttributedString", "NSBundle", "NSDictionary", "NSEnumerator", "NSError", "NSLocale", "NSNotification", "NSObject", "NSGeometry", "NSProcessInfo", "NSString", "NSURL", "NSUserDefaults", "NSValue", "NSData"] }
 # The Mac's battery from IOKit's power sources (`macos_power`).
 objc2-io-kit = { version = "0.3", default-features = false, optional = true, features = [
     "std",
@@ -560,6 +570,7 @@ objc2-io-kit = { version = "0.3", default-features = false, optional = true, fea
 objc2-core-foundation = { version = "0.3", default-features = false, optional = true, features = [
     "std",
     "CFArray",
+    "CFCGTypes",
     "CFDictionary",
     "CFNumber",
     "CFString",
@@ -610,7 +621,12 @@ objc2-av-foundation = { version = "0.3", default-features = false, optional = tr
     "dispatch2",
     "std",
     "block2",
+    "objc2-core-foundation",
     "objc2-core-media",
+    "objc2-core-video",
+    "AVAsset",
+    "AVAssetResourceLoader",
+    "AVAssetTrack",
     "AVCaptureSession",
     "AVCaptureSessionPreset",
     "AVCaptureDevice",
@@ -620,12 +636,22 @@ objc2-av-foundation = { version = "0.3", default-features = false, optional = tr
     "AVCaptureVideoDataOutput",
     "AVCapturePhotoOutput",
     "AVMediaFormat",
+    "AVMediaSelection",
+    "AVMediaSelectionGroup",
+    "AVPlayer",
+    "AVPlayerItem",
+    "AVPlayerItemOutput",
+    "AVPlayerItemTrack",
+    "AVTime",
     "AVVideoSettings",
 ] }
 objc2-core-media = { version = "0.3", default-features = false, optional = true, features = [
     "std",
     "objc2-core-video",
+    "CMFormatDescription",
     "CMSampleBuffer",
+    "CMTime",
+    "CMTimeRange",
 ] }
 objc2-core-video = { version = "0.3", default-features = false, optional = true, features = [
     "std",
@@ -653,10 +679,12 @@ objc2 = { version = "0.6", optional = true }
 objc2-foundation = { version = "0.3", default-features = false, optional = true, features = [
     "std",
     "NSArray",
+    "NSAttributedString",
     "NSData",
     "NSDictionary",
     "NSEnumerator",
     "NSError",
+    "NSLocale",
     "NSNotification",
     "NSObject",
     "NSObjCRuntime",
@@ -740,7 +768,9 @@ objc2-av-foundation = { version = "0.3", default-features = false, optional = tr
     "dispatch2",
     "std",
     "block2",
+    "objc2-core-foundation",
     "objc2-core-media",
+    "objc2-core-video",
     "AVCaptureSession",
     "AVCaptureSessionPreset",
     "AVCaptureDevice",
@@ -750,18 +780,27 @@ objc2-av-foundation = { version = "0.3", default-features = false, optional = tr
     "AVCaptureVideoDataOutput",
     "AVCapturePhotoOutput",
     "AVMediaFormat",
+    "AVMediaSelection",
+    "AVMediaSelectionGroup",
     "AVVideoSettings",
-    # Media playback (`ios_media`): AVPlayer streams a remote item as well as a
-    # local one, and the asset is what answers a duration probe.
+    # Media playback (`ios_media` and `apple::player`): AVPlayer streams remote
+    # and local items with zero-copy CVPixelBuffer video output.
     "AVAsset",
+    "AVAssetResourceLoader",
+    "AVAssetTrack",
     "AVPlayer",
     "AVPlayerItem",
+    "AVPlayerItemOutput",
+    "AVPlayerItemTrack",
+    "AVTime",
 ] }
 objc2-core-media = { version = "0.3", default-features = false, optional = true, features = [
     "std",
     "objc2-core-video",
+    "CMFormatDescription",
     "CMSampleBuffer",
     "CMTime",
+    "CMTimeRange",
 ] }
 objc2-core-video = { version = "0.3", default-features = false, optional = true, features = [
     "std",
@@ -925,9 +964,19 @@ stats_alloc = "0.1.10"
 # Reads the cursor the X server shows (`x11_cursor_tests`).
 x11rb = { version = "0.14.0", features = ["xfixes"] }
 
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# Pumps the main NSRunLoop in the harness-less AVPlayer integration test.
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSDate", "NSRunLoop"] }
+
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+
+[[test]]
+name = "apple_player"
+path = "tests/apple_player/main.rs"
+required-features = ["desktop", "renderer-wgpu", "video"]
+harness = false
 
 [[test]]
 name = "framebuffer_memory"

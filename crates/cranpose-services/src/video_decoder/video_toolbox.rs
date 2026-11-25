@@ -100,7 +100,7 @@ impl Backend {
             rotation,
             color,
         } = config;
-        if codec == VideoCodec::Av1 {
+        if matches!(codec, VideoCodec::Av1 | VideoCodec::Vp9) {
             return Err(DecoderError::NoDecoder(codec));
         }
         let DecoderOutput::Frames { depth } = output else {

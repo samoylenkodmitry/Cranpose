@@ -33,8 +33,28 @@ use objc2_core_video::{
 };
 
 use super::{
-    ColorPrimaries, ColorRange, ColorTransfer, CropRect, VideoColorInfo, sps::StreamMetadata,
+    ColorPrimaries, ColorRange, ColorTransfer, CropRect, FrameInfo, VideoColorInfo, VideoFrame,
+    VideoRotation, sps::StreamMetadata,
 };
+
+/// Wraps a valid `CVPixelBufferRef` (retaining one reference count) into a zero-copy
+/// [`VideoFrame`], reading its clean aperture and CoreVideo color metadata without heap
+/// allocation.
+///
+/// # Safety
+/// `pixel_buffer` must be null or a valid `CVPixelBufferRef` backed by an IOSurface.
+pub unsafe fn video_frame_from_pixel_buffer_ptr(
+    pixel_buffer: *mut c_void,
+    info: FrameInfo,
+    rotation: VideoRotation,
+) -> Option<VideoFrame> {
+    // SAFETY: caller guarantees `pixel_buffer` is a valid CVPixelBufferRef.
+    let image = unsafe { Image::retain_from_ptr(pixel_buffer)? };
+    let size = image.size();
+    let crop = image.crop();
+    let color = image.color(StreamMetadata::default(), None);
+    Some(VideoFrame::new(info, size, crop, color, rotation, image))
+}
 
 // The pictures of a decoder that the decoder or the app holds. The count keeps the app from
 // holding every picture that the decoder's pool has.
@@ -44,7 +64,7 @@ pub(super) type LivePictures = Arc<AtomicUsize>;
 // back when the picture drops.
 pub(super) struct Image {
     buffer: CFRetained<CVPixelBuffer>,
-    live: LivePictures,
+    live: Option<LivePictures>,
 }
 
 // SAFETY: a CVPixelBuffer's reference count changes atomically, and the decoder never writes
@@ -59,8 +79,16 @@ impl Image {
         live.fetch_add(1, Ordering::Relaxed);
         Self {
             buffer,
-            live: Arc::clone(live),
+            live: Some(Arc::clone(live)),
         }
+    }
+
+    // Retains one reference count of a valid `CVPixelBufferRef` with zero heap allocation.
+    pub(super) unsafe fn retain_from_ptr(ptr: *mut c_void) -> Option<Self> {
+        let ptr = NonNull::new(ptr.cast::<CVPixelBuffer>())?;
+        // SAFETY: caller guarantees `ptr` is a valid CVPixelBufferRef.
+        let buffer = unsafe { CFRetained::retain(ptr) };
+        Some(Self { buffer, live: None })
     }
 
     pub(super) fn pixel_buffer(&self) -> *mut c_void {
@@ -146,7 +174,9 @@ impl Image {
 
 impl Drop for Image {
     fn drop(&mut self) {
-        self.live.fetch_sub(1, Ordering::Relaxed);
+        if let Some(live) = &self.live {
+            live.fetch_sub(1, Ordering::Relaxed);
+        }
     }
 }
 

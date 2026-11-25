@@ -311,13 +311,14 @@ pub use player::{
     HlsMediaPlaylist, HlsRendition, HlsRenditionType, HlsSegment, HlsVariant, LIP_SYNC_TOLERANCE,
     LoadControl, ManifestError, MasterClock, MediaCache, MediaCacheError, MediaCacheStats,
     MediaProperties, PlaybackParameters, Player, PlayerBackend, PlayerBackendFactory,
-    PlayerBuilder, PlayerCommand, PlayerError, PlayerEvent, PlayerId, PlayerObserver, PlayerPool,
-    PlayerPoolConfig, PlayerPriority, PlayerSink, PlayerState, PositionDiscontinuityReason,
-    RepeatMode, SubtitleTrack, TrackEntry, TrackFormat, TrackGroup, TrackSelectionOverride,
-    TrackSelectionParameters, TrackType, Tracks, VideoSize, clear_platform_player_factory,
-    parse_dash_mpd, parse_hls_master, parse_hls_media, parse_srt, parse_subtitles, parse_webvtt,
-    platform_player_factory, rememberIsLoading, rememberIsPlaying, rememberPlayerError,
-    rememberPlayerEvents, rememberPlayerState, select_abr_variant, set_platform_player_factory,
+    PlayerBuilder, PlayerCapabilities, PlayerCommand, PlayerError, PlayerEvent, PlayerId,
+    PlayerObserver, PlayerPool, PlayerPoolConfig, PlayerPriority, PlayerSink, PlayerState,
+    PositionDiscontinuityReason, RepeatMode, SubtitleTrack, TrackEntry, TrackFormat, TrackGroup,
+    TrackSelectionOverride, TrackSelectionParameters, TrackType, Tracks, VideoContainer, VideoSize,
+    clear_platform_player_factory, parse_dash_mpd, parse_hls_master, parse_hls_media, parse_srt,
+    parse_subtitles, parse_webvtt, platform_player_factory, player_capabilities, rememberIsLoading,
+    rememberIsPlaying, rememberPlayerError, rememberPlayerEvents, rememberPlayerState,
+    select_abr_variant, set_platform_player_factory,
 };
 pub use power::{
     BatteryStatus, PowerCapabilities, PowerMonitor, PowerMonitorRef, PowerObserverRegistration,
@@ -358,11 +359,13 @@ pub use uri_handler::{
 };
 #[cfg(all(feature = "video-web", target_arch = "wasm32", target_os = "unknown"))]
 pub use video_decoder::WebVideoSource;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub use video_decoder::video_frame_from_pixel_buffer_ptr;
 pub use video_decoder::{
     AccessUnit, ColorPrimaries, ColorRange, ColorTransfer, CropRect, DecodeOrder, DecodedFrames,
     DecoderCapabilities, DecoderCapabilitySource, DecoderConfig, DecoderError, DecoderOutput,
-    DecoderStats, FrameInfo, VideoCodec, VideoColorInfo, VideoDecoder, VideoFrame, VideoRotation,
-    set_platform_decoder_capabilities, split_access_units,
+    DecoderStats, FrameInfo, FrameProducer, VideoCodec, VideoColorInfo, VideoDecoder, VideoFrame,
+    VideoRotation, set_platform_decoder_capabilities, split_access_units,
 };
 #[cfg(target_os = "linux")]
 pub use video_decoder::{

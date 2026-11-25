@@ -7,6 +7,7 @@ use std::{
 };
 
 use cranpose_core::ProcessIds;
+use portable_atomic::AtomicU64;
 
 use super::{
     AudioRole, AvailableCommands, CueGroup, LoadControl, MediaProperties, PlaybackParameters,
@@ -16,10 +17,14 @@ use super::{
     backend::platform_player_factory,
     state::{PlayerCore, StartPlayback},
 };
-use crate::{media::MediaItem, video_decoder::DecodedFrames};
+use crate::{
+    media::{MediaCommand, MediaItem, observe_audio_focus, observe_media_commands},
+    video_decoder::DecodedFrames,
+};
 
 static NEXT_PLAYER_ID: ProcessIds = ProcessIds::starting_at(1);
 static NEXT_OBSERVER_ID: ProcessIds = ProcessIds::starting_at(1);
+static ACTIVE_PRIMARY_PLAYER_ID: AtomicU64 = AtomicU64::new(0);
 
 const DEFAULT_SEEK_BACK: Duration = Duration::from_secs(5);
 const DEFAULT_SEEK_FORWARD: Duration = Duration::from_secs(15);
@@ -92,6 +97,21 @@ impl PlayerBuilder {
             let sink = PlayerSink::new(Arc::clone(&core));
             let backend = factory.create(sink, self.load_control, self.audio_role)?;
             *core.backend.lock() = Some(backend);
+        }
+        if self.audio_role == AudioRole::Primary {
+            let weak_focus = Arc::downgrade(&core);
+            let focus_obs = observe_audio_focus(move |focus| {
+                if let Some(core) = weak_focus.upgrade() {
+                    core.on_audio_focus(focus);
+                }
+            });
+            let weak_cmd = Arc::downgrade(&core);
+            let cmd_obs = observe_media_commands(move |command| {
+                if let Some(core) = weak_cmd.upgrade() {
+                    dispatch_os_command(&Player { core }, command);
+                }
+            });
+            core.system_observers.lock().extend([focus_obs, cmd_obs]);
         }
         Ok(Player { core })
     }
@@ -333,6 +353,9 @@ impl Player {
             events.push(ev);
         }
         self.core.emit(&events);
+        if self.core.audio_role == AudioRole::Primary {
+            ACTIVE_PRIMARY_PLAYER_ID.store(self.core.id.0, Ordering::Release);
+        }
         self.core.open_active_item(&item, start_pos, start);
     }
 
@@ -354,6 +377,7 @@ impl Player {
         let (pwr_changed, was_ended, prev_playing, now_playing, cmd_ev, active_item) = {
             let mut snap = self.core.state.lock();
             let prev_playing = snap.effective_is_playing();
+            snap.paused_by_focus = false;
             let pwr_changed = snap.play_when_ready != play_when_ready;
             snap.play_when_ready = play_when_ready;
             let was_ended = play_when_ready && snap.playback_state == PlayerState::Ended;
@@ -399,6 +423,9 @@ impl Player {
             events.push(ev);
         }
         self.core.emit(&events);
+        if play_when_ready && self.core.audio_role == AudioRole::Primary {
+            ACTIVE_PRIMARY_PLAYER_ID.store(self.core.id.0, Ordering::Release);
+        }
         if was_ended && let Some(item) = active_item {
             self.core
                 .open_active_item(&item, Duration::ZERO, StartPlayback::Play);
@@ -672,6 +699,13 @@ impl Player {
             return;
         }
         let backend = self.core.backend.lock().take();
+        self.core.system_observers.lock().clear();
+        let _ = ACTIVE_PRIMARY_PLAYER_ID.compare_exchange(
+            self.core.id.0,
+            0,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
         let events = self.core.halt_to_idle(true);
         self.core.emit(&events);
         if let Some(backend) = backend {
@@ -849,5 +883,29 @@ impl Player {
             core: Arc::clone(&self.core),
             id,
         }
+    }
+}
+
+fn dispatch_os_command(player: &Player, command: MediaCommand) {
+    if ACTIVE_PRIMARY_PLAYER_ID.load(Ordering::Acquire) != player.core.id.0
+        || player.media_item_count() == 0
+        || player.playback_state() == PlayerState::Idle
+    {
+        return;
+    }
+    match command {
+        MediaCommand::Play => player.play(),
+        MediaCommand::Pause => player.pause(),
+        MediaCommand::TogglePlayPause => {
+            if player.play_when_ready() {
+                player.pause();
+            } else {
+                player.play();
+            }
+        }
+        MediaCommand::Stop => player.stop(),
+        MediaCommand::Next => player.seek_to_next(),
+        MediaCommand::Previous => player.seek_to_previous(),
+        MediaCommand::SeekTo(position) => player.seek_to(position),
     }
 }

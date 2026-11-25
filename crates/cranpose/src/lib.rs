@@ -296,6 +296,17 @@ pub use player_surface_intake::{
 #[cfg(feature = "video")]
 pub use player_ui::*;
 
+/// Installs the native zero-copy [`Player`] backend for the current
+/// platform.
+///
+/// Desktop, iOS, Android, and Web launchers call this automatically on startup when the `video`
+/// feature is enabled; embedded views and standalone tests may call it directly.
+#[cfg(feature = "video")]
+pub fn install_player() {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    apple::player::register();
+}
+
 static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 

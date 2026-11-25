@@ -83,6 +83,12 @@ pub(crate) mod now_playing;
     any(target_os = "macos", target_os = "ios")
 ))]
 pub(crate) mod nv12_converter;
+#[cfg(all(feature = "video", any(target_os = "macos", target_os = "ios")))]
+pub(crate) mod player;
+#[cfg(all(feature = "video", any(target_os = "macos", target_os = "ios")))]
+mod player_media;
+#[cfg(all(feature = "video", feature = "ios", target_os = "ios"))]
+mod player_route;
 #[cfg(any(
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
     all(
