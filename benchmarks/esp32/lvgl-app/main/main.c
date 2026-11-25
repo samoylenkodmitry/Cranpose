@@ -203,6 +203,27 @@ typedef struct {
     bool started;
 } stats_t;
 
+#if CONFIG_BENCH_FRAMES
+static void boot_frame(int64_t now)
+{
+    static uint16_t counts[10];
+    static int64_t first_us;
+    static bool reported;
+    if (reported) return;
+    size_t second = now / 1000000;
+    if (second < sizeof(counts) / sizeof(counts[0])) {
+        if (!first_us) first_us = now;
+        counts[second]++;
+    } else {
+        if (first_us) ESP_LOGI(TAG, "BENCH first_ms %lld", first_us / 1000);
+        for (size_t i = 0; i < sizeof(counts) / sizeof(counts[0]); i++) {
+            ESP_LOGI(TAG, "BENCH second %u frames %u", (unsigned)i, (unsigned)counts[i]);
+        }
+        reported = true;
+    }
+}
+#endif
+
 static void record(stats_t *stats, int64_t start, int64_t busy, int64_t now)
 {
     if (!stats->started) {
@@ -261,6 +282,9 @@ void app_main(void)
         uint32_t wait_ms = lv_timer_handler();
         int64_t after = esp_timer_get_time();
         if (rendered) {
+#if CONFIG_BENCH_FRAMES
+            boot_frame(after);
+#endif
             record(&stats, start, after - before, after);
             if (!backlight) {
                 // The last strip's transfer ends before the backlight turns on.

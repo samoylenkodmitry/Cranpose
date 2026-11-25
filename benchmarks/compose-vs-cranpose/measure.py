@@ -17,6 +17,7 @@ the rest of the run does, and the frames of every second are kept.
 
 import argparse
 import json
+import os
 import re
 import shlex
 import statistics
@@ -163,9 +164,8 @@ class Device:
                                       timeout=timeout)
             except subprocess.TimeoutExpired:
                 if attempt == 1:
-                    raise RuntimeError(f'adb {" ".join(args)} hung for {timeout} s twice, '
-                                       'with a restart of the adb server between') from None
-                print(f'adb {" ".join(args[:2])} hung for {timeout} s; restarting the adb server', flush=True)
+                    raise RuntimeError(f'adb {" ".join(args)} hung for {timeout} s twice') from None
+                print(f'adb {" ".join(args[:2])} hung for {timeout} s; reconnecting', flush=True)
                 self.restart_adb()
 
     def restart_adb(self):
@@ -173,11 +173,16 @@ class Device:
         waits for the phone and opens its reversed ports again: the server
         that ended took them with it, and on 2026-10-27 every page Chrome
         opened after a restart found no server."""
-        try:
-            subprocess.run(['adb', 'kill-server'], capture_output=True, timeout=30)
-        except subprocess.TimeoutExpired:
-            subprocess.run(['pkill', '-KILL', '-f', 'adb .*fork-server'], capture_output=True)
-        subprocess.run(['adb', 'start-server'], capture_output=True, timeout=30)
+        if os.environ.get('ADB_SERVER_SOCKET') and ':' in self.serial:
+            # The SSH relay shares its ADB server with other devices.
+            subprocess.run(['adb', 'disconnect', self.serial], capture_output=True, timeout=30)
+            subprocess.run(['adb', 'connect', self.serial], check=True, capture_output=True, timeout=30)
+        else:
+            try:
+                subprocess.run(['adb', 'kill-server'], capture_output=True, timeout=30)
+            except subprocess.TimeoutExpired:
+                subprocess.run(['pkill', '-KILL', '-f', 'adb .*fork-server'], capture_output=True)
+            subprocess.run(['adb', 'start-server'], capture_output=True, timeout=30)
         subprocess.run(['adb', '-s', self.serial, 'wait-for-device'], capture_output=True,
                        timeout=RECONNECT_TIMEOUT_S)
         for port in self.reversed:
@@ -217,6 +222,14 @@ class Device:
         # `adb shell` joins its arguments into one command line for the
         # device's shell: quote each, so a layer name with spaces stays one.
         return self.adb('shell', *(shlex.quote(arg) for arg in args), timeout=timeout, check=check)
+
+    def apk_bytes(self, app):
+        package = APPS[app]['package']
+        paths = self.shell('pm', 'path', package, check=False).splitlines()
+        apks = [line.removeprefix('package:') for line in paths if line.startswith('package:')]
+        if not apks:
+            return None
+        return sum(int(size) for size in self.shell('stat', '-c', '%s', *apks).splitlines())
 
     def pid(self, package):
         deadline = time.monotonic() + 10
@@ -545,10 +558,11 @@ def window_start(output, target):
     if 'NO_PROCESS' in lines:
         raise RuntimeError(f'{target.package} did not start')
     layers = [line[len('LAYER '):] for line in lines if line.startswith('LAYER ')]
-    if not layers or (target.one_layer and len(layers) != 1):
+    splash_only = 'SPLASH_ONLY' in lines
+    if (not layers and not splash_only) or (target.one_layer and len(layers) > 1):
         raise ValueError(f'expected one buffer layer for {target.package}: {layers}')
     pids = [int(pid) for pid in next(line for line in lines if line.startswith('PIDS ')).split()[1:]]
-    return times, pids, layers[0]
+    return times, pids, next(iter(layers), None)
 
 
 def figure(value, spec):
@@ -860,7 +874,7 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
     target.prepare(device)
     output = device.shell('sh', REMOTE_WINDOW, target.package, target.processes, target.layer_pattern,
                           f'{run_s:.2f}', str(args.interval), '1' if target.gfx else '0',
-                          str(SLOW_FPS), str(SLOW_SECONDS), *target.start_args(scenario, extras.split()),
+                          str(0 if getattr(args, 'full_run', False) else SLOW_FPS), str(SLOW_SECONDS), *target.start_args(scenario, extras.split()),
                           timeout=run_s + 60)
     (destination / f'{target.name}-{scenario}-{int(time.time())}.txt').write_text(output)
     run['launch'], pids, layer = window_start(output, target)
@@ -873,7 +887,8 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
     if str(pids[0]) not in device.shell('pidof', target.package, check=False).split():
         raise RuntimeError(f'{target.package} exited or restarted during the run')
     focused = focused_window(device)
-    if focused != target.package:
+    splash_only = layer is None and focused in (None, f'Splash Screen {target.package}')
+    if focused != target.package and not splash_only:
         raise RuntimeError(f'{focused or "no window"} had the focus at the end of the run, not {target.package}')
     if isinstance(target, PageTarget):
         target.check_page()
@@ -882,7 +897,7 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
     # /proc/uptime counts suspended time and SurfaceFlinger's monotonic clock
     # does not. A poll's newest present can only precede the poll, so the
     # smallest gap is the clock offset to within about one frame.
-    offset = min(calibration)
+    offset = min(calibration, default=0.0)
     stats = frame_stats(frames, launched - offset, t1 - offset, vsync_ms)
     frame_times = [actual / 1e9 + offset for actual in frames]
     freqs = clock_samples(lines)
@@ -900,8 +915,8 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
         # Whether the run ended early, too slow to go on.
         stopped=any(line.startswith('SLOW ') for line in lines),
         layer=layer,
-        clock_offset_s=offset,
-        clock_offset_spread_s=max(calibration) - offset,
+        clock_offset_s=offset if calibration else None,
+        clock_offset_spread_s=max(calibration) - offset if calibration else None,
         latency_poll_gaps=poll_gaps,
         # SurfaceFlinger keeps a layer's last 128 presents: when the first poll
         # already held that many, frames of the launch may be missing.
@@ -981,9 +996,9 @@ def compare(args):
               'runs': [], 'startup': {'cranpose': [], 'compose': []}, 'failures': []}
     for app in args.apps.split(','):
         spec = APPS[app]
-        report[app + '_apk_bytes'] = spec['apk'].stat().st_size
         if args.install:
             device.install(app, spec['apk'])
+        report[app + '_apk_bytes'] = device.apk_bytes(app)
     debuggable = device.shell('dumpsys', 'package', APPS['compose']['package'])
     if 'DEBUGGABLE' in debuggable.split('pkgFlags=')[-1].split('\n')[0]:
         raise RuntimeError('the Compose APK is debuggable; measure a release build')

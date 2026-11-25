@@ -29,7 +29,7 @@ mod subject_bars;
 mod table;
 use focus::Focus;
 use launch_chart::{launch_lines, LaunchChart};
-use methodology::MethodologyCard;
+use methodology::{LayoutLinks, MethodologyCard};
 use plot::{Axis, Plot};
 pub use runs::{
     LegSamples, PerfFramesLeg, PerfFramesScenario, PerfIndex, PerfProtocol, PerfRun, PerfRunFrames,
@@ -185,10 +185,11 @@ enum Metric {
     GpuRam,
     CpuClock,
     GpuClock,
+    AppSize,
 }
 
 impl Metric {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::Fps,
         Self::FirstFrame,
         Self::CpuPerFrame,
@@ -197,6 +198,7 @@ impl Metric {
         Self::GpuRam,
         Self::CpuClock,
         Self::GpuClock,
+        Self::AppSize,
     ];
 
     /// The median's name in the run index.
@@ -210,6 +212,7 @@ impl Metric {
             Self::GpuRam => "gpu_ram_mb",
             Self::CpuClock => "cpu_mhz",
             Self::GpuClock => "gpu_mhz",
+            Self::AppSize => "app_mib",
         }
     }
 
@@ -223,6 +226,7 @@ impl Metric {
             Self::GpuRam => "GPU RAM MB",
             Self::CpuClock => "CPU MHz",
             Self::GpuClock => "GPU MHz",
+            Self::AppSize => "App size MiB",
         }
     }
 
@@ -259,6 +263,7 @@ impl Metric {
                  macOS."
             }
             Self::GpuClock => "Mean GPU clock over the run.",
+            Self::AppSize => "App size counts the Android APKs, desktop build and supplied assets, browser distribution or board application image.",
         }
     }
 
@@ -269,6 +274,7 @@ impl Metric {
             Self::CpuCores => "cores",
             Self::Ram | Self::GpuRam => "MB",
             Self::CpuClock | Self::GpuClock => "MHz",
+            Self::AppSize => "MiB",
         }
     }
 
@@ -282,7 +288,7 @@ impl Metric {
     fn format(self, value: f64) -> String {
         match self {
             Self::Fps | Self::CpuPerFrame => format!("{value:.1}"),
-            Self::CpuCores => format!("{value:.2}"),
+            Self::CpuCores | Self::AppSize => format!("{value:.2}"),
             // Medians in seconds, shown in milliseconds.
             Self::FirstFrame => format!("{:.0}", value * 1000.0),
             Self::Ram | Self::GpuRam | Self::CpuClock | Self::GpuClock => format!("{value:.0}"),
@@ -299,6 +305,7 @@ impl Metric {
             Self::Ram => Curve::Samples("ram_mb"),
             Self::CpuClock => Curve::Samples("cpu_mhz"),
             Self::GpuClock => Curve::Samples("gpu_mhz"),
+            Self::AppSize => Curve::None("Each build has one app size."),
             Self::GpuRam => Curve::None(
                 "No curve: the GPU's memory is read once, at the run's end. On Android, \
                  reading it costs the app a garbage collection.",
@@ -373,6 +380,7 @@ fn Message(palette: Palette, text: String) {
             .padding(24.0),
         ColumnSpec::default(),
         move || {
+            LayoutLinks(palette);
             Text(
                 text.clone(),
                 Modifier::empty(),
@@ -403,6 +411,7 @@ pub fn PerformanceDashboard(
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
         move || {
             Header(palette, refresh);
+            LayoutLinks(palette);
             MethodologyCard(palette);
             let nightly: Vec<PerfRun> = index.nightly().into_iter().cloned().collect();
             match nightly.last() {
@@ -446,20 +455,18 @@ fn Header(palette: Palette, refresh: Option<MutableState<u64>>) {
                         text_style(22.0, palette.text, Some(FontWeight::BOLD)),
                     );
                     Text(
-                        "Measured from outside each app, from its launch, over the same span \
-                         for every framework. First start: the first launch after install. \
-                         Second start: the launch after it.",
+                        "Each run includes startup. The first start follows installation. \
+                         The second starts the same build again.",
                         Modifier::empty(),
                         text_style(13.0, palette.muted, None),
                     );
                     Text(
                         format!(
-                            "Charts: the chosen metric from the launch, the frame rate over the \
-                             last {RATE_WINDOW_MS:.0} ms and the rest as sampled every half \
-                             second; a line is the median launch, its band the lowest to the \
-                             highest. Bars: medians over the run, best first. Hover a line, a \
-                             bar or a name to follow one framework; click bars to chart \
-                             only them."
+                            "Desktop and Android charts show FPS over the last {RATE_WINDOW_MS:.0} ms. \
+                             ESP32 charts show completed frames per second. Each line shows the \
+                             median launch. Its band spans the lowest and highest values. \
+                             Bars show medians over the run. Hover over a framework to see its \
+                             values or select its bar to filter the chart."
                         ),
                         Modifier::empty(),
                         text_style(12.0, palette.muted, None),
@@ -575,7 +582,7 @@ fn Trend(palette: Palette, nightly: Rc<Vec<PerfRun>>, scenario: MutableState<Str
             .unwrap_or_default();
         ScenarioChips(palette, names, scenario);
         StartChips(palette, start);
-        MetricChips(palette, metric);
+        MetricChips(palette, metric, &Metric::ALL);
         let (shown, measured, start) = (scenario.get(), metric.get(), start.get());
         let series = |subject: usize| -> Vec<f32> {
             nightly
@@ -675,13 +682,16 @@ fn ScenarioChips(palette: Palette, names: Vec<String>, scenario: MutableState<St
 
 /// The metrics, the one shown highlighted.
 #[composable]
-fn MetricChips(palette: Palette, metric: MutableState<Metric>) {
+fn MetricChips(palette: Palette, metric: MutableState<Metric>, choices: &'static [Metric]) {
     let shown = metric.get();
     Chips(
         palette,
-        Metric::ALL.map(|metric| metric.name().to_string()).to_vec(),
-        Metric::ALL.iter().position(|candidate| *candidate == shown),
-        move |index| metric.set(Metric::ALL[index]),
+        choices
+            .iter()
+            .map(|metric| metric.name().to_string())
+            .collect(),
+        choices.iter().position(|candidate| *candidate == shown),
+        move |index| metric.set(choices[index]),
     );
 }
 
@@ -892,6 +902,21 @@ fn RunView(
         start,
         metric,
     };
+    let subjects = if run.kind == "esp32" {
+        Rc::new(
+            subjects
+                .iter()
+                .filter(|(_, subject)| {
+                    run.scenarios[&selection.scenario]
+                        .app_bytes
+                        .contains_key(&subject.name)
+                })
+                .cloned()
+                .collect(),
+        )
+    } else {
+        subjects
+    };
     let lines = launch_lines(palette, &run, &selection.scenario, start, &subjects);
     LaunchChart(
         palette,
@@ -929,7 +954,12 @@ fn Frameworks(palette: Palette, run: Rc<PerfRun>, source: FrameSource) {
     let title = format!("{place} · {} · {}", run.device, run.date());
     Card(palette, title, move || {
         StartChips(palette, start);
-        MetricChips(palette, metric);
+        let metrics: &[Metric] = if run.kind == "esp32" {
+            &[Metric::Fps, Metric::FirstFrame, Metric::AppSize]
+        } else {
+            &Metric::ALL
+        };
+        MetricChips(palette, metric, metrics);
         RunView(
             palette,
             Rc::clone(&run),
@@ -940,7 +970,11 @@ fn Frameworks(palette: Palette, run: Rc<PerfRun>, source: FrameSource) {
             metric.get(),
         );
         Text(
-            metric.get().about(),
+            if run.kind == "esp32" && metric.get() != Metric::AppSize {
+                "The firmware counts drawn frames in each second from ESP timer startup. First frame shows milliseconds on that clock."
+            } else {
+                metric.get().about()
+            },
             Modifier::empty(),
             text_style(12.0, palette.muted, None),
         );

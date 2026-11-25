@@ -1,8 +1,7 @@
 # Performance benchmark methodology
 
-Every nightly benchmark measures each framework from outside the app process.
-No benchmark app counts its own frames or computes its own frame rate, CPU usage,
-or memory footprint.
+The desktop and Android benchmarks use external frame counters. Each ESP32
+firmware records frames on the board.
 
 ## External measurement
 
@@ -66,6 +65,37 @@ Two patterns appear in every app and are not measurement logic:
      lower bound so Chrome's own shell does not count as page content.
    - `PERF frozen frame=N` fires only when `PERF_FREEZE > 0` during `--parity`
      screenshot comparisons. Nightly performance runs set `freeze = 0`.
+
+### ESP32 boards
+
+The ES3C35P and E32R35T draw the animated demo in Cranpose and LVGL. The ES3C35P
+also draws the dashboard in Slint and both other frameworks. LVGL and Slint draw
+the dashboard on the E32R35T. The firmware counts completed draws in each of
+the first ten seconds on the ESP timer clock. It writes the counts to the
+serial port after the tenth second. The report keeps the first boot after
+flashing and the next reset as separate starts. The browser emulator previews
+the animated bar on a virtual panel. [ESP32 demo](https://samoylenkodmitry.github.io/cranpose-esp32/)
+
+### Mi TV Stick
+
+The Mi TV Stick and Mate 20 X install the same signed framework APKs. Native
+apps carry both ARM ABIs. The stick loads the 32-bit libraries. Both devices
+measure the tier 12 gauntlet for ten seconds on each start. Each report
+records the SHA-256 of each APK. An installation failure appears beside the
+affected framework. The Mac reaches the stick at the repository variable
+`MI_TV_ENDPOINT` (host and port). The job uses the ADB server on `samarch-1`
+through a temporary SSH tunnel.
+
+## App size
+
+Each scenario records bytes by framework in `app_bytes`. The Performance tab
+shows MiB (1,048,576 bytes). Android counts the supplied benchmark APK or
+sums the installed base and split APKs for an existing installation.
+The desktop runner counts the app bundle, publish directory or executable plus
+the shared benchmark fonts and chat assets. Its web and Tauri entries include
+the served page. Browser runs count the files in each app's distribution.
+The ESP32 figure counts the flashable application image. The bootloader and
+partition table have separate images.
 
 ## Protocol and reading the numbers
 

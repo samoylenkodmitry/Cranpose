@@ -68,7 +68,8 @@ BUILD_RETRY_DELAY_S = 60
 
 
 def build(tree, suffix=None):
-    command = ['./gradlew', '--no-daemon', '-q', ':app:assembleRelease']
+    command = ['./gradlew', '--no-daemon', '-q', '--init-script', str(Path(__file__).with_name('benchmark_abis.gradle')),
+               ':app:assembleRelease']
     if suffix:
         command.append('-PperfCompareSuffix=' + suffix)
     # Each tree builds into its own target: one target shared by two trees

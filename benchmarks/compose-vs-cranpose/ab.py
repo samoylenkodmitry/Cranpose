@@ -199,8 +199,10 @@ def compare_builds(args):
                      'deciding': {metric: rule[0] for metric, rule in DECIDING.items()}},
         'scenarios': [],
     }
+    sizes = {app: size for app in subjects if (size := device.apk_bytes(app)) is not None}
     for scenario in scenarios:
-        run['scenarios'].append(compare_scenario(device, scenario, subjects, args))
+        measured = compare_scenario(device, scenario, subjects, args)
+        run['scenarios'].append({**measured, 'app_bytes': sizes})
         (args.output / 'ab.json').write_text(json.dumps(run, indent=1))
     run['duration_s'] = round(time.monotonic() - args.started)
     (args.output / 'ab.json').write_text(json.dumps(run, indent=1))

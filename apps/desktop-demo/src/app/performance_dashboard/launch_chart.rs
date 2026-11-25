@@ -135,9 +135,12 @@ fn leg_trace(leg: &PerfFramesLeg, curve: Curve, run_ms: f64) -> Option<Vec<f64>>
         Curve::Frames if !leg.frame_ms.is_empty() => {
             Some(launch_fps(&leg.frame_ms, run_ms, CHART_STEP_MS))
         }
+        Curve::Frames => {
+            Some(leg.samples.every("fps", run_ms, CHART_STEP_MS)).filter(|trace| !trace.is_empty())
+        }
         Curve::Samples(key) => Some(leg.samples.every(key, run_ms, CHART_STEP_MS))
             .filter(|trace| trace.iter().any(|value| value.is_finite())),
-        Curve::Frames | Curve::None(_) => None,
+        Curve::None(_) => None,
     }
 }
 

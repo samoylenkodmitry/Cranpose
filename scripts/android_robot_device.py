@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 import fcntl
 import hashlib
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -22,7 +23,9 @@ class AndroidRobotDevice:
 
 @contextmanager
 def device_lock(serial):
-    key = hashlib.sha256(serial.encode()).hexdigest()[:16]
+    # A forwarded ADB port changes on each connection to the same device.
+    identity = os.environ.get('ANDROID_DEVICE_LOCK_ID', serial)
+    key = hashlib.sha256(identity.encode()).hexdigest()[:16]
     path = Path(tempfile.gettempdir()) / ('cranpose-device-' + key + '.lock')
     with path.open('a+') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)

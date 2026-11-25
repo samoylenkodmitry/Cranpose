@@ -1,15 +1,10 @@
 name: perf nightly
 
-# Each night main's Cranpose against the latest release, and both against the
-# other frameworks at their latest releases, on the Huawei Mate 20 X and on a
-# Mac desktop (benchmarks/compose-vs-cranpose README, "Every night"). macm3
-# moves every framework's pin to its latest stable release, builds every
-# framework's apps, measures the desktop ones and opens a pull request with
-# the pins that moved; the Mac the phone is attached to builds Cranpose's and
-# measures them all on the phone. The frameworks that target the browser run
-# there too, in Chrome on the Mac desktop and in Chrome on the phone. Results
-# go to the perf-data branch the desktop demo's Performance tab reads; a
-# regression found twice in a row opens a perf-regression issue.
+# The Mate 20 X and Mi TV Stick measure the same signed framework APKs.
+# macm3 builds the other frameworks and measures their desktop and browser
+# apps. The Mate also measures Chrome and compares Cranpose main with the
+# latest release. Both ESP32 boards measure their own firmware on samarch-1.
+# The Performance tab reads the published results from the perf-data branch.
 
 on:
   # GitHub's schedule did not fire this workflow on its first nights, so a
@@ -104,15 +99,18 @@ jobs:
           RUNNER_OS: ${{ runner.os }}
         run: scripts/ci/android_env.sh
 
-      - name: Skip a main this Mac already measured
+      - name: Skip a main already measured on the desktop and both Android devices
         id: published
         # A night asked to move the commit pins measures again.
         if: ${{ !inputs.git_pins }}
         run: |
           chip="$(sysctl -n machdep.cpu.brand_string)"
           chrome="$(defaults read '/Applications/Google Chrome.app/Contents/Info' CFBundleShortVersionString | cut -d. -f1)"
-          if python3 scripts/perf/publish.py --published frameworks "$chip" "$(git rev-parse HEAD)" \
-              && python3 scripts/perf/publish.py --published browser "$chip · Chrome $chrome" "$(git rev-parse HEAD)"; then
+          revision=$(git rev-parse HEAD)
+          if python3 scripts/perf/publish.py --published frameworks "$chip" "$revision" \
+              && python3 scripts/perf/publish.py --published browser "$chip · Chrome $chrome" "$revision" \
+              && python3 scripts/perf/publish.py --published frameworks "EVR-AL00" "$revision" \
+              && python3 scripts/perf/publish.py --published frameworks "MiTV-AYFR0" "$revision"; then
             echo "measured=yes" >> "$GITHUB_OUTPUT"
           fi
 
@@ -120,7 +118,7 @@ jobs:
         if: steps.published.outputs.measured != 'yes'
         run: |
           scripts/ci/install_toolchains.sh
-          scripts/ci/rustup_locked.sh target add aarch64-linux-android
+          scripts/ci/rustup_locked.sh target add aarch64-linux-android armv7-linux-androideabi
           command -v just >/dev/null || cargo install just --locked
           command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
           # The CPU and GPU clocks each desktop leg records.
@@ -226,8 +224,50 @@ jobs:
             ${{ runner.temp }}/desktop*/**/*.log
           retention-days: 30
 
+  esp32:
+    name: firmware on ${{ matrix.board }}
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
+    runs-on: [self-hosted, Linux, samarch1]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      # The builds share the host's ESP-IDF installation.
+      max-parallel: 1
+      matrix:
+        board: [es3c35p, e32r35t]
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Configure the board toolchain
+        run: |
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          scripts/esp32/setup.sh --boards-only
+      - name: Measure both boots of each firmware
+        shell: bash --noprofile --norc -eo pipefail {0}
+        env:
+          BOARD: ${{ matrix.board }}
+        run: just perf-esp32 "$BOARD" "$RUNNER_TEMP/esp32-$GITHUB_RUN_ID-$BOARD"
+      - name: Publish the board results
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOARD: ${{ matrix.board }}
+        run: just perf-publish "$RUNNER_TEMP/esp32-$GITHUB_RUN_ID-$BOARD/report.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !cancelled() }}
+        with:
+          name: perf-${{ matrix.board }}
+          path: |
+            ${{ runner.temp }}/esp32-${{ github.run_id }}-${{ matrix.board }}/*.log
+            ${{ runner.temp }}/esp32-${{ github.run_id }}-${{ matrix.board }}/*.build
+            ${{ runner.temp }}/esp32-${{ github.run_id }}-${{ matrix.board }}/*.json
+          retention-days: 30
+
   android:
-    name: release against main, and the frameworks (Mate 20 X)
+    name: release against main on Mate 20 X and frameworks on both Android devices
     needs: [decide, desktop]
     # The release against main runs whatever became of the desktop job.
     if: ${{ !cancelled() && needs.decide.outputs.run == 'true' }}
@@ -260,7 +300,7 @@ jobs:
       - name: Provision toolchains
         run: |
           scripts/ci/install_toolchains.sh
-          scripts/ci/rustup_locked.sh target add aarch64-linux-android
+          scripts/ci/rustup_locked.sh target add aarch64-linux-android armv7-linux-androideabi
           command -v just >/dev/null || cargo install just --locked
           command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
 
@@ -282,15 +322,29 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: gauntlet-apks
-          path: ${{ runner.temp }}/gauntlet-apks
+          path: ${{ env.PERF_OUTPUT }}/apks
+
+      - name: Add Cranpose to the APKs for both devices
+        id: framework_apks
+        if: ${{ !cancelled() && needs.desktop.outputs.apks == 'yes' }}
+        run: just perf-framework-apks "$PERF_OUTPUT/apks"
 
       - name: Compare the frameworks on the phone
-        if: ${{ !cancelled() && needs.desktop.outputs.apks == 'yes' }}
+        if: ${{ !cancelled() && steps.framework_apks.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          just perf-frameworks "$PERF_SERIAL" "$PERF_OUTPUT/frameworks" "$RUNNER_TEMP/gauntlet-apks"
+          just perf-measure-frameworks "$PERF_OUTPUT/frameworks" "$PERF_OUTPUT/apks" "$PERF_SERIAL"
           just perf-publish "$PERF_OUTPUT/frameworks/frameworks.json"
+
+      - name: Compare the same APKs on the Mi TV Stick
+        if: ${{ !cancelled() && steps.framework_apks.outcome == 'success' }}
+        env:
+          MI_TV_ENDPOINT: ${{ vars.MI_TV_ENDPOINT }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          just perf-mi-tv "$PERF_OUTPUT/mi-tv" "$PERF_OUTPUT/apks"
+          just perf-publish "$PERF_OUTPUT/mi-tv/frameworks.json"
 
       - name: Fetch the browser builds
         if: ${{ !cancelled() && needs.desktop.outputs.browser == 'yes' }}

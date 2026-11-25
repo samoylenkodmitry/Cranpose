@@ -148,6 +148,7 @@ fi
 {
     echo "FPS perf gate"
     echo "profile=$PROFILE"
+    report_app_bytes "$BIN"
     echo "example=$EXAMPLE"
     echo "duration_secs=$DURATION_SECS"
     echo "warmup_secs=$WARMUP_SECS"

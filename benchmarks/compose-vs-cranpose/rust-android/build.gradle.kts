@@ -8,7 +8,7 @@ plugins {
 /** The activity each app's framework runs in: `game` or `native`. */
 val activities = mapOf("egui" to "game", "slint" to "native")
 
-// Every Rust app the same way: its crate built for arm64 in release by
+// Each release contains native libraries for both Android benchmark devices, built by
 // cargo-ndk, loaded by the activity its framework runs in, whose launch
 // activity hands the native side the `am start` extras.
 subprojects {
@@ -55,13 +55,19 @@ subprojects {
     val cargoNdk = tasks.register<Exec>("cargoNdk") {
         workingDir = projectDir
         doFirst {
-            environment("ANDROID_NDK_HOME", sdk.ndkDirectory.get().asFile.path)
+            val ndk = sdk.ndkDirectory.get().asFile.path
+            environment("ANDROID_NDK_HOME", ndk)
+            environment("ANDROID_NDK", ndk)
+            if (app == "slint") {
+                // The published arm64 Skia binary needs a libc++ symbol absent from this NDK.
+                environment("FORCE_SKIA_BUILD", "1")
+            }
             // Build scripts that compile Java, such as Slint's, use the app's platform.
             environment("ANDROID_JAR", sdk.bootClasspath.get().first().asFile.path)
         }
         // The library alone: each crate's binary is its desktop app.
         commandLine(
-            "cargo", "ndk", "--platform", "28", "-t", "arm64-v8a",
+            "cargo", "ndk", "--platform", "28", "-t", "arm64-v8a", "-t", "armeabi-v7a",
             "-o", rust.get().asFile.path, "build", "--release", "--lib",
         )
     }

@@ -1473,9 +1473,15 @@ liquid-reference-device-test device team results suite:
 liquid-reference-device-run device run results suite architecture="arm64":
     xcodebuild -xctestrun '{{run}}' -destination 'platform=iOS,arch={{architecture}},id={{device}}' -resultBundlePath '{{results}}' -parallel-testing-enabled NO -test-timeouts-enabled NO -only-testing:LiquidReferenceTests/{{suite}} test-without-building
 
-# Nightly comparison of the latest release's benchmark app against main's on
-# an attached Android device: builds both, compares them with the short A/B
-# protocol and writes OUTPUT/run.json.
+# Measure both boots of each screen on a physical ESP32 board.
+perf-esp32 board output:
+    . "$HOME/export-{{esp32_toolchain}}.sh" && scripts/ci/with_host_lock.sh --shared python3 scripts/esp32/nightly.py build --board {{quote(board)}} --output {{quote(output)}}
+    scripts/ci/with_host_lock.sh --exclusive python3 scripts/esp32/nightly.py measure --board {{quote(board)}} --output {{quote(output)}}
+
+perf-mi-tv output apks:
+    scripts/android/mi_tv.sh just perf-measure-frameworks {{quote(output)}} {{quote(apks)}}
+
+# Compare the latest release with main on the attached Android device.
 perf-nightly serial output:
     python3 scripts/perf/nightly.py --serial {{serial}} --output {{output}}
 
@@ -1483,7 +1489,14 @@ perf-nightly serial output:
 # benchmarks/compose-vs-cranpose/build_apps.sh) beside Cranpose's latest
 # release and main, built from this checkout.
 perf-frameworks serial output apks:
-    python3 scripts/perf/frameworks_phone.py --serial {{serial}} --output {{output}} --apks {{apks}}
+    just perf-framework-apks {{quote(apks)}}
+    just perf-measure-frameworks {{quote(output)}} {{quote(apks)}} {{quote(serial)}}
+
+perf-framework-apks apks:
+    python3 scripts/perf/framework_apks.py --apks {{quote(apks)}}
+
+perf-measure-frameworks output apks serial:
+    python3 benchmarks/compose-vs-cranpose/frameworks.py --serial {{quote(serial)}} --output {{quote(output)}} --install {{quote(apks)}} --full-run --main "$(git rev-parse HEAD)" --release "$(git describe --tags --abbrev=0 --match 'v*')"
 
 # The apps that target the browser, open in Chrome on the phone: the pages in
 # `pages` (from `build_apps.sh browser`), at the browser's tiers on the phone.

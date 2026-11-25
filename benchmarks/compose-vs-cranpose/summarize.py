@@ -100,8 +100,9 @@ def main():
     lines.append('Desired timestamps are producer-selected; these delays are not '
                  'input latency or GPU execution time. Timestamp origins must be '
                  'verified before comparing renderers. Missing samples are n/a.\n')
-    lines.append(f'APK size: Cranpose {report["cranpose_apk_bytes"] / 1e6:.1f} MB, '
-                 f'Compose {report["compose_apk_bytes"] / 1e6:.2f} MB.')
+    for app in ('cranpose', 'compose'):
+        if (size := report.get(app + '_apk_bytes')) is not None:
+            lines.append(f'{app.capitalize()} APK size: {size / 1_048_576:.2f} MiB.')
     if report['failures']:
         lines.append(f'Failed runs: {len(report["failures"])} (kept in the report).')
     print('\n'.join(lines))
