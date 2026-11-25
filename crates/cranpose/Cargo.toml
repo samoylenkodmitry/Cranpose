@@ -928,6 +928,12 @@ path = "tests/framebuffer_memory/main.rs"
 required-features = ["framebuffer"]
 harness = false
 
+[[test]]
+name = "player_memory"
+path = "tests/player_memory/main.rs"
+required-features = ["video"]
+harness = false
+
 [[bench]]
 name = "framebuffer_frame"
 harness = false

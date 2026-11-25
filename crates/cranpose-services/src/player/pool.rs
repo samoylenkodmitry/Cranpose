@@ -1,13 +1,16 @@
 //! Bounded multi-player pool with priority ranking, instant handoff, and automatic audio
 //! arbitration for vertical video feeds and multi-player screens.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
-use cranpose_core::collections::map::HashMap;
 use parking_lot::Mutex;
+use portable_atomic::AtomicU64;
 
 use super::{AudioRole, LoadControl, Player, PlayerBackendFactory, PlayerError};
 use crate::media::MediaItem;
@@ -59,7 +62,7 @@ struct PoolInner {
     factory: Option<Arc<dyn PlayerBackendFactory>>,
     user_muted: AtomicBool,
     clock: AtomicU64,
-    slots: Mutex<HashMap<String, PoolSlot>>,
+    slots: Mutex<BTreeMap<String, PoolSlot>>,
 }
 
 /// Bounded multi-player pool managing hardware decoder admission, feed preloading, instant
@@ -68,6 +71,14 @@ struct PoolInner {
 pub struct PlayerPool {
     inner: Arc<PoolInner>,
 }
+
+impl PartialEq for PlayerPool {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl Eq for PlayerPool {}
 
 impl PlayerPool {
     /// Creates a pool using the process-wide platform [`PlayerBackendFactory`].
@@ -94,7 +105,7 @@ impl PlayerPool {
                 factory,
                 user_muted: AtomicBool::new(false),
                 clock: AtomicU64::new(1),
-                slots: Mutex::new(HashMap::default()),
+                slots: Mutex::new(BTreeMap::new()),
             }),
         }
     }
@@ -263,18 +274,17 @@ impl PlayerPool {
         let end = (active_index + self.inner.config.preload_ahead).min(items.len() - 1);
         let window = &items[start..=end];
 
-        let removed: Vec<Player> = {
-            let mut slots = self.inner.slots.lock();
-            let stale: Vec<String> = slots
-                .keys()
-                .filter(|key| !window.iter().any(|(k, _)| k == *key))
-                .cloned()
-                .collect();
-            stale
-                .into_iter()
-                .filter_map(|k| slots.remove(&k).map(|s| s.player))
-                .collect()
-        };
+        let mut slots = self.inner.slots.lock();
+        let stale: Vec<String> = slots
+            .keys()
+            .filter(|key| !window.iter().any(|(k, _)| k == *key))
+            .cloned()
+            .collect();
+        let removed: Vec<Player> = stale
+            .into_iter()
+            .filter_map(|k| slots.remove(&k).map(|s| s.player))
+            .collect();
+        drop(slots);
         for player in removed {
             player.release();
         }
@@ -291,7 +301,7 @@ impl PlayerPool {
         let mut capacity_left = self.inner.config.max_concurrent_players.saturating_sub(1);
         if capacity_left > 0 && active_index < end {
             let (k, item) = &items[active_index + 1];
-            let _ = self.acquire(k.clone(), item.clone(), PlayerPriority::Next)?;
+            drop(self.acquire(k.clone(), item.clone(), PlayerPriority::Next)?);
             capacity_left -= 1;
         }
         for (offset, (k, item)) in window.iter().enumerate() {
@@ -302,7 +312,7 @@ impl PlayerPool {
             if idx == active_index || idx == active_index + 1 {
                 continue;
             }
-            let _ = self.acquire(k.clone(), item.clone(), PlayerPriority::Preload)?;
+            drop(self.acquire(k.clone(), item.clone(), PlayerPriority::Preload)?);
             capacity_left -= 1;
         }
         Ok(Some(active_player))
@@ -318,11 +328,10 @@ impl PlayerPool {
 
     /// Releases every pooled player and clears all slots.
     pub fn release_all(&self) {
-        let drained: Vec<PoolSlot> = {
-            let mut slots = self.inner.slots.lock();
-            slots.drain().map(|(_, slot)| slot).collect()
-        };
-        for slot in drained {
+        let mut slots = self.inner.slots.lock();
+        let drained = std::mem::take(&mut *slots);
+        drop(slots);
+        for slot in drained.into_values() {
             slot.player.release();
         }
     }

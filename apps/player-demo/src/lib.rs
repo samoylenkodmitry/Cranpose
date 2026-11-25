@@ -10,19 +10,63 @@ use cranpose_ui::text::{FontWeight, TextUnit};
 
 mod clip_feed;
 mod feed_thread;
+mod video_feed;
 
 pub use feed_thread::FeedThread;
+pub use video_feed::VerticalVideoFeed;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DemoTab {
+    Decoders,
+    Feed,
+}
 
 // The whole screen of the demo.
 #[composable]
 pub fn PlayerDemo() {
+    let tab = rememberMutableStateOf(|| DemoTab::Decoders);
     Column(
         Modifier::empty()
             .fill_max_size()
             .background(Color(0.08, 0.1, 0.12, 1.0))
             .padding(24.0),
         ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(12.0)),
-        Clips,
+        move || {
+            Row(
+                Modifier::empty().fill_max_width(),
+                RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(12.0)),
+                move || {
+                    Button(
+                        Modifier::empty(),
+                        ButtonSpec::default(),
+                        move || tab.set(DemoTab::Decoders),
+                        || {
+                            Text(
+                                "Hardware Decoders",
+                                Modifier::empty(),
+                                sized(15.0, Some(FontWeight::BOLD)),
+                            );
+                        },
+                    );
+                    Button(
+                        Modifier::empty(),
+                        ButtonSpec::default(),
+                        move || tab.set(DemoTab::Feed),
+                        || {
+                            Text(
+                                "Vertical Video Feed",
+                                Modifier::empty(),
+                                sized(15.0, Some(FontWeight::BOLD)),
+                            );
+                        },
+                    );
+                },
+            );
+            match tab.value() {
+                DemoTab::Decoders => Clips(),
+                DemoTab::Feed => VerticalVideoFeed(),
+            }
+        },
     );
 }
 

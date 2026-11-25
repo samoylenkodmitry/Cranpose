@@ -1,7 +1,7 @@
 use std::{
     sync::{
         Arc, Mutex, PoisonError,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -13,6 +13,7 @@ use cranpose::{
 
 struct TestBackend {
     released: Arc<AtomicBool>,
+    live: Arc<AtomicUsize>,
 }
 
 impl PlayerBackend for TestBackend {
@@ -26,12 +27,18 @@ impl PlayerBackend for TestBackend {
     fn set_track_selection(&self, _parameters: &TrackSelectionParameters) {}
     fn release(&self) {
         self.released.store(true, Ordering::Release);
+        self.live.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
 pub(crate) struct TestFactory {
     sink: Mutex<Option<PlayerSink>>,
+    #[allow(dead_code, reason = "read by player_ui_integration")]
     pub(crate) released: Arc<AtomicBool>,
+    #[allow(dead_code, reason = "read by player_memory")]
+    pub(crate) live: Arc<AtomicUsize>,
+    #[allow(dead_code, reason = "read by player_memory")]
+    pub(crate) peak: Arc<AtomicUsize>,
 }
 
 impl TestFactory {
@@ -39,6 +46,8 @@ impl TestFactory {
         Arc::new(Self {
             sink: Mutex::new(None),
             released: Arc::new(AtomicBool::new(false)),
+            live: Arc::new(AtomicUsize::new(0)),
+            peak: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -58,9 +67,12 @@ impl PlayerBackendFactory for TestFactory {
         _load_control: LoadControl,
         _audio_role: AudioRole,
     ) -> Result<Arc<dyn PlayerBackend>, PlayerError> {
+        let now = self.live.fetch_add(1, Ordering::AcqRel) + 1;
+        self.peak.fetch_max(now, Ordering::AcqRel);
         *self.sink.lock().unwrap_or_else(PoisonError::into_inner) = Some(sink);
         Ok(Arc::new(TestBackend {
             released: Arc::clone(&self.released),
+            live: Arc::clone(&self.live),
         }))
     }
 }

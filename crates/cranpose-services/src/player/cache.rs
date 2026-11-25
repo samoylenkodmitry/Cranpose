@@ -1,12 +1,10 @@
 //! Opt-in byte-bounded LRU media cache for feed preloading and offline playback.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::{Arc, atomic::Ordering};
 
 use cranpose_core::collections::map::HashMap;
 use parking_lot::Mutex;
+use portable_atomic::AtomicU64;
 use sha2::{Digest, Sha256};
 
 use crate::media::MediaItem;
@@ -113,7 +111,12 @@ mod storage {
             let tmp_path = self.dir.join(format!("{key}.{access}.tmp"));
             fs::write(&tmp_path, bytes).map_err(|e| MediaCacheError::Io(e.to_string()))?;
             if let Err(err) = fs::rename(&tmp_path, &final_path) {
-                let _ = fs::remove_file(&tmp_path);
+                if let Err(remove_err) = fs::remove_file(&tmp_path) {
+                    log::debug!(
+                        "media cache: cleanup {} failed: {remove_err}",
+                        tmp_path.display()
+                    );
+                }
                 return Err(MediaCacheError::Io(err.to_string()));
             }
             Ok(StoredEntry {
@@ -124,7 +127,11 @@ mod storage {
         }
 
         pub(super) fn remove_entry(&self, entry: &StoredEntry) {
-            let _ = fs::remove_file(&entry.path);
+            if let Err(err) = fs::remove_file(&entry.path)
+                && err.kind() != std::io::ErrorKind::NotFound
+            {
+                log::debug!("media cache: remove {} failed: {err}", entry.path.display());
+            }
         }
 
         pub(super) fn resolve_item(entry: &StoredEntry, original: &MediaItem) -> MediaItem {
@@ -203,6 +210,14 @@ struct CacheInner {
 pub struct MediaCache {
     inner: Arc<CacheInner>,
 }
+
+impl PartialEq for MediaCache {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl Eq for MediaCache {}
 
 impl MediaCache {
     /// Opens or creates a persistent disk-backed [`MediaCache`] under `directory` capped at
@@ -324,9 +339,11 @@ impl MediaCache {
             entry.last_access = access;
             let resolved = storage::DiskStore::resolve_item(entry, item);
             state.hits = state.hits.saturating_add(1);
+            drop(state);
             resolved
         } else {
             state.misses = state.misses.saturating_add(1);
+            drop(state);
             item.clone()
         }
     }
@@ -334,15 +351,12 @@ impl MediaCache {
     /// Removes the cached entry for `uri`, if present.
     pub fn remove(&self, uri: &str) {
         let key = cache_key(uri);
-        let removed = {
-            let mut state = self.inner.state.lock();
-            if let Some(entry) = state.entries.remove(&key) {
-                state.total_bytes = state.total_bytes.saturating_sub(entry.byte_len);
-                Some(entry)
-            } else {
-                None
-            }
-        };
+        let mut state = self.inner.state.lock();
+        let removed = state.entries.remove(&key);
+        if let Some(ref entry) = removed {
+            state.total_bytes = state.total_bytes.saturating_sub(entry.byte_len);
+        }
+        drop(state);
         if let Some(entry) = removed {
             self.inner.store.remove_entry(&entry);
         }
@@ -350,11 +364,11 @@ impl MediaCache {
 
     /// Removes all cached entries and resets total stored bytes to zero.
     pub fn clear(&self) {
-        let drained: Vec<storage::StoredEntry> = {
-            let mut state = self.inner.state.lock();
-            state.total_bytes = 0;
-            state.entries.drain().map(|(_, entry)| entry).collect()
-        };
+        let mut state = self.inner.state.lock();
+        state.total_bytes = 0;
+        let drained: Vec<storage::StoredEntry> =
+            state.entries.drain().map(|(_, entry)| entry).collect();
+        drop(state);
         for entry in drained {
             self.inner.store.remove_entry(&entry);
         }
@@ -375,24 +389,23 @@ impl MediaCache {
 
     fn evict_to_budget(&self) {
         let mut evicted = Vec::new();
-        {
-            let mut state = self.inner.state.lock();
-            while state.total_bytes > self.inner.max_bytes {
-                let oldest = state
-                    .entries
-                    .iter()
-                    .min_by_key(|(_, entry)| entry.last_access)
-                    .map(|(k, _)| k.clone());
-                let Some(oldest_key) = oldest else {
-                    break;
-                };
-                if let Some(entry) = state.entries.remove(&oldest_key) {
-                    state.total_bytes = state.total_bytes.saturating_sub(entry.byte_len);
-                    state.evictions = state.evictions.saturating_add(1);
-                    evicted.push(entry);
-                }
+        let mut state = self.inner.state.lock();
+        while state.total_bytes > self.inner.max_bytes {
+            let oldest = state
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_access)
+                .map(|(k, _)| k.clone());
+            let Some(oldest_key) = oldest else {
+                break;
+            };
+            if let Some(entry) = state.entries.remove(&oldest_key) {
+                state.total_bytes = state.total_bytes.saturating_sub(entry.byte_len);
+                state.evictions = state.evictions.saturating_add(1);
+                evicted.push(entry);
             }
         }
+        drop(state);
         for entry in evicted {
             self.inner.store.remove_entry(&entry);
         }
@@ -400,11 +413,12 @@ impl MediaCache {
 }
 
 fn cache_key(uri: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     let digest = Sha256::digest(uri.as_bytes());
     let mut hex = String::with_capacity(digest.len() * 2);
     for byte in digest {
-        use std::fmt::Write;
-        let _ = write!(&mut hex, "{byte:02x}");
+        hex.push(char::from(HEX[usize::from(byte >> 4)]));
+        hex.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
     hex
 }
