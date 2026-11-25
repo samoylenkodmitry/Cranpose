@@ -31,31 +31,40 @@ export component TileBox inherits Rectangle {
     in property <length> dot;
     background: fill;
     border-radius: 2px;
-    clip: true;
-    label := Text {
-        x: pad;
-        y: pad;
-        text: tile.label;
-        font-size: label-size;
-        font-weight: 700;
-        color: white;
-        wrap: no-wrap;
-    }
+    // The other apps cut each text at its own box inside the padding. A
+    // rounded clip would draw each tile into a layer of its own on renderers
+    // without rounded clip paths.
     Rectangle {
         x: pad;
-        y: pad + label.preferred-height + (value.preferred-height - dot) / 2;
-        width: dot;
-        height: dot;
-        border-radius: dot / 2;
-        background: tile.dot;
-    }
-    value := Text {
-        x: pad + dot * 1.5;
-        y: pad + label.preferred-height;
-        text: tile.value;
-        font-size: value-size;
-        color: white;
-        wrap: no-wrap;
+        y: pad;
+        width: parent.width - 2 * pad;
+        height: parent.height - 2 * pad;
+        clip: true;
+        label := Text {
+            x: 0;
+            y: 0;
+            text: tile.label;
+            font-size: label-size;
+            font-weight: 700;
+            color: white;
+            wrap: no-wrap;
+        }
+        Rectangle {
+            x: 0;
+            y: label.preferred-height + (value.preferred-height - dot) / 2;
+            width: dot;
+            height: dot;
+            border-radius: dot / 2;
+            background: tile.dot;
+        }
+        value := Text {
+            x: dot * 1.5;
+            y: label.preferred-height;
+            text: tile.value;
+            font-size: value-size;
+            color: white;
+            wrap: no-wrap;
+        }
     }
 }
 
