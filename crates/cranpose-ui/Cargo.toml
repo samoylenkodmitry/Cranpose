@@ -91,10 +91,6 @@ harness = false
 name = "scope_cost"
 harness = false
 
-[[bench]]
-name = "subcompose_chain"
-harness = false
-
 [[test]]
 name = "integration"
 path = "tests/integration.rs"

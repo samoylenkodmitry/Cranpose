@@ -246,9 +246,9 @@ build() {
         build_bin "$side" movable_content "$ws_target" \
             cargo bench -p cranpose-app-shell --bench movable_content --no-run
     fi
-    if [ -f "$src/crates/cranpose-ui/benches/subcompose_chain.rs" ]; then
+    if [ -f "$src/crates/cranpose-app-shell/benches/subcompose_chain.rs" ]; then
         build_bin "$side" subcompose_chain "$ws_target" \
-            cargo bench -p cranpose-ui --bench subcompose_chain --no-run
+            cargo bench -p cranpose-app-shell --bench subcompose_chain --no-run
     fi
 }
 

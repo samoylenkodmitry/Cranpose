@@ -19,8 +19,7 @@ use web_time::Instant;
 use crate::{
     layout::MeasuredNode,
     modifier::{
-        ElementMatch, Modifier, ModifierChainHandle, ModifierNodeSlices, Point, ResolvedModifiers,
-        Size,
+        ElementMatch, Modifier, ModifierChainHandle, ModifierNodeSlices, ResolvedModifiers, Size,
     },
     render_state::AppContext,
     widgets::nodes::{ChildPlacement, LayoutNode, LayoutParts, LayoutState, NodeCache},
@@ -272,8 +271,6 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         let _paused = context
             .as_ref()
             .map(|context| context.measure_reads.paused());
-        let mut inner = self.parent_handle.inner.borrow_mut();
-
         let (virtual_node_id, is_rebound) =
             if let Some((node_id, rebound)) = self.state.take_node_from_reusables(slot_id) {
                 (node_id, rebound)
@@ -281,11 +278,9 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
                 let id = self
                     .composer
                     .create_virtual_node(Box::new(LayoutNode::new_virtual()));
-                inner.children.push(id);
+                self.parent_handle.inner.borrow_mut().children.push(id);
                 (id, false)
             };
-
-        drop(inner);
 
         let children = self.compose_into_slot(slot_id, virtual_node_id, content);
         if is_rebound {
@@ -544,6 +539,9 @@ pub(crate) type RetainedMeasurePolicy =
 /// Node responsible for orchestrating measure-time subcomposition.
 pub struct SubcomposeLayoutNode {
     inner: Rc<RefCell<SubcomposeLayoutNodeInner>>,
+    modifier_chain: ModifierChainHandle,
+    modifier_capabilities: NodeCapabilities,
+    debug_modifiers: bool,
     parent: Cell<Option<NodeId>>,
     id: Cell<Option<NodeId>>,
     needs_semantics: Cell<bool>,
@@ -559,8 +557,11 @@ impl SubcomposeLayoutNode {
     /// Creates a node with `modifier` whose children `measure_policy` subcomposes and measures.
     pub fn new(modifier: Modifier, measure_policy: Rc<MeasurePolicy>) -> Self {
         let inner = Rc::new(RefCell::new(SubcomposeLayoutNodeInner::new(measure_policy)));
-        let node = Self {
+        let mut node = Self {
             inner,
+            modifier_chain: ModifierChainHandle::detached(crate::LayoutDirection::Ltr),
+            modifier_capabilities: NodeCapabilities::default(),
+            debug_modifiers: false,
             parent: Cell::new(None),
             id: Cell::new(None),
             needs_semantics: Cell::new(true),
@@ -571,7 +572,7 @@ impl SubcomposeLayoutNode {
             modifier_slices_snapshot: crate::modifier::SlicesSnapshot::default(),
             modifier_slices_dirty: Cell::new(true),
         };
-        let (invalidations, _) = node.inner.borrow_mut().set_modifier_collect(modifier);
+        let (invalidations, _) = node.set_modifier_collect(modifier);
         node.dispatch_modifier_invalidations(&invalidations, NodeCapabilities::empty());
         node.note_host_to_the_composition_that_made_it();
         node
@@ -593,8 +594,11 @@ impl SubcomposeLayoutNode {
             .state
             .set_policy(Box::new(cranpose_core::ContentTypeReusePolicy));
         let inner = Rc::new(RefCell::new(inner_data));
-        let node = Self {
+        let mut node = Self {
             inner,
+            modifier_chain: ModifierChainHandle::detached(crate::LayoutDirection::Ltr),
+            modifier_capabilities: NodeCapabilities::default(),
+            debug_modifiers: false,
             parent: Cell::new(None),
             id: Cell::new(None),
             needs_semantics: Cell::new(true),
@@ -605,7 +609,7 @@ impl SubcomposeLayoutNode {
             modifier_slices_snapshot: crate::modifier::SlicesSnapshot::default(),
             modifier_slices_dirty: Cell::new(true),
         };
-        let (invalidations, _) = node.inner.borrow_mut().set_modifier_collect(modifier);
+        let (invalidations, _) = node.set_modifier_collect(modifier);
         node.dispatch_modifier_invalidations(&invalidations, NodeCapabilities::empty());
         node.note_host_to_the_composition_that_made_it();
         node
@@ -691,9 +695,7 @@ impl SubcomposeLayoutNode {
 
     /// Updates relative modifier placement for this node's composition scope.
     pub fn set_layout_direction(&mut self, direction: crate::LayoutDirection) {
-        let mut inner = self.inner.borrow_mut();
-        if inner.modifier_chain.set_layout_direction(direction) {
-            drop(inner);
+        if self.modifier_chain.set_layout_direction(direction) {
             self.modifier_slices_dirty.set(true);
             self.mark_needs_measure();
         }
@@ -702,11 +704,8 @@ impl SubcomposeLayoutNode {
     /// Replaces the modifier chain and invalidates the layout, draw, pointer input and semantics
     /// work that the changed modifier nodes affect.
     pub fn set_modifier(&mut self, modifier: Modifier) {
-        let prev_caps = self.modifier_capabilities();
-        let (invalidations, modifier_changed) = {
-            let mut inner = self.inner.borrow_mut();
-            inner.set_modifier_collect(modifier)
-        };
+        let prev_caps = self.modifier_capabilities;
+        let (invalidations, modifier_changed) = self.set_modifier_collect(modifier);
         self.dispatch_modifier_invalidations(&invalidations, prev_caps);
         self.modifier_slices_dirty.set(true);
         crate::modal_nodes::reach_changed(self.id.get());
@@ -715,12 +714,23 @@ impl SubcomposeLayoutNode {
         }
     }
 
+    fn set_modifier_collect(&mut self, modifier: Modifier) -> (ModifierInvalidations, bool) {
+        let modifier_changed = !self
+            .modifier_chain
+            .holds(&modifier, ElementMatch::Structural);
+        self.modifier_chain.set_debug_logging(self.debug_modifiers);
+        let invalidations = self.modifier_chain.update_on_node(self.id.get(), &modifier);
+        self.modifier_capabilities = self.modifier_chain.capabilities();
+
+        (invalidations, modifier_changed)
+    }
+
     fn update_modifier_slices_cache(&self) {
-        let inner = self.inner.borrow();
+        let density = self.inner.borrow().density.density();
         self.modifier_slices_snapshot.collect(
-            inner.modifier_chain.chain(),
+            self.modifier_chain.chain(),
             Some(&self.parts),
-            inner.density.density(),
+            density,
         );
         self.modifier_slices_dirty.set(false);
     }
@@ -729,11 +739,15 @@ impl SubcomposeLayoutNode {
         &self,
         constraints: Constraints,
     ) -> crate::layout::SubcomposeMeasureStart {
-        let inner = self.inner.borrow();
-        let mut runtime = self.parts.runtime_state().borrow_mut();
-        let plan = runtime.bind_subcompose(inner.density, &inner.modifier_chain, constraints);
-        let measured_children = Rc::clone(&inner.measured_children_scratch);
-        drop((runtime, inner));
+        let (density, measured_children) = {
+            let inner = self.inner.borrow();
+            (inner.density, Rc::clone(&inner.measured_children_scratch))
+        };
+        let plan = self.parts.runtime_state().borrow_mut().bind_subcompose(
+            density,
+            &self.modifier_chain,
+            constraints,
+        );
         measured_children.borrow_mut().clear();
         self.cache().clear_measurement();
         crate::layout::SubcomposeMeasureStart::new(
@@ -750,22 +764,23 @@ impl SubcomposeLayoutNode {
 
     /// Turns debug logging of the modifier chain on or off.
     pub fn set_debug_modifiers(&mut self, enabled: bool) {
-        self.inner.borrow_mut().set_debug_modifiers(enabled);
+        self.debug_modifiers = enabled;
+        self.modifier_chain.set_debug_logging(enabled);
     }
 
     /// Returns the modifier that was last set on this node.
     pub fn modifier(&self) -> Modifier {
-        self.handle().modifier()
+        self.modifier_chain.modifier()
     }
 
     /// Returns the padding, layout properties and offset that the modifier chain resolved to.
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {
-        self.inner.borrow().modifier_chain.resolved_modifiers()
+        self.modifier_chain.resolved_modifiers()
     }
 
     /// What the chain tells the parent's measure policy about this node.
     pub(crate) fn parent_data(&self) -> crate::modifier::SharedParentData {
-        self.inner.borrow().modifier_chain.parent_data()
+        self.modifier_chain.parent_data()
     }
 
     /// Returns a clone of the current layout state.
@@ -801,17 +816,17 @@ impl SubcomposeLayoutNode {
 
     /// Semantics reported by this node's live modifier chain.
     pub fn semantics_configuration(&self) -> Option<SemanticsConfiguration> {
-        crate::modifier::collect_semantics_from_chain(self.inner.borrow().modifier_chain.chain())
+        crate::modifier::collect_semantics_from_chain(self.modifier_chain.chain())
     }
 
     /// Whether this node's modifiers make it modal or hidden.
     pub fn semantics_reach(&self) -> cranpose_foundation::SemanticsReach {
-        crate::modifier::semantics_reach_of_chain(self.inner.borrow().modifier_chain.chain())
+        crate::modifier::semantics_reach_of_chain(self.modifier_chain.chain())
     }
 
     /// Runs `read` with the node's modifier chain.
     pub(crate) fn with_modifier_chain<R>(&self, read: impl FnOnce(&ModifierChainHandle) -> R) -> R {
-        read(&self.inner.borrow().modifier_chain)
+        read(&self.modifier_chain)
     }
 
     /// Returns the modifier slices snapshot for rendering.
@@ -963,7 +978,7 @@ impl SubcomposeLayoutNode {
 
     /// Returns the modifier capabilities for this node.
     pub fn modifier_capabilities(&self) -> NodeCapabilities {
-        self.inner.borrow().modifier_capabilities
+        self.modifier_capabilities
     }
 
     /// Returns whether the modifier chain contains layout modifier nodes.
@@ -1049,16 +1064,13 @@ impl SubcomposeLayoutNode {
 
 impl cranpose_core::Node for SubcomposeLayoutNode {
     fn mount(&mut self) {
-        let mut inner = self.inner.borrow_mut();
-        let node_id = inner.node_id;
-        inner.modifier_chain.remount(node_id);
+        self.modifier_chain.remount(self.id.get());
         crate::modal_nodes::reach_changed(self.id.get());
     }
 
     fn unmount(&mut self) {
-        let mut inner = self.inner.borrow_mut();
-        inner.modifier_chain.chain_mut().detach_nodes();
-        if let Some(node_id) = inner.node_id
+        self.modifier_chain.chain_mut().detach_nodes();
+        if let Some(node_id) = self.id.get()
             && let Some(context) = crate::render_state::current_app_context()
         {
             context.measure_reads.forget(node_id);
@@ -1122,12 +1134,9 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
     }
 
     fn set_node_id(&mut self, id: NodeId) {
-        self.id.set(Some(id));
-        {
-            let mut inner = self.inner.borrow_mut();
-            let previous = inner.node_id.replace(id);
-            inner.modifier_chain.move_to_node_later(previous, Some(id));
-        }
+        let previous = self.id.replace(Some(id));
+        self.inner.borrow_mut().node_id = Some(id);
+        self.modifier_chain.move_to_node_later(previous, Some(id));
         // The slices carry the node's id; they are collected again when next read.
         self.modifier_slices_dirty.set(true);
     }
@@ -1209,55 +1218,6 @@ impl SubcomposeLayoutNodeHandle {
             return;
         }
         inner.slots.note_nested_host(slot_host);
-    }
-
-    pub fn modifier(&self) -> Modifier {
-        self.inner.borrow().modifier_chain.modifier()
-    }
-
-    pub fn layout_properties(&self) -> crate::modifier::LayoutProperties {
-        self.resolved_modifiers().layout_properties()
-    }
-
-    pub fn resolved_modifiers(&self) -> ResolvedModifiers {
-        self.inner.borrow().modifier_chain.resolved_modifiers()
-    }
-
-    pub fn total_offset(&self) -> Point {
-        self.resolved_modifiers().offset()
-    }
-
-    pub fn modifier_capabilities(&self) -> NodeCapabilities {
-        self.inner.borrow().modifier_capabilities
-    }
-
-    pub fn has_layout_modifier_nodes(&self) -> bool {
-        self.modifier_capabilities()
-            .contains(NodeCapabilities::LAYOUT)
-    }
-
-    pub fn has_draw_modifier_nodes(&self) -> bool {
-        self.modifier_capabilities()
-            .contains(NodeCapabilities::DRAW)
-    }
-
-    pub fn has_pointer_input_modifier_nodes(&self) -> bool {
-        self.modifier_capabilities()
-            .contains(NodeCapabilities::POINTER_INPUT)
-    }
-
-    pub fn has_semantics_modifier_nodes(&self) -> bool {
-        self.modifier_capabilities()
-            .contains(NodeCapabilities::SEMANTICS)
-    }
-
-    pub fn has_focus_modifier_nodes(&self) -> bool {
-        self.modifier_capabilities()
-            .contains(NodeCapabilities::FOCUS)
-    }
-
-    pub fn set_debug_modifiers(&self, enabled: bool) {
-        self.inner.borrow_mut().set_debug_modifiers(enabled);
     }
 
     // Measures the node with its retained measure policy, from the slots of
@@ -1424,14 +1384,11 @@ impl SubcomposeLayoutNodeHandle {
 }
 
 struct SubcomposeLayoutNodeInner {
-    modifier_chain: ModifierChainHandle,
-    modifier_capabilities: NodeCapabilities,
     state: SubcomposeState,
     measure_policy: Rc<MeasurePolicy>,
     retained_measure_policy: Option<Rc<RetainedMeasurePolicy>>,
     children: Vec<NodeId>,
     slots: Rc<SlotsHost>,
-    debug_modifiers: bool,
     node_id: Option<NodeId>,
     last_placements: Rc<Vec<NodeId>>,
     measure_scratch: MeasureScratch,
@@ -1485,14 +1442,11 @@ impl SubcomposeLayoutNodeInner {
 
     fn new(measure_policy: Rc<MeasurePolicy>) -> Self {
         Self {
-            modifier_chain: ModifierChainHandle::detached(crate::LayoutDirection::Ltr),
-            modifier_capabilities: NodeCapabilities::default(),
             state: SubcomposeState::default(),
             measure_policy,
             retained_measure_policy: None,
             children: Vec::new(),
             slots: Rc::new(SlotsHost::new(SlotTable::default())),
-            debug_modifiers: false,
             node_id: None,
             last_placements: Rc::new(Vec::new()),
             measure_scratch: MeasureScratch::default(),
@@ -1510,22 +1464,6 @@ impl SubcomposeLayoutNodeInner {
                 "failed to reset root measurement slots after measure policy update: {err}"
             );
         }
-    }
-
-    fn set_modifier_collect(&mut self, modifier: Modifier) -> (ModifierInvalidations, bool) {
-        let modifier_changed = !self
-            .modifier_chain
-            .holds(&modifier, ElementMatch::Structural);
-        self.modifier_chain.set_debug_logging(self.debug_modifiers);
-        let invalidations = self.modifier_chain.update_on_node(self.node_id, &modifier);
-        self.modifier_capabilities = self.modifier_chain.capabilities();
-
-        (invalidations, modifier_changed)
-    }
-
-    fn set_debug_modifiers(&mut self, enabled: bool) {
-        self.debug_modifiers = enabled;
-        self.modifier_chain.set_debug_logging(enabled);
     }
 }
 

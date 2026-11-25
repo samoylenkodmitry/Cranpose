@@ -189,19 +189,6 @@ struct ModifierChainInputs {
     uses_chain: bool,
 }
 
-struct ModifierChainMeasurement {
-    size: Size,
-    alignment_lines: AlignmentLines,
-    content_offset: Point,
-    offset: Point,
-    window_root: bool,
-    /// The incoming constraints this measurement holds for besides its own.
-    hold: Option<cranpose_ui_layout::ConstraintsHold>,
-    /// Whether no child's size entered it: see
-    /// [`MeasurePolicy::ignores_child_sizes`].
-    ignores_child_sizes: bool,
-}
-
 /// Counts and heap sizes of the layout and semantics data that one measure pass retains, for memory
 /// diagnostics.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1271,6 +1258,7 @@ impl LayoutBuilderState {
             inner_constraints,
             placements,
             moved_coordinators,
+            invalidations,
         } = self.measure_subcompose_through_modifier_chain(
             &node_handle,
             &parts,
@@ -1291,6 +1279,7 @@ impl LayoutBuilderState {
         parts.note_child_placements(&placements);
         cache.clear_needs_measure();
         cache.clear_layout_dirt();
+        self.mark_invalidations(node_id, invalidations);
 
         // One borrow of the applier places every child; measuring a child
         // the pass did not measure borrows it on its own.
@@ -1445,6 +1434,7 @@ impl LayoutBuilderState {
         }
         cache.clear_needs_measure();
         cache.clear_layout_dirt();
+        self.mark_invalidations(node_id, measurement.invalidations);
         layout_state.set_size(Some(node_id), measurement.size, &self.context);
         layout_state.set_content_offset(Some(node_id), measurement.content_offset);
 

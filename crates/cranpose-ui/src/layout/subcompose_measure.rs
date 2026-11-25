@@ -64,6 +64,7 @@ pub(super) struct SubcomposeChainMeasurement {
     pub(super) inner_constraints: Constraints,
     pub(super) placements: Vec<Placement>,
     pub(super) moved_coordinators: bool,
+    pub(super) invalidations: u8,
 }
 
 struct SubcomposeLeaf<'a> {
@@ -142,6 +143,7 @@ impl LayoutBuilderState {
                     inner_constraints: constraints,
                     placements: result.placements,
                     moved_coordinators,
+                    invalidations: 0,
                 })
             }
             SubcomposeChainPlan::Direct {
@@ -181,6 +183,7 @@ impl LayoutBuilderState {
                     inner_constraints,
                     placements: result.placements,
                     moved_coordinators,
+                    invalidations: 0,
                 })
             }
             SubcomposeChainPlan::General { density, offset } => self
@@ -219,7 +222,7 @@ impl LayoutBuilderState {
                 .measure_from(0, &frame, constraints);
             (placeable, runtime_state.take_moved_coordinators())
         };
-        self.mark_invalidations(node_id, frame.take_invalidations());
+        let invalidations = frame.take_invalidations();
         if let Some(err) = measure_error.borrow_mut().take() {
             return Err(err);
         }
@@ -245,6 +248,7 @@ impl LayoutBuilderState {
             inner_constraints,
             placements,
             moved_coordinators,
+            invalidations,
         })
     }
 

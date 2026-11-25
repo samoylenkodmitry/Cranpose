@@ -526,3 +526,192 @@ fn reversed_lazy_row_with_spare_space_honors_spaced_by_and_end_arrangements() {
     assert_eq!(rect(&layout, "rl0"), (40.0, 40.0, 40.0, 16.0));
     assert_eq!(rect(&layout, "rl1"), (0.0, 40.0, 40.0, 16.0));
 }
+
+#[test]
+fn clean_subcompose_layout_reuses_cached_measurement_across_identical_passes() {
+    use cranpose_ui::SubcomposeLayoutScope;
+
+    let measures = Rc::new(Cell::new(0usize));
+    let measures_in_policy = Rc::clone(&measures);
+    let mut composition = cranpose_ui::run_test_composition(move || {
+        let measures = Rc::clone(&measures_in_policy);
+        cranpose_ui::SubcomposeLayout(
+            Modifier::empty().size_points(100.0, 40.0),
+            move |scope, constraints| {
+                measures.set(measures.get() + 1);
+                scope.layout(constraints.max_width, constraints.max_height, Vec::new())
+            },
+        );
+    });
+
+    let first = layout_composition(&mut composition, VIEWPORT);
+    assert_eq!(first.root().rect.width, 100.0);
+    assert_eq!(first.root().rect.height, 40.0);
+    assert_eq!(measures.get(), 1);
+
+    let second = layout_composition(&mut composition, VIEWPORT);
+    assert_eq!(second.root().rect.width, 100.0);
+    assert_eq!(second.root().rect.height, 40.0);
+    assert_eq!(
+        measures.get(),
+        1,
+        "a clean SubcomposeLayout should keep its cached measurement without re-running its policy"
+    );
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct InvalidateDuringMeasureElement {
+    kind: cranpose_foundation::InvalidationKind,
+    active: bool,
+}
+
+#[derive(Debug)]
+struct InvalidateDuringMeasureNode {
+    kind: cranpose_foundation::InvalidationKind,
+    active: bool,
+    state: cranpose_foundation::NodeState,
+}
+
+impl cranpose_foundation::DelegatableNode for InvalidateDuringMeasureNode {
+    fn node_state(&self) -> &cranpose_foundation::NodeState {
+        &self.state
+    }
+}
+
+impl cranpose_foundation::ModifierNode for InvalidateDuringMeasureNode {
+    fn as_layout_node(&self) -> Option<&dyn cranpose_foundation::LayoutModifierNode> {
+        Some(self)
+    }
+
+    fn as_layout_node_mut(&mut self) -> Option<&mut dyn cranpose_foundation::LayoutModifierNode> {
+        Some(self)
+    }
+}
+
+impl cranpose_foundation::LayoutModifierNode for InvalidateDuringMeasureNode {
+    fn measure(
+        &self,
+        context: &mut dyn cranpose_foundation::ModifierNodeContext,
+        measurable: &dyn cranpose_ui::Measurable,
+        constraints: cranpose_ui::Constraints,
+    ) -> cranpose_ui::LayoutModifierMeasureResult {
+        if self.active {
+            context.invalidate(self.kind);
+        }
+        let placeable = measurable.measure(constraints);
+        cranpose_ui::LayoutModifierMeasureResult::with_size(Size::new(
+            placeable.width(),
+            placeable.height(),
+        ))
+    }
+}
+
+impl cranpose_foundation::ModifierNodeElement for InvalidateDuringMeasureElement {
+    type Node = InvalidateDuringMeasureNode;
+
+    fn create(&self) -> Self::Node {
+        InvalidateDuringMeasureNode {
+            kind: self.kind,
+            active: self.active,
+            state: cranpose_foundation::NodeState::new(),
+        }
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        node.kind = self.kind;
+        node.active = self.active;
+    }
+
+    fn capabilities(&self) -> cranpose_foundation::NodeCapabilities {
+        cranpose_foundation::NodeCapabilities::LAYOUT
+    }
+}
+
+#[test]
+fn layout_modifier_measure_invalidations_mark_only_the_requested_flag() {
+    use cranpose_foundation::InvalidationKind;
+
+    let all_kinds = [
+        InvalidationKind::Layout,
+        InvalidationKind::Draw,
+        InvalidationKind::Semantics,
+        InvalidationKind::PointerInput,
+        InvalidationKind::Focus,
+    ];
+
+    let measure_without_semantics = |composition: &mut cranpose_ui::TestComposition, root_id| {
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        cranpose_ui::layout::measure_layout_with_options(
+            &mut applier,
+            root_id,
+            VIEWPORT,
+            cranpose_ui::layout::MeasureLayoutOptions {
+                collect_semantics: false,
+                build_layout_tree: false,
+            },
+        )
+        .expect("measure layout");
+        applier.clear_runtime_handle();
+    };
+
+    for requested in all_kinds {
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            Box(
+                Modifier::with_element(InvalidateDuringMeasureElement {
+                    kind: requested,
+                    active: true,
+                })
+                .size_points(40.0, 20.0),
+                BoxSpec::default(),
+                || {},
+            );
+        });
+        let root_id = composition.root().expect("root node");
+        // Clear initial creation flags before measuring so only measure-time invalidations show.
+        measure_without_semantics(&mut composition, root_id);
+        let mut semantics_tree = None;
+        cranpose_ui::layout::update_semantics_tree_from_applier(
+            &mut composition.applier_mut(),
+            root_id,
+            &mut semantics_tree,
+        )
+        .expect("initial semantics sync");
+        composition
+            .applier_mut()
+            .with_node::<cranpose_ui::LayoutNode, _>(root_id, |node| {
+                node.clear_needs_redraw();
+                node.clear_needs_pointer_pass();
+                node.clear_needs_focus_sync();
+                node.mark_needs_measure();
+            })
+            .expect("reset root LayoutNode flags");
+
+        measure_without_semantics(&mut composition, root_id);
+        let flags = composition
+            .applier_mut()
+            .with_node::<cranpose_ui::LayoutNode, _>(root_id, |node| {
+                (
+                    node.needs_measure(),
+                    node.needs_redraw(),
+                    node.needs_semantics(),
+                    node.needs_pointer_pass(),
+                    node.needs_focus_sync(),
+                )
+            })
+            .expect("root LayoutNode");
+
+        assert_eq!(
+            flags,
+            (
+                requested == InvalidationKind::Layout,
+                requested == InvalidationKind::Draw,
+                requested == InvalidationKind::Semantics,
+                requested == InvalidationKind::PointerInput,
+                requested == InvalidationKind::Focus,
+            ),
+            "measure invalidation {requested:?} should raise only its own flag"
+        );
+    }
+}
