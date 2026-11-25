@@ -35,7 +35,8 @@ pub struct DecoderStats {
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "linux"
+    target_os = "linux",
+    all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
 ))]
 pub(super) use counters::StatsCounters;
 
@@ -44,7 +45,8 @@ pub(super) use counters::StatsCounters;
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "linux"
+    target_os = "linux",
+    all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
 ))]
 mod counters {
     use std::time::Duration;

@@ -58,6 +58,13 @@ pub(crate) mod surface_scale;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod text_input;
 pub(crate) mod text_span;
+#[cfg(all(
+    feature = "video",
+    feature = "renderer-wgpu",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
+pub(crate) mod video_converter;
 #[cfg(all(feature = "webview", target_arch = "wasm32"))]
 pub(crate) mod webview;
 pub(crate) mod wheel;

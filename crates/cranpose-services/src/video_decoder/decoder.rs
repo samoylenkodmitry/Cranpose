@@ -5,7 +5,8 @@
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "linux"
+    target_os = "linux",
+    all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
 ))]
 use super::frame_queue::Frames;
 #[cfg(target_os = "android")]
@@ -15,11 +16,14 @@ use super::media_codec::Backend;
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "linux"
+    target_os = "linux",
+    all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
 )))]
 use super::unavailable::{Backend, Frames};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use super::video_toolbox::Backend;
+#[cfg(all(feature = "video-web", target_arch = "wasm32", target_os = "unknown"))]
+use super::web_codecs::Backend;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 use super::worker_mailbox::ThreadedBackend as Backend;
 use super::{

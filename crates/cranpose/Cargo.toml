@@ -216,6 +216,7 @@ video = [
     "dep:objc2-io-surface",
     "dep:objc2-metal",
     "dep:windows",
+    "cranpose-services/video-web",
 ]
 renderer-pixels = ["cranpose-render-pixels"]
 # A composition the CPU draws into an RGBA framebuffer that the host
@@ -379,6 +380,12 @@ web-sys = { version = "0.3", optional = true, features = [
     # and the Web Audio graph a visualiser reads.
     "HtmlMediaElement",
     "HtmlAudioElement",
+    "HtmlVideoElement",
+    "DomRectReadOnly",
+    "VideoColorPrimaries",
+    "VideoColorSpace",
+    "VideoFrame",
+    "VideoTransferCharacteristics",
     "TimeRanges",
     "Blob",
     "BlobPropertyBag",

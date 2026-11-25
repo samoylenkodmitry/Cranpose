@@ -20,7 +20,8 @@
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "linux"
+    target_os = "linux",
+    all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
 ))]
 mod admission;
 mod annex_b;
@@ -40,7 +41,8 @@ mod frame;
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "linux"
+    target_os = "linux",
+    all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
 ))]
 mod frame_queue;
 #[cfg(target_os = "android")]
@@ -63,7 +65,8 @@ mod media_foundation_transform;
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "linux"
+    target_os = "linux",
+    all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
 ))]
 mod pending_units;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -77,7 +80,8 @@ mod split_access_units;
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "linux"
+    target_os = "linux",
+    all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
 ))]
 mod sps;
 mod stats;
@@ -86,7 +90,8 @@ mod stats;
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "linux"
+    target_os = "linux",
+    all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
 )))]
 mod unavailable;
 #[cfg(target_os = "linux")]
@@ -97,6 +102,12 @@ mod vaapi_loader;
 mod video_toolbox;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod video_toolbox_capabilities;
+#[cfg(all(feature = "video-web", target_arch = "wasm32", target_os = "unknown"))]
+mod web_codecs;
+#[cfg(all(feature = "video-web", target_arch = "wasm32", target_os = "unknown"))]
+mod web_codecs_capabilities;
+#[cfg(all(feature = "video-web", target_arch = "wasm32", target_os = "unknown"))]
+mod web_frame;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod worker_mailbox;
 
@@ -117,3 +128,5 @@ pub use linux_frame::{
 };
 pub use split_access_units::split_access_units;
 pub use stats::DecoderStats;
+#[cfg(all(feature = "video-web", target_arch = "wasm32", target_os = "unknown"))]
+pub use web_frame::WebVideoSource;

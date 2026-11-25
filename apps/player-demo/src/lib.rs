@@ -9,9 +9,22 @@ use cranpose::{DecodedFrames, DecoderStats, VideoCodec, prelude::*};
 use cranpose_ui::text::{FontWeight, TextUnit};
 
 mod clip_feed;
+#[cfg(not(target_arch = "wasm32"))]
 mod feed_thread;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use feed_thread::FeedThread;
+
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub async fn run_player_demo(canvas_id: String) -> Result<(), wasm_bindgen::JsValue> {
+    AppLauncher::new()
+        .with_title("Player demo")
+        .with_size(1280, 720)
+        .with_web_fill_viewport(true)
+        .run_web(&canvas_id, PlayerDemo)
+        .await
+}
 
 // The whole screen of the demo.
 #[composable]
@@ -61,6 +74,7 @@ fn Clip(title: &'static str, codec: VideoCodec, rate: u32, content_scale: Conten
     let frames = rememberMutableStateOf(|| None::<DecodedFrames>);
     let stats = rememberMutableStateOf(DecoderStats::default);
     let failure = rememberMutableStateOf(|| None::<String>);
+    #[cfg(not(target_arch = "wasm32"))]
     DisposableEffect(codec, move |_| {
         let feed = match clip_feed::start(codec, rate) {
             Ok((feed, decoded)) => {
@@ -73,6 +87,14 @@ fn Clip(title: &'static str, codec: VideoCodec, rate: u32, content_scale: Conten
             }
         };
         DisposableEffectResult::new(move || drop(feed))
+    });
+    #[cfg(target_arch = "wasm32")]
+    LaunchedEffect(codec, async move |_| {
+        if let Err(error) =
+            clip_feed::run_async(codec, rate, move |decoded| frames.set(Some(decoded))).await
+        {
+            failure.set(Some(error.to_string()));
+        }
     });
     LaunchedEffect(frames.value(), async move |_| {
         let Some(decoded) = frames.value() else {
