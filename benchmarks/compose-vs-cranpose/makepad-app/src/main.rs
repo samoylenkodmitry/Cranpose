@@ -15,6 +15,7 @@ live_design! {
         texture image: texture2d
         fn pixel(self)->vec4 {
             let col=sample2d(self.image,self.pos);
+            if self.radius == 0. { return Pal::premul(col); }
             let sdf=Sdf2d::viewport(self.pos*self.rect_size);
             sdf.box(0.,0.,self.rect_size.x,self.rect_size.y,self.radius*0.5);
             return sdf.fill(col);
@@ -43,6 +44,17 @@ live_design! {
     Wall = {{Wall}} {
         width: Fill, height: Fill,
         shape: <TileShape> {}
+        line: {
+            fn pixel(self) -> vec4 {
+                let at = self.pos * self.rect_size - self.line_start;
+                let span = self.line_end - self.line_start;
+                let along = clamp(dot(at, span) / max(dot(span, span), 0.000001), 0., 1.);
+                let distance = length(at - along * span);
+                let pixel = max(length(dFdx(at)), length(dFdy(at)));
+                let coverage = clamp((self.half_line_width - distance) / pixel + 0.5, 0., 1.);
+                return Pal::premul(vec4(self.color.xyz, self.color.w * coverage));
+            }
+        }
         band: <DrawBand> {}
         bitmap: <DrawBitmap> {}
         regular: {text_style: {font_family: {latin = font("crate://self/fonts/Roboto-Regular.ttf", 0.0, 0.0)}}}
