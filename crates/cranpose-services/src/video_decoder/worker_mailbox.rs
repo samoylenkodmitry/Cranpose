@@ -319,7 +319,7 @@ impl ThreadedBackend {
 
     pub(super) fn submit(&mut self, unit: AccessUnit<'_>) -> Result<(), DecoderError> {
         let pts_us = self.admission.check(&unit)?;
-        if self.codec != VideoCodec::Av1 {
+        if !matches!(self.codec, VideoCodec::Av1 | VideoCodec::Vp9) {
             self.nals.parse(self.codec, unit.data);
             if let Some(sps) = self.nals.sequence_parameter_set(unit.data)
                 && let Some(meta) = StreamMetadata::parse_sps(self.codec, sps)

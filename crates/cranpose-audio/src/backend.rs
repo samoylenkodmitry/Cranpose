@@ -206,7 +206,10 @@ pub fn is_compiled() -> bool {
 /// Each arm is a separate `cfg` block, so the explicit returns are what keeps
 /// exactly one of them live per target instead of one expression with five
 /// conditional parts.
-#[expect(clippy::needless_return, reason = "each cfg arm returns")]
+#[allow(
+    clippy::needless_return,
+    reason = "each cfg arm returns when a platform audio backend is enabled, and falls through otherwise"
+)]
 pub fn open(renderer: Box<dyn Renderer>) -> Result<Box<dyn AudioSink>, AudioError> {
     #[cfg(all(feature = "aaudio", target_os = "android"))]
     {

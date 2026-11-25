@@ -121,6 +121,11 @@ ignores:
   - crates/cranpose/src/apple/device_motion.rs
   - crates/cranpose/src/apple/network.rs
   - crates/cranpose/src/apple/now_playing.rs
+  - crates/cranpose/src/android/media_session.rs
+  - crates/cranpose/src/android/player_extractor.rs
+  - crates/cranpose/src/apple/player.rs
+  - crates/cranpose/src/apple/player_media.rs
+  - crates/cranpose/src/apple/player_route.rs
   - crates/cranpose/src/apple/wearable.rs
   - crates/cranpose/src/desktop/accessibility.rs
   - crates/cranpose/src/desktop/media_controls/macos.rs

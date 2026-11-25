@@ -31,6 +31,8 @@ pub(super) const VA_PROFILE_H264_HIGH: c_int = 7;
 pub(super) const VA_PROFILE_H264_CONSTRAINED_BASELINE: c_int = 13;
 pub(super) const VA_PROFILE_HEVC_MAIN: c_int = 17;
 pub(super) const VA_PROFILE_HEVC_MAIN10: c_int = 18;
+pub(super) const VA_PROFILE_VP9_PROFILE0: c_int = 19;
+pub(super) const VA_PROFILE_VP9_PROFILE2: c_int = 21;
 pub(super) const VA_PROFILE_AV1_PROFILE0: c_int = 32;
 
 pub(super) const VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2: u32 = 0x4000_0000;

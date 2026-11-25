@@ -6,7 +6,61 @@ use super::{
     AudioRole, CueGroup, LoadControl, PlaybackParameters, PlayerError, PlayerState,
     TrackSelectionParameters, Tracks, VideoSize, state::PlayerCore,
 };
-use crate::{media::MediaItem, registry::ServiceRegistry, video_decoder::DecodedFrames};
+use crate::{
+    media::MediaItem,
+    registry::ServiceRegistry,
+    video_decoder::{DecodedFrames, VideoCodec},
+};
+
+/// Media container or adaptive streaming format supported by a platform [`Player`](super::Player)
+/// backend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum VideoContainer {
+    /// ISO Base Media File Format (`.mp4`, `.m4v`, `.mov`).
+    Mp4,
+    /// Fragmented MP4 (`.m4s`, CMAF).
+    FragmentedMp4,
+    /// Matroska container (`.mkv`).
+    Mkv,
+    /// WebM container (`.webm`).
+    Webm,
+    /// HTTP Live Streaming (`.m3u8`).
+    Hls,
+    /// Dynamic Adaptive Streaming over HTTP (`.mpd`).
+    Dash,
+}
+
+/// Platform playback capabilities reported by the active [`PlayerBackendFactory`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PlayerCapabilities {
+    /// Containers and streaming manifest formats the platform backend can demux and play.
+    pub supported_containers: Vec<VideoContainer>,
+    /// Video codecs the platform backend can decode (hardware or software fallback).
+    pub supported_video_codecs: Vec<VideoCodec>,
+    /// Video codecs backed by dedicated hardware decode on this device.
+    pub hardware_video_codecs: Vec<VideoCodec>,
+    /// Whether 10-bit HDR (PQ / HLG) video output is supported.
+    pub hdr_10bit: bool,
+    /// Whether decoded video frames stay in GPU memory without CPU pixel copies.
+    pub zero_copy_gpu: bool,
+}
+
+impl PlayerCapabilities {
+    /// Whether `container` is supported by the active platform backend.
+    pub fn supports_container(&self, container: VideoContainer) -> bool {
+        self.supported_containers.contains(&container)
+    }
+
+    /// Whether `codec` is supported by the active platform backend.
+    pub fn supports_video_codec(&self, codec: VideoCodec) -> bool {
+        self.supported_video_codecs.contains(&codec)
+    }
+
+    /// Whether `codec` decodes on dedicated hardware on this device.
+    pub fn supports_hardware_video_codec(&self, codec: VideoCodec) -> bool {
+        self.hardware_video_codecs.contains(&codec)
+    }
+}
 
 /// Stream properties reported by a [`PlayerBackend`] once a media item opens or updates.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -124,6 +178,11 @@ pub trait PlayerBackendFactory: Send + Sync {
         load_control: LoadControl,
         audio_role: AudioRole,
     ) -> Result<Arc<dyn PlayerBackend>, PlayerError>;
+
+    /// Reports the container, codec, HDR, and zero-copy GPU capabilities of this backend.
+    fn capabilities(&self) -> PlayerCapabilities {
+        PlayerCapabilities::default()
+    }
 }
 
 static PLATFORM_FACTORY: ServiceRegistry<dyn PlayerBackendFactory> = ServiceRegistry::new();
@@ -141,4 +200,12 @@ pub fn clear_platform_player_factory() {
 /// Returns the currently installed platform [`PlayerBackendFactory`], if any.
 pub fn platform_player_factory() -> Option<Arc<dyn PlayerBackendFactory>> {
     PLATFORM_FACTORY.get()
+}
+
+/// Returns the container, codec, HDR, and zero-copy GPU capabilities of the installed platform
+/// [`PlayerBackendFactory`], or [`PlayerCapabilities::default`] when none is installed.
+pub fn player_capabilities() -> PlayerCapabilities {
+    PLATFORM_FACTORY
+        .get()
+        .map_or_default(|factory| factory.capabilities())
 }

@@ -14,7 +14,7 @@ use windows::{
             MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT,
             MFT_FRIENDLY_NAME_Attribute, MFT_OUTPUT_TYPES_Attributes, MFT_REGISTER_TYPE_INFO,
             MFTEnumEx, MFVideoFormat_AV1, MFVideoFormat_H264, MFVideoFormat_HEVC,
-            MFVideoFormat_P010,
+            MFVideoFormat_P010, MFVideoFormat_VP90,
         },
         System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize},
     },
@@ -66,6 +66,7 @@ pub(super) fn codec_subtype(codec: VideoCodec) -> GUID {
     match codec {
         VideoCodec::H264 => MFVideoFormat_H264,
         VideoCodec::Hevc => MFVideoFormat_HEVC,
+        VideoCodec::Vp9 => MFVideoFormat_VP90,
         VideoCodec::Av1 => MFVideoFormat_AV1,
     }
 }

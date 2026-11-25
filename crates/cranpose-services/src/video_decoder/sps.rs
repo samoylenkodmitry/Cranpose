@@ -21,7 +21,7 @@ impl StreamMetadata {
         match codec {
             VideoCodec::H264 => parse_h264_sps(nal),
             VideoCodec::Hevc => parse_hevc_sps(nal),
-            VideoCodec::Av1 => None,
+            VideoCodec::Av1 | VideoCodec::Vp9 => None,
         }
     }
 }
@@ -482,6 +482,7 @@ pub(super) fn webcodecs_codec_string(codec: VideoCodec, sps: Option<&[u8]>) -> S
         VideoCodec::Hevc => sps
             .and_then(hevc_codec_string_from_sps)
             .unwrap_or_else(|| "hvc1.1.6.L93.B0".into()),
+        VideoCodec::Vp9 => "vp09.00.10.08".into(),
         VideoCodec::Av1 => "av01.0.04M.08".into(),
     }
 }

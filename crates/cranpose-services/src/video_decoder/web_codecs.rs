@@ -144,7 +144,7 @@ impl Backend {
             admission: Admission::new((width as usize) * (height as usize), order),
             configured_codec: None,
         };
-        if codec == VideoCodec::Av1 {
+        if matches!(codec, VideoCodec::Av1 | VideoCodec::Vp9) {
             backend.configure_decoder(None)?;
         }
         Ok(backend)
@@ -159,7 +159,7 @@ impl Backend {
             self.shared.queue.stats.refused();
             return Err(DecoderError::Full);
         }
-        let is_key = if self.codec == VideoCodec::Av1 {
+        let is_key = if matches!(self.codec, VideoCodec::Av1 | VideoCodec::Vp9) {
             self.configured_codec.is_none()
         } else {
             self.nals.parse(self.codec, unit.data);
@@ -222,7 +222,7 @@ impl Backend {
         self.shared.pending.lock().clear();
         self.shared.queue.frames.lock().clear();
         self.admission.reset();
-        if self.codec == VideoCodec::Av1 {
+        if matches!(self.codec, VideoCodec::Av1 | VideoCodec::Vp9) {
             self.configure_decoder(None)?;
         }
         Ok(())

@@ -74,18 +74,27 @@ impl EmbeddedView {
                 ..Default::default()
             },
         ))?;
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("Cranpose embedded view"),
-                required_features: cranpose_render_wgpu::optional_device_features(&adapter)
-                    | settings.gpu_requirements.features_on(&adapter),
-                required_limits: settings.gpu_requirements.limits_on(
-                    &adapter,
-                    crate::gpu_limits::mobile_device_limits(adapter.limits()),
-                ),
-                memory_hints: crate::gpu_limits::mobile_memory_hints(),
-                ..Default::default()
-            }))?;
+        let descriptor = wgpu::DeviceDescriptor {
+            label: Some("Cranpose embedded view"),
+            required_features: cranpose_render_wgpu::optional_device_features(&adapter)
+                | settings.gpu_requirements.features_on(&adapter),
+            required_limits: settings.gpu_requirements.limits_on(
+                &adapter,
+                crate::gpu_limits::mobile_device_limits(adapter.limits()),
+            ),
+            memory_hints: crate::gpu_limits::mobile_memory_hints(),
+            ..Default::default()
+        };
+        #[cfg(all(feature = "android", feature = "video", target_os = "android"))]
+        let (device, queue) = if let Some(pair) =
+            crate::android::hardware_buffer_device::request_device(&adapter, &descriptor)
+        {
+            pair
+        } else {
+            pollster::block_on(adapter.request_device(&descriptor))?
+        };
+        #[cfg(not(all(feature = "android", feature = "video", target_os = "android")))]
+        let (device, queue) = pollster::block_on(adapter.request_device(&descriptor))?;
         let gpu = GpuContext {
             instance: OFFSCREEN_INSTANCE.clone(),
             adapter,

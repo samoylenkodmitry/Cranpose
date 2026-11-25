@@ -33,7 +33,7 @@ const REPORT_EVERY: Duration = Duration::from_secs(1);
 fn clip_bytes(codec: VideoCodec) -> &'static [u8] {
     match codec {
         VideoCodec::Hevc => HEVC_CLIP,
-        VideoCodec::H264 | VideoCodec::Av1 => H264_CLIP,
+        VideoCodec::H264 | VideoCodec::Av1 | VideoCodec::Vp9 => H264_CLIP,
     }
 }
 

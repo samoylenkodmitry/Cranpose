@@ -14,7 +14,8 @@ use super::{
     vaapi_loader::{
         VA_ENTRY_VLD, VA_PROFILE_AV1_PROFILE0, VA_PROFILE_H264_CONSTRAINED_BASELINE,
         VA_PROFILE_H264_HIGH, VA_PROFILE_H264_MAIN, VA_PROFILE_HEVC_MAIN, VA_PROFILE_HEVC_MAIN10,
-        VA_STATUS_SUCCESS, VaApi, VaDisplay, av_api, render_nodes, va_api,
+        VA_PROFILE_VP9_PROFILE0, VA_PROFILE_VP9_PROFILE2, VA_STATUS_SUCCESS, VaApi, VaDisplay,
+        av_api, render_nodes, va_api,
     },
 };
 
@@ -30,6 +31,7 @@ pub(super) struct VaApiSupport {
 struct CachedVaSupport {
     h264: VaApiSupport,
     hevc: VaApiSupport,
+    vp9: VaApiSupport,
     av1: VaApiSupport,
 }
 
@@ -76,6 +78,7 @@ pub(super) fn av_decoder_names(codec: VideoCodec) -> &'static [&'static CStr] {
     match codec {
         VideoCodec::H264 => &[c"h264"],
         VideoCodec::Hevc => &[c"hevc"],
+        VideoCodec::Vp9 => &[c"vp9"],
         VideoCodec::Av1 => &[c"av1", c"libdav1d"],
     }
 }
@@ -98,6 +101,7 @@ pub(super) fn probe_vaapi_codec(codec: VideoCodec) -> Option<VaApiSupport> {
     Some(match codec {
         VideoCodec::H264 => cached.h264,
         VideoCodec::Hevc => cached.hevc,
+        VideoCodec::Vp9 => cached.vp9,
         VideoCodec::Av1 => cached.av1,
     })
 }
@@ -149,6 +153,7 @@ unsafe fn query_all_profiles(va: &VaApi, display: VaDisplay) -> CachedVaSupport 
         return CachedVaSupport {
             h264: empty,
             hevc: empty,
+            vp9: empty,
             av1: empty,
         };
     }
@@ -160,6 +165,7 @@ unsafe fn query_all_profiles(va: &VaApi, display: VaDisplay) -> CachedVaSupport 
         return CachedVaSupport {
             h264: empty,
             hevc: empty,
+            vp9: empty,
             av1: empty,
         };
     }
@@ -169,6 +175,8 @@ unsafe fn query_all_profiles(va: &VaApi, display: VaDisplay) -> CachedVaSupport 
     };
     let hevc_main = has_vld(VA_PROFILE_HEVC_MAIN);
     let hevc_main10 = has_vld(VA_PROFILE_HEVC_MAIN10);
+    let vp9_p0 = has_vld(VA_PROFILE_VP9_PROFILE0);
+    let vp9_p2 = has_vld(VA_PROFILE_VP9_PROFILE2);
     let av1_p0 = has_vld(VA_PROFILE_AV1_PROFILE0);
     CachedVaSupport {
         h264: VaApiSupport {
@@ -180,6 +188,10 @@ unsafe fn query_all_profiles(va: &VaApi, display: VaDisplay) -> CachedVaSupport 
         hevc: VaApiSupport {
             vld: hevc_main || hevc_main10,
             hdr_10bit: hevc_main10,
+        },
+        vp9: VaApiSupport {
+            vld: vp9_p0 || vp9_p2,
+            hdr_10bit: vp9_p2,
         },
         av1: VaApiSupport {
             vld: av1_p0,

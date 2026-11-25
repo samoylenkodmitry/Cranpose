@@ -7,6 +7,19 @@ extern crate self as cranpose;
 mod async_image;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(all(feature = "video", feature = "android", target_os = "android"))]
+mod player_audio;
+#[cfg(all(
+    feature = "video",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        all(feature = "android", target_os = "android")
+    )
+))]
+mod player_control;
+#[cfg(all(feature = "video", feature = "android", target_os = "android"))]
+mod player_stream;
 #[cfg(feature = "video")]
 mod player_surface;
 #[cfg(feature = "video")]
@@ -295,6 +308,19 @@ pub use player_surface_intake::{
 };
 #[cfg(feature = "video")]
 pub use player_ui::*;
+
+/// Installs the native zero-copy [`Player`] backend for the current
+/// platform.
+///
+/// Desktop, iOS, Android, and Web launchers call this automatically on startup when the `video`
+/// feature is enabled; embedded views and standalone tests may call it directly.
+#[cfg(feature = "video")]
+pub fn install_player() {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    apple::player::register();
+    #[cfg(all(feature = "android", target_os = "android"))]
+    android::player::register();
+}
 
 static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);

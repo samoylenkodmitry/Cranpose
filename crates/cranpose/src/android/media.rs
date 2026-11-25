@@ -1,5 +1,3 @@
-#![expect(unsafe_code, reason = "JNI and NDK calls into the Android system")]
-
 use std::{
     sync::{
         Arc,
@@ -10,43 +8,17 @@ use std::{
 
 use cranpose_media::SoftwareMediaPlayer;
 use cranpose_services::{
-    AudioFocus, EqualizerBand, EqualizerSettings, MediaCapabilities, MediaCommand, MediaError,
-    MediaItem, MediaMetadata, MediaPlayer, MediaSourceHandle, MediaSourceOpener, playback_progress,
-    publish_audio_focus, publish_media_command, set_platform_media_player,
-    set_platform_media_source_opener,
-};
-use jni::{
-    EnvUnowned, jni_sig, jni_str,
-    objects::{JClass, JValue},
-    signature::MethodSignature,
-    sys::{jfloat, jint, jlong},
+    EqualizerBand, EqualizerSettings, MediaCapabilities, MediaError, MediaItem, MediaMetadata,
+    MediaPlayer, MediaSourceHandle, MediaSourceOpener, playback_progress,
+    set_platform_media_player, set_platform_media_source_opener,
 };
 
-use super::jni::{clear_pending_android_jni_exception, with_android_activity_env};
-
-const SESSION_STOPPED: jint = 0;
-const SESSION_PLAYING: jint = 1;
-const SESSION_PAUSED: jint = 2;
-
-const FOCUS_GAINED: jint = 0;
-const FOCUS_DUCKED: jint = 1;
-const FOCUS_LOST_TRANSIENT: jint = 2;
-const FOCUS_LOST: jint = 3;
-
-const COMMAND_PLAY: jint = 0;
-const COMMAND_PAUSE: jint = 1;
-const COMMAND_TOGGLE: jint = 2;
-const COMMAND_STOP: jint = 3;
-const COMMAND_NEXT: jint = 4;
-const COMMAND_PREVIOUS: jint = 5;
-const COMMAND_SEEK: jint = 6;
-
-const NO_DURATION: jlong = -1;
+use super::media_session::{self, SESSION_PAUSED, SESSION_PLAYING, SESSION_STOPPED};
 
 pub(crate) fn register(app: android_activity::AndroidApp) {
+    media_session::set_activity(app);
     set_platform_media_source_opener(Arc::new(DocumentOpener));
     set_platform_media_player(Arc::new(AndroidMediaPlayer {
-        app,
         player: SoftwareMediaPlayer::new(),
         speed: AtomicU32::new(1.0f32.to_bits()),
     }));
@@ -64,63 +36,18 @@ impl MediaSourceOpener for DocumentOpener {
 }
 
 struct AndroidMediaPlayer {
-    app: android_activity::AndroidApp,
     player: SoftwareMediaPlayer,
     speed: AtomicU32,
 }
 
 impl AndroidMediaPlayer {
-    fn call_bool(&self, name: &'static jni::strings::JNIStr, default: bool) -> bool {
-        let called = with_android_activity_env(&self.app, |env, activity| {
-            env.call_method(&activity, name, jni_sig!("()Z"), &[])
-                .and_then(jni::JValueOwned::z)
-                .map_err(|error| {
-                    clear_pending_android_jni_exception(env);
-                    error.to_string()
-                })
-        });
-        match called {
-            Ok(value) => value,
-            Err(error) => {
-                log::warn!("cranpose: android media call failed: {error}");
-                default
-            }
-        }
-    }
-
-    fn call(
-        &self,
-        name: &'static jni::strings::JNIStr,
-        signature: MethodSignature,
-        arguments: &[JValue<'_>],
-    ) {
-        let called = with_android_activity_env(&self.app, |env, activity| {
-            env.call_method(&activity, name, signature, arguments)
-                .map(|_| ())
-                .map_err(|error| {
-                    clear_pending_android_jni_exception(env);
-                    error.to_string()
-                })
-        });
-        if let Err(error) = called {
-            log::warn!("cranpose: android media call failed: {error}");
-        }
-    }
-
-    fn publish_session(&self, state: jint) {
+    fn publish_session(&self, state: i32) {
         let progress = playback_progress();
-        let duration = progress.duration.map_or(NO_DURATION, |duration| {
-            duration.as_millis().min(jlong::MAX as u128) as jlong
-        });
-        self.call(
-            jni_str!("cranposeMediaSessionUpdate"),
-            jni_sig!("(IJJF)V"),
-            &[
-                JValue::Int(state),
-                JValue::Long(progress.position.as_millis().min(jlong::MAX as u128) as jlong),
-                JValue::Long(duration),
-                JValue::Float(f32::from_bits(self.speed.load(Ordering::Relaxed)) as jfloat),
-            ],
+        media_session::update_session(
+            state,
+            progress.position,
+            progress.duration,
+            f32::from_bits(self.speed.load(Ordering::Relaxed)),
         );
     }
 }
@@ -148,7 +75,7 @@ impl MediaPlayer for AndroidMediaPlayer {
     }
 
     fn play(&self) -> Result<(), MediaError> {
-        if !self.call_bool(jni_str!("cranposeMediaRequestFocus"), true) {
+        if !media_session::request_focus() {
             return Err(MediaError::Failed(
                 "another app holds the audio output".to_owned(),
             ));
@@ -166,7 +93,7 @@ impl MediaPlayer for AndroidMediaPlayer {
     fn stop(&self) {
         self.player.stop();
         self.publish_session(SESSION_STOPPED);
-        self.call(jni_str!("cranposeMediaAbandonFocus"), jni_sig!("()V"), &[]);
+        media_session::abandon_focus();
     }
 
     fn seek_to(&self, position: Duration) -> Result<(), MediaError> {
@@ -212,76 +139,6 @@ impl MediaPlayer for AndroidMediaPlayer {
     }
 
     fn set_session_metadata(&self, metadata: &MediaMetadata) {
-        let called = with_android_activity_env(&self.app, |env, activity| {
-            let title = env.new_string(&metadata.title).map_err(|error| {
-                clear_pending_android_jni_exception(env);
-                error.to_string()
-            })?;
-            let artist = env.new_string(&metadata.artist).map_err(|error| {
-                clear_pending_android_jni_exception(env);
-                error.to_string()
-            })?;
-            let album = env
-                .new_string(&metadata.album)
-                .map_err(|error| error.to_string())?;
-            let artwork = env
-                .byte_array_from_slice(metadata.artwork.as_ref().map_or(&[], |art| &art.bytes))
-                .map_err(|error| error.to_string())?;
-            env.call_method(
-                &activity,
-                jni_str!("cranposeMediaSetMetadata"),
-                jni_sig!("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[B)V"),
-                &[
-                    JValue::Object(&title),
-                    JValue::Object(&artist),
-                    JValue::Object(&album),
-                    JValue::Object(&artwork),
-                ],
-            )
-            .map(|_| ())
-            .map_err(|error| {
-                clear_pending_android_jni_exception(env);
-                error.to_string()
-            })
-        });
-        if let Err(error) = called {
-            log::warn!("cranpose: android media metadata failed: {error}");
-        }
+        media_session::set_metadata(metadata);
     }
-}
-
-#[doc(hidden)]
-#[unsafe(no_mangle)]
-pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnMediaAudioFocus(
-    _env: EnvUnowned<'_>,
-    _class: JClass<'_>,
-    focus: jint,
-) {
-    publish_audio_focus(match focus {
-        FOCUS_DUCKED => AudioFocus::Ducked,
-        FOCUS_LOST_TRANSIENT => AudioFocus::LostTransient,
-        FOCUS_LOST => AudioFocus::Lost,
-        FOCUS_GAINED => AudioFocus::Gained,
-        _ => return,
-    });
-}
-
-#[doc(hidden)]
-#[unsafe(no_mangle)]
-pub(crate) extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnMediaCommand(
-    _env: EnvUnowned<'_>,
-    _class: JClass<'_>,
-    command: jint,
-    position_ms: jlong,
-) {
-    publish_media_command(match command {
-        COMMAND_PLAY => MediaCommand::Play,
-        COMMAND_PAUSE => MediaCommand::Pause,
-        COMMAND_TOGGLE => MediaCommand::TogglePlayPause,
-        COMMAND_STOP => MediaCommand::Stop,
-        COMMAND_NEXT => MediaCommand::Next,
-        COMMAND_PREVIOUS => MediaCommand::Previous,
-        COMMAND_SEEK => MediaCommand::SeekTo(Duration::from_millis(position_ms.max(0) as u64)),
-        _ => return,
-    });
 }

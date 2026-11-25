@@ -100,7 +100,7 @@ impl Format {
                     None,
                     NonNull::from(&mut description),
                 ),
-                VideoCodec::Av1 => return Err(DecoderError::NoDecoder(codec)),
+                VideoCodec::Av1 | VideoCodec::Vp9 => return Err(DecoderError::NoDecoder(codec)),
             }
         };
         let description = NonNull::new(description.cast_mut())

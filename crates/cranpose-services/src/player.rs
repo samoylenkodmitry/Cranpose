@@ -14,8 +14,9 @@ mod tracks;
 mod types;
 
 pub use backend::{
-    MediaProperties, PlayerBackend, PlayerBackendFactory, PlayerSink,
-    clear_platform_player_factory, platform_player_factory, set_platform_player_factory,
+    MediaProperties, PlayerBackend, PlayerBackendFactory, PlayerCapabilities, PlayerSink,
+    VideoContainer, clear_platform_player_factory, platform_player_factory, player_capabilities,
+    set_platform_player_factory,
 };
 pub use cache::{MediaCache, MediaCacheError, MediaCacheStats};
 pub use clock::{FrameTiming, LIP_SYNC_TOLERANCE, MasterClock};

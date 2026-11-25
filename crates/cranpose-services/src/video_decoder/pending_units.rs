@@ -116,7 +116,7 @@ impl PendingUnits {
     }
 
     // The units that wait for their pictures.
-    #[cfg(any(test, target_os = "macos", target_os = "ios"))]
+    #[cfg(any(test, target_os = "android", target_os = "macos", target_os = "ios"))]
     pub(super) fn len(&self) -> usize {
         self.units.len()
     }
