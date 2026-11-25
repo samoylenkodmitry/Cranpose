@@ -63,9 +63,10 @@ use crate::{
 mod types;
 
 pub use types::{
-    AudioFocus, DUCKED_GAIN, EqualizerBand, EqualizerSettings, MediaArtwork, MediaCapabilities,
-    MediaCommand, MediaError, MediaItem, MediaMetadata, MediaSamples, OCTAVE_BAND_CENTERS_HZ,
-    PlaybackProgress, PlaybackState, octave_equalizer_bands,
+    AudioFocus, ClippingConfiguration, DUCKED_GAIN, EqualizerBand, EqualizerSettings, MediaArtwork,
+    MediaCapabilities, MediaCommand, MediaError, MediaItem, MediaMetadata, MediaSamples,
+    OCTAVE_BAND_CENTERS_HZ, PlaybackProgress, PlaybackState, SubtitleConfiguration,
+    octave_equalizer_bands,
 };
 
 /// A platform media stack.
