@@ -211,14 +211,9 @@ impl PlayerPool {
                         None => break,
                     }
                 }
-                let role = if priority == PlayerPriority::Active {
-                    AudioRole::Primary
-                } else {
-                    AudioRole::Muted
-                };
                 let mut builder = Player::builder()
                     .with_load_control(self.inner.config.load_control)
-                    .with_audio_role(role);
+                    .with_audio_role(AudioRole::Primary);
                 if let Some(factory) = &self.inner.factory {
                     builder = builder.with_backend_factory(Arc::clone(factory));
                 }

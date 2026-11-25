@@ -334,6 +334,8 @@ jobs:
         run: scripts/ci/provision_toolchain.sh
       - name: Measure the steady frames against their budgets
         run: just steady-ledger
+      - name: Video player steady-frame allocations and 100-swipe feed memory gate
+        run: just test-player-memory
 
   # Each feature of the framework crates built alone (cargo-hack, about 12
   # minutes), and the generic functions that copy most IR into the desktop

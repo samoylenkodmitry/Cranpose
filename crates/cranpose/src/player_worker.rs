@@ -26,6 +26,12 @@ use crate::{
     },
 };
 
+// Android's `AImageReader` reserves `depth` full GPU buffers and adds `depth` to MediaCodec's
+// native-window `MIN_UNDEQUEUED_BUFFERS`; keeping it at 3 fits mobile OMX port buffer caps while
+// still holding 1 presented frame + 2 queued frames for smooth 60/120 Hz pacing.
+#[cfg(target_os = "android")]
+pub(crate) const FRAME_QUEUE_DEPTH: usize = 3;
+#[cfg(not(target_os = "android"))]
 pub(crate) const FRAME_QUEUE_DEPTH: usize = 8;
 pub(crate) const AUDIO_TARGET_BUFFER: Duration = Duration::from_millis(250);
 const ACTIVE_STEP_WAIT: Duration = Duration::from_millis(4);

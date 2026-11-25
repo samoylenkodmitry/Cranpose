@@ -37,7 +37,8 @@ use crate::player_control::{WorkerBackend, WorkerControl};
 const FRAME_QUEUE_DEPTH: usize = 4;
 const ACTIVE_POLL_INTERVAL: Duration = Duration::from_millis(8);
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
-const INITIAL_FRAME_WAIT_LIMIT: Duration = Duration::from_secs(2);
+const INITIAL_FRAME_WAIT_LIMIT: Duration = Duration::from_secs(4);
+const SEEK_MATCH_TOLERANCE: Duration = Duration::from_millis(250);
 
 pub(crate) fn register() {
     static INIT: Once = Once::new();
@@ -122,6 +123,7 @@ struct ActiveSession {
     active_sidecar: Option<usize>,
     metadata_published: bool,
     pending_frame_deadline: Option<Instant>,
+    pending_seek_target: Option<Duration>,
     frame_sequence: u64,
     last_state: Option<PlayerState>,
     last_loading: Option<bool>,
@@ -223,10 +225,12 @@ impl ApplePlayerWorker {
             self.volume = volume;
             self.apply_volume();
         }
-        if let Some(parameters) = batch.parameters {
+        let parameters_changed = if let Some(parameters) = batch.parameters {
             self.parameters = parameters;
-            self.apply_rate();
-        }
+            true
+        } else {
+            false
+        };
         if let Some(selection) = batch.track_selection {
             self.track_selection = selection;
             if let Some(session) = &mut self.session {
@@ -245,12 +249,14 @@ impl ApplePlayerWorker {
         if let Some((item, start_position)) = batch.open {
             self.open_item(&item, start_position);
         }
-        if let Some(pos) = batch.seek {
-            self.seek_session(pos);
-        }
         if let Some(want_play) = batch.play {
             self.want_play = want_play;
             self.apply_play_state();
+        } else if parameters_changed {
+            self.apply_rate();
+        }
+        if let Some(pos) = batch.seek {
+            self.seek_session(pos);
         }
         false
     }
@@ -326,6 +332,7 @@ impl ApplePlayerWorker {
             active_sidecar: None,
             metadata_published: false,
             pending_frame_deadline: Some(Instant::now() + INITIAL_FRAME_WAIT_LIMIT),
+            pending_seek_target: (!target_start.is_zero()).then_some(target_start),
             frame_sequence: 0,
             last_state: Some(PlayerState::Buffering),
             last_loading: Some(true),
@@ -357,6 +364,7 @@ impl ApplePlayerWorker {
         let target = session.clip_start.saturating_add(position);
         session.producer.clear();
         session.pending_frame_deadline = Some(Instant::now() + INITIAL_FRAME_WAIT_LIMIT);
+        session.pending_seek_target = Some(target);
         unsafe {
             session.player.seekToTime_toleranceBefore_toleranceAfter(
                 cm_time(target),
@@ -542,10 +550,18 @@ impl ApplePlayerWorker {
         let Some(pixel_buf) = pixel_buf else {
             return;
         };
-        let pts = cm_time_to_duration(display_time)
+        let abs_pts = cm_time_to_duration(display_time)
             .or_else(|| cm_time_to_duration(item_time))
-            .unwrap_or(Duration::ZERO)
-            .saturating_sub(session.clip_start);
+            .unwrap_or(Duration::ZERO);
+        if let Some(target) = session.pending_seek_target
+            && abs_pts.abs_diff(target) > SEEK_MATCH_TOLERANCE
+            && session
+                .pending_frame_deadline
+                .is_some_and(|deadline| Instant::now() < deadline)
+        {
+            return;
+        }
+        let pts = abs_pts.saturating_sub(session.clip_start);
         session.frame_sequence = session.frame_sequence.wrapping_add(1);
         let info = FrameInfo {
             timestamp: pts,
@@ -561,6 +577,7 @@ impl ApplePlayerWorker {
         {
             session.producer.push(frame);
             session.pending_frame_deadline = None;
+            session.pending_seek_target = None;
         }
     }
 }

@@ -34,10 +34,31 @@ pub async fn run_player_demo(canvas_id: String) -> Result<(), wasm_bindgen::JsVa
         .await
 }
 
+fn initial_tab() -> DemoTab {
+    if launch_args()
+        .string("tab")
+        .is_some_and(|v| v.eq_ignore_ascii_case("feed"))
+    {
+        return DemoTab::Feed;
+    }
+    #[cfg(target_arch = "wasm32")]
+    if web_query_has_feed_tab() {
+        return DemoTab::Feed;
+    }
+    DemoTab::Decoders
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_query_has_feed_tab() -> bool {
+    web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .is_some_and(|q| q.contains("tab=feed"))
+}
+
 // The whole screen of the demo.
 #[composable]
 pub fn PlayerDemo() {
-    let tab = rememberMutableStateOf(|| DemoTab::Decoders);
+    let tab = rememberMutableStateOf(initial_tab);
     Column(
         Modifier::empty()
             .fill_max_size()

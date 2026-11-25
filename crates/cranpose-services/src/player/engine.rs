@@ -351,7 +351,9 @@ impl Player {
             events.push(ev);
         }
         self.core.emit(&events);
-        self.core.claim_primary();
+        if start == StartPlayback::Play {
+            self.core.claim_primary();
+        }
         self.core.open_active_item(&item, start_pos, start);
     }
 
