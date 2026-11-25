@@ -1,10 +1,12 @@
 use esp_idf_svc::timer::EspTaskTimerService;
 
+const SECONDS: usize = 5;
+
 // Each bucket covers a whole second of the ESP timer from boot. Logging the
 // counts after the last second keeps serial writes out of the measurement.
 pub(crate) struct BootFrames {
     clock: EspTaskTimerService,
-    counts: [u16; 10],
+    counts: [u16; SECONDS],
     first_ms: Option<u64>,
     reported: bool,
 }
@@ -13,7 +15,7 @@ impl BootFrames {
     pub(crate) fn new(clock: EspTaskTimerService) -> Self {
         Self {
             clock,
-            counts: [0; 10],
+            counts: [0; SECONDS],
             first_ms: None,
             reported: false,
         }

@@ -1,0 +1,18 @@
+[package]
+name = "perf-compare-makepad"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+makepad-widgets = "1.0.0"
+perf-data = { version = "0.1.0", path = "../perf-data" }
+
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -182,7 +182,12 @@ APPS = {
     'bui': [HERE / 'bui-app/build/perf-compare-bui.app/Contents/MacOS/perf-compare-bui'],
     'ferro': [HERE / 'ferro-app/target/release/perf-compare-ferro'],
     'zgui': [HERE / 'zgui-app/target/release/perf-compare-zgui'],
+    'freya': [HERE / 'freya-app/target/release/perf-compare-freya'],
+    'vizia': [HERE / 'vizia-app/target/release/perf-compare-vizia'],
+    'makepad': [HERE / 'makepad-app/build/perf-compare-makepad.app/Contents/MacOS/perf-compare-makepad'],
     'floem': [HERE / 'floem-app/target/release/perf-compare-floem'],
+    'electron': [HERE / 'electron-app/build/PerfElectron-darwin-arm64/PerfElectron.app/Contents/MacOS/PerfElectron',
+                 '--user-data-dir={profile}', '--enable-logging=stderr', '--page={page}?tier={tier}&freeze={freeze}&scenario={scenario}'],
     'fyne': [HERE / 'fyne-app/build/perf-compare-fyne'],
 }
 
@@ -203,10 +208,12 @@ def install_source(name):
 def app_bytes(name, browser):
     if browser:
         return artifact_bytes(browser / name)
+    if name == 'makepad':
+        return artifact_bytes(install_source(name))
     # The native harness supplies these loose resources beside the installed app.
     size = sum(file.stat().st_size for file in FONTS.glob('*.ttf'))
     size += sum((CHAT_ASSETS / file).stat().st_size for file in ('spin.gif', 'progress.svg'))
-    if name in ('web', 'tauri'):
+    if name in ('web', 'tauri', 'electron'):
         size += artifact_bytes(HERE / 'web-app/www')
     if name != 'web':
         size += artifact_bytes(install_source(name))
@@ -1170,9 +1177,11 @@ def screen(text):
 
 
 def shows(name, scenario):
-    """Whether app `name` draws this scenario. Every app does,
-    except `cranpose-release` on a screen its release's app does not know: it
-    would draw another screen under that screen's name."""
+    """Only schedule screens implemented by the installed version."""
+    if name == 'freya':
+        return scenario in ('gauntlet', 'wall')
+    if name in ('vizia', 'makepad'):
+        return scenario == 'wall'
     if name != 'cranpose-release':
         return True
     known = RELEASE_SCREENS.read_text().split() if RELEASE_SCREENS.exists() else ['gauntlet']

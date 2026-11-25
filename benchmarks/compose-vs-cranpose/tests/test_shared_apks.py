@@ -30,9 +30,9 @@ class SharedApksTest(unittest.TestCase):
             for name in ('compose', 'views'):
                 (root / f'{name}.apk').write_bytes(name.encode())
             (root / 'versions.json').write_text('{"compose":"test","views":"test"}')
-            for serial in ('mate', 'stick'):
+            for serial, tier in (('mate', 12), ('stick', 3)):
                 output = root / serial
-                argv = ['frameworks.py', '--serial', serial, '--install', folder, '--output', str(output), '--full-run']
+                argv = ['frameworks.py', '--serial', serial, '--install', folder, '--output', str(output), '--full-run', '--tier', str(tier)]
                 launches = [leg(25.0), leg(25.0)]
                 if serial == 'mate':
                     launches.extend([RuntimeError('first launch failed'), leg(25.0)])
@@ -45,7 +45,7 @@ class SharedApksTest(unittest.TestCase):
                 self.assertEqual({s['name']: s['apk_sha256'] for s in report['subjects']},
                                  {name: hashlib.sha256(name.encode()).hexdigest() for name in ('compose', 'views')})
                 scenario = report['scenarios'][0]
-                self.assertEqual(scenario['extras'], '--ei tier 12')
+                self.assertEqual(scenario['extras'], f'--ei tier {tier}')
                 self.assertEqual(scenario['app_bytes'], {'compose': 7, 'views': 5})
                 self.assertEqual({leg['subject'] for leg in scenario['legs']},
                                  {'compose'} if serial == 'stick' else {'compose', 'views'})

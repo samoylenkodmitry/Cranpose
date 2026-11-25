@@ -52,7 +52,17 @@ pub struct PerfRunFrames {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct PerfFramesScenario {
     pub scenario: String,
+    #[serde(default)]
+    extras: String,
     pub legs: Vec<PerfFramesLeg>,
+}
+
+impl PerfFramesScenario {
+    fn tier(&self) -> Option<u16> {
+        let mut words = self.extras.split(|c: char| c.is_whitespace() || c == ',');
+        words.find(|word| *word == "tier")?;
+        words.next()?.parse().ok()
+    }
 }
 
 /// One launch of one subject.
@@ -111,6 +121,13 @@ impl LegSamples {
 }
 
 impl PerfRunFrames {
+    pub(super) fn tier(&self, scenario: &str) -> Option<u16> {
+        self.scenarios
+            .iter()
+            .find(|case| case.scenario == scenario)?
+            .tier()
+    }
+
     pub fn parse(json: &str) -> Result<Self, String> {
         serde_json::from_str(json)
             .map_err(|error| format!("The run's frames did not parse: {error}"))
@@ -136,6 +153,17 @@ pub struct PerfScenario {
     /// The results of each start, by its name in [`STARTS`].
     #[serde(default)]
     pub starts: BTreeMap<String, PerfStart>,
+}
+
+impl PerfScenario {
+    pub(super) fn includes(&self, name: &str) -> bool {
+        self.app_bytes.is_empty()
+            || self.app_bytes.contains_key(name)
+            || self
+                .starts
+                .values()
+                .any(|start| start.summary.contains_key(name) || start.failures.contains_key(name))
+    }
 }
 
 /// One start's results in a scenario.

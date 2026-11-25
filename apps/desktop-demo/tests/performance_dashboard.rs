@@ -103,7 +103,7 @@ fn frames() -> FrameSource {
             .take_while(|time| *time < 3000.0)
             .collect()
     };
-    let run = serde_json::json!({"scenarios": [{"scenario": "gauntlet", "legs": [
+    let run = serde_json::json!({"scenarios": [{"scenario": "gauntlet", "extras": "--ei tier 3", "legs": [
         {"subject": "egui", "start": "first", "frame_ms": steady(900.0, 1000.0 / 60.0),
          "samples": {"t_ms": [500, 1000, 2000, 3000], "ram_mb": [110, 120, 130, 150]}},
         {"subject": "egui", "start": "second", "frame_ms": steady(600.0, 1000.0 / 60.0)},
@@ -185,6 +185,7 @@ fn after(labels: &[String], marker: &str, text: &str) -> usize {
 #[test]
 fn the_latest_night_lists_each_scenario_of_the_start_chosen_with_both_builds() {
     let labels = labels();
+    assert!(shows(&labels, "Tier 3"));
     assert!(
         shows(
             &labels,

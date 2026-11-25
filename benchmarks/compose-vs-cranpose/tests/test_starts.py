@@ -119,7 +119,7 @@ class StartsApartTest(unittest.TestCase):
             events.append((start, app))
             return leg(rates[(app, start)])
 
-        args = SimpleNamespace(max_pairs=4, extra='', output=Path('results'))
+        args = SimpleNamespace(max_pairs=4, load='heavy', extra='', output=Path('results'))
         with patch.object(ab.AppTarget, 'reset', reset), patch.object(ab, 'measure_run', measure_run):
             scenario = ab.compare_scenario(None, 'gauntlet', ['cranpose-release', 'cranpose'], args)
         self.assertEqual(events[:6], [('reset', 'cranpose-release'), ('first', 'cranpose-release'),

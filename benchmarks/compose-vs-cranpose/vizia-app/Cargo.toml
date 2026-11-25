@@ -1,0 +1,18 @@
+[package]
+name = "perf-compare-vizia"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+perf-data = { version = "0.1.0", path = "../perf-data" }
+vizia = "0.4.0"
+
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

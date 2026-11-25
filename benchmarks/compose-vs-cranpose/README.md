@@ -31,8 +31,7 @@ per-frame workload, without touch input. Their work per second depends on the
 frame rate. Workspace quote streaming separately targets the same 16 ms cadence.
 
 `measure.py` uses a **heavy** load for each scenario so the apps expose more
-of their frame work. The Huawei Mate 20 X baseline kept Compose below 60 fps
-at this load. `--load default` uses each app's lighter sizes. Record the device
+of their frame work. `--load default` uses each app's lighter sizes. Record the device
 model with every comparison because frame capacity varies by device.
 
 | Scenario | What changes each frame | Heavy load | Stresses |
@@ -70,11 +69,9 @@ Knobs:
 
 ### Gauntlet
 
-One screen heavy enough that no framework holds 60 fps on the device it runs
-on, so every framework's frame rate shows its per-frame cost. Every frame
-advances a frame index `k`, and everything follows from `k`, so each framework
-does the same work per frame. Printed values are integer arithmetic of `k`,
-so both apps show the same digits on the same frame.
+Gauntlet combines scrolling cards with overlapping animated panels. Every frame
+advances an integer index `k`. All frameworks use that index for motion and
+text so a frozen frame shows the same workload and digits.
 
 - **Ticker strip:** quote tiles in a flow row whose price and change text and
   bar change every frame: recomposition, text shaping and reflow.
@@ -187,11 +184,11 @@ draws no turned object, so its panels only drift.
 | 15 | 16 | 0.14 | 300 | 72 | 6 | 9 |
 | 16 | 20 | 0.12 | 400 | 80 | 6 | 10 |
 
-Calibration fixes one tier per device: the lightest at which every
-framework draws below 60 fps. The Huawei Mate 20 X runs tier 12 and the
-Apple M3 Pro desktop tier 16. Raising a device's tier starts a new series
-rather than changing an old one. The web view renders in a sandboxed process
-of its own, which the phone's CPU count leaves out.
+The nightly uses one Gauntlet tier for all native frameworks on each device.
+The Mate 20 X uses tier 12, the Mi TV Stick uses tier 3 and the M3 Pro uses tier 16.
+The M3 Pro also measures Still Wall at tier 20 and Patchwork at tier 17.
+The ESP32 boards use fixed layouts. The Performance tab lists results for each start.
+[Performance results](https://samoylenkodmitry.github.io/Cranpose/?tab=performance)
 
 `parity.py` launches two apps frozen on frame 120 and compares the two
 captures the way the eye does: softened and cut into tiles. On frame 120 a
@@ -209,16 +206,7 @@ bands absorb drift: the frameworks put lines of text on different pixel grids,
 so a list scrolled 720 dp shows its rows a few dozen pixels apart without
 looking any different. Flutter rounds each line to whole logical pixels and
 Compose rounds it up to whole device pixels. Any difference for the same
-composable code is a Cranpose bug. Against Compose at tier 5 every app but
-Flutter, NativeScript and Slint stays under the 2% gate; what the other
-frameworks draw differently, by design:
-
-- The stacked panels lie still over a list that drifts as each framework
-  rounds its lines: where a tilted panel's edge crosses the list, the list
-  beneath it has moved. Flutter's and NativeScript's lists drift the most,
-  about 50 pixels under the second panel's edge, so the row of tiles along
-  that edge changes: 2.9% and 3.4% of tiles. Slint's ticker strip breaks
-  into one more line, so its panels and its list sit a line lower: 2.9%.
+composable code is a Cranpose bug.
 
 - Flutter and Slint set text slightly wider, so a few lines break a word
   earlier.
@@ -230,9 +218,7 @@ frameworks draw differently, by design:
 
 ### Still wall
 
-One screen where almost nothing changes, heavy enough that no framework
-holds 60 fps on the Mac it runs on: at tier 20 on macm3 the fastest holds
-about 30 fps. Each frame changes two small things on
+Each frame changes two small things on
 a screen of thousands of nodes, so a framework that pays for the whole
 screen each frame shows that cost, and one that pays only for what changed
 does not. `desktop.py --scenario wall` measures it; `perf-data/src/wall.rs`
@@ -453,8 +439,7 @@ its paragraph breaks its lines two words earlier.
   once an assistive technology asks, as the other desktop toolkits do. Its
   Android adapter attaches to GameActivity's view, which R8 must keep, and
   needs `accesskit_winit`'s `accesskit_android` feature, which egui-winit
-  leaves off. Avalonia serves its tree by default:
-  uiautomator reads 765 nodes at tier 5. Slint's Android backend has no
+  leaves off. Avalonia serves its tree by default. Slint's Android backend has no
   accessibility support, so the Slint app does none of this work.
 - **Release builds:**
   - Compose: R8 with resource shrinking, not debuggable, and fully
@@ -541,9 +526,7 @@ desired → present are each settled for both starts:
   three with two legs a side, two with three, one with four.
 
 The thresholds are 3% of fps, 3% of CPU per frame and 2 ms. After four pairs
-anything still open is inconclusive. On the Mate, a same-build A/A comparison
-settles in 4 legs for 60 fps scenes and runs 8 legs for the gauntlet, whose
-launch-to-launch noise is about 3%.
+anything still open is inconclusive.
 
 ```bash
 python3 benchmarks/compose-vs-cranpose/ab.py --serial SERIAL --a cranpose-release --b cranpose \
@@ -564,11 +547,7 @@ framework, the first starts and the second starts apart. A leg whose app
 presented fewer than 10 frames in each of 5 seconds in a row ends there,
 marked `stopped`, on every harness, `ab.py` and `desktop.py` too: the rest of
 it would only repeat that the app is slow. Seconds in a row, not an average,
-so a slow start that the app then outruns does not end it. The line is 10 fps
-because an ended leg is a shorter span, in which the launch weighs more: with
-the line at 30 fps an app near it, as Cranpose and egui are on the wall at
-tier 20, reported about 25 fps from a whole leg and about 21 fps from an ended
-one. In Chrome a first start begins with
+so a slow start that the app then outruns does not end it. Native framework comparisons on both Android devices use the full ten seconds. In Chrome a first start begins with
 Chrome's data cleared (`pm clear com.android.chrome`, then its first-run
 screen passed with "Stay signed out"): only that empties its compiled GPU
 programs, which DevTools' cache clearing and `pm trim-caches` leave. The
@@ -590,30 +569,21 @@ python3 benchmarks/compose-vs-cranpose/frameworks.py --serial SERIAL --output OU
 unless the dashboard already holds it. Cranpose runs twice: its latest
 release (`cranpose-release`, once a release draws the gauntlet) and main.
 
-1. On macm3, `versions.py bump` moves each framework's pin to its latest
-   stable release, `build_apps.sh` builds every desktop app, every Android
-   app but Cranpose's, and the release's desktop app, and `desktop.py`
-   measures each supported desktop app on the gauntlet at tier 16, the still
-   wall at tier 20 and patchwork at tier 17. A moved pin that does not build is
-   put back. The run goes to the dashboard, and the pins that moved and
-   built go to the pull request `perf/framework-versions`. `build_apps.sh`
-   keeps each app's last build with a stamp of the files, pin and
-   toolchains it read, so a night builds again only the apps that moved and
-   Cranpose's.
-   `build_apps.sh browser` also builds the apps that target the browser, and
-   `desktop.py --browser` measures them in Chrome on the gauntlet and still
-   wall (below).
-2. On the Mac the Mate 20 X is attached to, `scripts/perf/nightly.py`
-   compares the latest release with main on the gauntlet, and
-   `just perf-frameworks` installs
-   macm3's Android builds beside Cranpose's release and main and runs
-   `frameworks.py`. `just perf-browser` then opens macm3's browser builds in
-   Chrome on the phone at tier 8, then at tier 10 (below).
-3. The Mi TV Stick installs the same signed APKs as the Mate 20 X. Each
-   device runs every framework on the tier 12 gauntlet for ten seconds on
-   each start. The report includes each APK's SHA-256 and size.
+1. macm3 updates the framework pins and prepares the Flutter and .NET SDKs once.
+   It builds the Android and browser apps first. The Android runner downloads
+   those artifacts while macm3 builds and measures the desktop apps. The Android release comparison reuses the Cranpose APK pair when available.
+   The M3 Pro uses tier 16 for Gauntlet, tier 20 for Still Wall and tier 17 for Patchwork.
+   The desktop and Chrome measurements hold the host lock during capture. The build
+   cache reuses apps with matching sources and toolchains. A failed build
+   retries its previous pin. The nightly proposes working updates in
+   `perf/framework-versions`.
+2. The Android runner compares the Cranpose release with main on the Mate 20 X.
+   `just perf-android-devices` then installs the same signed APKs on both devices.
+   The Mi TV Stick runs every framework at Gauntlet tier 3. The Mate uses tier 12.
+   The devices capture concurrently. Each start lasts ten seconds. Each report includes the APK size and SHA-256.
+3. `just perf-browser` measures the browser builds in Chrome on the Mate at tiers 8 and 10.
 4. The ES3C35P and E32R35T boards run the animated demo and dashboard
-   firmware. The [board comparison](../esp32/README.md) lists the frameworks
+   firmware for five seconds per boot. The [board comparison](../esp32/README.md) lists the frameworks
    for each layout.
 
 Rune and zgui publish no release: their pins name a commit, which moves
@@ -784,9 +754,7 @@ in each bundle's own, the web views' WebKit caches, Chrome's Metal shaders and
 the Cranpose app's pipeline cache; a browser app gets a new Chrome profile),
 from a fresh copy of its program, as installing it leaves one (its bundle,
 or its directory where its libraries lie beside it), then its second start
-from that copy. macOS checks a program the first time it runs, 0.2 to 0.3 s
-for the 10 MB Cranpose bench on macm3: without the copy only the apps rebuilt
-since an earlier run, Cranpose's every night, paid it. Every leg is one launch measured from its start for
+from that copy. macOS checks each fresh program on its first start. Every leg is one launch measured from its start for
 10 s (`--run`), the same span for every app: FrameCount waits for the app's window, records the
 time of every frame and says where its capture began, so the frames of every
 second from the launch are kept. A leg disturbed by other processes stays in
@@ -794,27 +762,7 @@ the run, marked, and out of the medians. Desktop numbers feed the dashboard
 only; merges are judged on the slowest phone.
 
 **What a frame is.** ScreenCaptureKit reports a frame for a window each time
-the window server composites the display again. An app's present does that, and
-so does anything else that moves on the display: a quiet window in the corner of
-macm3's television was composited 34 times a second while a Cranpose window
-animated in its middle, and 2 times a second without it. A rate counted from
-those frames is the rate of what moves on the display. FrameCount therefore
-counts a composited frame only when the window's picture differs from the
-last one's (a hash of its pixels at 1/8 scale). A hook on an app's Metal layer
-counts the drawables the app takes: for GPUI, Slint and Cranpose the counted
-frames agree with it within a frame a second, as they do for a Chrome page that
-draws every animation frame. The composites alone ran 20 to 90% above the hook
-for Slint and GPUI with nothing else moving, and five times above it with a
-Cranpose window animating.
-
-On 2026-10-18 the run of 12:35 UTC counted 53 to 56 frames a second for Flutter,
-GPUI and Slint on macm3, where each desktop run from 2026-10-11 to 06:38 UTC
-that day had counted 11 to 24. Something moved on the display during that run.
-A Cranpose window animating beside a GPUI window reproduces its numbers: 53.5
-frames a second at 27 ms of CPU a frame, against 16 at 70 ms alone, while the
-hook counted 12 drawables a second in both. The slower runs before it were
-inflated as well, by the composites that were not the app's. Each leg records
-`composited_fps` beside `fps`.
+the window server composites the display again. Other windows can also trigger a composite. FrameCount hashes the window pixels at 1/8 scale and counts changes to the picture. Each leg records both `composited_fps` and `fps`.
 
 Before its first leg and after its last, `desktop.py` asks FrameCount for the
 state of the display (`--display`: its mode, its scale, whether it is awake and
@@ -829,15 +777,12 @@ so a read above 5 is followed by another one. A report keeps both states under
 `display` with every ambient read, and each leg the rate and the longest gap of
 its display's link.
 
-At tier 5 against Compose Multiplatform, SwiftUI and AppKit change 0.0% of
-tiles, Flutter 0.1%, the web page and Tauri 0.2%, Dioxus and egui 0.3%,
-Cranpose 0.35%, Avalonia 0.5%, Slint 0.7%, GPUI 0.9% and iced 1.1%. Fyne
-changes 2.7%: its panels only drift. Xilem changes 5.6%: its labels keep the
-font's own line height, so its cards are shorter and its list drifts further,
-and the panels lie over a different part of the cluster's look-alike levels.
-
 | App | Stack |
 | --- | --- |
+| `electron` | Electron runs the same web layouts in its packaged Chromium runtime |
+| `freya` | Freya components on Gauntlet and a cached Skia tile layer on Still Wall |
+| `vizia` | Vizia labels and a cached Skia tile layer on Still Wall |
+| `makepad` | Makepad widgets with a retained tile draw list on Still Wall |
 | `cranpose` | `cranpose-app`'s desktop binary |
 | `compose` | `compose-desktop-app`: Compose Multiplatform on the JVM, drawing the composables `compose-app` draws, from `shared-compose` |
 | `egui`, `slint` | the Android crates' desktop binaries; egui draws through eframe's default renderer, wgpu, where the phone's build uses glow |
@@ -847,7 +792,7 @@ and the panels lie over a different part of the cluster's look-alike levels.
 | `swiftui` | `swiftui-app`: SwiftUI |
 | `appkit` | `appkit-app`: AppKit's layer-backed views, laid out by hand, with a list that recycles its rows |
 | `flutter` | `flutter-app`'s macOS runner, on Impeller |
-| `web` | the web page in a Chrome app window, the engine Electron apps ship |
+| `web` | the web page in a Chrome app window |
 | `tauri` | the same page in a Tauri window, on the system's WKWebView; the page asks the app for the tier and logs through its commands |
 | `dioxus` | `dioxus-app`: Dioxus components over the web page's CSS, on Dioxus's desktop renderer (WKWebView) |
 | `xilem` | `xilem-app`: Xilem's views over Masonry's widgets, drawn by Vello on wgpu |
@@ -907,24 +852,8 @@ What each framework lacks and how its app does without:
   are PNG files in memory.
 - A leg with no result says why in the report, beside its failure: whether
   the app was still running, whether it drew a frame, and the last line it
-  logged. The known ones on macm3:
-  - SwiftUI and Compose need 12 to 18 s to show the wall at tier 20, longer
-    than a 10 s leg, so the leg sees no window.
-  - Xilem's wall at tier 20 and Floem's gauntlet at tier 16 end when Vello
-    asks wgpu for a buffer binding of 201 MB, over the limit of 128 MB.
-    Xilem's patchwork at tier 17 opens a window and shows no content.
-  - Rune and BUI opened no window when the nightly's runner started their
-    programs directly, though they did from a terminal. `build_apps.sh` now
-    puts a bundle around each and `desktop.py` opens that, as Launch
-    Services starts apps.
-- Floem draws with Vello, whose buffers have a fixed size. Vello gave a black
-  window from about 14,900 painted tiles, so the app draws content that never
-  changes once into a picture: the wall's tiles and the patchwork's still and
-  chart patches. Its rate on those screens is the rate of showing that
-  picture. The gauntlet at tier 16 has no result on macm3: Vello asks wgpu for
-  a buffer binding of 201 MB, over the limit of 128 MB, and the app ends. At
-  tier 12 the gauntlet runs. Its list is a few rows off the other apps',
-  since Floem lays out text lines a little taller.
+  logged.
+- Floem uses Vello. It caches static tile layers on Still Wall and Patchwork.
 - Fyne sizes an object before it knows its width, so the app wraps
   paragraphs and places every object itself, as Fyne's custom widgets do. It
   rotates no object: the badge stays upright. Its canvas has no path: the
@@ -1006,39 +935,8 @@ reverse`, takes its frames from Chrome's page surface
 every Chrome process. A page that fails to start leaves its legs out and the
 run goes on, as a dash in the dashboard.
 
-**The tier.** A browser caps a page at the display's rate, and a framework
-that draws in a browser tab loses much of what it has natively, so each
-browser has a tier of its own, calibrated like the devices': the lightest at
-which no page reaches 60 fps, so every page's frame rate shows its cost. If
-that tier leaves the heaviest pages under 5 fps, it is relaxed a tier or two:
-a load that crawls for all tells the pages apart no better. Frame rates of one
-round each, 2026-10-08:
-
-| Tier | Cranpose | Compose | Flutter | egui | Slint | iced | Dioxus | Avalonia | Web |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| M3 Pro 8 | 47.9 | 34.5 | 48.3 | 60.1 | 51.7 | 60.2 | 60.2 | 39.6 | 60.0 |
-| M3 Pro 12 | 29.3 | 25.6 | 52.1 | 60.2 | 34.2 | 42.2 | 56.5 | 27.4 | 57.6 |
-| **M3 Pro 16** | 23.6 | 22.9 | 31.2 | 49.8 | 24.7 | 33.5 | 35.1 | 21.3 | 37.8 |
-| Mate 4 | 10.4 | 13.0 | 59.5 | 60.2 | 19.5 | fails | 59.3 | 15.1 | 59.2 |
-| **Mate 8** | 6.1 | 6.2 | 28.4 | 54.8 | 8.7 | fails | 33.6 | 5.9 | 42.2 |
-| Mate 12 | 2.5 | 2.5 | 10.5 | 42.2 | 4.7 | fails | 12.4 | 2.3 | 16.0 |
-
-On the desktop the heaviest tier, 16, already keeps egui, the fastest, under
-60. On the phone tier 8 is the first at which nothing reaches 60, and tier 12
-leaves three pages at about 2 fps. Chrome on the Mate has no WebGPU
-(Android 10), so every page that can draws on WebGL2. iced's WebGL fragment
-shader for gradients does not compile on the Mate's GPU driver, and its page
-stops at start. Raising a browser's tier starts a new series. The Cranpose
-column above ran on WebGL2, before the page took WebGPU where the browser has
-it.
-
-**The heavier tier.** The phone's run measures tier 10 too, as the scenario
-`gauntlet-tier-10`. At tier 8 Cranpose's page draws about 56 fps with about 4
-frames over 25 ms in 20 s. At tier 10 the page settles in one of two states:
-about 55 fps with a few such frames and the GPU at about 480 MHz, or about
-48 fps with over 100 of them and the GPU at about 380 MHz (2026-11-07, 20 s
-legs). The second state is a loss to fix, issue #2059. The card shows each
-night which state the page took.
+Chrome on the M3 Pro measures Gauntlet at tier 16 and Still Wall at tier 20.
+Chrome on the Mate measures Gauntlet at tiers 8 and 10. The phone reports the second tier as `gauntlet-tier-10`.
 
 ### A start without a window
 
