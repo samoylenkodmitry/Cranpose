@@ -16,4 +16,8 @@ config BENCH_DASHBOARD
         changes most of the display every frame. The Cranpose demo's
         dashboard feature and the Slint benchmark show the same screen.
 
+config BENCH_FRAMES
+    bool "Record frame counts for the nightly"
+    default n
+
 endmenu

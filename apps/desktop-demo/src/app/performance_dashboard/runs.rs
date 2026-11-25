@@ -130,6 +130,9 @@ pub struct PerfSubject {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct PerfScenario {
     pub legs: usize,
+    /// Packaged app size in bytes for each subject that builds this screen.
+    #[serde(default)]
+    pub app_bytes: BTreeMap<String, u64>,
     /// The results of each start, by its name in [`STARTS`].
     #[serde(default)]
     pub starts: BTreeMap<String, PerfStart>,
@@ -174,6 +177,14 @@ impl PerfRun {
         metric: &str,
     ) -> Option<f64> {
         let name = &self.subjects.get(subject)?.name;
+        if metric == "app_mib" {
+            return self
+                .scenarios
+                .get(scenario)?
+                .app_bytes
+                .get(name)
+                .map(|bytes| *bytes as f64 / 1_048_576.0);
+        }
         self.start(scenario, start)?
             .summary
             .get(name)?
@@ -189,10 +200,9 @@ impl PerfRun {
             .all(|(start, _)| self.protocol.starts.iter().any(|kept| kept == start))
     }
 
-    /// Whether the run compares frameworks: Compose is among its subjects,
-    /// or it is the browser run, whose Compose may have failed to start.
+    // Older framework comparisons can be identified by the Compose subject.
     pub(super) fn compares_frameworks(&self) -> bool {
-        self.kind == "browser"
+        matches!(self.kind.as_str(), "browser" | "frameworks" | "esp32")
             || self
                 .subjects
                 .iter()

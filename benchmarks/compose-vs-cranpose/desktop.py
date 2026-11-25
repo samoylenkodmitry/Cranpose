@@ -75,6 +75,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import versions
+from app_size import artifact_bytes
 from browser import BrowserServer
 from timelines import SLOW_FPS, SLOW_SECONDS, STARTS, per_second, slow_rule
 
@@ -191,6 +192,27 @@ APPS = {
 INSTALLED_WITH_DIRECTORY = {'avalonia'}
 
 
+def install_source(name):
+    executable = Path(APPS[name][0])
+    for parent in executable.parents:
+        if parent.suffix == '.app':
+            return parent
+    return executable.parent if name in INSTALLED_WITH_DIRECTORY else executable
+
+
+def app_bytes(name, browser):
+    if browser:
+        return artifact_bytes(browser / name)
+    # The native harness supplies these loose resources beside the installed app.
+    size = sum(file.stat().st_size for file in FONTS.glob('*.ttf'))
+    size += sum((CHAT_ASSETS / file).stat().st_size for file in ('spin.gif', 'progress.svg'))
+    if name in ('web', 'tauri'):
+        size += artifact_bytes(HERE / 'web-app/www')
+    if name != 'web':
+        size += artifact_bytes(install_source(name))
+    return size
+
+
 def fresh_install(name, stage, label):
     """`name`'s program installed as an install of a new build leaves it, and
     the path to launch. macOS checks a program the first time it runs: on
@@ -205,15 +227,9 @@ def fresh_install(name, stage, label):
     hashes macOS never ran. Without the new signatures only the apps rebuilt
     since an earlier run paid the check of new code, Cranpose's every night,
     and no app paid it for libraries it did not rebuild."""
-    executable = Path(str(APPS[name][0]))
-    text = str(executable)
-    bundle = '.app/Contents/MacOS/' in text
-    if bundle:
-        installed = Path(text.split('.app/Contents/MacOS/')[0] + '.app')
-    elif name in INSTALLED_WITH_DIRECTORY:
-        installed = executable.parent
-    else:
-        installed = executable
+    executable = Path(APPS[name][0])
+    installed = install_source(name)
+    bundle = installed.suffix == '.app'
     target = stage / 'installs' / label / installed.name
     target.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(['ditto', str(installed), str(target)], check=True)
@@ -1089,7 +1105,7 @@ def run(args, apps, server, stage):
         # Pillow, which comparing pictures needs and measuring does not.
         from PIL import Image
         from parity import compare_pair
-        apps = [name for name in apps if shows(name, args)]
+        apps = [name for name in apps if shows(name, args.scenario)]
         pictures = {name: picture(name, args, args.output, server, stage) for name in apps}
         # Compose's picture is the one the others are held to.
         reference = next((name for name in ('compose', 'web') if name in apps), apps[0])
@@ -1116,6 +1132,9 @@ def run(args, apps, server, stage):
     width, height = DESKTOP_WINDOW
     window = f'{width} x {height} {"browser " if args.browser else ""}window'
     scenarios = [measure_screen(screen_args(args, screen), apps, server, stage, window) for screen in args.screens]
+    sizes = {name: app_bytes(name, args.browser) for name in apps}
+    for scenario in scenarios:
+        scenario['app_bytes'] = {name: size for name, size in sizes.items() if shows(name, scenario['scenario'])}
     chip = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'], capture_output=True, text=True,
                           check=True).stdout.strip()
     platform = 'browser' if args.browser else 'desktop'
@@ -1150,20 +1169,20 @@ def screen(text):
     return name, int(tier) if tier else None
 
 
-def shows(name, args):
-    """Whether app `name` draws the screen `args` names. Every app does,
+def shows(name, scenario):
+    """Whether app `name` draws this scenario. Every app does,
     except `cranpose-release` on a screen its release's app does not know: it
     would draw another screen under that screen's name."""
     if name != 'cranpose-release':
         return True
     known = RELEASE_SCREENS.read_text().split() if RELEASE_SCREENS.exists() else ['gauntlet']
-    return args.scenario in known
+    return scenario in known
 
 
 def measure_screen(args, apps, server, stage, window):
     """The rounds of every app that draws the screen `args` names: the run's
     entry for that screen."""
-    skipped = [name for name in apps if not shows(name, args)]
+    skipped = [name for name in apps if not shows(name, args.scenario)]
     if skipped:
         print(f'{args.scenario}: not drawn by {", ".join(skipped)}', flush=True)
     apps = [name for name in apps if name not in skipped]

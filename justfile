@@ -1473,9 +1473,18 @@ liquid-reference-device-test device team results suite:
 liquid-reference-device-run device run results suite architecture="arm64":
     xcodebuild -xctestrun '{{run}}' -destination 'platform=iOS,arch={{architecture}},id={{device}}' -resultBundlePath '{{results}}' -parallel-testing-enabled NO -test-timeouts-enabled NO -only-testing:LiquidReferenceTests/{{suite}} test-without-building
 
-# Nightly comparison of the latest release's benchmark app against main's on
-# an attached Android device: builds both, compares them with the short A/B
-# protocol and writes OUTPUT/run.json.
+# Measure both boots of each screen on a physical ESP32 board.
+perf-esp32 board output:
+    . "$HOME/export-{{esp32_toolchain}}.sh" && scripts/ci/with_host_lock.sh --shared python3 scripts/esp32/nightly.py build --board {{quote(board)}} --output {{quote(output)}}
+    scripts/ci/with_host_lock.sh --exclusive python3 scripts/esp32/nightly.py measure --board {{quote(board)}} --output {{quote(output)}}
+
+perf-mi-tv output:
+    bash scripts/perf/mi_tv.sh {{quote(output)}}
+
+test-mi-tv apk output:
+    scripts/android/mi_tv.sh python3 scripts/android/tv_remote_test.py --apk {{quote(apk)}} --output {{quote(output)}}
+
+# Compare the latest release with main on the attached Android device.
 perf-nightly serial output:
     python3 scripts/perf/nightly.py --serial {{serial}} --output {{output}}
 

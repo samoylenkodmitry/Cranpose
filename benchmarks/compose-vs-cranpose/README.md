@@ -593,22 +593,27 @@ release (`cranpose-release`, once a release draws the gauntlet) and main.
 1. On macm3, `versions.py bump` moves each framework's pin to its latest
    stable release, `build_apps.sh` builds every desktop app, every Android
    app but Cranpose's, and the release's desktop app, and `desktop.py`
-   measures the desktop apps on the gauntlet at tier 16, then on the still
-   wall at tier 20, the apps that draw it. A moved pin that does not build is
+   measures each supported desktop app on the gauntlet at tier 16, the still
+   wall at tier 20 and patchwork at tier 17. A moved pin that does not build is
    put back. The run goes to the dashboard, and the pins that moved and
    built go to the pull request `perf/framework-versions`. `build_apps.sh`
    keeps each app's last build with a stamp of the files, pin and
    toolchains it read, so a night builds again only the apps that moved and
    Cranpose's.
    `build_apps.sh browser` also builds the apps that target the browser, and
-   `desktop.py --browser` measures them in Chrome on the same two screens
-   (below).
+   `desktop.py --browser` measures them in Chrome on the gauntlet and still
+   wall (below).
 2. On the Mac the Mate 20 X is attached to, `scripts/perf/nightly.py`
    compares the latest release with main on the gauntlet, and
    `just perf-frameworks` installs
    macm3's Android builds beside Cranpose's release and main and runs
    `frameworks.py`. `just perf-browser` then opens macm3's browser builds in
    Chrome on the phone at tier 8, then at tier 10 (below).
+3. The Mi TV Stick runs the tier 8 gauntlet in Cranpose and Compose for ten
+   seconds on each start.
+4. The ES3C35P and E32R35T boards run the animated demo and dashboard
+   firmware. The [board comparison](../esp32/README.md) lists the frameworks
+   for each layout.
 
 Rune and zgui publish no release: their pins name a commit, which moves
 most days. `versions.py bump` leaves them where they are. A night dispatched
@@ -627,8 +632,9 @@ its registry's latest release.
 The Performance tab of the desktop demo reads the runs from the `perf-data`
 branch: the latest night's release against main, the trend, and the latest
 framework comparison of each device. Chips choose what the trend and each
-comparison show: frames per second, CPU per frame, memory, GPU memory, or
-the CPU and GPU clocks. Each framework there opens its gauntlet's source at
+comparison show, including app size in MiB. The
+[measurement guide](../../docs/performance_methodology.md) defines the artifact
+size for each platform. Each framework there opens its gauntlet's source at
 the commit measured.
 
 ### Long comparisons

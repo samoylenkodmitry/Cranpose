@@ -445,10 +445,12 @@ class BenchmarkContracts(unittest.TestCase):
             self.assertEqual(report['launch_time'], 'launch-time')
             report.update(elapsed_s=0.04, layer={'frames': 2}, before={}, after={}, acceptance_eligible=True)
 
+        (self.root / 'app.apk').write_bytes(b'APK')
         proof = {'apk_sha256': 'hash', 'build': {'native_sha256': 'native'}, 'native_member': 'libapp.so'}
         report = {}
         with patch('android_benchmark.verify_apk'), patch('android_benchmark.wait_ready') as ready, patch('android_benchmark.run_window', side_effect=window), patch('android_benchmark.verify_first_gesture') as motion:
             run_leg(device, route, self.root / 'app.apk', proof, self.root / 'classes.dex', self.root, report, '/staged.apk')
+        self.assertEqual(report['app_bytes'], 3)
         motion.assert_called_once()
         self.assertIsNone(ready.call_args_list[0].args[1]['start_region'])
         self.assertEqual(ready.call_args_list[1].args[1]['start_region'], route['start_region'])

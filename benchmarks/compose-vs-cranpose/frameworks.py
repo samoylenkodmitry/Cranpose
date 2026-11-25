@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ab import DECIDING, REPORTED, leg_record, summarize
+from app_size import artifact_bytes
 from browser import BrowserServer
 from measure import (APPS, CHROME, HEAVY, HERE, REMOTE_WINDOW, STARTS, AppTarget, Device, PageTarget,
                      device_lock, figure, measure_run)
@@ -107,6 +108,10 @@ def measure_frameworks(args):
         if match := re.search(r'versionName=(\S+)', webview):
             built['web'] = f'WebView {match.group(1)}, {built.get("web") or versions.version("web", "android")}'
     scenarios = [measure_scenario(device, name, extras, targets, args) for name, extras, targets in loads]
+    sizes = ({app: artifact_bytes(args.browser / app) for app in apps} if args.browser else
+             {app: size for app in apps if (size := device.apk_bytes(app)) is not None})
+    for scenario in scenarios:
+        scenario['app_bytes'] = sizes
     identity = {key: device.shell('getprop', key).strip() for key in
                 ['ro.product.model', 'ro.build.version.release', 'ro.hardware']}
     if args.browser:
@@ -124,7 +129,8 @@ def measure_frameworks(args):
         'release': args.release,
         'device': identity,
         'subjects': subjects,
-        'protocol': {'run_s': args.run, 'starts': list(STARTS), 'rounds': args.rounds, **slow_rule()},
+        'protocol': {'run_s': args.run, 'starts': list(STARTS), 'rounds': args.rounds,
+                     **({} if args.full_run else slow_rule())},
         'scenarios': scenarios,
         'duration_s': round(time.monotonic() - args.started),
     }
@@ -135,6 +141,8 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--serial', required=True)
     parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--full-run', action='store_true', help='measure the full span even on a slow device')
+    parser.add_argument('--require-all', action='store_true', help='fail if any selected app misses a start')
     parser.add_argument('--apps', help='by default every app built, or every page in `--browser`')
     parser.add_argument('--scenario', default='gauntlet')
     parser.add_argument('--rounds', type=int, default=1,
@@ -167,6 +175,8 @@ def main():
                     f'fps {values["fps"]:5.1f} cpu/f {figure(values.get("cpu_ms_per_frame"), "6.1f")}'
                     if values else 'no legs'))
     print('DURATION', run['duration_s'], 's')
+    if args.require_all and any(scenario['failures'] for scenario in run['scenarios']):
+        raise SystemExit('a required launch failed; see frameworks.json')
 
 
 if __name__ == '__main__':

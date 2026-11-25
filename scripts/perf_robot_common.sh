@@ -10,6 +10,12 @@ readonly DEFAULT_PERF_SCENARIOS=(
     opaque_scene
 )
 
+report_app_bytes() {
+    local bytes
+    bytes=$(wc -c < "$1")
+    printf 'app_bytes=%d\n' "$bytes"
+}
+
 is_valid_perf_scenario() {
     local scenario="$1"
     case "$scenario" in

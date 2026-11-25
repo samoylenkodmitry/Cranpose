@@ -36,6 +36,10 @@ class BrowserTiersTest(unittest.TestCase):
             return leg(50.0)
 
         with tempfile.TemporaryDirectory() as folder:
+            for app in ('cranpose', 'egui'):
+                page = Path(folder) / app
+                page.mkdir()
+                (page / 'index.html').write_bytes(app.encode())
             output = Path(folder) / 'out'
             arguments = ['frameworks.py', '--serial', 'serial', '--output', str(output),
                          '--browser', folder, '--apps', 'cranpose,egui']
@@ -53,6 +57,7 @@ class BrowserTiersTest(unittest.TestCase):
                          [('gauntlet', 'cranpose', 8), ('gauntlet', 'egui', 8),
                           ('gauntlet-tier-10', 'cranpose', 10), ('gauntlet-tier-10', 'egui', 10)])
         for scenario in run['scenarios']:
+            self.assertEqual(scenario['app_bytes'], {'cranpose': 8, 'egui': 4})
             self.assertEqual(len(scenario['legs']), 4)
             self.assertEqual(scenario['starts']['first']['summary']['egui']['fps'], 50.0)
 

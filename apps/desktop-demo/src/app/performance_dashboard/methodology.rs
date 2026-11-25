@@ -11,10 +11,19 @@ use cranpose_ui::{
     VerticalAlignment,
 };
 
-use super::{text_style, Palette, SOURCE_URL};
+use super::{
+    super::demo_tab::{local_active_tab, DemoTab},
+    text_style, Palette, SOURCE_URL,
+};
 
 const METHODOLOGY_URL: &str =
     "https://github.com/samoylenkodmitry/Cranpose/blob/main/docs/performance_methodology.md";
+
+#[derive(Clone, Copy, PartialEq)]
+enum ChipStyle {
+    Accent,
+    Plain,
+}
 
 const HARNESS_LINKS: [(&str, &str); 4] = [
     ("desktop.py", "benchmarks/compose-vs-cranpose/desktop.py"),
@@ -60,7 +69,12 @@ pub(super) fn MethodologyCard(palette: Palette) {
                             .horizontal_arrangement(LinearArrangement::SpacedBy(8.0))
                             .vertical_alignment(VerticalAlignment::CenterVertically),
                         move || {
-                            LinkChip(palette, "Full methodology", METHODOLOGY_URL, true);
+                            LinkChip(
+                                palette,
+                                "Full methodology",
+                                METHODOLOGY_URL,
+                                ChipStyle::Accent,
+                            );
                             let is_open = expanded.get();
                             Button(
                                 Modifier::empty()
@@ -86,7 +100,7 @@ pub(super) fn MethodologyCard(palette: Palette) {
                 },
             );
             Text(
-                "External tools measure every framework from outside the app process. macOS runs \
+                "External tools measure desktop and Android apps. macOS runs \
                  use FrameCount.app (ScreenCaptureKit pixel-change hashing), libproc, footprint, \
                  and macmon. Android runs use SurfaceFlinger --latency, /proc, dumpsys meminfo, \
                  sysfs clocks, and thermalservice.",
@@ -94,15 +108,39 @@ pub(super) fn MethodologyCard(palette: Palette) {
                 text_style(12.5, palette.muted, None),
             );
             Text(
-                "No app counts or times its own frames. The frame += 1 loop inside each app \
-                 drives identical per-frame work. PERF log lines are one-shot liveness and \
-                 parity markers.",
+                "The ESP32 firmware counts completed frames each second. The emulator previews the demo layout.",
                 Modifier::empty(),
                 text_style(12.5, palette.muted, None),
             );
             if expanded.get() {
                 ExpandedDetails(palette);
             }
+        },
+    );
+}
+
+#[composable]
+pub(super) fn LayoutLinks(palette: Palette) {
+    let active = local_active_tab().current();
+    FlowRow(
+        Modifier::empty().fill_max_width(),
+        FlowSpec::default()
+            .main_axis_spacing(6.0)
+            .cross_axis_spacing(6.0),
+        move || {
+            if let Some(active) = active {
+                for tab in [DemoTab::Gauntlet, DemoTab::StillWall, DemoTab::Patchwork] {
+                    ActionChip(palette, tab.label(), ChipStyle::Plain, move || {
+                        active.set(tab)
+                    });
+                }
+            }
+            LinkChip(
+                palette,
+                "ESP32 demo in browser",
+                "https://samoylenkodmitry.github.io/cranpose-esp32/",
+                ChipStyle::Plain,
+            );
         },
     );
 }
@@ -141,7 +179,7 @@ fn ExpandedDetails(palette: Palette) {
                 move || {
                     for (label, path) in HARNESS_LINKS {
                         let url = format!("{SOURCE_URL}/main/{path}");
-                        LinkChip(palette, label, &url, false);
+                        LinkChip(palette, label, &url, ChipStyle::Plain);
                     }
                 },
             );
@@ -159,9 +197,24 @@ fn DetailLine(palette: Palette, heading: &'static str, body: &'static str) {
 }
 
 #[composable]
-fn LinkChip(palette: Palette, label: &'static str, url: &str, primary: bool) {
+fn LinkChip(palette: Palette, label: &'static str, url: &str, style: ChipStyle) {
     let uri_handler = local_uri_handler().current();
     let target = url.to_string();
+    ActionChip(palette, label, style, move || {
+        if let Err(error) = uri_handler.open_uri(&target) {
+            log::error!("Could not open {target}: {error:#}");
+        }
+    });
+}
+
+#[composable]
+fn ActionChip(
+    palette: Palette,
+    label: &'static str,
+    style: ChipStyle,
+    action: impl Fn() + Clone + 'static,
+) {
+    let primary = style == ChipStyle::Accent;
     Button(
         Modifier::empty()
             .background(if primary {
@@ -172,11 +225,7 @@ fn LinkChip(palette: Palette, label: &'static str, url: &str, primary: bool) {
             .rounded_corners(14.0)
             .padding_symmetric(10.0, 4.0),
         ButtonSpec::default(),
-        move || {
-            if let Err(error) = uri_handler.open_uri(&target) {
-                log::error!("Could not open {target}: {error:#}");
-            }
-        },
+        action,
         move || {
             Text(
                 label,

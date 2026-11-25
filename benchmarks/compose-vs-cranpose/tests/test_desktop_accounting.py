@@ -110,6 +110,7 @@ class DesktopRoundsTest(unittest.TestCase):
         args = SimpleNamespace(parity=False, output=Path('results'), rounds=rounds, max_others=1.5, main=None,
                                release=None, tier=16, run=3.0, browser=browser, screens=list(screens))
         with patch.object(desktop, 'measure', measure), patch.object(desktop, 'clear_app_state', clear), \
+                patch.object(desktop, 'app_bytes', return_value=2048), \
                 patch.object(desktop, 'fresh_install', install), \
                 patch.object(desktop, 'wait_for_program_checks', wait_for_checks), \
                 patch.object(desktop, 'warm_chrome', warm_chrome), \
@@ -131,6 +132,8 @@ class DesktopRoundsTest(unittest.TestCase):
         self.assertEqual(self.screens, [('gauntlet', 16, Path('results/gauntlet'))] * 4
                          + [('wall', 20, Path('results/wall'))] * 2)
         self.assertTrue(wall['extras'].startswith('tier 20, '))
+        self.assertEqual(set(gauntlet['app_bytes']), {'egui', 'cranpose-release'})
+        self.assertEqual(set(wall['app_bytes']), {'egui'})
 
     def test_the_release_draws_only_the_screens_its_release_knows(self):
         screens = [('gauntlet', 16), ('wall', 20)]

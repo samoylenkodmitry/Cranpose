@@ -85,6 +85,7 @@ def index_entry(run, file):
         'scenarios': {
             scenario['scenario']: {
                 'legs': len(scenario['legs']),
+                'app_bytes': scenario.get('app_bytes', {}),
                 'starts': {
                     start: {
                         'summary': {name: {metric: judged['summary'][name][metric]

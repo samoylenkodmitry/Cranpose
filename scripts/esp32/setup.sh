@@ -16,8 +16,10 @@ if rustup toolchain list | grep -q "^$toolchain"; then
     echo "toolchain $toolchain is installed"
 else
     espup install --name "$toolchain" --toolchain-version "$toolchain_version" \
-        --targets esp32s3 --std --export-file "$HOME/export-$toolchain.sh"
+        --targets esp32,esp32s3 --std --export-file "$HOME/export-$toolchain.sh"
 fi
+
+if [[ ${1:-} == --boards-only ]]; then exit 0; fi
 
 case "$(uname -s)-$(uname -m)" in
     Darwin-arm64) host=aarch64-apple-darwin ;;

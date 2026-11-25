@@ -539,6 +539,24 @@ fn choose(robot: &mut RobotTestRule<TestRenderer>, name: &str, nth: usize) {
 }
 
 #[test]
+fn a_board_card_shows_the_firmware_size_for_its_selected_layout() {
+    let index = r#"{"runs":[{"kind":"esp32","device":"E32R35T","started_at":"2026-11-25",
+        "protocol":{"starts":["first","second"]},"subjects":[{"name":"lvgl","label":"LVGL"},
+        {"name":"slint","label":"Slint"}],"scenarios":{
+        "demo":{"legs":2,"app_bytes":{"lvgl":524288}},
+        "dashboard":{"legs":4,"app_bytes":{"lvgl":786432,"slint":1048576}}}}]}"#;
+    let mut robot = dashboard_of(index, FrameSource::Files(Rc::default()));
+    choose(&mut robot, "App size MiB", 0);
+    choose(&mut robot, "demo", 0);
+    let texts = robot.get_all_text();
+    assert!(shows(&texts, "0.50"), "{texts:?}");
+    assert!(!shows(&texts, "Slint"), "{texts:?}");
+    choose(&mut robot, "dashboard", 0);
+    let texts = robot.get_all_text();
+    assert!(shows(&texts, "0.75") && shows(&texts, "1.00"), "{texts:?}");
+}
+
+#[test]
 fn a_framework_card_shows_the_metric_chosen_and_a_dash_where_a_run_has_none() {
     let mut robot = dashboard();
     // The trend's chips come first, then the newest framework card's: the
@@ -974,6 +992,26 @@ impl UriHandler for RecordingUriHandler {
 }
 
 #[test]
+fn the_performance_links_open_the_benchmark_tabs() {
+    use desktop_app::app::{combined_app_with_initial_tab, DemoTab, TEST_ACTIVE_TAB_STATE};
+    for tab in [DemoTab::Gauntlet, DemoTab::StillWall, DemoTab::Patchwork] {
+        // The compact header keeps the tab picker closed. Only the links in
+        // the Performance tab can open the requested benchmark here.
+        let mut robot = create_headless_robot_test(540, 900, || {
+            combined_app_with_initial_tab(Some(DemoTab::Performance));
+        });
+        let link = rect_of(&mut robot, tab.label());
+        assert!(robot.click_at(link.x + link.width / 2.0, link.y + link.height / 2.0));
+        robot.wait_for_idle();
+        assert_eq!(
+            TEST_ACTIVE_TAB_STATE.with(|state| state.borrow().map(|tab| tab.get())),
+            Some(tab)
+        );
+        assert!(robot.get_all_text().iter().any(|label| label == "Tier"));
+    }
+}
+
+#[test]
 fn the_methodology_card_explains_external_measurement_and_toggles_details() {
     let mut robot = dashboard();
     let texts = robot.get_all_text();
@@ -1038,6 +1076,7 @@ fn methodology_links_open_the_markdown_doc_and_harness_sources() {
         });
     });
 
+    click_on(&mut robot, "ESP32 demo in browser");
     click_on(&mut robot, "Full methodology");
     click_on(&mut robot, "More details");
     click_on(&mut robot, "FrameCount.swift");
@@ -1046,6 +1085,7 @@ fn methodology_links_open_the_markdown_doc_and_harness_sources() {
     assert_eq!(
         uris,
         vec![
+            "https://samoylenkodmitry.github.io/cranpose-esp32/",
             "https://github.com/samoylenkodmitry/Cranpose/blob/main/docs/performance_methodology.md",
             "https://github.com/samoylenkodmitry/Cranpose/blob/main/benchmarks/compose-vs-cranpose/framecount/FrameCount.swift",
         ]

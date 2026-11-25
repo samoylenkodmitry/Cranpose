@@ -72,6 +72,11 @@ python3 benchmarks/esp32/summary.py target/esp32/bench-*.log
 The LVGL build takes ESP-IDF from `~/.espressif`, where the demo's first
 build installed it.
 
+The nightly runs `just perf-esp32 BOARD OUTPUT` on the two boards attached to
+samarch-1. Each screen has its own application image. The JSON report keeps its
+byte size and the frame count of every second for both boots. The Performance
+tab reads the published report. [Measurement details](../../docs/performance_methodology.md)
+
 ### Compare revisions
 
 A screen's frame time moves by up to 0.1 ms with where the linker puts the

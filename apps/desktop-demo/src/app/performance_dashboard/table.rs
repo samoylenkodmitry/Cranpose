@@ -13,8 +13,15 @@ use super::{figure, text_style, Palette, PerfRun};
 /// release's, coloured by its verdicts.
 #[composable]
 pub(super) fn NightlyTable(palette: Palette, run: Rc<PerfRun>, start: &'static str) {
-    let headers = ["scenario", "fps", "change", "CPU ms", "latency ms"]
-        .map(|header| TableCell::new(header.to_string(), palette.muted));
+    let headers = [
+        "scenario",
+        "fps",
+        "change",
+        "CPU ms",
+        "latency ms",
+        "app MiB",
+    ]
+    .map(|header| TableCell::new(header.to_string(), palette.muted));
     TableRow(palette, headers.to_vec(), true);
     for scenario in run.scenarios.keys() {
         let entry = run.start(scenario, start).cloned().unwrap_or_default();
@@ -44,6 +51,7 @@ pub(super) fn NightlyTable(palette: Palette, run: Rc<PerfRun>, start: &'static s
             TableCell::new(change, verdict("fps")),
             pair("cpu_ms_per_frame"),
             pair("desired_to_present_p50_ms"),
+            pair("app_mib"),
         ];
         TableRow(palette, cells, false);
     }

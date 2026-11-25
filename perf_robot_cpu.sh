@@ -122,6 +122,7 @@ fi
 {
     echo "CPU perf summary"
     echo "profile=$PROFILE"
+    report_app_bytes "$BIN"
     echo "example=$EXAMPLE"
     echo "duration_secs=$DURATION_SECS"
     echo "scenarios=${PERF_SCENARIOS[*]}"

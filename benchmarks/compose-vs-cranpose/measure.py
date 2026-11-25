@@ -218,6 +218,14 @@ class Device:
         # device's shell: quote each, so a layer name with spaces stays one.
         return self.adb('shell', *(shlex.quote(arg) for arg in args), timeout=timeout, check=check)
 
+    def apk_bytes(self, app):
+        package = APPS[app]['package']
+        paths = self.shell('pm', 'path', package, check=False).splitlines()
+        apks = [line.removeprefix('package:') for line in paths if line.startswith('package:')]
+        if not apks:
+            return None
+        return sum(int(size) for size in self.shell('stat', '-c', '%s', *apks).splitlines())
+
     def pid(self, package):
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
@@ -860,7 +868,7 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
     target.prepare(device)
     output = device.shell('sh', REMOTE_WINDOW, target.package, target.processes, target.layer_pattern,
                           f'{run_s:.2f}', str(args.interval), '1' if target.gfx else '0',
-                          str(SLOW_FPS), str(SLOW_SECONDS), *target.start_args(scenario, extras.split()),
+                          str(0 if getattr(args, 'full_run', False) else SLOW_FPS), str(SLOW_SECONDS), *target.start_args(scenario, extras.split()),
                           timeout=run_s + 60)
     (destination / f'{target.name}-{scenario}-{int(time.time())}.txt').write_text(output)
     run['launch'], pids, layer = window_start(output, target)
@@ -981,9 +989,9 @@ def compare(args):
               'runs': [], 'startup': {'cranpose': [], 'compose': []}, 'failures': []}
     for app in args.apps.split(','):
         spec = APPS[app]
-        report[app + '_apk_bytes'] = spec['apk'].stat().st_size
         if args.install:
             device.install(app, spec['apk'])
+        report[app + '_apk_bytes'] = device.apk_bytes(app)
     debuggable = device.shell('dumpsys', 'package', APPS['compose']['package'])
     if 'DEBUGGABLE' in debuggable.split('pkgFlags=')[-1].split('\n')[0]:
         raise RuntimeError('the Compose APK is debuggable; measure a release build')

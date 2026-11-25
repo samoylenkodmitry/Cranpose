@@ -76,9 +76,12 @@ class IndexEntryTest(unittest.TestCase):
 
     def test_an_entry_leaves_out_of_a_screen_the_subject_that_does_not_draw_it(self):
         measured = run()
+        measured['scenarios'][0]['app_bytes'] = {'cranpose': 3000000}
         for start in measured['scenarios'][0]['starts'].values():
             del start['summary']['cranpose-release']
-        starts = publish.index_entry(measured, 'runs/x.json')['scenarios']['gauntlet']['starts']
+        screen = publish.index_entry(measured, 'runs/x.json')['scenarios']['gauntlet']
+        self.assertEqual(screen['app_bytes'], {'cranpose': 3000000})
+        starts = screen['starts']
         self.assertEqual(sorted(starts['second']['summary']), ['cranpose'],
                          'a release that knows no such screen has no medians there')
 
