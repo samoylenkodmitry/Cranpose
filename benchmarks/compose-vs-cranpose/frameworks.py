@@ -31,7 +31,7 @@ from ab import DECIDING, REPORTED, leg_record, summarize
 from android_benchmark_support import digest
 from app_size import artifact_bytes
 from browser import BrowserServer
-from measure import (APPS, CHROME, HEAVY, HERE, REMOTE_WINDOW, STARTS, AppTarget, Device, PageTarget,
+from measure import (APPS, CHROME, load_extras, HERE, REMOTE_WINDOW, STARTS, AppTarget, Device, PageTarget,
                      device_lock, figure, measure_run)
 from timelines import slow_rule
 import versions
@@ -88,6 +88,9 @@ def measure_scenario(device, name, extras, targets, args, install_errors):
 def measure_frameworks(args):
     """Runs the whole comparison: the caller holds the device lock."""
     args.load, args.screenshots = 'heavy', False
+    if args.tier is not None:
+        args.load = 'default'
+        args.extra = f'--ei tier {args.tier} {args.extra}'.strip()
     args.started = time.monotonic()
     args.output.mkdir(parents=True, exist_ok=True)
     device = Device(args.serial)
@@ -102,7 +105,7 @@ def measure_frameworks(args):
         loads = [(args.scenario if index == 0 else f'{args.scenario}-tier-{tier}', f'tier {tier}, in Chrome',
                   {app: PageTarget(server, app, tier) for app in apps}) for index, tier in enumerate(args.tiers)]
     else:
-        loads = [(args.scenario, (HEAVY.get(args.scenario, '') + ' ' + args.extra).strip(),
+        loads = [(args.scenario, load_extras(args.scenario, args),
                   {app: AppTarget(app) for app in apps})]
         for app, apk in apks.items():
             try:
@@ -184,7 +187,10 @@ def main():
                              "make Cranpose's losses large (README)")
     parser.add_argument('--main', help="the commit the Cranpose app was built at, recorded with the run")
     parser.add_argument('--release', help='the release tag `cranpose-release` was built at')
+    parser.add_argument('--tier', type=int, choices=range(1, 17), help='native Gauntlet tier')
     args = parser.parse_args()
+    if args.tier is not None and (args.browser or args.scenario != 'gauntlet'):
+        parser.error('--tier selects the native Gauntlet workload')
     if not args.apps:
         if args.browser:
             args.apps = ','.join(name for name in versions.BROWSER_APPS if (args.browser / name / 'index.html').exists())

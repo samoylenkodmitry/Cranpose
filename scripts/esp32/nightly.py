@@ -20,7 +20,7 @@ sys.path.insert(0, str(board.ROOT / 'scripts'))
 from android_robot_device import device_lock
 
 STARTS = ('first', 'second')
-SECONDS = 10
+SECONDS = 5
 PORTS = {'es3c35p': '/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*-if00',
          'e32r35t': '/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0'}
 SOURCES = {'cranpose': 'apps/esp32-demo/src/main.rs', 'lvgl': 'benchmarks/esp32/lvgl-app/main/main.c',

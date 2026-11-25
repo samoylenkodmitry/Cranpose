@@ -856,6 +856,11 @@ class PageTarget:
         device.shell('am', 'force-stop', CHROME)
 
 
+def load_extras(scenario, args):
+    preset = HEAVY.get(scenario, '') if args.load == 'heavy' else ''
+    return f'{preset} {args.extra}'.strip()
+
+
 def measure_run(device, app, scenario, args, destination, run_s=None):
     """One cold launch, measured from the start command for `run_s` seconds
     (`args.run` unless given), or until it presented fewer than `SLOW_FPS`
@@ -868,7 +873,7 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
     target = AppTarget(app) if isinstance(app, str) else app
     run_s = run_s or args.run
     run = {'app': target.name, 'scenario': scenario, 'temperature_before': device.temperatures()}
-    extras = (HEAVY.get(scenario, '') + ' ' + args.extra).strip() if args.load == 'heavy' else args.extra.strip()
+    extras = load_extras(scenario, args)
     run['extras'] = extras
     launched_host = time.monotonic()
     target.prepare(device)

@@ -206,7 +206,7 @@ typedef struct {
 #if CONFIG_BENCH_FRAMES
 static void boot_frame(int64_t now)
 {
-    static uint16_t counts[10];
+    static uint16_t counts[5];
     static int64_t first_us;
     static bool reported;
     if (reported) return;

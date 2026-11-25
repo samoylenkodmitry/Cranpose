@@ -66,6 +66,9 @@ fmt:
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/ferro-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/zgui-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/floem-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/freya-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/vizia-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/makepad-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/layout-parity/cranpose-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/shopbench/Cargo.toml
 
@@ -89,6 +92,9 @@ fmt-check:
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/ferro-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/zgui-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/floem-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/freya-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/vizia-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/makepad-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/layout-parity/cranpose-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/shopbench/Cargo.toml
 
@@ -772,6 +778,8 @@ test-shell-helpers: _benchmark-python ci-contract-gates
     python3 benchmarks/compose-vs-cranpose/tests/test_chrome_first_run.py
     python3 benchmarks/compose-vs-cranpose/tests/test_browser_server.py
     python3 benchmarks/compose-vs-cranpose/tests/test_browser_tiers.py
+    python3 benchmarks/compose-vs-cranpose/tests/test_shared_apks.py
+    python3 benchmarks/compose-vs-cranpose/tests/test_android_devices.py
     python3 benchmarks/compose-vs-cranpose/tests/test_starts.py
     python3 benchmarks/compose-vs-cranpose/tests/test_window_launch.py
     python3 benchmarks/compose-vs-cranpose/tests/test_release_tree.py
@@ -1478,12 +1486,15 @@ perf-esp32 board output:
     . "$HOME/export-{{esp32_toolchain}}.sh" && scripts/ci/with_host_lock.sh --shared python3 scripts/esp32/nightly.py build --board {{quote(board)}} --output {{quote(output)}}
     scripts/ci/with_host_lock.sh --exclusive python3 scripts/esp32/nightly.py measure --board {{quote(board)}} --output {{quote(output)}}
 
+perf-android-devices output serial:
+    python3 scripts/perf/android_devices.py --output {{quote(output)}} --serial {{quote(serial)}}
+
 perf-mi-tv output apks:
-    scripts/android/mi_tv.sh just perf-measure-frameworks {{quote(output)}} {{quote(apks)}}
+    scripts/android/mi_tv.sh just perf-measure-frameworks-at {{quote(output)}} {{quote(apks)}} 3
 
 # Compare the latest release with main on the attached Android device.
-perf-nightly serial output:
-    python3 scripts/perf/nightly.py --serial {{serial}} --output {{output}}
+perf-nightly serial output apks="":
+    python3 scripts/perf/nightly.py --serial {{quote(serial)}} --output {{quote(output)}} {{if apks == "" { "" } else { "--apks " + quote(apks) }}}
 
 # Every framework's app on the phone: the builds in `apks` (APP.apk, from
 # benchmarks/compose-vs-cranpose/build_apps.sh) beside Cranpose's latest
@@ -1496,7 +1507,10 @@ perf-framework-apks apks:
     python3 scripts/perf/framework_apks.py --apks {{quote(apks)}}
 
 perf-measure-frameworks output apks serial:
-    python3 benchmarks/compose-vs-cranpose/frameworks.py --serial {{quote(serial)}} --output {{quote(output)}} --install {{quote(apks)}} --full-run --main "$(git rev-parse HEAD)" --release "$(git describe --tags --abbrev=0 --match 'v*')"
+    just perf-measure-frameworks-at {{quote(output)}} {{quote(apks)}} 12 {{quote(serial)}}
+
+perf-measure-frameworks-at output apks tier serial:
+    python3 benchmarks/compose-vs-cranpose/frameworks.py --tier {{quote(tier)}} --serial {{quote(serial)}} --output {{quote(output)}} --install {{quote(apks)}} --full-run --main "$(git rev-parse HEAD)" --release "$(git describe --tags --abbrev=0 --match 'v*')"
 
 # The apps that target the browser, open in Chrome on the phone: the pages in
 # `pages` (from `build_apps.sh browser`), at the browser's tiers on the phone.

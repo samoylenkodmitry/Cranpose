@@ -902,20 +902,31 @@ fn RunView(
         start,
         metric,
     };
-    let subjects = if run.kind == "esp32" {
+    let workload = match &frames {
+        _ if run.kind == "esp32" => Some("Fixed 320 × 480 layout".to_string()),
+        FramesState::Loaded(detail) => detail
+            .tier(&selection.scenario)
+            .map(|tier| format!("Tier {tier}")),
+        _ => None,
+    };
+    if let Some(workload) = workload {
+        Text(
+            workload,
+            Modifier::empty(),
+            text_style(14.0, palette.text, None),
+        );
+    }
+    let measured = &run.scenarios[&selection.scenario];
+    let subjects = if subjects.iter().all(|(_, s)| measured.includes(&s.name)) {
+        subjects
+    } else {
         Rc::new(
             subjects
                 .iter()
-                .filter(|(_, subject)| {
-                    run.scenarios[&selection.scenario]
-                        .app_bytes
-                        .contains_key(&subject.name)
-                })
+                .filter(|(_, s)| measured.includes(&s.name))
                 .cloned()
                 .collect(),
         )
-    } else {
-        subjects
     };
     let lines = launch_lines(palette, &run, &selection.scenario, start, &subjects);
     LaunchChart(

@@ -1,0 +1,8 @@
+[env]
+# Makepad runs clang directly for its macOS Metal shim. An inherited iOS
+# deployment target would select the iOS ABI for that object.
+IPHONEOS_DEPLOYMENT_TARGET = { value = "", force = true }
+MAKEPAD_PACKAGE_DIR = "makepad"
+
+[target.'cfg(target_os = "macos")']
+rustflags = ["--cfg", "apple_bundle"]

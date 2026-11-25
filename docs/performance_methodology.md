@@ -7,6 +7,8 @@ firmware records frames on the board.
 
 ### macOS desktop and Chrome browser
 
+The M3 Pro runs Gauntlet at tier 16 and Still Wall at tier 20 in native apps and Chrome. Native apps also run Patchwork at tier 17.
+
 [`desktop.py`](../benchmarks/compose-vs-cranpose/desktop.py) runs each app alone
 in a 1280 x 820 window on an idle Mac.
 
@@ -29,6 +31,8 @@ in a 1280 x 820 window on an idle Mac.
   and GPU clocks from hardware counters.
 
 ### Android native and Chrome browser
+
+Chrome on the Mate 20 X runs Gauntlet at tiers 8 and 10.
 
 [`measure.py`](../benchmarks/compose-vs-cranpose/measure.py),
 [`frameworks.py`](../benchmarks/compose-vs-cranpose/frameworks.py), and
@@ -71,16 +75,17 @@ Two patterns appear in every app and are not measurement logic:
 The ES3C35P and E32R35T draw the animated demo in Cranpose and LVGL. The ES3C35P
 also draws the dashboard in Slint and both other frameworks. LVGL and Slint draw
 the dashboard on the E32R35T. The firmware counts completed draws in each of
-the first ten seconds on the ESP timer clock. It writes the counts to the
-serial port after the tenth second. The report keeps the first boot after
+the first five seconds on the ESP timer clock. It writes the counts to the
+serial port after the fifth second. The report keeps the first boot after
 flashing and the next reset as separate starts. The browser page shows captures of both layouts and runs their firmware on a
 320 by 480 virtual panel. [ESP32 benchmark layouts](https://samoylenkodmitry.github.io/cranpose-esp32/benchmarks/)
 
 ### Mi TV Stick
 
 The Mi TV Stick and Mate 20 X install the same signed framework APKs. Native
-apps carry both ARM ABIs. The stick loads the 32-bit libraries. Both devices
-measure the tier 12 gauntlet for ten seconds on each start. Each report
+apps carry both ARM ABIs. The stick loads the 32-bit libraries. The phone
+measures Gauntlet at tier 12. The stick measures the same layout at tier 3.
+The two devices capture independently for ten seconds per start. Each report
 records the SHA-256 of each APK. An installation failure appears beside the
 affected framework. The Mac reaches the stick at the repository variable
 `MI_TV_ENDPOINT` (host and port). The job uses the ADB server on `samarch-1`
