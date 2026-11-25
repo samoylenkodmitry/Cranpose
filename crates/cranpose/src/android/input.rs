@@ -28,9 +28,9 @@ fn android_pointer_source(
     pointer: &android_activity::input::Pointer<'_>,
     event_source: android_activity::input::Source,
 ) -> PointerSource {
-    use android_activity::input::{Source, ToolType};
+    use android_activity::input::ToolType;
 
-    use crate::android_input::{AndroidSourceKind, AndroidToolKind, resolve_pointer_source};
+    use crate::android_input::{AndroidToolKind, android_source_kind, resolve_pointer_source};
 
     let tool = match pointer.tool_type() {
         ToolType::Finger => AndroidToolKind::Finger,
@@ -38,12 +38,7 @@ fn android_pointer_source(
         ToolType::Stylus | ToolType::Eraser => AndroidToolKind::Stylus,
         _ => AndroidToolKind::Indeterminate,
     };
-    let source = match event_source {
-        Source::Touchscreen => AndroidSourceKind::Touchscreen,
-        Source::Stylus | Source::BluetoothStylus => AndroidSourceKind::Stylus,
-        Source::Mouse | Source::MouseRelative => AndroidSourceKind::Mouse,
-        _ => AndroidSourceKind::Other,
-    };
+    let source = android_source_kind(u32::from(event_source));
     resolve_pointer_source(tool, source)
 }
 
@@ -528,8 +523,10 @@ fn dispatch_pending_input(shell: &mut AppShell<WgpuRenderer>, input: PendingInpu
         PendingInput::PointerDown(x, y, time_ms, source) => {
             shell.set_pointer_source(source);
             let event_time = shell.realtime_pointer_event_time(time_ms);
-            shell.set_cursor_at_event_time(x, y, event_time);
-            shell.pointer_pressed_at_event_time(event_time);
+            // Android reports hover separately via `HoverEnter`/`HoverMove` and
+            // `HoverExit`; a bare `ACTION_DOWN` must not synthesize a hover
+            // entry that no `HoverExit` will later clear.
+            shell.pointer_pressed_at_position_event_time(x, y, event_time);
         }
         PendingInput::PointerUp(x, y, time_ms, source) => {
             shell.set_pointer_source(source);

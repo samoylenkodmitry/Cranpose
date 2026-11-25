@@ -38,13 +38,13 @@ divergence, worsened delta, non-finite bound, missing node, or new panic fails
 the job. Any tracked unexpected bug that starts passing also fails the job until
 the entry is removed from `divergences.toml` and from the table below.
 
-Baseline on `175b56734` (`0.5` dp tolerance):
+Current counts (`0.5` dp tolerance):
 
-- `1.0x`: 397/442 common nodes pass (`89.8%`, all 397 exact within `0.01` dp),
-  5 non-finite bounds, 20 nodes absent from Cranpose, 31 expected text-metric
-  divergences, 34 unexpected divergences.
-- `1.75x`: 373/442 common nodes pass (`84.4%`, 303 exact), 5 non-finite bounds,
-  20 nodes absent from Cranpose, 18 expected text-metric divergences, 71
+- `1.0x`: 429/462 common nodes pass (`92.9%`, all 429 exact within `0.01` dp),
+  0 non-finite bounds, 0 nodes absent from Cranpose, 31 expected text-metric
+  divergences, 2 unexpected divergences.
+- `1.75x`: 405/462 common nodes pass (`87.7%`, 335 exact), 0 non-finite bounds,
+  0 nodes absent from Cranpose, 18 expected text-metric divergences, 39
   unexpected divergences.
 - Stress suite: Compose `8/8` pass. Cranpose `19/20` pass.
 
@@ -65,9 +65,6 @@ linked GitHub issue and a ratchet entry in `divergences.toml`.
 | Ledger rule | Issue | Densities | Kind | Observed impact | Summary |
 |---|---|---|---|---|---|
 | `scroll_state_owner_disposed_before_scroll_node_detaches` (stress) | [#2457](https://github.com/samoylenkodmitry/Cranpose/issues/2457) | stress | panic | `19/20` pass | `ScrollState::remove_invalidate_callback` panics in `ScrollNode::on_detach` after the owner of the `ScrollState` is disposed. |
-| `lazy-row-unbounded-height-returns-infinity` | [#2458](https://github.com/samoylenkodmitry/Cranpose/issues/2458) | `1.0x`, `1.75x` | `non_finite` | 5 nodes (`z17_lr_wrap_h`, `z18_lr_in_vscroll`, `z18_vs_tail0..2`) | `LazyRow` without `Modifier::height` returns `Infinity` height inside vertical scrollables. |
-| `lazy-row-unbounded-height-evicts-following-lazy-items` | [#2458](https://github.com/samoylenkodmitry/Cranpose/issues/2458) | `1.0x`, `1.75x` | `missing_in_cranpose` | 20 nodes (`z17_lr_perm_a`, `z17_lr_perm_b`, `z17_lr_rev_wrap`, `z17_pa0..5`, `z17_pb0..4`, `z17_rv0..5`) | Infinite height on `z17_lr_wrap_h` pushes later `LazyColumn` items past the viewport so Cranpose omits them. |
-| `lazy-column-without-width-expands-cross-axis` | [#2458](https://github.com/samoylenkodmitry/Cranpose/issues/2458) | `1.0x`, `1.75x` | `bounds_delta` | 7 nodes (`z19_lc_wrap_w`, `z19_vs_in_lr`, `z19_vslr0..4`), `+12.0` dp | `LazyColumn` without an explicit width expands to `max_width` inside a `LazyRow` instead of wrapping its content width. |
 | `semantics-bounds-ignore-layer-and-offset-with` | [#2459](https://github.com/samoylenkodmitry/Cranpose/issues/2459) (see also [#2059](https://github.com/samoylenkodmitry/Cranpose/issues/2059), [#2386](https://github.com/samoylenkodmitry/Cranpose/issues/2386)) | `1.0x`, `1.75x` | `bounds_delta` | 2 nodes (`z11_gl_nest_c` `5.44` dp, `z11_off_lam` `10.00`–`10.29` dp) | Semantics bounds ignore ancestor `graphicsLayer` transforms and `Modifier::offset_with` layer translation. |
 | `fractional-density-rounding-drift` | [#2460](https://github.com/samoylenkodmitry/Cranpose/issues/2460) | `1.75x` | `bounds_delta` | 37 nodes across Zones 1, 2, 7, 8, 9, 10, 15, 19 (`0.57`–`1.14` dp) | Layout rounding at `1.75x` drifts by 1 to 2 physical pixels from Compose pixel-snapped constraints and placements. |
 

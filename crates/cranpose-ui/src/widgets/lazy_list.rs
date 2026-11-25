@@ -688,8 +688,8 @@ fn place_lazy_list(
 ) -> MeasureResult {
     let state = context.state;
     let overscroll = context.overscroll;
-    let axis = frame.axis;
-    let cross_axis_size = frame.cross_axis_size;
+    let placed = frame.resolve_placement(constraints, result, context.config);
+    let axis = placed.frame.axis;
     let effective_viewport_size = result.viewport_size;
     overscroll.set_dimension(effective_viewport_size);
 
@@ -710,42 +710,15 @@ fn place_lazy_list(
     let in_pool = scope.reusable_slots_count();
     state.update_stats(truly_visible_count, in_pool);
 
-    let resolve_main_axis = |content_size: f32, min: f32, max: f32| {
-        if max.is_finite() {
-            content_size.clamp(min, max)
-        } else {
-            content_size.min(effective_viewport_size).max(min)
-        }
-    };
-
-    let width = if axis.is_vertical() {
-        cross_axis_size
-    } else {
-        resolve_main_axis(
-            result.total_content_size,
-            constraints.min_width,
-            constraints.max_width,
-        )
-    };
-    let height = if axis.is_vertical() {
-        resolve_main_axis(
-            result.total_content_size,
-            constraints.min_height,
-            constraints.max_height,
-        )
-    } else {
-        cross_axis_size
-    };
-
     let density = scope.density();
-    scope.layout_with_placed_roots(width, height, |placements, placed_roots| {
+    scope.layout_with_placed_roots(placed.width, placed.height, |placements, placed_roots| {
         push_lazy_list_placements(
             placements,
             density,
             &result.visible_items,
             count,
-            frame,
-            effective_viewport_size,
+            &placed.frame,
+            placed.main_axis_size,
             context.config,
         );
         // The placements follow the items and their roots in this order.

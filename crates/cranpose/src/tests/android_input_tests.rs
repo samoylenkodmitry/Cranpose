@@ -76,3 +76,29 @@ fn unreported_tool_type_uses_the_source_class() {
         PointerSource::Unknown
     );
 }
+
+#[test]
+fn source_bits_classify_single_and_combined_pointer_sources() {
+    assert_eq!(
+        android_source_kind(ANDROID_SOURCE_TOUCHSCREEN),
+        AndroidSourceKind::Touchscreen
+    );
+    assert_eq!(
+        android_source_kind(ANDROID_SOURCE_TOUCHSCREEN | ANDROID_SOURCE_STYLUS),
+        AndroidSourceKind::Touchscreen
+    );
+    assert_eq!(android_source_kind(0x0000_c002), AndroidSourceKind::Stylus);
+    assert_eq!(
+        android_source_kind(ANDROID_SOURCE_MOUSE),
+        AndroidSourceKind::Mouse
+    );
+    assert_eq!(
+        android_source_kind(ANDROID_SOURCE_MOUSE_RELATIVE),
+        AndroidSourceKind::Mouse
+    );
+    assert_eq!(android_source_kind(0x0000_0002), AndroidSourceKind::Other);
+    assert_eq!(android_source_kind(0x0000_1000), AndroidSourceKind::Other);
+    assert_eq!(android_source_kind(0x0000_2000), AndroidSourceKind::Other);
+    assert_eq!(android_source_kind(0x0000_4000), AndroidSourceKind::Other);
+    assert_eq!(android_source_kind(0x0002_0000), AndroidSourceKind::Other);
+}

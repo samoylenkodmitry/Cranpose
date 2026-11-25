@@ -324,7 +324,7 @@ jobs:
     needs: decide
     if: needs.decide.outputs.run == 'true'
     runs-on: [self-hosted, Linux, cranpose-heavy]
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}

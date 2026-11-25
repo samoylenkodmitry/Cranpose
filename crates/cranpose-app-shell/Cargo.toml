@@ -59,3 +59,7 @@ harness = false
 [[bench]]
 name = "movable_content"
 harness = false
+
+[[bench]]
+name = "subcompose_chain"
+harness = false

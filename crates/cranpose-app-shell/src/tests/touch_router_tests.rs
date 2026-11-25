@@ -235,3 +235,74 @@ fn the_mouse_always_drives_the_primary_pointer() {
     assert_eq!(taken(&log), [(0, Down), (0, Move), (0, Up)]);
     assert!(router.cancel(&mut shell, None, None));
 }
+
+#[test]
+fn press_at_position_clicks_without_synthesizing_hover_enter() {
+    let _guard = test_guard();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let clicks = Rc::new(Cell::new(0u32));
+    let events_sink = Rc::clone(&events);
+    let clicks_sink = Rc::clone(&clicks);
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        move || {
+            let events_sink = Rc::clone(&events_sink);
+            let clicks_sink = Rc::clone(&clicks_sink);
+            // Offset the clickable away from `(0, 0)` so a press must move the
+            // cursor to `(x, y)` before hit-testing.
+            Box(
+                Modifier::empty().fill_max_size().padding(50.0),
+                BoxSpec::default(),
+                move || {
+                    let events_sink = Rc::clone(&events_sink);
+                    let clicks_sink = Rc::clone(&clicks_sink);
+                    Box(
+                        Modifier::empty()
+                            .size_points(100.0, 100.0)
+                            .clickable(move |_| clicks_sink.set(clicks_sink.get() + 1))
+                            .pointer_input((), move |scope: PointerInputScope| {
+                                let events_sink = Rc::clone(&events_sink);
+                                async move {
+                                    scope
+                                        .await_pointer_event_scope(|pointer_events| async move {
+                                            loop {
+                                                let event =
+                                                    pointer_events.await_pointer_event().await;
+                                                events_sink.borrow_mut().push(event.kind);
+                                            }
+                                        })
+                                        .await;
+                                }
+                            }),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+        },
+    );
+    shell.set_viewport(200.0, 200.0);
+    shell.update();
+
+    assert!(!shell.pointer_pressed_at_position(10.0, 10.0));
+    shell.pointer_released_at_position(10.0, 10.0);
+
+    for source in [PointerSource::Unknown, PointerSource::Stylus] {
+        shell.set_pointer_source(source);
+        assert!(shell.pointer_pressed_at_position(100.0, 100.0));
+        shell.pointer_released_at_position(100.0, 100.0);
+    }
+
+    let mut router = TouchRouter::<u32>::default();
+    shell.set_pointer_source(PointerSource::Unknown);
+    assert!(router.press(&mut shell, Some(7), TouchSample::new(100.0, 100.0)));
+    assert!(router.release(&mut shell, Some(7), TouchSample::new(100.0, 100.0)));
+
+    assert_eq!(clicks.get(), 3);
+    assert!(
+        !events.borrow().contains(&PointerEventKind::Enter),
+        "direct presses without hover must not synthesize Enter: {:?}",
+        events.borrow()
+    );
+}

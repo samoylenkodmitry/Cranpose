@@ -80,6 +80,60 @@ impl FillElement {
         }
         cranpose_ui_layout::round_to_px(extent * self.fraction, density)
     }
+
+    #[inline]
+    pub(crate) fn inner_constraints(&self, constraints: Constraints, density: f32) -> Constraints {
+        let (min_width, max_width) = if self.direction != FillDirection::Vertical
+            && constraints.max_width != f32::INFINITY
+        {
+            let width =
+                cranpose_ui_layout::round_to_px(constraints.max_width * self.fraction, density)
+                    .clamp(constraints.min_width, constraints.max_width);
+            (width, width)
+        } else {
+            (constraints.min_width, constraints.max_width)
+        };
+        let (min_height, max_height) = if self.direction != FillDirection::Horizontal
+            && constraints.max_height != f32::INFINITY
+        {
+            let height =
+                cranpose_ui_layout::round_to_px(constraints.max_height * self.fraction, density)
+                    .clamp(constraints.min_height, constraints.max_height);
+            (height, height)
+        } else {
+            (constraints.min_height, constraints.max_height)
+        };
+        Constraints {
+            min_width,
+            max_width,
+            min_height,
+            max_height,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn place_size(
+        &self,
+        constraints: Constraints,
+        inner: Constraints,
+        child: Size,
+    ) -> Size {
+        let width = if self.direction != FillDirection::Vertical
+            && constraints.max_width != f32::INFINITY
+        {
+            inner.min_width
+        } else {
+            child.width
+        };
+        let height = if self.direction != FillDirection::Horizontal
+            && constraints.max_height != f32::INFINITY
+        {
+            inner.min_height
+        } else {
+            child.height
+        };
+        Size { width, height }
+    }
 }
 
 impl PlainElement for FillElement {
@@ -148,68 +202,17 @@ impl PlainLayout for FillElement {
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        let density = context.density();
-        let (fill_width, child_min_width, child_max_width) = if self.direction
-            != FillDirection::Vertical
-            && constraints.max_width != f32::INFINITY
-        {
-            let width =
-                cranpose_ui_layout::round_to_px(constraints.max_width * self.fraction, density)
-                    .clamp(constraints.min_width, constraints.max_width);
-            (width, width, width)
-        } else {
-            (
-                constraints.max_width,
-                constraints.min_width,
-                constraints.max_width,
-            )
-        };
-
-        let (fill_height, child_min_height, child_max_height) = if self.direction
-            != FillDirection::Horizontal
-            && constraints.max_height != f32::INFINITY
-        {
-            let height =
-                cranpose_ui_layout::round_to_px(constraints.max_height * self.fraction, density)
-                    .clamp(constraints.min_height, constraints.max_height);
-            (height, height, height)
-        } else {
-            (
-                constraints.max_height,
-                constraints.min_height,
-                constraints.max_height,
-            )
-        };
-
-        let fill_constraints = Constraints {
-            min_width: child_min_width,
-            max_width: child_max_width,
-            min_height: child_min_height,
-            max_height: child_max_height,
-        };
-
+        let fill_constraints = self.inner_constraints(constraints, context.density());
         let placeable = measurable.measure(fill_constraints);
-
-        let result_width = if self.direction != FillDirection::Vertical
-            && constraints.max_width != f32::INFINITY
-        {
-            fill_width
-        } else {
-            placeable.width()
-        };
-
-        let result_height = if self.direction != FillDirection::Horizontal
-            && constraints.max_height != f32::INFINITY
-        {
-            fill_height
-        } else {
-            placeable.height()
-        };
-
-        cranpose_ui_layout::LayoutModifierMeasureResult::with_size(Size {
-            width: result_width,
-            height: result_height,
-        })
+        let size = self.place_size(
+            constraints,
+            fill_constraints,
+            Size {
+                width: placeable.width(),
+                height: placeable.height(),
+            },
+        );
+        cranpose_ui_layout::LayoutModifierMeasureResult::with_size(size)
     }
 
     fn intrinsic(&self, measurable: &dyn Measurable, kind: PlainIntrinsic, density: f32) -> f32 {

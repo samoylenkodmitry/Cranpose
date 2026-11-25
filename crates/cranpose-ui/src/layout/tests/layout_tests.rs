@@ -480,13 +480,6 @@ fn a_subcomposed_subtree_given_a_different_density_is_measured_on_that_grid()
 }
 
 #[test]
-fn clamp_dimension_respects_infinite_max() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    let clamped = clamp_dimension(50.0, 10.0, f32::INFINITY);
-    assert_eq!(clamped, 50.0);
-}
-
-#[test]
 fn layout_measure_respects_parent_constraints_for_weighted_nodes() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let seen = Rc::new(RefCell::new(None));
@@ -509,20 +502,6 @@ fn layout_measure_respects_parent_constraints_for_weighted_nodes() -> Result<(),
     assert_eq!(recorded.max_height, 600.0);
 
     Ok(())
-}
-
-#[test]
-fn resolve_dimension_applies_explicit_points() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    let size = resolve_dimension(
-        10.0,
-        DimensionConstraint::Points(20.0),
-        None,
-        None,
-        0.0,
-        100.0,
-    );
-    assert_eq!(size, 20.0);
 }
 
 #[test]
@@ -1896,7 +1875,7 @@ fn tree_needs_layout_supports_subcompose_root_nodes() -> Result<(), NodeError> {
     )?);
 
     applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-        node.clear_needs_measure();
+        node.cache().clear_needs_measure();
         node.clear_needs_layout();
     })?;
     assert!(!tree_needs_layout(

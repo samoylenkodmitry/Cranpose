@@ -3,10 +3,10 @@
 
 use std::rc::Rc;
 
-use cranpose_ui_layout::MeasurePolicy;
+use cranpose_ui_layout::{Constraints, MeasurePolicy};
 
 use super::{
-    ModifierChainInputs, coordinator_chain::CoordinatorChain,
+    ModifierChainInputs, SubcomposeChainPlan, coordinator_chain::CoordinatorChain,
     layout_child_measure_state::LayoutChildren,
 };
 use crate::{
@@ -61,6 +61,34 @@ impl LayoutRuntimeState {
 
     pub(super) fn bind_node(&mut self, node: &LayoutNode) -> ModifierChainInputs {
         self.coordinator_chain.sync(node)
+    }
+
+    pub(crate) fn bind_subcompose(
+        &mut self,
+        density: crate::density::Density,
+        chain: &crate::modifier::ModifierChainHandle,
+        constraints: Constraints,
+    ) -> SubcomposeChainPlan {
+        let inputs = self.coordinator_chain.sync_subcompose(density, chain);
+        if !inputs.uses_chain {
+            SubcomposeChainPlan::Bypass {
+                offset: inputs.offset,
+                moved_coordinators: self.coordinator_chain.take_moved(),
+            }
+        } else if self.coordinator_chain.is_direct() {
+            let inner_constraints = self
+                .coordinator_chain
+                .enter_direct(constraints, density.density());
+            SubcomposeChainPlan::Direct {
+                offset: inputs.offset,
+                inner_constraints,
+            }
+        } else {
+            SubcomposeChainPlan::General {
+                density: density.density(),
+                offset: inputs.offset,
+            }
+        }
     }
 
     pub(crate) fn measure_policy(&self) -> &dyn MeasurePolicy {

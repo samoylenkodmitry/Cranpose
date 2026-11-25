@@ -66,7 +66,11 @@ STD_REALLOC = re.compile(r"\brealloc_fallback\b|\b__rust_realloc\b")
 
 # The example's functions whose stacks make up its phases.
 START = "steady_frames::start"
-STEADY = ("steady_frames::steady_frames", "movable_content::steady_frames")
+STEADY = (
+    "steady_frames::steady_frames",
+    "movable_content::steady_frames",
+    "subcompose_chain::steady_frames",
+)
 # The outermost frame of a whole stack: a thread's entry. valgrind keeps
 # the innermost 500 frames, so a deep layout's stack can end before it.
 ENTRY = re.compile(r"^0x[0-9A-Fa-f]+: (main|start_thread|clone3?|\(below main\)) \(")

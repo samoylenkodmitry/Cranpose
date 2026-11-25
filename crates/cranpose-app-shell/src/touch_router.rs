@@ -82,8 +82,12 @@ impl<F: Copy + Eq> TouchRouter<F> {
         match self.route_press(finger) {
             Route::Primary => {
                 let event_time = shell.realtime_pointer_event_time(time_ms);
-                shell.set_cursor_at_event_time(x, y, event_time);
-                shell.pointer_pressed_at_event_time(event_time)
+                if finger.is_none() {
+                    shell.set_cursor_at_event_time(x, y, event_time);
+                    shell.pointer_pressed_at_event_time(event_time)
+                } else {
+                    shell.pointer_pressed_at_position_event_time(x, y, event_time)
+                }
             }
             Route::Secondary(id) => shell.secondary_pointer_pressed(id, x, y, time_ms),
             Route::Untracked => false,
