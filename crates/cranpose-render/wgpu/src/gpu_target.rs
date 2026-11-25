@@ -73,7 +73,9 @@ impl GpuTarget {
 pub fn optional_device_features(adapter: &wgpu::Adapter) -> wgpu::Features {
     let mut wanted = wgpu::Features::PIPELINE_CACHE
         | wgpu::Features::TIMESTAMP_QUERY
-        | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM;
+        | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+        | wgpu::Features::TEXTURE_FORMAT_NV12
+        | wgpu::Features::TEXTURE_FORMAT_P010;
     if matches!(
         adapter.get_info().device_type,
         wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::Cpu

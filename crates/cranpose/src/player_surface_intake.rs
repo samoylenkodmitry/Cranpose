@@ -153,6 +153,7 @@ pub(crate) fn pump_with(
     any(
         target_os = "macos",
         target_os = "ios",
+        target_os = "windows",
         all(feature = "android", target_os = "android")
     )
 ))]
@@ -161,6 +162,8 @@ mod platform {
     pub(super) use crate::android::ycbcr_converter::YcbcrConverter as Converter;
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub(super) use crate::apple::nv12_converter::Nv12Converter as Converter;
+    #[cfg(target_os = "windows")]
+    pub(super) use crate::windows::d3d12_converter::D3d12Converter as Converter;
     use crate::{GpuContext, gpu_context};
 
     pub(super) const SUPPORTED: bool = true;
@@ -182,6 +185,7 @@ mod platform {
     any(
         target_os = "macos",
         target_os = "ios",
+        target_os = "windows",
         all(feature = "android", target_os = "android")
     )
 )))]

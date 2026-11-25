@@ -29,7 +29,7 @@ use objc2_video_toolbox::{
 use parking_lot::{Condvar, Mutex};
 
 use super::{
-    AccessUnit, DecodeOrder, DecoderConfig, DecoderError, DecoderOutput, FrameInfo, VideoCodec,
+    AccessUnit, DecodeOrder, DecoderConfig, DecoderError, DecoderOutput, VideoCodec,
     VideoColorInfo, VideoFrame, VideoRotation,
     admission::Admission,
     annex_b::AccessUnitNals,
@@ -341,18 +341,7 @@ impl Shared {
         }
         // SAFETY: the callback's image is valid for the call, and this takes a count of its own.
         let image = Image::new(unsafe { CFRetained::retain(image) }, &self.live);
-        let frame_info = unit.map_or_else(
-            || FrameInfo {
-                timestamp: Duration::from_micros(pts_us),
-                metadata: 0,
-                decode_time: Duration::ZERO,
-            },
-            |unit| FrameInfo {
-                timestamp: unit.timestamp,
-                metadata: unit.metadata,
-                decode_time: unit.submitted.elapsed(),
-            },
-        );
+        let frame_info = PendingUnit::into_frame_info(unit, pts_us);
         let stream_meta = *self.stream_meta.lock();
         let color = image.color(stream_meta, self.config_color);
         let frame = VideoFrame::new(

@@ -1,10 +1,22 @@
 //! The decoder and the handle that receives its pictures.
 
-#[cfg(any(target_os = "android", target_os = "macos", target_os = "ios"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows"
+))]
 use super::frame_queue::Frames;
 #[cfg(target_os = "android")]
 use super::media_codec::Backend;
-#[cfg(not(any(target_os = "android", target_os = "macos", target_os = "ios")))]
+#[cfg(target_os = "windows")]
+use super::media_foundation::Backend;
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows"
+)))]
 use super::unavailable::{Backend, Frames};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use super::video_toolbox::Backend;

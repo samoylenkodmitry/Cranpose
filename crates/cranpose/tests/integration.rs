@@ -25,6 +25,6 @@ mod native_view;
 #[cfg(all(
     feature = "video",
     feature = "renderer-wgpu",
-    any(target_os = "macos", target_os = "ios")
+    any(target_os = "macos", target_os = "ios", target_os = "windows")
 ))]
 mod player_surface;

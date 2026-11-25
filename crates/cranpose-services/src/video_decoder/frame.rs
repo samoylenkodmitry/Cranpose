@@ -1,12 +1,21 @@
 //! A decoded picture that the app receives.
 
-use std::{ffi::c_void, time::Duration};
+#[cfg(not(target_os = "windows"))]
+use std::ffi::c_void;
+use std::time::Duration;
 
+#[cfg(target_os = "windows")]
+use super::d3d11_frame::{DxgiSharedFrame, Image};
 #[cfg(target_os = "android")]
 use super::image_reader::Image;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use super::pixel_buffer::Image;
-#[cfg(not(any(target_os = "android", target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows"
+)))]
 use super::unavailable::Image;
 use super::{VideoColorInfo, VideoRotation};
 
@@ -51,7 +60,12 @@ pub struct VideoFrame {
 }
 
 impl VideoFrame {
-    #[cfg(any(target_os = "android", target_os = "macos", target_os = "ios"))]
+    #[cfg(any(
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows"
+    ))]
     pub(super) fn new(
         info: FrameInfo,
         size: (u32, u32),
@@ -108,19 +122,25 @@ impl VideoFrame {
     /// The picture's native buffer as a pointer: an `AHardwareBuffer*`, which a renderer imports
     /// as a GPU image. The pointer stays valid while this frame lives. Apps do not call this:
     /// the headset's backend does.
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
     pub fn as_hardware_buffer_ptr(&self) -> *mut c_void {
         self.image.hardware_buffer()
     }
 
-    /// The picture's native buffer as a pointer: a `CVPixelBufferRef` in NV12, backed by an
-    /// IOSurface that Metal samples. Its format is
-    /// `kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange`, or the full-range format if the
-    /// stream uses that range. The pointer stays valid while this frame lives. Apps do not call
-    /// this: `PlayerSurface` of the `cranpose` crate imports it.
+    /// The picture's native buffer as a pointer: a `CVPixelBufferRef` in NV12 or P010, backed by
+    /// an IOSurface that Metal samples. The pointer stays valid while this frame lives. Apps do
+    /// not call this: `PlayerSurface` of the `cranpose` crate imports it.
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub fn as_pixel_buffer_ptr(&self) -> *mut c_void {
         self.image.pixel_buffer()
+    }
+
+    /// The picture's shared D3D11/DXGI texture and fence NT handles for zero-copy D3D12 import.
+    /// Both handles remain valid while this frame lives. Apps do not call this: `PlayerSurface`
+    /// of the `cranpose` crate imports it.
+    #[cfg(target_os = "windows")]
+    pub fn dxgi_shared_frame(&self) -> DxgiSharedFrame {
+        self.image.shared_frame()
     }
 }
 

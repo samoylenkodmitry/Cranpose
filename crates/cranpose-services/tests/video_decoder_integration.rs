@@ -1,6 +1,11 @@
 // The video decoder on a platform that has none.
 
-#![cfg(not(any(target_os = "android", target_os = "macos", target_os = "ios")))]
+#![cfg(not(any(
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows"
+)))]
 
 use cranpose_services::{
     DecoderConfig, DecoderError, DecoderOutput, MediaCapabilities, VideoCodec, VideoDecoder,
