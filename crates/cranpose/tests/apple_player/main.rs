@@ -77,7 +77,11 @@ mod macos {
     }
 
     fn temp_test_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+        let base = std::env::var_os("CARGO_TARGET_DIR").map_or_else(
+            || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target"),
+            PathBuf::from,
+        );
+        let dir = base.join("test-output").join(format!(
             "cranpose-apple-player-{tag}-{}",
             std::process::id()
         ));
