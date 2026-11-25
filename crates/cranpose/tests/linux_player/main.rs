@@ -218,7 +218,16 @@ mod linux {
             let c = pixel_rgba(px, WIDTH, WIDTH / 2, HEIGHT / 2);
             c[2] > 170 && c[0] < 90
         })
-        .expect("expected blue HTTP HLS frame");
+        .unwrap_or_else(|| {
+            panic!(
+                "expected blue HTTP HLS frame: state={:?}, error={:?}, size={:?}, first_frame={}, saw_header={}",
+                player.playback_state(),
+                player.player_error(),
+                player.video_size(),
+                player.rendered_first_frame(),
+                saw_header.load(Ordering::Acquire),
+            )
+        });
         let blue = pixel_rgba(&hls_frame, WIDTH, WIDTH / 2, HEIGHT / 2);
         eprintln!("linux_player HTTP HLS blue={blue:?}");
         assert!(

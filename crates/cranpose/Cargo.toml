@@ -210,6 +210,7 @@ media-backend = ["dep:cranpose-media", "dep:objc2-media-player"]
 # brings what makes a picture's IOSurface a Metal texture.
 video = [
     "audio",
+    "cranpose-services/http-native",
     "dep:pollster",
     "dep:portable-atomic",
     "dep:objc2",
