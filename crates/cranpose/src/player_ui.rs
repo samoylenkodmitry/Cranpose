@@ -3,6 +3,7 @@
 //! hooks.
 
 mod controls;
+mod feed;
 mod frame;
 mod lifecycle;
 mod progress;
@@ -17,6 +18,7 @@ pub use controls::{
     rememberRepeatButtonState, rememberSeekBackButtonState, rememberSeekForwardButtonState,
     rememberShuffleButtonState,
 };
+pub use feed::rememberPlayerPool;
 pub use frame::{
     ContentFrame, PresentationState, rememberPlayer, rememberPlayerWith, rememberPresentationState,
 };

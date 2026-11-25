@@ -1,11 +1,13 @@
-//! Media3-aligned asynchronous [`Player`] engine, A/V master clock, subtitles, and streaming
-//! manifest parsers.
+//! Media3-aligned asynchronous [`Player`] engine, A/V master clock, subtitles, streaming manifest
+//! parsers, bounded [`PlayerPool`], and persistent LRU [`MediaCache`].
 
 mod backend;
+mod cache;
 mod clock;
 mod cues;
 mod engine;
 mod hooks;
+mod pool;
 mod state;
 mod streaming;
 mod tracks;
@@ -15,6 +17,7 @@ pub use backend::{
     MediaProperties, PlayerBackend, PlayerBackendFactory, PlayerSink,
     clear_platform_player_factory, platform_player_factory, set_platform_player_factory,
 };
+pub use cache::{MediaCache, MediaCacheError, MediaCacheStats};
 pub use clock::{FrameTiming, LIP_SYNC_TOLERANCE, MasterClock};
 pub use cues::{
     Cue, CueAlignment, CueGroup, SubtitleTrack, parse_srt, parse_subtitles, parse_webvtt,
@@ -24,6 +27,7 @@ pub use hooks::{
     rememberIsLoading, rememberIsPlaying, rememberPlayerError, rememberPlayerEvents,
     rememberPlayerState,
 };
+pub use pool::{PlayerPool, PlayerPoolConfig, PlayerPriority};
 pub use streaming::{
     AbrVariant, DashAdaptationSet, DashManifest, DashRepresentation, DashSegment,
     HlsMasterPlaylist, HlsMediaPlaylist, HlsRendition, HlsRenditionType, HlsSegment, HlsVariant,
