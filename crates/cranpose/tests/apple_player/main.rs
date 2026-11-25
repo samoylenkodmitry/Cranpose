@@ -77,14 +77,12 @@ mod macos {
     }
 
     fn temp_test_dir(tag: &str) -> PathBuf {
-        let base = std::env::var_os("CARGO_TARGET_DIR").map_or_else(
-            || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target"),
-            PathBuf::from,
-        );
-        let dir = base.join("test-output").join(format!(
-            "cranpose-apple-player-{tag}-{}",
-            std::process::id()
-        ));
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-output")
+            .join(format!(
+                "cranpose-apple-player-{tag}-{}",
+                std::process::id()
+            ));
         drop(fs::remove_dir_all(&dir));
         fs::create_dir_all(&dir).expect("create test media dir");
         dir
