@@ -364,8 +364,8 @@ properties that changed; a token appends to a text view's storage. Avalonia
 and Fyne make their controls and canvas objects once, set the brushes or
 texts of the row that changed and move the cards whole; Avalonia's lists
 recycle their rows. Slint binds only the changing values to the frame and
-writes the rows of its models that changed; Rust wraps its reorder row, as
-Slint has no flow layout. Slint draws the still patches, the scroll list's
+writes the rows of its models that changed; a `FlexboxLayout` wraps its
+reorder row. Slint draws the still patches, the scroll list's
 rows and each recolor and deep row into cached layers; each of those rows
 has a model of its own. GPUI embeds each row, patch and chat part as a
 cached view and notifies the views that changed. Xilem memoizes a row on how

@@ -4,7 +4,8 @@
 // In Slint's declarative idiom every patch is a repeater over a Rust model
 // made once, and a frame writes only the model rows that changed: one row of
 // fills (recolor), the fills of two tiles (pile), the digits of one row of
-// nests (deep), the placed tiles that moved (reorder). The cards are rows of a
+// nests (deep), the two tiles that changed places (reorder), which a
+// `FlexboxLayout` wraps into rows. The cards are rows of a
 // model that gains a card at its front when a move begins; a binding on the
 // frame places each card. The scroll patch is a `ListView`, which builds only
 // the rows it shows from a model that makes a row when asked, and the frame
@@ -34,11 +35,9 @@ export struct PatchCard {
     tiles: [WallTile],
 }
 
-/// A tile of the reorder patch with the place its row of items gives it.
-export struct PlacedTile {
+/// A tile of the reorder patch and its width.
+export struct ReorderTile {
     tile: WallTile,
-    x: length,
-    y: length,
     width: length,
 }
 
@@ -183,13 +182,16 @@ component Cards inherits Patch {
 }
 
 component Reorder inherits Patch {
-    in property <[PlacedTile]> placed;
-    for item in placed: PatchTile {
-        x: item.x;
-        y: item.y;
-        width: item.width;
-        height: Metrics.tile-height;
-        tile: item.tile;
+    in property <[ReorderTile]> tiles;
+    FlexboxLayout {
+        padding: 1px;
+        spacing: 1px;
+        cross-axis-line-alignment: start;
+        for item in tiles: PatchTile {
+            width: item.width;
+            height: Metrics.tile-height;
+            tile: item.tile;
+        }
     }
 }
 
@@ -288,7 +290,7 @@ export component PatchworkWindow inherits Window {
     in property <[color]> pile-fills;
     in property <[ChartData]> charts;
     in property <[PatchCard]> cards;
-    in property <[PlacedTile]> placed;
+    in property <[ReorderTile]> reorder-tiles;
     in property <[NestRow]> nest-rows;
     in property <[TileRow]> scroll-rows;
     in-out property <length> scroll-offset <=> scroll.offset;
@@ -350,7 +352,7 @@ export component PatchworkWindow inherits Window {
             Reorder {
                 x: Metrics.patch-width;
                 y: Metrics.patch-height;
-                placed: placed;
+                tiles: reorder-tiles;
             }
             Deep {
                 x: 2 * Metrics.patch-width;

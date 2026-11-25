@@ -21,7 +21,7 @@ use slint::{
 };
 
 use super::{
-    ChartData, FillRow, Metrics, NestRow, PatchCard, PatchworkWindow, PlacedTile, TileRow,
+    ChartData, FillRow, Metrics, NestRow, PatchCard, PatchworkWindow, ReorderTile, TileRow,
     WallClock, chat::ChatModel, color, wall_tile,
 };
 
@@ -113,94 +113,57 @@ impl Model for ScrollRows {
     }
 }
 
-/// The reorder patch: the items in the places of one wrapping row. A place
-/// holds an item, its width and where the row put it.
+// The reorder patch: the items in the places of one wrapping row, which the
+// markup's `FlexboxLayout` wraps. A frame writes the places whose item changed.
 struct Reorder {
-    count: usize,
     tile_width: f32,
-    tile_height: f32,
-    patch_width: f32,
-    /// The first of the two places whose items changed places last.
     swap: usize,
-    /// What each place holds, to find the places a frame changes.
-    held: Vec<Held>,
-    placed: Rc<VecModel<PlacedTile>>,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-struct Held {
-    item: usize,
-    x: f32,
-    y: f32,
-    width: f32,
+    held: Vec<usize>,
+    tiles: Rc<VecModel<ReorderTile>>,
 }
 
 impl Reorder {
-    fn new(tiles: PatchTiles, patch_width: f32) -> Self {
-        let mut reorder = Self {
-            count: patchwork_reorder_count(tiles.count()),
+    fn new(tiles: PatchTiles) -> Self {
+        let count = patchwork_reorder_count(tiles.count());
+        let held: Vec<usize> = (0..count)
+            .map(|position| patchwork_reorder_item(position, 0, count))
+            .collect();
+        let model = Rc::new(VecModel::from(
+            held.iter()
+                .map(|item| Self::tile(*item, tiles.width))
+                .collect::<Vec<_>>(),
+        ));
+        Self {
             tile_width: tiles.width,
-            tile_height: tiles.height,
-            patch_width,
-            swap: 0,
-            held: Vec::new(),
-            placed: Rc::new(VecModel::default()),
-        };
-        reorder.place(0, 0, 0);
-        reorder
-    }
-
-    // Moves the swap to the places of frame `frame`. The items before the
-    // earlier and the later swap stay where they were, and so do those after
-    // both as soon as one lies where it did, as the row wraps from the same
-    // place on.
-    fn advance(&mut self, frame: u32) {
-        let swap = patchwork_reorder_swap(frame, self.count);
-        let (low, high) = (self.swap.min(swap), self.swap.max(swap));
-        self.swap = swap;
-        self.place(frame, low, high);
-    }
-
-    // Places the items of `frame` from place `low` on in the row and writes
-    // the places whose item or position differs from what they held.
-    fn place(&mut self, frame: u32, low: usize, high: usize) {
-        let (mut x, mut y) = match low.checked_sub(1).map(|before| self.held[before]) {
-            Some(before) => (before.x + before.width + WALL_GAP, before.y),
-            None => (WALL_GAP, WALL_GAP),
-        };
-        for position in low..self.count {
-            let item = patchwork_reorder_item(position, frame, self.count);
-            let width = patchwork_reorder_width(patchwork_reorder_units(item), self.tile_width);
-            if x > WALL_GAP && x + width > self.patch_width - WALL_GAP {
-                x = WALL_GAP;
-                y += self.tile_height + WALL_GAP;
-            }
-            let held = Held { item, x, y, width };
-            match self.held.get(position) {
-                Some(shown) if *shown == held => {
-                    if position > high + 1 {
-                        break;
-                    }
-                }
-                Some(_) => {
-                    self.held[position] = held;
-                    self.placed.set_row_data(position, Self::placed(held));
-                }
-                None => {
-                    self.held.push(held);
-                    self.placed.push(Self::placed(held));
-                }
-            }
-            x += width + WALL_GAP;
+            swap: patchwork_reorder_swap(0, count),
+            held,
+            tiles: model,
         }
     }
 
-    fn placed(held: Held) -> PlacedTile {
-        PlacedTile {
-            tile: wall_tile(held.item),
-            x: held.x,
-            y: held.y,
-            width: held.width,
+    // Moves the swap to the places of frame `frame`: the two places of the
+    // last swap and the two of this one.
+    fn advance(&mut self, frame: u32) {
+        let count = self.held.len();
+        let swap = patchwork_reorder_swap(frame, count);
+        for position in [self.swap, self.swap + 1, swap, swap + 1] {
+            if position >= count {
+                continue;
+            }
+            let item = patchwork_reorder_item(position, frame, count);
+            if self.held[position] != item {
+                self.held[position] = item;
+                self.tiles
+                    .set_row_data(position, Self::tile(item, self.tile_width));
+            }
+        }
+        self.swap = swap;
+    }
+
+    fn tile(item: usize, tile_width: f32) -> ReorderTile {
+        ReorderTile {
+            tile: wall_tile(item),
+            width: patchwork_reorder_width(patchwork_reorder_units(item), tile_width),
         }
     }
 }
@@ -428,8 +391,8 @@ impl Patches {
         };
         window.set_cards(cards.model.clone().into());
 
-        let reorder = Reorder::new(tiles, layout.patch_width);
-        window.set_placed(reorder.placed.clone().into());
+        let reorder = Reorder::new(tiles);
+        window.set_reorder_tiles(reorder.tiles.clone().into());
 
         let (pair_columns, pair_rows) = layout.pairs;
         let nest_turn = InTurn {
