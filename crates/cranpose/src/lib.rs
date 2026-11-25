@@ -23,7 +23,13 @@ mod player_audio;
         target_os = "ios",
         all(feature = "android", target_os = "android"),
         target_os = "linux",
-        target_os = "windows"
+        target_os = "windows",
+        all(
+            feature = "web",
+            feature = "renderer-wgpu",
+            target_arch = "wasm32",
+            target_os = "unknown"
+        )
     )
 ))]
 mod player_control;
@@ -354,6 +360,13 @@ pub fn install_player() {
     linux::player::register();
     #[cfg(target_os = "windows")]
     windows::player::register();
+    #[cfg(all(
+        feature = "web",
+        feature = "renderer-wgpu",
+        target_arch = "wasm32",
+        target_os = "unknown"
+    ))]
+    web::player::register();
 }
 
 static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =

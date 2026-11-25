@@ -48,6 +48,27 @@ pub(crate) mod lifecycle;
 pub(crate) mod media;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod pipeline_landing;
+#[cfg(all(
+    feature = "video",
+    feature = "renderer-wgpu",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
+pub(crate) mod player;
+#[cfg(all(
+    feature = "video",
+    feature = "renderer-wgpu",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
+mod player_fetch;
+#[cfg(all(
+    feature = "video",
+    feature = "renderer-wgpu",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
+mod player_mse;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod pointer;
 #[cfg(target_arch = "wasm32")]

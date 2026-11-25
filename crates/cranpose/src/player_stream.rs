@@ -21,7 +21,7 @@ use cranpose_services::{
     parse_dash_mpd, parse_hls_master, parse_hls_media, parse_subtitles, select_abr_variant,
 };
 
-use crate::player_control::select_track_index;
+use crate::player_control::{choose_dash_representation, select_track_index};
 
 const FORWARD_SKIP_LIMIT: u64 = 256 * 1024;
 const DEFAULT_BANDWIDTH_BPS: u32 = 4_000_000;
@@ -653,18 +653,7 @@ impl AdaptiveStream {
         let Some(set) = set else {
             return false;
         };
-        let abr: Vec<AbrVariant> = set
-            .representations
-            .iter()
-            .enumerate()
-            .map(|(index, rep)| AbrVariant {
-                index,
-                bitrate: rep.bandwidth,
-                width: rep.width,
-                height: rep.height,
-            })
-            .collect();
-        let chosen = select_abr_variant(&abr, self.bandwidth_bps, selection).unwrap_or(0);
+        let chosen = choose_dash_representation(set, self.bandwidth_bps, selection);
         let Some(rep) = set.representations.get(chosen) else {
             return false;
         };

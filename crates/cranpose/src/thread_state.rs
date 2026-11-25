@@ -189,6 +189,11 @@ pub(crate) struct WebThreadState {
         cranpose_core::collections::map::HashMap<String, crate::web::services::ActiveNotification>,
     >,
     pub(crate) device_motion: RefCell<Option<crate::web::device_motion::Listener>>,
+    #[cfg(all(feature = "video", target_os = "unknown"))]
+    pub(crate) video_players:
+        RefCell<cranpose_core::collections::map::HashMap<u64, crate::web::player::Session>>,
+    #[cfg(all(feature = "video", target_os = "unknown"))]
+    pub(crate) next_video_player_id: std::cell::Cell<u64>,
 }
 
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
@@ -202,6 +207,10 @@ impl WebThreadState {
             media_browser: RefCell::new(None),
             active_notifications: RefCell::new(cranpose_core::collections::map::HashMap::default()),
             device_motion: RefCell::new(None),
+            #[cfg(all(feature = "video", target_os = "unknown"))]
+            video_players: RefCell::new(cranpose_core::collections::map::HashMap::default()),
+            #[cfg(all(feature = "video", target_os = "unknown"))]
+            next_video_player_id: std::cell::Cell::new(1),
         }
     }
 }
