@@ -33,10 +33,13 @@ class SharedApksTest(unittest.TestCase):
             for serial in ('mate', 'stick'):
                 output = root / serial
                 argv = ['frameworks.py', '--serial', serial, '--install', folder, '--output', str(output), '--full-run']
+                launches = [leg(25.0), leg(25.0)]
+                if serial == 'mate':
+                    launches.extend([RuntimeError('first launch failed'), leg(25.0)])
                 with patch.object(sys, 'argv', argv), patch.object(frameworks, 'Device', BenchmarkDevice), \
                         patch.object(frameworks, 'device_lock', lambda _: contextlib.nullcontext()), \
                         patch.object(frameworks.AppTarget, 'reset', lambda *_: None), \
-                        patch.object(frameworks, 'measure_run', return_value=leg(25.0)):
+                        patch.object(frameworks, 'measure_run', side_effect=launches):
                     frameworks.main()
                 report = json.loads((output / 'frameworks.json').read_text())
                 self.assertEqual({s['name']: s['apk_sha256'] for s in report['subjects']},
@@ -47,7 +50,9 @@ class SharedApksTest(unittest.TestCase):
                 self.assertEqual({leg['subject'] for leg in scenario['legs']},
                                  {'compose'} if serial == 'stick' else {'compose', 'views'})
                 self.assertEqual([(f['subject'], f['start']) for f in scenario['failures']],
-                                 [('views', 'first'), ('views', 'second')] if serial == 'stick' else [])
+                                 [('views', 'first'), ('views', 'second')] if serial == 'stick' else [('views', 'first')])
+                if serial == 'mate':
+                    self.assertEqual([leg['start'] for leg in scenario['legs'] if leg['subject'] == 'views'], ['second'])
 
 
 if __name__ == '__main__':

@@ -1,15 +1,10 @@
 name: perf nightly
 
-# Each night main's Cranpose against the latest release, and both against the
-# other frameworks at their latest releases, on the Huawei Mate 20 X and on a
-# Mac desktop (benchmarks/compose-vs-cranpose README, "Every night"). macm3
-# moves every framework's pin to its latest stable release, builds every
-# framework's apps, measures the desktop ones and opens a pull request with
-# the pins that moved; the Mac the phone is attached to builds Cranpose's and
-# measures them all on the phone. The frameworks that target the browser run
-# there too, in Chrome on the Mac desktop and in Chrome on the phone. Results
-# go to the perf-data branch the desktop demo's Performance tab reads; a
-# regression found twice in a row opens a perf-regression issue.
+# The Mate 20 X and Mi TV Stick measure the same signed framework APKs.
+# macm3 builds the other frameworks and measures their desktop and browser
+# apps. The Mate also measures Chrome and compares Cranpose main with the
+# latest release. Both ESP32 boards measure their own firmware on samarch-1.
+# The Performance tab reads the published results from the perf-data branch.
 
 on:
   # GitHub's schedule did not fire this workflow on its first nights, so a

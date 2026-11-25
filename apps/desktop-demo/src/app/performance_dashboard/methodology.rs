@@ -129,8 +129,12 @@ pub(super) fn LayoutLinks(palette: Palette) {
             .cross_axis_spacing(6.0),
         move || {
             if let Some(active) = active {
-                for tab in [DemoTab::Gauntlet, DemoTab::StillWall, DemoTab::Patchwork] {
-                    ActionChip(palette, tab.label(), ChipStyle::Plain, move || {
+                for (tab, label) in [
+                    (DemoTab::Gauntlet, "Open Gauntlet"),
+                    (DemoTab::StillWall, "Open Still Wall"),
+                    (DemoTab::Patchwork, "Open Patchwork"),
+                ] {
+                    ActionChip(palette, label, ChipStyle::Plain, move || {
                         active.set(tab);
                     });
                 }
@@ -217,6 +221,7 @@ fn ActionChip(
     let primary = style == ChipStyle::Accent;
     Button(
         Modifier::empty()
+            .height_in(32.0, f32::INFINITY)
             .background(if primary {
                 palette.accent
             } else {

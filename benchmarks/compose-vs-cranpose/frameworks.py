@@ -51,16 +51,23 @@ def measure_scenario(device, name, extras, targets, args, install_errors):
     for round_index in range(args.rounds):
         for app in list(running if round_index % 2 == 0 else running[::-1]):
             target = targets[app]
+            try:
+                target.reset(device)
+            except RuntimeError as failure:
+                print(f'{app:10} clear failed: {failure}', flush=True)
+                failures.extend({'subject': app, 'round': round_index, 'start': start, 'error': str(failure)[:300]}
+                                for start in STARTS)
+                continue
             for start in STARTS:
                 try:
-                    if start == STARTS[0]:
-                        target.reset(device)
                     run = measure_run(device, target, name, args, args.output)
                 except (RuntimeError, ValueError) as failure:
                     print(f'{app:10} {start:6} failed: {failure}', flush=True)
                     # Kept, so the dashboard shows why the app has no frames.
                     failures.append({'subject': app, 'round': round_index, 'start': start,
                                      'error': str(failure)[:300]})
+                    if args.full_run:
+                        continue
                     if round_index == 0:
                         running.remove(app)
                     break

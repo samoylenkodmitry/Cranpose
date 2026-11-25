@@ -558,10 +558,11 @@ def window_start(output, target):
     if 'NO_PROCESS' in lines:
         raise RuntimeError(f'{target.package} did not start')
     layers = [line[len('LAYER '):] for line in lines if line.startswith('LAYER ')]
-    if not layers or (target.one_layer and len(layers) != 1):
+    splash_only = 'SPLASH_ONLY' in lines
+    if (not layers and not splash_only) or (target.one_layer and len(layers) > 1):
         raise ValueError(f'expected one buffer layer for {target.package}: {layers}')
     pids = [int(pid) for pid in next(line for line in lines if line.startswith('PIDS ')).split()[1:]]
-    return times, pids, layers[0]
+    return times, pids, next(iter(layers), None)
 
 
 def figure(value, spec):
@@ -886,7 +887,8 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
     if str(pids[0]) not in device.shell('pidof', target.package, check=False).split():
         raise RuntimeError(f'{target.package} exited or restarted during the run')
     focused = focused_window(device)
-    if focused != target.package:
+    splash_only = layer is None and focused in (None, f'Splash Screen {target.package}')
+    if focused != target.package and not splash_only:
         raise RuntimeError(f'{focused or "no window"} had the focus at the end of the run, not {target.package}')
     if isinstance(target, PageTarget):
         target.check_page()
@@ -895,7 +897,7 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
     # /proc/uptime counts suspended time and SurfaceFlinger's monotonic clock
     # does not. A poll's newest present can only precede the poll, so the
     # smallest gap is the clock offset to within about one frame.
-    offset = min(calibration)
+    offset = min(calibration, default=0.0)
     stats = frame_stats(frames, launched - offset, t1 - offset, vsync_ms)
     frame_times = [actual / 1e9 + offset for actual in frames]
     freqs = clock_samples(lines)
@@ -913,8 +915,8 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
         # Whether the run ended early, too slow to go on.
         stopped=any(line.startswith('SLOW ') for line in lines),
         layer=layer,
-        clock_offset_s=offset,
-        clock_offset_spread_s=max(calibration) - offset,
+        clock_offset_s=offset if calibration else None,
+        clock_offset_spread_s=max(calibration) - offset if calibration else None,
         latency_poll_gaps=poll_gaps,
         # SurfaceFlinger keeps a layer's last 128 presents: when the first poll
         # already held that many, frames of the launch may be missing.

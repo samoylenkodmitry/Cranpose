@@ -994,13 +994,17 @@ impl UriHandler for RecordingUriHandler {
 #[test]
 fn the_performance_links_open_the_benchmark_tabs() {
     use desktop_app::app::{combined_app_with_initial_tab, DemoTab, TEST_ACTIVE_TAB_STATE};
-    for tab in [DemoTab::Gauntlet, DemoTab::StillWall, DemoTab::Patchwork] {
+    for (tab, label) in [
+        (DemoTab::Gauntlet, "Open Gauntlet"),
+        (DemoTab::StillWall, "Open Still Wall"),
+        (DemoTab::Patchwork, "Open Patchwork"),
+    ] {
         // The compact header keeps the tab picker closed. Only the links in
         // the Performance tab can open the requested benchmark here.
         let mut robot = create_headless_robot_test(540, 900, || {
             combined_app_with_initial_tab(Some(DemoTab::Performance));
         });
-        let link = rect_of(&mut robot, tab.label());
+        let link = rect_of(&mut robot, label);
         assert!(robot.click_at(link.x + link.width / 2.0, link.y + link.height / 2.0));
         robot.wait_for_idle();
         assert_eq!(
