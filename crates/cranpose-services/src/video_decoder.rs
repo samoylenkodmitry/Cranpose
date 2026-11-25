@@ -10,38 +10,74 @@
 //! stream must have no B-frames. [`DecodeOrder::Presentation`] reorders B-frames into ascending
 //! presentation-timestamp order and carries stream color primaries, range, transfer function,
 //! display rotation, and clean aperture (`CropRect`) on every [`VideoFrame`]. Android decodes
-//! through `MediaCodec`. macOS and iOS decode through VideoToolbox and output [`VideoFrame`]s
-//! only. Other platforms report the decoder as unavailable.
+//! through `MediaCodec`. macOS and iOS decode through VideoToolbox, and Windows decodes through
+//! Media Foundation into D3D11 shared textures, outputting [`VideoFrame`]s only. Other platforms
+//! report the decoder as unavailable.
 
-#[cfg(any(target_os = "android", target_os = "macos", target_os = "ios"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows"
+))]
 mod admission;
 mod annex_b;
 mod capabilities;
 mod codec;
 mod color;
 mod config;
+#[cfg(target_os = "windows")]
+mod d3d11_frame;
 mod decoder;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod decompression_session;
 mod error;
 mod frame;
-#[cfg(any(target_os = "android", target_os = "macos", target_os = "ios"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows"
+))]
 mod frame_queue;
 #[cfg(target_os = "android")]
 mod image_reader;
 #[cfg(target_os = "android")]
 mod media_codec;
-#[cfg(any(test, target_os = "android", target_os = "macos", target_os = "ios"))]
+#[cfg(target_os = "windows")]
+mod media_foundation;
+#[cfg(target_os = "windows")]
+mod media_foundation_capabilities;
+#[cfg(target_os = "windows")]
+mod media_foundation_transform;
+#[cfg(any(
+    test,
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows"
+))]
 mod pending_units;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod pixel_buffer;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod reorder_buffer;
 mod split_access_units;
-#[cfg(any(test, target_os = "android", target_os = "macos", target_os = "ios"))]
+#[cfg(any(
+    test,
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows"
+))]
 mod sps;
 mod stats;
-#[cfg(not(any(target_os = "android", target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows"
+)))]
 mod unavailable;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod video_toolbox;
@@ -54,6 +90,8 @@ pub use capabilities::{
 pub use codec::VideoCodec;
 pub use color::{ColorPrimaries, ColorRange, ColorTransfer, VideoColorInfo, VideoRotation};
 pub use config::{AccessUnit, DecodeOrder, DecoderConfig, DecoderOutput};
+#[cfg(target_os = "windows")]
+pub use d3d11_frame::{DxgiPixelFormat, DxgiSharedFrame};
 pub use decoder::{DecodedFrames, VideoDecoder};
 pub use error::DecoderError;
 pub use frame::{CropRect, FrameInfo, VideoFrame};

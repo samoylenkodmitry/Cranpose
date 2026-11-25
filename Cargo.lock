@@ -1681,6 +1681,7 @@ dependencies = [
  "web-time",
  "webbrowser",
  "webpki-root-certs",
+ "windows",
 ]
 
 [[package]]

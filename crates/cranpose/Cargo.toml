@@ -215,6 +215,7 @@ video = [
     "objc2-core-video/objc2-io-surface",
     "dep:objc2-io-surface",
     "dep:objc2-metal",
+    "dep:windows",
 ]
 renderer-pixels = ["cranpose-render-pixels"]
 # A composition the CPU draws into an RGBA framebuffer that the host
@@ -501,6 +502,7 @@ windows = { version = "0.62", optional = true, features = [
     "Media",
     "Storage_Streams",
     "Win32_Foundation",
+    "Win32_Graphics_Direct3D12",
     "Win32_System_WinRT",
 ] }
 wgpu = { workspace = true, optional = true, features = [

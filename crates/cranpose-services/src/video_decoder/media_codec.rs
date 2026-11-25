@@ -507,14 +507,7 @@ impl Output {
                 DecodeOrder::Presentation => pending.remove(pts_us),
             }
         };
-        let info = unit.map_or_else(
-            || orphan(pts_us),
-            |unit| FrameInfo {
-                timestamp: unit.timestamp,
-                metadata: unit.metadata,
-                decode_time: unit.submitted.elapsed(),
-            },
-        );
+        let info = PendingUnit::into_frame_info(unit, pts_us);
         if let Err(error) = self.codec.0.release_output_buffer(buffer, true) {
             log::error!("video decoder: render: {error}");
             self.shared.queue.stats.dropped();

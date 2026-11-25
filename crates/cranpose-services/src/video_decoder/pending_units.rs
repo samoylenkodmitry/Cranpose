@@ -5,6 +5,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use super::FrameInfo;
+
 // The most units kept. A decoder with low latency holds a few, so a unit older than this many
 // never comes out.
 const CAPACITY: usize = 64;
@@ -17,6 +19,32 @@ pub(super) struct PendingUnit {
     pub(super) timestamp: Duration,
     pub(super) metadata: u64,
     pub(super) submitted: Instant,
+}
+
+impl PendingUnit {
+    // Builds a picture's `FrameInfo` from its matching submitted unit, or falls back to `pts_us`
+    // when the decoder emitted a picture with no matching submission record.
+    #[cfg(any(
+        test,
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows"
+    ))]
+    pub(super) fn into_frame_info(unit: Option<Self>, pts_us: u64) -> FrameInfo {
+        unit.map_or_else(
+            || FrameInfo {
+                timestamp: Duration::from_micros(pts_us),
+                metadata: 0,
+                decode_time: Duration::ZERO,
+            },
+            |unit| FrameInfo {
+                timestamp: unit.timestamp,
+                metadata: unit.metadata,
+                decode_time: unit.submitted.elapsed(),
+            },
+        )
+    }
 }
 
 // The units in the order of their timestamps, oldest first.
@@ -43,7 +71,7 @@ impl PendingUnits {
     // Takes the unit that the picture at `pts_us` came from. The units before it produced no
     // picture, such as a unit of parameter sets, so they go too. A timestamp that no unit has
     // takes nothing.
-    #[cfg(any(test, target_os = "android"))]
+    #[cfg(any(test, target_os = "android", target_os = "windows"))]
     pub(super) fn take(&mut self, pts_us: u64) -> Option<PendingUnit> {
         let index = self.units.iter().position(|unit| unit.pts_us == pts_us)?;
         self.units.drain(..index);
@@ -52,14 +80,26 @@ impl PendingUnits {
 
     // Takes the unit at `pts_us` and leaves the others, for a decoder that answers each unit
     // alone and may answer out of order (including B-frame presentation reordering).
-    #[cfg(any(test, target_os = "android", target_os = "macos", target_os = "ios"))]
+    #[cfg(any(
+        test,
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows"
+    ))]
     pub(super) fn remove(&mut self, pts_us: u64) -> Option<PendingUnit> {
         let index = self.units.iter().position(|unit| unit.pts_us == pts_us)?;
         self.units.remove(index)
     }
 
     // Discards all pending units on flush.
-    #[cfg(any(test, target_os = "android", target_os = "macos", target_os = "ios"))]
+    #[cfg(any(
+        test,
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows"
+    ))]
     pub(super) fn clear(&mut self) {
         self.units.clear();
     }

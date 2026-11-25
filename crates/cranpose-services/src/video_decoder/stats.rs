@@ -30,10 +30,20 @@ pub struct DecoderStats {
     pub max_decode: Duration,
 }
 
-#[cfg(any(target_os = "android", target_os = "macos", target_os = "ios"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows"
+))]
 pub(super) use counters::StatsCounters;
 
-#[cfg(any(target_os = "android", target_os = "macos", target_os = "ios"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows"
+))]
 mod counters {
     use std::{
         sync::atomic::{AtomicU64, Ordering::Relaxed},

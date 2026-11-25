@@ -34,7 +34,13 @@ enum Role {
 struct Nal {
     start: usize,
     #[cfg_attr(
-        not(any(test, target_os = "android", target_os = "macos", target_os = "ios")),
+        not(any(
+            test,
+            target_os = "android",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "windows"
+        )),
         expect(
             dead_code,
             reason = "only targets with native hardware decoders read NAL payload slices"
@@ -147,7 +153,13 @@ impl AccessUnitNals {
     }
 
     // The first sequence parameter set NAL payload in the parsed access unit, if any.
-    #[cfg(any(test, target_os = "android", target_os = "macos", target_os = "ios"))]
+    #[cfg(any(
+        test,
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows"
+    ))]
     pub(super) fn sequence_parameter_set<'a>(&self, data: &'a [u8]) -> Option<&'a [u8]> {
         self.nals
             .iter()

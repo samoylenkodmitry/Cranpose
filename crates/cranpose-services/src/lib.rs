@@ -346,6 +346,8 @@ pub use video_decoder::{
     DecoderStats, FrameInfo, VideoCodec, VideoColorInfo, VideoDecoder, VideoFrame, VideoRotation,
     set_platform_decoder_capabilities, split_access_units,
 };
+#[cfg(target_os = "windows")]
+pub use video_decoder::{DxgiPixelFormat, DxgiSharedFrame};
 pub use wearable::{
     WearableError, WearableEvent, WearableLink, WearablePeer, WearableReceiver, WearableStream,
     open_on_wearable_peer, open_wearable_stream, publish_wearable_event, send_wearable_message,

@@ -14,7 +14,7 @@ mod system_languages;
 #[cfg(all(
     feature = "video",
     feature = "renderer-wgpu",
-    any(target_os = "macos", target_os = "ios")
+    any(target_os = "macos", target_os = "ios", target_os = "windows")
 ))]
 mod video_convert;
 #[cfg(any(
@@ -25,11 +25,14 @@ mod video_convert;
         any(
             target_os = "macos",
             target_os = "ios",
+            target_os = "windows",
             all(feature = "android", target_os = "android")
         )
     )
 ))]
 mod video_transform;
+#[cfg(target_os = "windows")]
+mod windows;
 #[cfg(feature = "localization")]
 pub use system_languages::{
     ProvideApplicationLocalization, local_system_languages, system_languages,
