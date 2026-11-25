@@ -1,10 +1,14 @@
+#[macro_use]
+#[path = "../../../coroflow/tests/support/main_thread_test.rs"]
+mod main_thread_test;
+
 #[cfg(not(all(
     target_os = "android",
     feature = "android",
     feature = "renderer-wgpu",
     feature = "video"
 )))]
-fn main() {}
+fn android_player_e2e() {}
 
 #[cfg(all(
     target_os = "android",
@@ -12,9 +16,11 @@ fn main() {}
     feature = "renderer-wgpu",
     feature = "video"
 ))]
-fn main() {
+fn android_player_e2e() {
     android_e2e::run_all();
 }
+
+main_thread_test!(android_player_e2e);
 
 #[cfg(all(
     target_os = "android",

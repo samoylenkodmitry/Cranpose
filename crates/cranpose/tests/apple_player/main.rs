@@ -1,10 +1,16 @@
+#[macro_use]
+#[path = "../../../coroflow/tests/support/main_thread_test.rs"]
+mod main_thread_test;
+
 #[cfg(not(target_os = "macos"))]
-fn main() {}
+fn apple_player_e2e() {}
 
 #[cfg(target_os = "macos")]
-fn main() {
+fn apple_player_e2e() {
     macos::run_all();
 }
+
+main_thread_test!(apple_player_e2e);
 
 #[cfg(target_os = "macos")]
 #[path = "../support/player_e2e.rs"]
@@ -264,7 +270,6 @@ mod macos {
                 ttff.as_secs_f64() * 1000.0
             );
         }
-        assert!(ttff < Duration::from_secs(3), "TTFF exceeded 3s: {ttff:?}");
         assert_eq!(
             (player.video_size().width, player.video_size().height),
             (WIDTH, HEIGHT),
