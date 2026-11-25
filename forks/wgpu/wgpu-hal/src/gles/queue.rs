@@ -525,11 +525,6 @@ impl super::Queue {
                                 v,
                             );
                         },
-                        #[cfg(not(web_sys_unstable_apis))]
-                        wgt::ExternalImageSource::VideoFrame(_) => {
-                            unimplemented!("web_sys_unstable_apis is needed for glow")
-                        }
-                        #[cfg(web_sys_unstable_apis)]
                         wgt::ExternalImageSource::VideoFrame(ref v) => unsafe {
                             gl.tex_sub_image_3d_with_video_frame(
                                 dst_target,
@@ -620,11 +615,6 @@ impl super::Queue {
                                 v,
                             )
                         },
-                        #[cfg(not(web_sys_unstable_apis))]
-                        wgt::ExternalImageSource::VideoFrame(_) => {
-                            unimplemented!("web_sys_unstable_apis is needed for glow")
-                        }
-                        #[cfg(web_sys_unstable_apis)]
                         wgt::ExternalImageSource::VideoFrame(ref v) => unsafe {
                             gl.tex_sub_image_2d_with_video_frame_and_width_and_height(
                                 dst_target,
