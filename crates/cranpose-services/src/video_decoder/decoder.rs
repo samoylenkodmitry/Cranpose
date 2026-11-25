@@ -4,22 +4,24 @@
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    target_os = "windows"
+    target_os = "windows",
+    target_os = "linux"
 ))]
 use super::frame_queue::Frames;
 #[cfg(target_os = "android")]
 use super::media_codec::Backend;
-#[cfg(target_os = "windows")]
-use super::media_foundation::Backend;
 #[cfg(not(any(
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    target_os = "windows"
+    target_os = "windows",
+    target_os = "linux"
 )))]
 use super::unavailable::{Backend, Frames};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use super::video_toolbox::Backend;
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+use super::worker_mailbox::ThreadedBackend as Backend;
 use super::{
     AccessUnit, DecoderCapabilities, DecoderConfig, DecoderError, DecoderStats, FrameInfo,
     VideoCodec, VideoFrame, capabilities,
@@ -45,9 +47,13 @@ impl VideoDecoder {
     /// Makes a decoder for `config`. The decoder is unavailable on a platform without a hardware
     /// decoder that Cranpose drives.
     pub fn new(config: DecoderConfig) -> Result<Self, DecoderError> {
-        Ok(Self {
-            backend: Backend::new(config)?,
-        })
+        #[cfg(target_os = "windows")]
+        let backend = super::media_foundation::open(config)?;
+        #[cfg(target_os = "linux")]
+        let backend = super::linux_decoder::open(config)?;
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        let backend = Backend::new(config)?;
+        Ok(Self { backend })
     }
 
     /// The limits of the hardware decoder that [`new`](Self::new) opens for `codec`: its largest

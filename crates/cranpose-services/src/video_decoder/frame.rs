@@ -1,6 +1,6 @@
 //! A decoded picture that the app receives.
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 use std::ffi::c_void;
 use std::time::Duration;
 
@@ -8,13 +8,16 @@ use std::time::Duration;
 use super::d3d11_frame::{DxgiSharedFrame, Image};
 #[cfg(target_os = "android")]
 use super::image_reader::Image;
+#[cfg(target_os = "linux")]
+use super::linux_frame::{Image, LinuxFrameMemory};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use super::pixel_buffer::Image;
 #[cfg(not(any(
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    target_os = "windows"
+    target_os = "windows",
+    target_os = "linux"
 )))]
 use super::unavailable::Image;
 use super::{VideoColorInfo, VideoRotation};
@@ -64,7 +67,8 @@ impl VideoFrame {
         target_os = "android",
         target_os = "macos",
         target_os = "ios",
-        target_os = "windows"
+        target_os = "windows",
+        target_os = "linux"
     ))]
     pub(super) fn new(
         info: FrameInfo,
@@ -122,7 +126,12 @@ impl VideoFrame {
     /// The picture's native buffer as a pointer: an `AHardwareBuffer*`, which a renderer imports
     /// as a GPU image. The pointer stays valid while this frame lives. Apps do not call this:
     /// the headset's backend does.
-    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows",
+        target_os = "linux"
+    )))]
     pub fn as_hardware_buffer_ptr(&self) -> *mut c_void {
         self.image.hardware_buffer()
     }
@@ -141,6 +150,14 @@ impl VideoFrame {
     #[cfg(target_os = "windows")]
     pub fn dxgi_shared_frame(&self) -> DxgiSharedFrame {
         self.image.shared_frame()
+    }
+
+    /// The picture's Linux memory representation: zero-copy VA-API DMABUF planes or explicit
+    /// software bi-planar YUV planes. File descriptors and plane slices remain valid while this
+    /// frame lives. Apps do not call this: `PlayerSurface` of the `cranpose` crate imports it.
+    #[cfg(target_os = "linux")]
+    pub fn linux_frame(&self) -> LinuxFrameMemory<'_> {
+        self.image.memory()
     }
 }
 

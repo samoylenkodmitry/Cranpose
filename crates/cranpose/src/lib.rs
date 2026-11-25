@@ -5,6 +5,8 @@ extern crate self as cranpose;
 
 #[cfg(feature = "image-loading")]
 mod async_image;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(feature = "video")]
 mod player_surface;
 #[cfg(feature = "video")]
@@ -14,7 +16,12 @@ mod system_languages;
 #[cfg(all(
     feature = "video",
     feature = "renderer-wgpu",
-    any(target_os = "macos", target_os = "ios", target_os = "windows")
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows",
+        target_os = "linux"
+    )
 ))]
 mod video_convert;
 #[cfg(any(
@@ -26,6 +33,7 @@ mod video_convert;
             target_os = "macos",
             target_os = "ios",
             target_os = "windows",
+            target_os = "linux",
             all(feature = "android", target_os = "android")
         )
     )

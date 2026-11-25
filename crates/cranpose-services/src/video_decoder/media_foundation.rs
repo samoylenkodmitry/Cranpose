@@ -11,18 +11,12 @@
 )]
 
 use std::{
-    collections::VecDeque,
     mem::ManuallyDrop,
     ptr,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    thread::{self, JoinHandle},
+    sync::{Arc, atomic::Ordering},
     time::{Duration, Instant},
 };
 
-use parking_lot::{Condvar, Mutex};
 use windows::{
     Win32::{
         Graphics::Direct3D11::ID3D11Texture2D,
@@ -40,12 +34,8 @@ use windows::{
 };
 
 use super::{
-    AccessUnit, ColorPrimaries, ColorRange, ColorTransfer, DecodeOrder, DecoderConfig,
-    DecoderError, DecoderOutput, VideoCodec, VideoColorInfo, VideoFrame, VideoRotation,
-    admission::Admission,
-    annex_b::AccessUnitNals,
-    d3d11_frame::{DxgiPixelFormat, LivePictures, SharedSurfacePool},
-    frame_queue::{FrameQueue, Frames},
+    DecodeOrder, DecoderConfig, DecoderError, VideoCodec, VideoFrame,
+    d3d11_frame::{DxgiPixelFormat, SharedSurfacePool},
     media_foundation_capabilities::MfRuntimeGuard,
     media_foundation_transform::{
         OutputFormat, attach_d3d_manager, clamp_crop, configure_input_type, configure_low_latency,
@@ -53,224 +43,21 @@ use super::{
         query_output_stream_info, unlock_async_if_needed,
     },
     pending_units::{PendingUnit, PendingUnits},
-    sps::StreamMetadata,
+    worker_mailbox::{COMMAND_TIMEOUT, Command, QueuedUnit, ThreadedBackend, WorkerShared},
 };
 
-// Maximum access units queued for the decoder worker thread before backpressure fires.
-const MAX_QUEUED_UNITS: usize = 8;
 // Polling slice for async MFT event checks when waiting for input/output.
 const ASYNC_POLL_WAIT: Duration = Duration::from_millis(2);
 // Maximum time `drain` waits for the worker to finish draining the MFT.
-const DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
+const DRAIN_TIMEOUT: Duration = COMMAND_TIMEOUT;
 
-struct QueuedUnit {
-    data: Vec<u8>,
-    pts_us: u64,
-    timestamp: Duration,
-    metadata: u64,
-    submitted: Instant,
-}
-
-enum Command {
-    Unit(QueuedUnit),
-    Drain(Arc<Completion>),
-    Flush(Arc<Completion>),
-}
-
-#[derive(Default)]
-struct Completion {
-    done: Mutex<Option<Result<(), DecoderError>>>,
-    ready: Condvar,
-}
-
-impl Completion {
-    fn finish(&self, result: Result<(), DecoderError>) {
-        *self.done.lock() = Some(result);
-        self.ready.notify_all();
-    }
-
-    fn wait(&self, timeout: Duration) -> Result<(), DecoderError> {
-        let deadline = Instant::now() + timeout;
-        let mut guard = self.done.lock();
-        while guard.is_none() {
-            if self.ready.wait_until(&mut guard, deadline).timed_out() {
-                return Err(DecoderError::Failed("decoder command timed out".into()));
-            }
-        }
-        guard.take().unwrap_or(Ok(()))
-    }
-}
-
-struct Mailbox {
-    commands: VecDeque<Command>,
-    stopped: bool,
-}
-
-struct Shared {
-    mailbox: Mutex<Mailbox>,
-    wake_worker: Condvar,
-    wake_feeder: Condvar,
-    queue: Arc<FrameQueue>,
-    live: LivePictures,
-    depth: usize,
-    order: DecodeOrder,
-    rotation: VideoRotation,
-    config_color: Option<VideoColorInfo>,
-    stream_meta: Mutex<StreamMetadata>,
-    stop: AtomicBool,
-}
-
-pub(super) struct Backend {
-    shared: Arc<Shared>,
-    codec: VideoCodec,
-    nals: AccessUnitNals,
-    admission: Admission,
-    input_wait: Duration,
-    _worker: JoinHandle<()>,
-}
-
-impl Backend {
-    pub(super) fn new(config: DecoderConfig) -> Result<Self, DecoderError> {
-        let DecoderConfig {
-            codec,
-            width,
-            height,
-            output,
-            input_wait,
-            order,
-            rotation,
-            color,
-        } = config;
-        let DecoderOutput::Frames { depth } = output else {
-            return Err(DecoderError::Unavailable);
-        };
-        let depth = depth.max(2);
-        let shared = Arc::new(Shared {
-            mailbox: Mutex::new(Mailbox {
-                commands: VecDeque::with_capacity(MAX_QUEUED_UNITS + 2),
-                stopped: false,
-            }),
-            wake_worker: Condvar::new(),
-            wake_feeder: Condvar::new(),
-            queue: Arc::new(FrameQueue::new(depth, 0)),
-            live: LivePictures::default(),
-            depth,
-            order,
-            rotation,
-            config_color: color,
-            stream_meta: Mutex::new(StreamMetadata::default()),
-            stop: AtomicBool::new(false),
-        });
-        let init_done = Arc::new(Completion::default());
-        let worker_shared = Arc::clone(&shared);
-        let worker_init = Arc::clone(&init_done);
-        let worker = thread::Builder::new()
-            .name("video-decoder-mf".into())
-            .spawn(move || {
-                run_worker(codec, (width, height), order, worker_shared, worker_init);
-            })
-            .map_err(|error| DecoderError::Failed(format!("decoder thread: {error}")))?;
-        init_done.wait(DRAIN_TIMEOUT)?;
-        Ok(Self {
-            shared,
-            codec,
-            nals: AccessUnitNals::default(),
-            admission: Admission::new((width as usize) * (height as usize), order),
-            input_wait,
-            _worker: worker,
-        })
-    }
-
-    pub(super) fn submit(&mut self, unit: AccessUnit<'_>) -> Result<(), DecoderError> {
-        let pts_us = self.admission.check(&unit)?;
-        if self.codec != VideoCodec::Av1 {
-            self.nals.parse(self.codec, unit.data);
-            if let Some(sps) = self.nals.sequence_parameter_set(unit.data)
-                && let Some(meta) = StreamMetadata::parse_sps(self.codec, sps)
-            {
-                *self.shared.stream_meta.lock() = meta;
-            }
-        }
-        let queued = QueuedUnit {
-            data: unit.data.to_vec(),
-            pts_us,
-            timestamp: unit.timestamp,
-            metadata: unit.metadata,
-            submitted: Instant::now(),
-        };
-        let deadline = Instant::now() + self.input_wait;
-        let mut mailbox = self.shared.mailbox.lock();
-        while !mailbox.stopped && mailbox.commands.len() >= MAX_QUEUED_UNITS {
-            if self
-                .shared
-                .wake_feeder
-                .wait_until(&mut mailbox, deadline)
-                .timed_out()
-            {
-                self.shared.queue.stats.refused();
-                return Err(DecoderError::Full);
-            }
-        }
-        if mailbox.stopped {
-            return Err(DecoderError::Failed("decoder worker stopped".into()));
-        }
-        mailbox.commands.push_back(Command::Unit(queued));
-        drop(mailbox);
-        self.shared.wake_worker.notify_one();
-        self.admission.accept(pts_us);
-        self.shared.queue.stats.submitted();
-        Ok(())
-    }
-
-    pub(super) fn drain(&mut self) -> Result<(), DecoderError> {
-        let completion = Arc::new(Completion::default());
-        {
-            let mut mailbox = self.shared.mailbox.lock();
-            if mailbox.stopped {
-                return Err(DecoderError::Failed("decoder worker stopped".into()));
-            }
-            mailbox
-                .commands
-                .push_back(Command::Drain(Arc::clone(&completion)));
-        }
-        self.shared.wake_worker.notify_one();
-        completion.wait(DRAIN_TIMEOUT)?;
-        self.admission.reset();
-        Ok(())
-    }
-
-    pub(super) fn flush(&mut self) -> Result<(), DecoderError> {
-        let completion = Arc::new(Completion::default());
-        {
-            let mut mailbox = self.shared.mailbox.lock();
-            if mailbox.stopped {
-                return Err(DecoderError::Failed("decoder worker stopped".into()));
-            }
-            mailbox
-                .commands
-                .retain(|cmd| !matches!(cmd, Command::Unit(_)));
-            mailbox
-                .commands
-                .push_back(Command::Flush(Arc::clone(&completion)));
-        }
-        self.shared.wake_worker.notify_one();
-        completion.wait(DRAIN_TIMEOUT)?;
-        self.admission.reset();
-        Ok(())
-    }
-
-    pub(super) fn frames(&self) -> Frames {
-        Frames(Arc::clone(&self.shared.queue))
-    }
-}
-
-impl Drop for Backend {
-    fn drop(&mut self) {
-        self.shared.stop.store(true, Ordering::Release);
-        self.shared.mailbox.lock().stopped = true;
-        self.shared.wake_worker.notify_all();
-        self.shared.wake_feeder.notify_all();
-    }
+pub(super) fn open(config: DecoderConfig) -> Result<ThreadedBackend, DecoderError> {
+    ThreadedBackend::spawn(
+        config,
+        "video-decoder-mf",
+        MftSession::new,
+        MftSession::run_loop,
+    )
 }
 
 struct MftSession {
@@ -282,33 +69,9 @@ struct MftSession {
     output_sample_size: u32,
     output_format: OutputFormat,
     pending: PendingUnits,
-    shared: Arc<Shared>,
+    shared: Arc<WorkerShared>,
     needed_inputs: usize,
     ready_outputs: usize,
-}
-
-fn run_worker(
-    codec: VideoCodec,
-    size: (u32, u32),
-    order: DecodeOrder,
-    shared: Arc<Shared>,
-    init_done: Arc<Completion>,
-) {
-    let mut session = match MftSession::new(codec, size, order, Arc::clone(&shared)) {
-        Ok(session) => {
-            init_done.finish(Ok(()));
-            session
-        }
-        Err(error) => {
-            shared.mailbox.lock().stopped = true;
-            shared.wake_feeder.notify_all();
-            init_done.finish(Err(error));
-            return;
-        }
-    };
-    session.run_loop();
-    shared.mailbox.lock().stopped = true;
-    shared.wake_feeder.notify_all();
 }
 
 impl MftSession {
@@ -316,7 +79,7 @@ impl MftSession {
         codec: VideoCodec,
         size: (u32, u32),
         order: DecodeOrder,
-        shared: Arc<Shared>,
+        shared: Arc<WorkerShared>,
     ) -> Result<Self, DecoderError> {
         let runtime = MfRuntimeGuard::enter().ok_or(DecoderError::Unavailable)?;
         let (pool, device_manager) = SharedSurfacePool::new()?;
@@ -378,30 +141,15 @@ impl MftSession {
     }
 
     fn next_command(&mut self) -> Option<Command> {
-        let mut mailbox = self.shared.mailbox.lock();
-        loop {
-            if self.shared.stop.load(Ordering::Acquire) || mailbox.stopped {
-                return None;
+        let poll = self.async_events.is_some().then_some(ASYNC_POLL_WAIT);
+        let shared = Arc::clone(&self.shared);
+        shared.next_command_with(poll, || {
+            self.poll_async_events();
+            while self.ready_outputs > 0 {
+                self.ready_outputs -= 1;
+                let _ = self.pull_output();
             }
-            if let Some(cmd) = mailbox.commands.pop_front() {
-                self.shared.wake_feeder.notify_one();
-                return Some(cmd);
-            }
-            if self.async_events.is_some() {
-                self.shared
-                    .wake_worker
-                    .wait_for(&mut mailbox, ASYNC_POLL_WAIT);
-                drop(mailbox);
-                self.poll_async_events();
-                while self.ready_outputs > 0 {
-                    self.ready_outputs -= 1;
-                    let _ = self.pull_output();
-                }
-                mailbox = self.shared.mailbox.lock();
-            } else {
-                self.shared.wake_worker.wait(&mut mailbox);
-            }
-        }
+        })
     }
 
     fn process_unit(&mut self, unit: QueuedUnit) -> Result<(), DecoderError> {
@@ -611,9 +359,14 @@ impl MftSession {
             .map_err(|error| DecoderError::Failed(format!("GetBufferByIndex: {error}")))?;
         let (image, size) = self.import_buffer(&buffer)?;
         let crop = clamp_crop(self.output_format.crop, size);
-        let color = self.resolve_color(crop.height.max(size.1));
+        let color = self.shared.resolve_color(
+            self.output_format.primaries,
+            self.output_format.range,
+            self.output_format.transfer,
+            crop.height.max(size.1),
+        );
         let frame = VideoFrame::new(info, size, crop, color, self.shared.rotation, image);
-        self.enqueue(frame);
+        self.shared.enqueue_frame(frame);
         self.shared.queue.stats.decoded(info.decode_time);
         Ok(())
     }
@@ -672,45 +425,5 @@ impl MftSession {
         // SAFETY: balances `Lock`.
         let _ = unsafe { buffer.Unlock() };
         res.map(|image| (image, size))
-    }
-
-    fn resolve_color(&self, height: u32) -> VideoColorInfo {
-        let stream = *self.shared.stream_meta.lock();
-        let primaries = self
-            .output_format
-            .primaries
-            .or(stream.primaries)
-            .or_else(|| self.shared.config_color.map(|c| c.primaries))
-            .unwrap_or_else(|| ColorPrimaries::default_for_height(height));
-        let range = self
-            .output_format
-            .range
-            .or(stream.range)
-            .or_else(|| self.shared.config_color.map(|c| c.range))
-            .unwrap_or(ColorRange::Limited);
-        let transfer = self
-            .output_format
-            .transfer
-            .or(stream.transfer)
-            .or_else(|| self.shared.config_color.map(|c| c.transfer))
-            .unwrap_or(ColorTransfer::Sdr);
-        VideoColorInfo {
-            primaries,
-            range,
-            transfer,
-        }
-    }
-
-    fn enqueue(&self, frame: VideoFrame) {
-        let mut frames = self.shared.queue.frames.lock();
-        while self.shared.live.load(Ordering::Relaxed) > self.shared.depth {
-            self.shared.queue.stats.dropped();
-            if frames.pop_front().is_none() {
-                return;
-            }
-        }
-        frames.push_back(frame);
-        drop(frames);
-        self.shared.queue.wake();
     }
 }

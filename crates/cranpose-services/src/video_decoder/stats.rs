@@ -34,7 +34,8 @@ pub struct DecoderStats {
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    target_os = "windows"
+    target_os = "windows",
+    target_os = "linux"
 ))]
 pub(super) use counters::StatsCounters;
 
@@ -42,13 +43,13 @@ pub(super) use counters::StatsCounters;
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    target_os = "windows"
+    target_os = "windows",
+    target_os = "linux"
 ))]
 mod counters {
-    use std::{
-        sync::atomic::{AtomicU64, Ordering::Relaxed},
-        time::Duration,
-    };
+    use std::time::Duration;
+
+    use portable_atomic::{AtomicU64, Ordering::Relaxed};
 
     use super::DecoderStats;
 
