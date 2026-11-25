@@ -7,7 +7,6 @@ use std::{
 };
 
 use cranpose_core::ProcessIds;
-use portable_atomic::AtomicU64;
 
 use super::{
     AudioRole, AvailableCommands, CueGroup, LoadControl, MediaProperties, PlaybackParameters,
@@ -24,7 +23,6 @@ use crate::{
 
 static NEXT_PLAYER_ID: ProcessIds = ProcessIds::starting_at(1);
 static NEXT_OBSERVER_ID: ProcessIds = ProcessIds::starting_at(1);
-static ACTIVE_PRIMARY_PLAYER_ID: AtomicU64 = AtomicU64::new(0);
 
 const DEFAULT_SEEK_BACK: Duration = Duration::from_secs(5);
 const DEFAULT_SEEK_FORWARD: Duration = Duration::from_secs(15);
@@ -353,9 +351,7 @@ impl Player {
             events.push(ev);
         }
         self.core.emit(&events);
-        if self.core.audio_role == AudioRole::Primary {
-            ACTIVE_PRIMARY_PLAYER_ID.store(self.core.id.0, Ordering::Release);
-        }
+        self.core.claim_primary();
         self.core.open_active_item(&item, start_pos, start);
     }
 
@@ -423,8 +419,10 @@ impl Player {
             events.push(ev);
         }
         self.core.emit(&events);
-        if play_when_ready && self.core.audio_role == AudioRole::Primary {
-            ACTIVE_PRIMARY_PLAYER_ID.store(self.core.id.0, Ordering::Release);
+        if play_when_ready {
+            self.core.claim_primary();
+        } else {
+            self.core.sync_os_session();
         }
         if was_ended && let Some(item) = active_item {
             self.core
@@ -445,6 +443,7 @@ impl Player {
         }
         let events = self.core.halt_to_idle(false);
         self.core.emit(&events);
+        self.core.release_primary();
         if let Some(backend) = self.core.backend() {
             backend.stop();
         }
@@ -700,12 +699,7 @@ impl Player {
         }
         let backend = self.core.backend.lock().take();
         self.core.system_observers.lock().clear();
-        if ACTIVE_PRIMARY_PLAYER_ID
-            .compare_exchange(self.core.id.0, 0, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            log::debug!("player {}: released primary media slot", self.core.id.0);
-        }
+        self.core.release_primary();
         let events = self.core.halt_to_idle(true);
         self.core.emit(&events);
         if let Some(backend) = backend {
@@ -887,7 +881,7 @@ impl Player {
 }
 
 fn dispatch_os_command(player: &Player, command: MediaCommand) {
-    if ACTIVE_PRIMARY_PLAYER_ID.load(Ordering::Acquire) != player.core.id.0
+    if !player.core.is_active_primary()
         || player.media_item_count() == 0
         || player.playback_state() == PlayerState::Idle
     {

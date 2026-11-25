@@ -689,6 +689,31 @@ pub(crate) fn on_lifecycle(event: LifecycleEvent) {
     }
 }
 
+pub(crate) fn publish_player_session(
+    item: Option<MediaItem>,
+    state: PlaybackState,
+    progress: PlaybackProgress,
+) {
+    let mut item_changed = false;
+    {
+        let mut current = CURRENT_ITEM.lock();
+        if *current != item {
+            *current = item.clone();
+            item_changed = true;
+        }
+    }
+    if item_changed && let Some(active) = &item {
+        if let Some(player) = media_player()
+            && player.capabilities().session
+        {
+            player.set_session_metadata(&active.metadata);
+        }
+        observers::metadata_changed(&active.metadata);
+    }
+    publish_playback_progress(progress);
+    publish_playback_state(state);
+}
+
 /// The `file:` URI for a path, which is what [`MediaItem`] takes.
 ///
 /// Percent-encodes everything a URI reserves, so a track called `Sgt. Pepper's
