@@ -725,30 +725,13 @@ pub(super) fn apply_track_selection(
     apply_group_selection(&asset, item, TrackType::Audio, "audio", params);
     apply_group_selection(&asset, item, TrackType::Text, "text", params);
 
-    if sidecars.is_empty() || params.is_type_disabled(TrackType::Text) {
-        return None;
-    }
-    if let Some(ov) = params
-        .overrides
-        .iter()
-        .find(|o| o.group_id == "sidecar-text")
-    {
-        return ov
-            .track_indices
-            .first()
-            .copied()
-            .filter(|&i| i < sidecars.len());
-    }
-    for pref in &params.preferred_text_languages {
-        if let Some(idx) = sidecars.iter().position(|s| {
-            s.language
-                .as_deref()
-                .is_some_and(|lang| lang.eq_ignore_ascii_case(pref))
-        }) {
-            return Some(idx);
-        }
-    }
-    Some(0)
+    crate::player_control::select_track_index(
+        sidecars.len(),
+        |idx| sidecars[idx].language.as_deref(),
+        TrackType::Text,
+        "sidecar-text",
+        params,
+    )
 }
 
 fn apply_group_selection(

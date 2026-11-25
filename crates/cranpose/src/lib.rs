@@ -7,6 +7,19 @@ extern crate self as cranpose;
 mod async_image;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(all(feature = "video", feature = "android", target_os = "android"))]
+mod player_audio;
+#[cfg(all(
+    feature = "video",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        all(feature = "android", target_os = "android")
+    )
+))]
+mod player_control;
+#[cfg(all(feature = "video", feature = "android", target_os = "android"))]
+mod player_stream;
 #[cfg(feature = "video")]
 mod player_surface;
 #[cfg(feature = "video")]
@@ -305,6 +318,8 @@ pub use player_ui::*;
 pub fn install_player() {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     apple::player::register();
+    #[cfg(all(feature = "android", target_os = "android"))]
+    android::player::register();
 }
 
 static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =

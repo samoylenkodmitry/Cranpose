@@ -84,6 +84,11 @@ pub(crate) mod launch_args;
 #[cfg(all(feature = "media-backend", target_os = "android"))]
 pub(crate) mod media;
 #[cfg(all(
+    any(feature = "media-backend", feature = "video"),
+    target_os = "android"
+))]
+pub(crate) mod media_session;
+#[cfg(all(
     feature = "meta-entitlement",
     feature = "renderer-wgpu",
     target_os = "android"
@@ -118,6 +123,10 @@ pub(crate) mod permissions;
 mod pipeline_cache;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod pipeline_update;
+#[cfg(all(feature = "video", target_os = "android"))]
+pub(crate) mod player;
+#[cfg(all(feature = "video", target_os = "android"))]
+mod player_extractor;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod pointer_icon;
 #[cfg(any(test, feature = "renderer-wgpu"))]

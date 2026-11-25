@@ -134,7 +134,10 @@ pub(crate) fn captured_at(age: Duration) -> Option<Instant> {
 }
 
 // Each arm is a separate `cfg` block, as in `super::open`.
-#[expect(clippy::needless_return, reason = "each cfg arm returns")]
+#[allow(
+    clippy::needless_return,
+    reason = "each cfg arm returns when a platform microphone backend is enabled, and falls through otherwise"
+)]
 fn open_platform(
     recorder: Box<dyn Recorder>,
     preset: InputPreset,

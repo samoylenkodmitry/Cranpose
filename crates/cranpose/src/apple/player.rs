@@ -5,7 +5,7 @@
 
 use std::{
     ptr::NonNull,
-    sync::{Arc, Condvar, Mutex, Once, PoisonError, atomic::Ordering},
+    sync::{Arc, Once, PoisonError, atomic::Ordering},
     thread,
     time::{Duration, Instant},
 };
@@ -32,6 +32,7 @@ use super::player_media::{
     buffered_position_of, build_video_output, cm_time, cm_time_to_duration, cm_time_zero,
     load_sidecar_subtitles, open_asset, probe_item_metadata,
 };
+use crate::player_control::{WorkerBackend, WorkerControl};
 
 const FRAME_QUEUE_DEPTH: usize = 4;
 const ACTIVE_POLL_INTERVAL: Duration = Duration::from_millis(8);
@@ -56,7 +57,17 @@ impl PlayerBackendFactory for ApplePlayerFactory {
         load_control: LoadControl,
         audio_role: AudioRole,
     ) -> Result<Arc<dyn PlayerBackend>, PlayerError> {
-        ApplePlayerBackend::spawn(sink, load_control, audio_role)
+        let control = Arc::new(WorkerControl::new(None));
+        let worker_control = Arc::clone(&control);
+        thread::Builder::new()
+            .name("cranpose-apple-player".into())
+            .spawn(move || {
+                let mut worker =
+                    ApplePlayerWorker::new(worker_control, sink, load_control, audio_role);
+                worker.run();
+            })
+            .map_err(|err| PlayerError::Decoder(format!("spawn apple player worker: {err}")))?;
+        Ok(Arc::new(WorkerBackend::new(control)))
     }
 
     fn capabilities(&self) -> PlayerCapabilities {
@@ -91,192 +102,6 @@ fn probe_apple_capabilities() -> PlayerCapabilities {
         hardware_video_codecs,
         hdr_10bit: true,
         zero_copy_gpu: true,
-    }
-}
-
-struct PendingCommands {
-    open: Option<(MediaItem, Duration)>,
-    want_play: bool,
-    play_changed: bool,
-    stop: bool,
-    seek: Option<Duration>,
-    volume: f32,
-    volume_changed: bool,
-    parameters: PlaybackParameters,
-    parameters_changed: bool,
-    track_selection: TrackSelectionParameters,
-    track_selection_changed: bool,
-    released: bool,
-}
-
-impl Default for PendingCommands {
-    fn default() -> Self {
-        Self {
-            open: None,
-            want_play: false,
-            play_changed: false,
-            stop: false,
-            seek: None,
-            volume: 1.0,
-            volume_changed: false,
-            parameters: PlaybackParameters::DEFAULT,
-            parameters_changed: false,
-            track_selection: TrackSelectionParameters::default(),
-            track_selection_changed: false,
-            released: false,
-        }
-    }
-}
-
-struct SharedControl {
-    commands: Mutex<PendingCommands>,
-    wake_lock: Arc<Mutex<()>>,
-    wake_cv: Arc<Condvar>,
-}
-
-impl SharedControl {
-    fn lock_commands(&self) -> std::sync::MutexGuard<'_, PendingCommands> {
-        self.commands.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn wake(&self) {
-        let _guard = self
-            .wake_lock
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        self.wake_cv.notify_all();
-    }
-}
-
-struct ApplePlayerBackend {
-    control: Arc<SharedControl>,
-}
-
-impl ApplePlayerBackend {
-    fn spawn(
-        sink: PlayerSink,
-        load_control: LoadControl,
-        audio_role: AudioRole,
-    ) -> Result<Arc<dyn PlayerBackend>, PlayerError> {
-        let control = Arc::new(SharedControl {
-            commands: Mutex::new(PendingCommands::default()),
-            wake_lock: Arc::new(Mutex::new(())),
-            wake_cv: Arc::new(Condvar::new()),
-        });
-        let worker_control = Arc::clone(&control);
-        thread::Builder::new()
-            .name("cranpose-apple-player".into())
-            .spawn(move || {
-                let mut worker =
-                    ApplePlayerWorker::new(worker_control, sink, load_control, audio_role);
-                worker.run();
-            })
-            .map_err(|err| PlayerError::Decoder(format!("spawn apple player worker: {err}")))?;
-        Ok(Arc::new(Self { control }))
-    }
-}
-
-impl Drop for ApplePlayerBackend {
-    fn drop(&mut self) {
-        self.control.lock_commands().released = true;
-        self.control.wake();
-    }
-}
-
-impl PlayerBackend for ApplePlayerBackend {
-    fn open(&self, item: &MediaItem, start_position: Duration) {
-        let mut cmd = self.control.lock_commands();
-        if cmd.released {
-            return;
-        }
-        cmd.open = Some((item.clone(), start_position));
-        cmd.stop = false;
-        cmd.seek = None;
-        drop(cmd);
-        self.control.wake();
-    }
-
-    fn play(&self) {
-        let mut cmd = self.control.lock_commands();
-        if cmd.released {
-            return;
-        }
-        cmd.want_play = true;
-        cmd.play_changed = true;
-        drop(cmd);
-        self.control.wake();
-    }
-
-    fn pause(&self) {
-        let mut cmd = self.control.lock_commands();
-        if cmd.released {
-            return;
-        }
-        cmd.want_play = false;
-        cmd.play_changed = true;
-        drop(cmd);
-        self.control.wake();
-    }
-
-    fn stop(&self) {
-        let mut cmd = self.control.lock_commands();
-        if cmd.released {
-            return;
-        }
-        cmd.open = None;
-        cmd.want_play = false;
-        cmd.stop = true;
-        cmd.seek = None;
-        drop(cmd);
-        self.control.wake();
-    }
-
-    fn seek_to(&self, position: Duration) {
-        let mut cmd = self.control.lock_commands();
-        if cmd.released {
-            return;
-        }
-        cmd.seek = Some(position);
-        drop(cmd);
-        self.control.wake();
-    }
-
-    fn set_volume(&self, volume: f32) {
-        let mut cmd = self.control.lock_commands();
-        if cmd.released {
-            return;
-        }
-        cmd.volume = volume.clamp(0.0, 1.0);
-        cmd.volume_changed = true;
-        drop(cmd);
-        self.control.wake();
-    }
-
-    fn set_playback_parameters(&self, parameters: PlaybackParameters) {
-        let mut cmd = self.control.lock_commands();
-        if cmd.released {
-            return;
-        }
-        cmd.parameters = parameters;
-        cmd.parameters_changed = true;
-        drop(cmd);
-        self.control.wake();
-    }
-
-    fn set_track_selection(&self, parameters: &TrackSelectionParameters) {
-        let mut cmd = self.control.lock_commands();
-        if cmd.released {
-            return;
-        }
-        cmd.track_selection = parameters.clone();
-        cmd.track_selection_changed = true;
-        drop(cmd);
-        self.control.wake();
-    }
-
-    fn release(&self) {
-        self.control.lock_commands().released = true;
-        self.control.wake();
     }
 }
 
@@ -318,7 +143,7 @@ impl ActiveSession {
 }
 
 struct ApplePlayerWorker {
-    control: Arc<SharedControl>,
+    control: Arc<WorkerControl>,
     sink: PlayerSink,
     load_control: LoadControl,
     audio_role: AudioRole,
@@ -331,7 +156,7 @@ struct ApplePlayerWorker {
 
 impl ApplePlayerWorker {
     fn new(
-        control: Arc<SharedControl>,
+        control: Arc<WorkerControl>,
         sink: PlayerSink,
         load_control: LoadControl,
         audio_role: AudioRole,
@@ -359,52 +184,19 @@ impl ApplePlayerWorker {
                 break;
             }
             self.tick_session();
-            let active = self.needs_active_tick();
-            let wake_guard = self
-                .control
-                .wake_lock
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            if !self.has_pending_work() {
-                if active {
-                    drop(
-                        self.control
-                            .wake_cv
-                            .wait_timeout(wake_guard, ACTIVE_POLL_INTERVAL),
-                    );
-                } else {
-                    drop(self.control.wake_cv.wait(wake_guard));
-                }
-            } else {
-                drop(wake_guard);
-            }
+            let active_wait = self.needs_active_tick().then_some(ACTIVE_POLL_INTERVAL);
+            self.control.park_until(active_wait, || {
+                self.session.as_ref().is_some_and(|s| {
+                    s.signal.ended.load(Ordering::Acquire)
+                        || s.signal
+                            .failed
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .is_some()
+                })
+            });
         }
         self.close_session(true);
-    }
-
-    fn has_pending_work(&self) -> bool {
-        let has_cmd = {
-            let cmd = self.control.lock_commands();
-            cmd.released
-                || cmd.stop
-                || cmd.open.is_some()
-                || cmd.play_changed
-                || cmd.seek.is_some()
-                || cmd.volume_changed
-                || cmd.parameters_changed
-                || cmd.track_selection_changed
-        };
-        if has_cmd {
-            return true;
-        }
-        self.session.as_ref().is_some_and(|s| {
-            s.signal.ended.load(Ordering::Acquire)
-                || s.signal
-                    .failed
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .is_some()
-        })
     }
 
     fn needs_active_tick(&self) -> bool {
@@ -423,41 +215,20 @@ impl ApplePlayerWorker {
     }
 
     fn process_commands(&mut self) -> bool {
-        let snapshot = {
-            let mut cmd = self.control.lock_commands();
-            if cmd.released {
-                return true;
-            }
-            PendingCommands {
-                open: cmd.open.take(),
-                want_play: cmd.want_play,
-                play_changed: std::mem::take(&mut cmd.play_changed),
-                stop: std::mem::take(&mut cmd.stop),
-                seek: cmd.seek.take(),
-                volume: cmd.volume,
-                volume_changed: std::mem::take(&mut cmd.volume_changed),
-                parameters: cmd.parameters,
-                parameters_changed: std::mem::take(&mut cmd.parameters_changed),
-                track_selection: if cmd.track_selection_changed {
-                    cmd.track_selection.clone()
-                } else {
-                    TrackSelectionParameters::default()
-                },
-                track_selection_changed: std::mem::take(&mut cmd.track_selection_changed),
-                released: false,
-            }
+        let Some(batch) = self.control.take_batch() else {
+            return true;
         };
 
-        if snapshot.volume_changed {
-            self.volume = snapshot.volume;
+        if let Some(volume) = batch.volume {
+            self.volume = volume;
             self.apply_volume();
         }
-        if snapshot.parameters_changed {
-            self.parameters = snapshot.parameters;
+        if let Some(parameters) = batch.parameters {
+            self.parameters = parameters;
             self.apply_rate();
         }
-        if snapshot.track_selection_changed {
-            self.track_selection = snapshot.track_selection;
+        if let Some(selection) = batch.track_selection {
+            self.track_selection = selection;
             if let Some(session) = &mut self.session {
                 session.active_sidecar =
                     apply_track_selection(&session.item, &self.track_selection, &session.sidecars);
@@ -467,18 +238,18 @@ impl ApplePlayerWorker {
                 Self::publish_sidecar_cue(session, &self.sink, pos);
             }
         }
-        if snapshot.stop {
+        if batch.stop {
             self.want_play = false;
             self.close_session(false);
         }
-        if let Some((item, start_position)) = snapshot.open {
+        if let Some((item, start_position)) = batch.open {
             self.open_item(&item, start_position);
         }
-        if let Some(pos) = snapshot.seek {
+        if let Some(pos) = batch.seek {
             self.seek_session(pos);
         }
-        if snapshot.play_changed {
-            self.want_play = snapshot.want_play;
+        if let Some(want_play) = batch.play {
+            self.want_play = want_play;
             self.apply_play_state();
         }
         false
@@ -500,10 +271,8 @@ impl ApplePlayerWorker {
             .map_or(Duration::ZERO, |clip| clip.start_position);
         let target_start = clip_start.saturating_add(start_position);
         let (producer, decoded_frames) = DecodedFrames::channel(FRAME_QUEUE_DEPTH);
-        let signal = ItemSignal::new(
-            Arc::clone(&self.control.wake_lock),
-            Arc::clone(&self.control.wake_cv),
-        );
+        let (wake_lock, wake_cv) = self.control.wake_pair();
+        let signal = ItemSignal::new(wake_lock, wake_cv);
 
         // SAFETY: This worker thread exclusively creates, mutates, and destroys its AVPlayer and
         // AVPlayerItem; Apple's AVFoundation permits off-main serialized usage.

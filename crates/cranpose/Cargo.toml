@@ -209,6 +209,8 @@ media-backend = ["dep:cranpose-media", "dep:objc2-media-player"]
 # hardware buffer and with the YCbCr conversion feature. On macOS and iOS it
 # brings what makes a picture's IOSurface a Metal texture.
 video = [
+    "audio",
+    "dep:pollster",
     "dep:objc2",
     "dep:objc2-av-foundation",
     "dep:objc2-core-foundation",
