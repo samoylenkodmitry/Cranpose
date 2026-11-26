@@ -18,7 +18,7 @@ use super::hardware_buffer_extensions::extensions_to_add;
 
 // The device that `descriptor` names, opened with the import extensions, or `None` where `adapter`
 // is not a Vulkan adapter whose driver has them.
-pub(super) fn request_device(
+pub(crate) fn request_device(
     adapter: &wgpu::Adapter,
     descriptor: &wgpu::DeviceDescriptor<'_>,
 ) -> Option<(wgpu::Device, wgpu::Queue)> {
@@ -34,12 +34,23 @@ fn open_importing(
     adapter: &wgpu::Adapter,
     descriptor: &wgpu::DeviceDescriptor<'_>,
 ) -> Option<wgpu::hal::OpenDevice<Vulkan>> {
-    // SAFETY: the guard reads the adapter's handles while this function runs.
-    let hal = unsafe { adapter.as_hal::<Vulkan>() }?;
+    let Some(hal) = (unsafe { adapter.as_hal::<Vulkan>() }) else {
+        log::warn!(
+            "android video import: adapter {:?} is not Vulkan",
+            adapter.get_info().backend
+        );
+        return None;
+    };
     // wgpu-hal listed the driver's extensions when it made the adapter.
     let driver = hal.physical_device_capabilities();
     let enabled = hal.required_device_extensions(descriptor.required_features);
-    let added = extensions_to_add(|name| driver.supports_extension(name), &enabled)?;
+    let Some(added) = extensions_to_add(|name| driver.supports_extension(name), &enabled) else {
+        log::warn!(
+            "android video import: adapter {} lacks required AHardwareBuffer Vulkan extensions",
+            adapter.get_info().name
+        );
+        return None;
+    };
     let instance = hal.shared_instance().raw_instance();
     let physical = hal.raw_physical_device();
     // wgpu-hal reads this feature when it makes the adapter, but keeps the answer private.

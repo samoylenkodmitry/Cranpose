@@ -273,6 +273,7 @@ fn a_screen_is_told_which_controls_this_device_will_honour() {
         session: false,
         equalizer: false,
         probing: false,
+        video: false,
     });
 
     let capabilities = media_capabilities();

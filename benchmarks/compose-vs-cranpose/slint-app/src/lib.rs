@@ -328,8 +328,8 @@ fn register_roboto() {
 /// Registers the font files `files` name with Slint's font collection.
 #[cfg(not(target_os = "android"))]
 fn register_fonts(files: &[&str]) {
-    use slint::fontique_011::fontique;
-    let mut collection = slint::fontique_011::shared_collection();
+    use slint::fontique_012::fontique;
+    let mut collection = slint::fontique_012::shared_collection();
     for file in files {
         match perf_data::font_bytes(file) {
             Ok(bytes) => {

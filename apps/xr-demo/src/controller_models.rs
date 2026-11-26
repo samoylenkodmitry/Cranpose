@@ -18,7 +18,7 @@ use cranpose_ui::text::FontWeight;
 use cranpose_xr::{
     ControllerModel, ControllerModels, FollowMode, FollowTarget, FollowingSubspace, Hand, Pose,
     RenderViewpoint, SpatialFrameEffect, SpatialPanel, Subspace, SubspaceModifier,
-    local_controller_models,
+    TrackedDimensions, local_controller_models,
 };
 use player_demo::sized;
 
@@ -45,7 +45,9 @@ pub(crate) fn StartingChoice() {
             set_both(&models, ControllerModel::Plain);
         }
         if built("off") {
-            models.set_enabled(false);
+            for hand in [Hand::Left, Hand::Right] {
+                models.hand(hand).set_enabled(false);
+            }
         }
     });
 }
@@ -67,7 +69,10 @@ pub(crate) fn ModelsOnly() {
         return;
     }
     FollowingSubspace(
-        FollowTarget::Controller(Hand::Left, FollowMode::Tight),
+        FollowTarget::Controller(
+            Hand::Left,
+            FollowMode::Tight(TrackedDimensions::TranslationAndYaw),
+        ),
         || {
             SpatialPanel(
                 SubspaceModifier::new()
@@ -143,7 +148,7 @@ fn LogFrames() {
 
 // The state of the choice, in the words of the button.
 fn label(models: &ControllerModels) -> &'static str {
-    if !models.is_enabled() {
+    if !models.hand(Hand::Left).is_enabled() {
         return "Controller models: none";
     }
     match models.model(Hand::Left) {
@@ -165,13 +170,15 @@ pub(crate) fn ControllerModelsButton() {
             .padding_symmetric(32.0, 18.0),
         ButtonSpec::default(),
         move || {
-            if !models.is_enabled() {
-                models.set_enabled(true);
+            let shown = models.hand(Hand::Left).is_enabled();
+            if !shown {
                 set_both(&models, ControllerModel::Runtime);
             } else if models.model(Hand::Left) == ControllerModel::Runtime {
                 set_both(&models, ControllerModel::Plain);
-            } else {
-                models.set_enabled(false);
+                return;
+            }
+            for hand in [Hand::Left, Hand::Right] {
+                models.hand(hand).set_enabled(!shown);
             }
         },
         move || {

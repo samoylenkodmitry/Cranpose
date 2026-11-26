@@ -1,0 +1,17 @@
+label {
+    width: 1s;
+    alignment: left;
+    font-family: "Roboto";
+    color: white;
+}
+.header {
+    padding-left: 16px;
+    font-size: 20px;
+    font-weight: bold;
+}
+.clock {
+    height: 24px;
+    padding-left: 8px;
+    background-color: #0f1220;
+    font-size: 14px;
+}

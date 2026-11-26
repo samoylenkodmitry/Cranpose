@@ -110,6 +110,7 @@ class DesktopRoundsTest(unittest.TestCase):
         args = SimpleNamespace(parity=False, output=Path('results'), rounds=rounds, max_others=1.5, main=None,
                                release=None, tier=16, run=3.0, browser=browser, screens=list(screens))
         with patch.object(desktop, 'measure', measure), patch.object(desktop, 'clear_app_state', clear), \
+                patch.object(desktop, 'app_bytes', return_value=2048), \
                 patch.object(desktop, 'fresh_install', install), \
                 patch.object(desktop, 'wait_for_program_checks', wait_for_checks), \
                 patch.object(desktop, 'warm_chrome', warm_chrome), \
@@ -131,6 +132,20 @@ class DesktopRoundsTest(unittest.TestCase):
         self.assertEqual(self.screens, [('gauntlet', 16, Path('results/gauntlet'))] * 4
                          + [('wall', 20, Path('results/wall'))] * 2)
         self.assertTrue(wall['extras'].startswith('tier 20, '))
+        self.assertEqual(set(gauntlet['app_bytes']), {'egui', 'cranpose-release'})
+        self.assertEqual(set(wall['app_bytes']), {'egui'})
+        self.assertEqual(wall['unimplemented'], ['cranpose-release'])
+
+    def test_each_current_desktop_app_measures_both_starts_on_all_three_screens(self):
+        apps = ['cranpose', *desktop.versions.PLATFORM_APPS['desktop']]
+        screens = [('gauntlet', 16), ('wall', 20), ('patchwork', 17)]
+        with patch.object(desktop.versions, 'version', return_value='test build'):
+            _, report = self.rounds([30.0] * (2 * len(screens) * len(apps)), apps=apps, screens=screens)
+        for scenario in report['scenarios']:
+            self.assertEqual(scenario['unimplemented'], [])
+            self.assertEqual(set(scenario['app_bytes']), set(apps))
+            for start in ('first', 'second'):
+                self.assertEqual(set(scenario['starts'][start]['summary']), set(apps))
 
     def test_the_release_draws_only_the_screens_its_release_knows(self):
         screens = [('gauntlet', 16), ('wall', 20)]

@@ -82,6 +82,19 @@ fn the_aim_pose_points_at_the_place() {
 }
 
 #[test]
+fn an_aim_straight_down_or_up_is_a_whole_pose_along_the_ray() {
+    for (at, along) in [([0.0, -1.0, 0.0], -1.0), ([0.0, 1.0, 0.0], 1.0)] {
+        let pose = aim_pose([0.0; 3], at);
+        assert!(
+            pose.orientation.iter().all(|part| part.is_finite()),
+            "{pose:?}"
+        );
+        let ray = Ray::of_aim(&pose);
+        assert!((ray.direction[1] - along).abs() < 1e-5, "{ray:?}");
+    }
+}
+
+#[test]
 fn a_pose_straight_ahead_has_no_turn() {
     let script = ScriptedHand::pointing(
         Hand::Right,
@@ -130,7 +143,9 @@ const PANEL: PanelSlot = PanelSlot {
     shape: Shape::Flat,
     resize: None,
     room: [800.0, 800.0],
+    priority: 0,
     ride: Ride::Free,
+    tracked: None,
 };
 
 #[test]
@@ -185,4 +200,20 @@ fn a_scripted_pinch_moves_to_the_place_presses_once_and_releases_once() {
     // The strength passes 0.6 at 2120 ms and falls below 0.4 at 2920 ms
     assert_eq!(presses, [213], "{gestures:?}");
     assert_eq!(releases, [293], "{gestures:?}");
+}
+
+#[test]
+fn a_script_with_a_palm_holds_that_joint_valid_and_tracked_and_the_others_at_rest() {
+    let palm = Pose::at([0.1, -0.3, -0.35]);
+    let open = script().with_palm(palm);
+    let mut frame = XrFrame::default();
+    play(&open, &mut frame);
+    let joint = frame.right_hand.joint(HandJointType::Palm);
+    assert!(joint.valid && joint.tracked && joint.radius > 0.0);
+    assert_eq!(joint.pose, palm);
+    assert!(!frame.right_hand.joint(HandJointType::Wrist).valid);
+    // A script without a palm leaves every joint at rest
+    let mut plain = XrFrame::default();
+    play(&script(), &mut plain);
+    assert!(!plain.right_hand.joint(HandJointType::Palm).valid);
 }

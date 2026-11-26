@@ -1,8 +1,8 @@
 //! Where a carried panel comes to rest on a plane of the room.
 
-#[cfg(any(test, headset))]
-use super::PanelKind;
 use super::{Entry, PanelMove, Space};
+#[cfg(any(test, headset))]
+use super::{PanelKind, Ride};
 use crate::Pose;
 #[cfg(any(test, headset))]
 use crate::{METERS_PER_DP, MovePolicy, SpatialMoveEventType};
@@ -11,7 +11,8 @@ use crate::{METERS_PER_DP, MovePolicy, SpatialMoveEventType};
 // that comes to rest on a plane when the panel's policy snaps and the step moves it.
 #[cfg(any(test, headset))]
 pub(super) fn snapped(space: &Space, entry: &Entry, step: &PanelMove) -> Pose {
-    if step.event_type != SpatialMoveEventType::Moving {
+    // A panel that rides a controller stays at the hand: a plane of the room does not hold it
+    if step.event_type != SpatialMoveEventType::Moving || entry.slot.ride != Ride::Free {
         return step.pose;
     }
     let Some(filter) = entry.policy.as_ref().and_then(MovePolicy::snap_filter) else {
@@ -19,7 +20,7 @@ pub(super) fn snapped(space: &Space, entry: &Entry, step: &PanelMove) -> Pose {
     };
     let [width, height] = entry.slot.size().map(|dp| dp * METERS_PER_DP);
     let depth = match entry.slot.kind {
-        PanelKind::Volume { depth } => depth * METERS_PER_DP,
+        PanelKind::Volume { depth, .. } => depth * METERS_PER_DP,
         PanelKind::Content | PanelKind::Surface(_) => 0.0,
     };
     space

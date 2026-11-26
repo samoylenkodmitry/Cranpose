@@ -343,7 +343,7 @@ fn retained_slot_activation_checks_child_identity_order_and_length() {
 }
 
 #[test]
-fn handle_reports_modifier_capabilities() {
+fn node_reports_modifier_capabilities() {
     let _app_context = crate::render_state::app_context_test_scope();
     let policy: Rc<MeasurePolicy> =
         Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
@@ -352,14 +352,12 @@ fn handle_reports_modifier_capabilities() {
         Rc::clone(&policy),
     );
 
-    let handle = node.handle();
-    assert!(handle.has_draw_modifier_nodes());
-    assert!(!handle.has_layout_modifier_nodes());
+    assert!(node.has_draw_modifier_nodes());
+    assert!(!node.has_layout_modifier_nodes());
 
     node.set_modifier(Modifier::empty().padding(4.0));
-    let handle = node.handle();
-    assert!(handle.has_layout_modifier_nodes());
-    assert!(!handle.has_draw_modifier_nodes());
+    assert!(node.has_layout_modifier_nodes());
+    assert!(!node.has_draw_modifier_nodes());
 }
 
 #[test]
@@ -443,15 +441,18 @@ fn subcompose_reuses_measured_children_scratch_map() {
     let policy: Rc<MeasurePolicy> =
         Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
     let node = SubcomposeLayoutNode::new(Modifier::empty(), Rc::clone(&policy));
-    let handle = node.handle();
 
-    let first = handle.measured_children_scratch();
+    let first = node
+        .begin_measure(Constraints::loose(0.0, 0.0))
+        .measured_children;
     let first_ptr = Rc::as_ptr(&first);
     first.borrow_mut().reserve(8);
     let retained_capacity = first.borrow().capacity();
     drop(first);
 
-    let second = handle.measured_children_scratch();
+    let second = node
+        .begin_measure(Constraints::loose(0.0, 0.0))
+        .measured_children;
     assert_eq!(
         Rc::as_ptr(&second),
         first_ptr,

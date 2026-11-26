@@ -1054,9 +1054,9 @@ dependencies = [
 
 [[package]]
 name = "cookie"
-version = "0.18.2"
+version = "0.18.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a373e3602691c3cdea496d2f0ee5935151e6168fe87739483c463db1b2f2f87"
+checksum = "d55f2d6c30eeec7d5c6f98bd4395d4abb1895629eab97ee6522d340623615f8a"
 dependencies = [
  "time",
  "version_check",
@@ -1103,7 +1103,7 @@ dependencies = [
 
 [[package]]
 name = "coroflow"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-core",
  "criterion",
@@ -1122,7 +1122,7 @@ dependencies = [
 
 [[package]]
 name = "coroflow-demo"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "coroflow",
  "cranpose",
@@ -1139,7 +1139,7 @@ dependencies = [
 
 [[package]]
 name = "coroflow-demo-android"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "coroflow-demo",
  "cranpose",
@@ -1148,7 +1148,7 @@ dependencies = [
 
 [[package]]
 name = "coroflow-demo-web"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "console_error_panic_hook",
  "coroflow-demo",
@@ -1210,7 +1210,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -1276,10 +1276,12 @@ dependencies = [
  "objc2-ui-kit",
  "objc2-uniform-type-identifiers",
  "objc2-user-notifications",
+ "objc2-video-toolbox",
  "objc2-watch-connectivity",
  "objc2-watch-kit",
  "oslog",
  "pollster",
+ "portable-atomic",
  "raw-window-handle",
  "serde",
  "serde_json",
@@ -1292,6 +1294,7 @@ dependencies = [
  "web-sys",
  "web-time",
  "windows",
+ "windows-core",
  "windows-sys 0.61.2",
  "winit",
  "wry",
@@ -1301,7 +1304,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-animation"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-core",
  "cranpose-ui-graphics",
@@ -1309,7 +1312,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-app-shell"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "arboard",
  "cranpose-core",
@@ -1329,11 +1332,11 @@ dependencies = [
 
 [[package]]
 name = "cranpose-assets"
-version = "0.26.0"
+version = "0.29.0"
 
 [[package]]
 name = "cranpose-audio"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "block2 0.6.2",
  "cpal",
@@ -1351,14 +1354,14 @@ dependencies = [
 
 [[package]]
 name = "cranpose-capabilities"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "fluent-syntax",
 ]
 
 [[package]]
 name = "cranpose-core"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-macros",
  "dispatch2",
@@ -1380,7 +1383,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-coroflow"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "coroflow",
  "cranpose-core",
@@ -1393,7 +1396,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-fonts"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "ab_glyph",
  "cranpose-fonts-cjk-data-1",
@@ -1403,19 +1406,19 @@ dependencies = [
 
 [[package]]
 name = "cranpose-fonts-cjk-data-1"
-version = "0.26.0"
+version = "0.29.0"
 
 [[package]]
 name = "cranpose-fonts-cjk-data-2"
-version = "0.26.0"
+version = "0.29.0"
 
 [[package]]
 name = "cranpose-fonts-cjk-data-3"
-version = "0.26.0"
+version = "0.29.0"
 
 [[package]]
 name = "cranpose-foundation"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-core",
  "cranpose-macros",
@@ -1430,7 +1433,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-gl-templates"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-shader-passes",
  "cranpose-ui-graphics",
@@ -1440,7 +1443,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-liquid"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-animation",
  "cranpose-core",
@@ -1457,7 +1460,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-localization"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "fluent-bundle",
@@ -1481,7 +1484,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-macros"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-localization",
  "proc-macro-crate 3.5.0",
@@ -1492,7 +1495,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-media"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-audio",
  "cranpose-core",
@@ -1507,7 +1510,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-native"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose",
  "cranpose-core",
@@ -1520,7 +1523,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-native-demo"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose",
  "cranpose-core",
@@ -1531,7 +1534,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-navigation"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-animation",
  "cranpose-core",
@@ -1547,14 +1550,14 @@ version = "0.2.2"
 
 [[package]]
 name = "cranpose-platform-android"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-ui-graphics",
 ]
 
 [[package]]
 name = "cranpose-platform-desktop-winit"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-foundation",
  "cranpose-ui-graphics",
@@ -1563,7 +1566,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-platform-web"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-foundation",
  "cranpose-ui-graphics",
@@ -1571,7 +1574,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-render-common"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "ab_glyph_rasterizer",
  "bytemuck",
@@ -1590,7 +1593,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-render-pixels"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "bytemuck",
  "cranpose-app-shell",
@@ -1605,7 +1608,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-render-wgpu"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "bytemuck",
  "cranpose-app-shell",
@@ -1636,7 +1639,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-runtime-std"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-core",
  "web-time",
@@ -1644,7 +1647,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-services"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-core",
  "cranpose-macros",
@@ -1671,6 +1674,7 @@ dependencies = [
  "rustix",
  "serde_json",
  "sha2 0.11.1",
+ "socket2",
  "tempfile",
  "thiserror 2.0.21",
  "url",
@@ -1680,25 +1684,26 @@ dependencies = [
  "web-time",
  "webbrowser",
  "webpki-root-certs",
+ "windows",
 ]
 
 [[package]]
 name = "cranpose-shader-passes"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "naga",
 ]
 
 [[package]]
 name = "cranpose-storekit"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-services",
 ]
 
 [[package]]
 name = "cranpose-testing"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose",
  "cranpose-app-shell",
@@ -1714,7 +1719,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-text"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "ab_glyph",
  "ab_glyph_rasterizer",
@@ -1733,7 +1738,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-ui"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-animation",
  "cranpose-core",
@@ -1758,7 +1763,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-ui-graphics"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "arrayvec",
  "bytemuck",
@@ -1770,7 +1775,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-ui-layout"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-core",
  "cranpose-ui-graphics",
@@ -1778,7 +1783,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu"
-version = "30.0.30"
+version = "30.0.32"
 dependencies = [
  "arrayvec",
  "bitflags 2.13.2",
@@ -1806,7 +1811,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu-core"
-version = "30.0.26"
+version = "30.0.28"
 dependencies = [
  "arrayvec",
  "bit-set 0.10.0",
@@ -1867,7 +1872,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu-hal"
-version = "30.0.23"
+version = "30.0.25"
 dependencies = [
  "android_system_properties",
  "arrayvec",
@@ -1923,13 +1928,14 @@ dependencies = [
 
 [[package]]
 name = "cranpose-xr"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "android-activity",
  "ash",
  "base64",
  "basisu",
  "cranpose",
+ "cranpose-animation",
  "cranpose-app-shell",
  "cranpose-core",
  "cranpose-render-common",
@@ -2150,6 +2156,7 @@ dependencies = [
  "midly",
  "perf-compare-cranpose",
  "pollster",
+ "portable-atomic",
  "pulldown-cmark",
  "serde",
  "serde_json",
@@ -2555,9 +2562,9 @@ checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
 name = "form_urlencoded"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+checksum = "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e"
 dependencies = [
  "percent-encoding",
 ]
@@ -4492,7 +4499,9 @@ dependencies = [
  "block2 0.6.2",
  "dispatch2",
  "objc2 0.6.5",
+ "objc2-core-foundation",
  "objc2-core-media",
+ "objc2-core-video",
  "objc2-foundation 0.3.2",
 ]
 
@@ -5203,17 +5212,21 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "player-demo"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose",
  "cranpose-ui",
  "env_logger",
  "log",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
 ]
 
 [[package]]
 name = "player-demo-android"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose",
  "cranpose-capabilities",
@@ -7259,9 +7272,9 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "url"
-version = "2.5.8"
+version = "2.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+checksum = "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a"
 dependencies = [
  "form_urlencoded",
  "idna",
@@ -8414,7 +8427,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xr-demo"
-version = "0.26.0"
+version = "0.29.0"
 dependencies = [
  "cranpose",
  "cranpose-capabilities",

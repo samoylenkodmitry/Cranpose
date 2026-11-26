@@ -58,7 +58,8 @@ const DEPTH_FAR_Z: f32 = 10_000.0;
 // distance `z` along the eye's axis, which is the depth of a camera whose far plane is infinite.
 pub(crate) struct EyeDepth<'a> {
     pub(crate) swapchain: &'a xr::Swapchain<Api>,
-    // The distance of the near plane in meters
+    // The near plane that the layer names, in meters. It can lie farther than the camera's, so the
+    // compositor reads every depth that much farther (`eye_camera::depth_scale`).
     pub(crate) near: f32,
 }
 
@@ -181,11 +182,14 @@ pub(crate) struct QuadLayer<'a> {
     pub(crate) pose: Pose,
     // The panel's width and height in meters.
     pub(crate) size: [f32; 2],
+    // The tracked space that `pose` is in, or `None` for the frame's space: the room
+    pub(crate) space: Option<xr::sys::Space>,
 }
 
 impl QuadLayer<'_> {
-    // The compositor's struct for the layer in `space`. It names the swapchain by its handle, so
-    // the struct is valid for as long as the swapchain lives.
+    // The compositor's struct for the layer in its own space, or in `space` for a layer in the
+    // room. It names the swapchain by its handle, so the struct is valid for as long as the
+    // swapchain lives.
     pub(crate) fn to_raw(&self, space: xr::sys::Space) -> xr::sys::CompositionLayerQuad {
         let (eye_visibility, offset, extent, blends) = match self.source {
             LayerSource::Drawn((width, height)) => {
@@ -204,7 +208,7 @@ impl QuadLayer<'_> {
             } else {
                 xr::CompositionLayerFlags::EMPTY
             },
-            space,
+            space: self.space.unwrap_or(space),
             eye_visibility,
             sub_image: xr::sys::SwapchainSubImage {
                 swapchain: self.swapchain.as_raw(),
@@ -240,7 +244,7 @@ pub(crate) struct XrSession {
     pub(crate) spatial_events: SpatialEvents,
     // The room as the app sees it: its origin is where the head was when the app started
     pub(crate) local: xr::Space,
-    // The head's own space, which the runtime locates for each frame
+    // The head's own space, which the runtime locates for each frame. Head-locked panels ride in it.
     view: xr::Space,
     // The floor: the runtime's STAGE space, when it has one
     stage: Option<xr::Space>,
@@ -353,6 +357,11 @@ impl XrSession {
         Graphics::TOP_ROW_FIRST || self.flips_layers
     }
 
+    // The head's own space, which head-locked panels ride in.
+    pub(crate) fn view_space(&self) -> xr::sys::Space {
+        self.view.as_raw()
+    }
+
     // The head at `time`, in the `local` space, with its velocities. A head that the runtime does
     // not track has none.
     pub(crate) fn head(&self, time: xr::Time) -> Option<TrackedPose> {
@@ -445,10 +454,32 @@ impl XrSession {
         Ok(state)
     }
 
+    // The most layers that the runtime takes in a frame, the room's layer included.
+    pub(crate) fn layer_limit(&self) -> usize {
+        self.limit.layers()
+    }
+
+    // Whether a frame still has to try how many layers the runtime takes.
+    pub(crate) fn layer_trial_due(&self) -> bool {
+        self.limit.trial().is_some()
+    }
+
+    // The room's layer while the runtime shows the app's layers, which is under all of them.
+    fn bottom(&self) -> Option<&xr::CompositionLayerBase<'_, Api>> {
+        self.passthrough.layer().filter(|_| self.status.shows())
+    }
+
+    // How many layers the room adds to the frame: one or none.
+    pub(crate) fn bottom_layers(&self) -> usize {
+        usize::from(self.bottom().is_some())
+    }
+
     // Ends the frame begun last. The room is the bottom layer while the runtime shows the app's
     // layers. Then come the layers of `stages`, in the order that the compositor draws them: the
     // last layer covers the others. With `plan`, the panels and rays test against the depth of the
-    // projection layer of the app's 3D content.
+    // projection layer of the app's 3D content. While the runtime has not shown how many layers it
+    // takes, `trial` is an empty layer whose copies fill the frame up to the number that the runtime
+    // reports. A runtime that refuses that frame gets the same frame again without them.
     pub(crate) fn end_frame<'a>(
         &mut self,
         display_time: xr::Time,
@@ -459,10 +490,9 @@ impl XrSession {
             impl Iterator<Item = QuadLayer<'a>>,
         >,
         plan: Option<VolumePlan>,
+        trial: Option<QuadLayer<'_>>,
     ) -> Result<(), String> {
-        let bottom = self.passthrough.layer().filter(|_| self.status.shows());
-        let room = self.limit.layers() - usize::from(bottom.is_some());
-        self.layers.fill(stages, plan, room);
+        self.layers.fill(stages, plan);
         // A layer over the projection layer tests its fragments against the depth that the
         // projection layer carries, and writes none of its own.
         let depth_test = xr::sys::CompositionLayerDepthTestFB {
@@ -509,6 +539,80 @@ impl XrSession {
                 ptr::null()
             },
         };
+        let layers = self.layers.len() + self.bottom_layers();
+        let counts = self.layers.counts(layers);
+        if counts != self.logged_layers {
+            self.logged_layers = counts;
+            log::info!(
+                "cranpose xr: the frame has {} layers, {} of them in the space of the head or a controller, {} test depth and {} write it, of {} that the runtime takes",
+                counts.layers,
+                counts.tracked,
+                counts.tested,
+                counts.written,
+                self.limit.layers(),
+            );
+        }
+        let ended = self.end_trying(display_time, chains, layers, trial);
+        self.layers.clear();
+        ended
+    }
+
+    // Ends the frame of `layers` layers. While the runtime has not shown how many layers it takes,
+    // copies of `trial` fill the frame up to the number that it reports. A runtime that refuses
+    // that frame gets the same frame again without them.
+    fn end_trying(
+        &mut self,
+        display_time: xr::Time,
+        chains: Chains,
+        layers: usize,
+        trial: Option<QuadLayer<'_>>,
+    ) -> Result<(), String> {
+        let tried = self
+            .limit
+            .trial()
+            .zip(trial)
+            .filter(|(reported, _)| *reported > layers);
+        if let Some((reported, empty)) = &tried {
+            self.layers.pad(empty, reported - layers);
+        }
+        let mut ended = self.submit(display_time, chains);
+        let mut retried = false;
+        if let Some((reported, _)) = tried {
+            let taken = ended.is_ok();
+            self.limit.tried(taken);
+            log::info!(
+                "cranpose xr: the runtime takes {} layers of the {reported} that it reports",
+                self.limit.layers()
+            );
+            if !taken {
+                self.layers.unpad();
+                ended = self.submit(display_time, chains);
+                retried = true;
+            }
+        }
+        match ended {
+            // A runtime that ends a frame when it refuses it takes no second end of that frame
+            Err(xr::sys::Result::ERROR_CALL_ORDER_INVALID) if retried => {
+                log::warn!("cranpose xr: the runtime ended the frame that it refused");
+                Ok(())
+            }
+            // The runtime takes fewer layers than it showed. The next frame has fewer layers, and
+            // this one is lost.
+            Err(xr::sys::Result::ERROR_LAYER_LIMIT_EXCEEDED) if self.limit.refused(layers) => {
+                log::warn!(
+                    "cranpose xr: the runtime refused {layers} layers and takes {}",
+                    self.limit.layers()
+                );
+                Ok(())
+            }
+            ended => ended.map_err(|error| format!("OpenXR end frame: {error}")),
+        }
+    }
+
+    // Hands the layers of the list to the runtime with the room's layer first. The call ends the
+    // frame. `chains` are the structs that every flat and curved layer names.
+    fn submit(&mut self, display_time: xr::Time, chains: Chains) -> Result<(), xr::sys::Result> {
+        let bottom = self.passthrough.layer().filter(|_| self.status.shows());
         let headers = self.layers.headers(bottom, chains);
         // SAFETY: each pointer names the struct of a layer that `self.layers` or
         // `self.passthrough` holds. Nothing moves or drops those until the call returns. The base
@@ -523,38 +627,8 @@ impl XrSession {
                 headers.len(),
             )
         };
-        let counts = self.layers.counts(references.len());
-        if counts != self.logged_layers {
-            self.logged_layers = counts;
-            log::info!(
-                "cranpose xr: the frame has {} layers, {} of them test depth and {} write it, of {} that the runtime takes, {} panels left out",
-                counts.layers,
-                counts.tested,
-                counts.written,
-                self.limit.layers(),
-                counts.left_out
-            );
-        }
-        let ended = match self
-            .stream
+        self.stream
             .end(display_time, self.passthrough.blend_mode(), references)
-        {
-            // The runtime takes fewer layers than it reports. The next frame leaves out the panels
-            // that do not fit, and this one is lost.
-            Err(xr::sys::Result::ERROR_LAYER_LIMIT_EXCEEDED)
-                if self.limit.refused(counts.layers) =>
-            {
-                log::warn!(
-                    "cranpose xr: the runtime refused {} layers and takes {}",
-                    counts.layers,
-                    self.limit.layers()
-                );
-                Ok(())
-            }
-            ended => ended.map_err(|error| format!("OpenXR end frame: {error}")),
-        };
-        self.layers.clear();
-        ended
     }
 }
 

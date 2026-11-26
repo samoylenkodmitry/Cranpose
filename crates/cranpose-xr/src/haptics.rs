@@ -19,6 +19,15 @@ pub struct Vibration {
 }
 
 impl Vibration {
+    // A vibration of an `amplitude` that lies in 0 to 1, for a constant.
+    pub(crate) const fn constant(amplitude: f32, duration: Duration) -> Self {
+        Self {
+            amplitude,
+            frequency: None,
+            duration,
+        }
+    }
+
     /// A vibration of `amplitude` from 0 to 1 that lasts `duration`, at the frequency that the
     /// controller picks. An amplitude outside 0 to 1 becomes the nearest end.
     pub fn new(amplitude: f32, duration: Duration) -> Self {

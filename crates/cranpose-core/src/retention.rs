@@ -157,6 +157,18 @@ impl Default for RetentionManager {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum RestoreRecord {
+    Keep,
+    ClearForDisposal,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RetentionPin {
+    Unpinned,
+    Pinned,
+}
+
 impl RetentionManager {
     pub(crate) fn new(policy: RetentionPolicy) -> Self {
         Self {
@@ -174,6 +186,14 @@ impl RetentionManager {
     }
 
     pub(crate) fn take(&mut self, key: RetainKey) -> Option<DetachedSubtree> {
+        self.take_with_mode(key, RestoreRecord::Keep)
+    }
+
+    pub(crate) fn take_with_mode(
+        &mut self,
+        key: RetainKey,
+        record: RestoreRecord,
+    ) -> Option<DetachedSubtree> {
         let retained = self.groups.get(&key)?;
         if !retained_subtree_matches_key(&retained.subtree, key, "restore") {
             return None;
@@ -189,10 +209,25 @@ impl RetentionManager {
         ) {
             return None;
         }
-        let restored_order = self.tick_operation();
         let retained = self.groups.remove(&key)?;
-        self.restored_at_by_key.insert(key, restored_order);
+        match record {
+            RestoreRecord::Keep => {
+                let restored_order = self.tick_operation();
+                self.restored_at_by_key.insert(key, restored_order);
+            }
+            RestoreRecord::ClearForDisposal => {
+                self.restored_at_by_key.remove(&key);
+            }
+        }
         Some(retained.subtree)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.groups.len()
+    }
+
+    pub(crate) fn is_small_for_reuse(&self) -> bool {
+        self.groups.capacity() <= 64 && self.restored_at_by_key.capacity() <= 64
     }
 
     pub(crate) fn take_after_restore_preflight(
@@ -215,27 +250,21 @@ impl RetentionManager {
         self.groups.contains_key(&key)
     }
 
+    #[cfg(test)]
     pub(crate) fn insert(
         &mut self,
         key: RetainKey,
         subtree: DetachedSubtree,
     ) -> Vec<DetachedSubtree> {
-        self.insert_with_pin(key, subtree, false)
+        self.insert_with_pin(key, subtree, RetentionPin::Unpinned)
     }
 
-    pub(crate) fn insert_pinned(
-        &mut self,
-        key: RetainKey,
-        subtree: DetachedSubtree,
-    ) -> Vec<DetachedSubtree> {
-        self.insert_with_pin(key, subtree, true)
-    }
-
-    fn insert_with_pin(
+    #[inline(never)]
+    pub(crate) fn insert_with_pin(
         &mut self,
         key: RetainKey,
         mut subtree: DetachedSubtree,
-        pinned: bool,
+        pin: RetentionPin,
     ) -> Vec<DetachedSubtree> {
         if self.groups.contains_key(&key) {
             log::error!(
@@ -261,7 +290,7 @@ impl RetentionManager {
                 detached_pass: self.pass_clock,
                 detached_order,
                 last_restored_order,
-                pinned,
+                pinned: pin == RetentionPin::Pinned,
             },
         );
         self.evict_to_budget()

@@ -14,6 +14,9 @@ pub(crate) struct Gestures {
     pub(crate) surfaces: Vec<SurfaceGesture>,
     pub(crate) moves: Vec<PanelMove>,
     pub(crate) resizes: Vec<PanelResize>,
+    // The hands whose press took or ended in this frame, left then right, each of which gets a
+    // light vibration
+    pub(crate) ticks: [bool; 2],
 }
 
 impl Gestures {
@@ -22,5 +25,6 @@ impl Gestures {
         self.surfaces.clear();
         self.moves.clear();
         self.resizes.clear();
+        self.ticks = [false; 2];
     }
 }

@@ -88,7 +88,23 @@ pub(crate) fn ScrollableTab(content: impl FnMut() + 'static) {
     );
 }
 
+const fn is_scene_tab(tab: DemoTab) -> bool {
+    matches!(
+        tab,
+        DemoTab::Room
+            | DemoTab::Xr
+            | DemoTab::Backrooms
+            | DemoTab::Tv
+            | DemoTab::Music
+            | DemoTab::Explainer
+            | DemoTab::VideoPlayground
+    )
+}
+
 pub(super) fn tab_requires_scroll(tab: DemoTab) -> bool {
+    if is_scene_tab(tab) {
+        return false;
+    }
     !matches!(
         tab,
         DemoTab::HackerNews
@@ -106,12 +122,6 @@ pub(super) fn tab_requires_scroll(tab: DemoTab) -> bool {
             | DemoTab::Liquid
             | DemoTab::GlassFeed
             | DemoTab::GlassTiles
-            | DemoTab::Room
-            | DemoTab::Xr
-            | DemoTab::Backrooms
-            | DemoTab::Tv
-            | DemoTab::Music
-            | DemoTab::Explainer
     )
 }
 
@@ -140,33 +150,16 @@ pub(super) fn render_active_tab(
         DemoTab::FilePicker => file_picker_tab(),
         DemoTab::Rotary => rotary_tab(),
         DemoTab::Wear => wear::wear_tab(),
-        DemoTab::HackerNews
-        | DemoTab::Performance
-        | DemoTab::Gauntlet
-        | DemoTab::StillWall
-        | DemoTab::Patchwork
-        | DemoTab::Images
-        | DemoTab::Text
-        | DemoTab::Wsz
-        | DemoTab::Xkcd
-        | DemoTab::Shaders
-        | DemoTab::ShaderRect
-        | DemoTab::Controls
-        | DemoTab::MarkdownViewer
-        | DemoTab::Liquid
-        | DemoTab::GlassFeed
-        | DemoTab::GlassTiles
-        | DemoTab::Room
-        | DemoTab::Xr
-        | DemoTab::Backrooms
-        | DemoTab::Tv
-        | DemoTab::Music
-        | DemoTab::Explainer => render_showcase_tab(active, startup, wsz_tab_state),
+        _ => render_showcase_tab(active, startup, wsz_tab_state),
     }
 }
 
 #[composable]
 fn render_showcase_tab(active: DemoTab, startup: StartupSelection, wsz_tab_state: WszTabState) {
+    if is_scene_tab(active) {
+        render_scene_tab(active);
+        return;
+    }
     match active {
         DemoTab::HackerNews => HackerNewsTab(),
         DemoTab::Performance => performance_dashboard::PerformanceTab(),
@@ -186,32 +179,7 @@ fn render_showcase_tab(active: DemoTab, startup: StartupSelection, wsz_tab_state
         DemoTab::Liquid => LiquidUiTab(),
         DemoTab::GlassFeed => GlassFeedTab(),
         DemoTab::GlassTiles => GlassTilesTab(),
-        DemoTab::Room
-        | DemoTab::Xr
-        | DemoTab::Backrooms
-        | DemoTab::Tv
-        | DemoTab::Music
-        | DemoTab::Explainer => {
-            render_scene_tab(active);
-        }
-        DemoTab::Guide
-        | DemoTab::Counter
-        | DemoTab::CompositionLocal
-        | DemoTab::Async
-        | DemoTab::Animations
-        | DemoTab::InteractiveAnim
-        | DemoTab::WebFetch
-        | DemoTab::WebView
-        | DemoTab::TextInput
-        | DemoTab::Layout
-        | DemoTab::ModifierShowcase
-        | DemoTab::LazyList
-        | DemoTab::Mineswapper2
-        | DemoTab::RecompositionLab
-        | DemoTab::FloatingWindows
-        | DemoTab::FilePicker
-        | DemoTab::Rotary
-        | DemoTab::Wear => {}
+        _ => {}
     }
 }
 
@@ -225,6 +193,7 @@ fn render_scene_tab(active: DemoTab) {
         DemoTab::Tv => super::tv::TvTab(),
         DemoTab::Music => super::music::MusicTab(),
         DemoTab::Explainer => super::explainer::ExplainerTab(),
+        DemoTab::VideoPlayground => super::video_playground::VideoPlaygroundTab(),
         _ => {}
     }
 }

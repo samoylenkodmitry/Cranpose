@@ -11,12 +11,14 @@ use super::{
     host::Host,
     session::XrSession,
     system_properties,
+    tracked_spaces::{LocatedSpace, TrackedSpaces},
     tracking::{EyeGazeAction, Trackers, TrackingSetup},
 };
 use crate::{
     Controller, Hand, Haptics, HeadsetProperties, PointerMapping, PointerSettings, Pose, Recenter,
-    RenderViewpoint, TrackingFeature, XrFrame, aim::Aim, frame_effects::FrameEffects,
-    haptics::controller_asks, pointer_aim::pointer_aim, session_status::SessionStatus,
+    RenderViewpoint, TrackingFeature, XrFrame, aim::Aim, follow_origin::Poses,
+    frame_effects::FrameEffects, haptics::controller_asks, pointer_aim::pointer_aim,
+    session_status::SessionStatus,
 };
 
 // The handles on the headset that the app's content reads: the registry of its frame effects, its
@@ -41,6 +43,9 @@ pub(crate) struct HeadsetInput {
     properties: HeadsetProperties,
     // Whether tracked hands point: the app asked for hand tracking
     hands_point: bool,
+    // The aim pose of each controller as the runtime located it in the frame sampled last, left
+    // then right, or `None` for a controller that the runtime does not track or that a script plays
+    runtime_aims: [Option<Pose>; 2],
 }
 
 impl HeadsetInput {
@@ -71,6 +76,7 @@ impl HeadsetInput {
             pointer_settings: PointerSettings::new(),
             properties,
             hands_point,
+            runtime_aims: [None; 2],
         })
     }
 
@@ -91,6 +97,13 @@ impl HeadsetInput {
             self.pointer_settings.mapping(),
             self.pointer_settings.beams_visible(),
         )
+    }
+
+    // Plays the pointer's press vibration on `hand`'s controller in the next frame.
+    pub(crate) fn tick(&self, hand: Hand) {
+        if let Some(vibration) = self.pointer_settings.press_vibration() {
+            self.haptics.vibrate(hand, vibration);
+        }
     }
 
     // The time at which the frame sampled last reaches the display, on the monotonic clock.
@@ -126,6 +139,16 @@ impl HeadsetInput {
         (width, height)
     }
 
+    // Where the targets of the following subspaces are in the frame sampled last: the head, each
+    // controller and the joints of each hand.
+    pub(crate) fn follow_poses(&self) -> Poses {
+        Poses {
+            head: self.frame.device_pose,
+            controllers: self.controllers(),
+            hands: [self.frame.left_hand, self.frame.right_hand],
+        }
+    }
+
     // The controller of `hand` in the frame sampled last.
     pub(crate) fn controller(&self, hand: Hand) -> &Controller {
         self.frame.controller(hand)
@@ -143,6 +166,23 @@ impl HeadsetInput {
                 orientation: controller.aim?.pose.orientation,
             })
         })
+    }
+
+    // The head's space and each controller's aim space with their poses in the frame sampled last,
+    // for the panels that ride in them.
+    pub(crate) fn tracked_spaces(&self, xr_session: &XrSession) -> TrackedSpaces {
+        TrackedSpaces {
+            view: self.frame.device_pose.map(|pose| LocatedSpace {
+                space: xr_session.view_space(),
+                pose,
+            }),
+            aims: Hand::BOTH.map(|hand| {
+                self.runtime_aims[hand.index()].map(|pose| LocatedSpace {
+                    space: self.controllers.aim_space(hand),
+                    pose,
+                })
+            }),
+        }
     }
 
     // Samples the headset for the frame that `state` describes, runs the app's frame effects and
@@ -177,10 +217,16 @@ impl HeadsetInput {
         frame.recenter = xr_session.recenters.take();
         self.controllers
             .sample(xr_session, time, status, self.trackers.gaze_set(), frame);
+        let located = Hand::BOTH.map(|hand| frame.controller(hand).aim.map(|aim| aim.pose));
         #[cfg(feature = "scripted-hand")]
         if frame.focused {
             crate::scripted_controller::apply(frame);
         }
+        // A controller that a script plays stands where the runtime's aim space does not
+        self.runtime_aims = Hand::BOTH.map(|hand| {
+            located[hand.index()]
+                .filter(|pose| frame.controller(hand).aim.map(|aim| aim.pose) == Some(*pose))
+        });
         self.trackers
             .sample(xr_session, host, frame.now, time, status, frame);
         let hands = self.hands_point;

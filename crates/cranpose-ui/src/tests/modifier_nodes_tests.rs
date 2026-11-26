@@ -491,7 +491,10 @@ fn mixed_modifier_chain_tracks_all_capabilities() {
     chain.for_each_forward_matching(NodeCapabilities::DRAW, |_| {
         draw_nodes += 1;
     });
-    assert_eq!(draw_nodes, 2, "expected alpha + background draw nodes");
+    assert_eq!(
+        draw_nodes, 3,
+        "expected the alpha, the clickable's indication and the background to draw"
+    );
 
     let mut pointer_nodes = 0;
     chain.for_each_forward_matching(NodeCapabilities::POINTER_INPUT, |_| {

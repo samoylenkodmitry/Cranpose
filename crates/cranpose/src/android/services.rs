@@ -97,32 +97,8 @@ pub(crate) fn register(
     set_platform_power_monitor(Arc::new(AndroidPowerMonitor { app: app.clone() }));
     set_platform_background_activity(Arc::new(AndroidBackgroundActivity { app: app.clone() }));
     set_platform_bundled_assets(Arc::new(AndroidBundledAssets { app: app.clone() }));
-    if capabilities.has(cranpose_capabilities::Service::Update) {
-        super::app_update::register(app.clone());
-    }
     super::camera::register(app.clone());
-    // Only an application that declared the sensor carries its Java, its
-    // permissions and this backend; anywhere else the service reports
-    // that there is no heart rate to read.
-    if capabilities.has(cranpose_capabilities::Service::HeartRate) {
-        super::heart_rate::register(app.clone());
-    }
-    // Present only when the application declares the microphone; anywhere
-    // else recording needs no permission from the framework.
-    if capabilities.has(cranpose_capabilities::Service::Microphone) {
-        super::microphone::register(app.clone());
-    }
-    // Present only when the application declares the unlock, which brings
-    // `CranposeDeviceAuth`; anywhere else nothing can unlock.
-    if capabilities.has(cranpose_capabilities::Service::DeviceAuth) {
-        super::device_auth::register(app.clone());
-    }
-    // Present only when the application declares the rotation sensor, which
-    // brings `CranposeDeviceMotion`; anywhere else the service reports that
-    // there is nothing to read.
-    if capabilities.has(cranpose_capabilities::Service::DeviceMotion) {
-        super::device_motion::register(app.clone());
-    }
+    super::declared_services::register(&app, capabilities);
     #[cfg(feature = "media-backend")]
     super::media::register(app.clone());
     set_platform_launch_args(Arc::new(read_launch_arguments(&app)));

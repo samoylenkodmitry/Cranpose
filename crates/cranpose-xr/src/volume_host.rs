@@ -28,8 +28,9 @@ use crate::{
 };
 
 // The window root of the scene, which holds the content of every volume and the models of the
-// controllers in use. It holds nothing while no volume exists and no controller shows a model. The
-// loads of the controllers' models belong here, because they go on while the scene is empty.
+// controllers in use. It holds nothing while no volume exists, no controller shows a model and the
+// frames no longer hold the scene. The loads of the controllers' models belong here, because they
+// go on while the scene is empty.
 #[composable]
 pub(crate) fn VolumeScene(space: Space) {
     let volumes = space.volumes();
@@ -37,7 +38,7 @@ pub(crate) fn VolumeScene(space: Space) {
     #[cfg(feature = "gltf")]
     ControllerLoaders(controllers);
     let contents = volumes.contents().get();
-    if contents.is_empty() && !controllers.any_shown() {
+    if contents.is_empty() && !controllers.any_shown() && !volumes.held().get() {
         return;
     }
     let window = remember(|| Rc::new(VolumeWindow::new(space.scene_size()))).with(Rc::clone);
@@ -63,9 +64,14 @@ pub(crate) fn VolumeScene(space: Space) {
     );
 }
 
-// One volume's content, moved to the volume's pose.
+// One volume's content, moved to the volume's pose. A volume that stands in no place composes
+// nothing, so the scene draws nothing of it.
 #[composable]
 fn VolumeNode(content: VolumeContent) {
+    if !content.shown.get() {
+        content.node.set(None);
+        return;
+    }
     let pose = content.pose;
     let compose = content.compose;
     let node = Box(
@@ -76,23 +82,36 @@ fn VolumeNode(content: VolumeContent) {
     content.node.set(Some(node));
 }
 
-// The scene as it draws now: the eye's camera and the first light that a volume sets, turned from
-// the volume's axes into the scene's. A scene has one light, so volumes share it. Where no volume
-// sets one, the controllers' models stand in the default light. A draw reads the states, so a
-// camera or a pose that changes draws again without composing. The samples are the ones that the
-// headset's device takes: the renderer stores the layer's depth from a second pass of one sample.
+// The scene as it draws now: the eye's camera and the light of the first shown volume whose light
+// casts shadows, else of the first that sets one, turned from the volume's axes into the scene's. A
+// scene has one light, so volumes share it, and a volume whose light casts none, such as controls
+// on no base, leaves the shadows to a volume that has them. Where no volume sets a light, the
+// controllers' models stand in the default light. A draw reads the states, so a camera or a pose
+// that changes draws again without composing. The samples are the ones that the headset's device
+// takes: the renderer stores the layer's depth from a second pass of one sample.
 fn scene_of(volumes: &Volumes, controllers: &ControllerStates) -> Scene3d {
     let light = volumes
         .contents()
         .read(|contents| {
-            contents.iter().find_map(|content| {
+            let lights = contents.iter().filter_map(|content| {
+                if !content.shown.get() {
+                    return None;
+                }
                 let light = content.light.get()?;
                 let turn = scene_from_volume(&content.pose.get());
                 Some(Light {
                     direction: turn.transform_vector(light.direction),
                     ..light
                 })
-            })
+            });
+            let mut first = None;
+            for light in lights {
+                if light.shadows {
+                    return Some(light);
+                }
+                first.get_or_insert(light);
+            }
+            first
         })
         .or_else(|| controllers.any_shown().then_some(DEFAULT_LIGHT));
     Scene3d {

@@ -65,6 +65,7 @@ mod ticking;
 pub mod tool_windows;
 mod tv;
 mod url_resolve;
+mod video_playground;
 mod walk_keys;
 pub mod wear;
 mod web_fetch;
@@ -108,7 +109,6 @@ use wsz::{remember_wsz_tab_state, WszTab, WszTabState};
 
 const DEMO_PAGE_PADDING: f32 = 20.0;
 const DEMO_TAB_BAR_PADDING: f32 = 8.0;
-
 const FLOATING_TOGGLE_TOP: f32 = 2.0;
 
 const COMPACT_WINDOW_SIZE_CLASS_MAX_WIDTH: f32 = 600.0;

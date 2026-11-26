@@ -62,6 +62,7 @@ impl RayLayers {
                 source: LayerSource::Drawn((ACROSS, ALONG)),
                 pose: quad_pose(&beam, head),
                 size: [WIDTH, beam.length],
+                space: None,
             })
     }
 }

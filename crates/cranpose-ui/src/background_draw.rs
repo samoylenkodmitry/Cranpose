@@ -46,7 +46,12 @@ impl BackgroundDraw {
 
     /// Records the background into `scope`, whose size is the node's.
     pub fn draw(&self, scope: &mut dyn DrawScope) {
-        let brush = Brush::solid(self.color);
+        self.fill(scope, self.color);
+    }
+
+    // Fills the background's shape with `color` in place of its own.
+    pub(crate) fn fill(&self, scope: &mut dyn DrawScope, color: Color) {
+        let brush = Brush::solid(color);
         match self.shape_in(scope.size()) {
             (rect, Some(radii)) => scope.draw_round_rect_at(rect, brush, radii),
             (rect, None) => scope.draw_rect_at(rect, brush),

@@ -1,9 +1,59 @@
-use std::{hash::Hash, rc::Rc};
+use std::{
+    cell::Cell,
+    hash::Hash,
+    rc::{Rc, Weak},
+};
 
 use crate::{
-    Composer, Key, composer_context, current_runtime_handle, hash_key, remember,
+    Composer, Key,
+    composer::{ComposerRuntimeState, MovableLookup},
+    composer_context, current_runtime_handle, hash_key,
+    owned::WeakOwned,
     with_current_composer,
 };
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MovableOwnerState {
+    NeverShown,
+    ShownInOwnerHost,
+    ShownOutsideOwnerHost,
+    DisposedWithSubtree,
+}
+
+struct RememberedMovable {
+    id: Key,
+    shared_state: Weak<ComposerRuntimeState>,
+    owner_host_key: usize,
+    state: Cell<MovableOwnerState>,
+}
+
+impl Drop for RememberedMovable {
+    fn drop(&mut self) {
+        let owner_host = match self.state.get() {
+            MovableOwnerState::NeverShown | MovableOwnerState::DisposedWithSubtree => return,
+            MovableOwnerState::ShownInOwnerHost => Some(self.owner_host_key),
+            MovableOwnerState::ShownOutsideOwnerHost => None,
+        };
+        if let Some(state) = self.shared_state.upgrade() {
+            state.on_movable_owner_dropped(self.id, owner_host);
+        }
+    }
+}
+
+// Returns the movable id when `payload` is the sole owner of a remembered
+// movable with no live `MovableContent` handles anywhere outside the slot.
+pub(crate) fn sole_owned_movable_id(payload: &dyn std::any::Any) -> Option<Key> {
+    let owned = payload.downcast_ref::<crate::Owned<RememberedMovable>>()?;
+    (owned.strong_count() == 1 && owned.weak_count() == 0).then(|| owned.with(|owner| owner.id))
+}
+
+// Marks a remembered movable whose content is already being disposed inline
+// with its owning subtree, so dropping the owner performs no redundant lookup.
+pub(crate) fn disarm_remembered_movable(payload: &dyn std::any::Any) {
+    if let Some(owned) = payload.downcast_ref::<crate::Owned<RememberedMovable>>() {
+        owned.with(|owner| owner.state.set(MovableOwnerState::DisposedWithSubtree));
+    }
+}
 
 /// Composes `content` under an identity that is `key` alone, the same at
 /// every call site, so the subtree can be emitted from any parent and keep
@@ -26,7 +76,9 @@ use crate::{
 #[track_caller]
 pub fn movable<K: Hash>(key: K, content: impl FnOnce()) {
     let id = hash_key(&key);
-    with_current_composer(|composer| composer.with_movable_group(id, |_| content()));
+    with_current_composer(|composer| {
+        composer.with_movable_group(id, MovableLookup::AnyHost, |_| content());
+    });
 }
 
 /// Content written once that keeps its identity wherever it is shown.
@@ -51,25 +103,36 @@ pub fn movable<K: Hash>(key: K, content: impl FnOnce()) {
 /// }
 /// ```
 ///
-/// The identity comes from the `remember`, so two of these at one call site
-/// -- one per row of a list -- are two pieces of content, and the same one
-/// survives recomposition. Everything [`movable`] says about ordering,
-/// showing content at most once, and releasing it still holds; release this
-/// one with [`MovableContent::forget`].
+/// The identity comes from the `remember`, so two calls at one site produce
+/// two distinct pieces of content. The same identity survives recomposition.
+/// Leaving the composition releases the content with the call site. Calling
+/// [`MovableContent::forget`] releases retained content earlier while the call
+/// site stays alive.
 ///
-/// Content that has to be recognised from somewhere this value cannot reach
-/// -- another composable that shows the same pane in another arrangement --
-/// wants [`movableContentOf`] instead, which takes the identity as a key.
+/// Content that must be recognised from another composable that this value
+/// cannot reach uses [`movableContentOf`] instead, which takes a key as the
+/// identity.
 ///
 /// Mirrors Jetpack Compose's `movableContentOf`.
 #[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberMovableContentOf(content: impl Fn() + 'static) -> MovableContent {
-    let runtime = with_current_composer(Composer::runtime_handle);
-    let id = remember(|| runtime.next_movable_content_id()).with(|id| *id);
+    crate::composer::enable_movable_hooks();
+    let source = crate::caller_location_key();
+    let (id, owner) = with_current_composer(|composer| {
+        let owned = composer.remember_at(source, || RememberedMovable {
+            id: composer.runtime_handle().next_movable_content_id(),
+            shared_state: composer.shared_state_weak(),
+            owner_host_key: composer.active_slots_host_storage_key(),
+            state: Cell::new(MovableOwnerState::NeverShown),
+        });
+        let id = owned.with(|owner| owner.id);
+        (id, owned.downgrade())
+    });
     MovableContent {
         id,
         content: Rc::new(content),
+        owner: Some(owner),
     }
 }
 
@@ -85,6 +148,7 @@ pub fn movableContentOf<K: Hash>(key: K, content: impl Fn() + 'static) -> Movabl
     MovableContent {
         id: hash_key(&key),
         content: Rc::new(content),
+        owner: None,
     }
 }
 
@@ -93,6 +157,7 @@ pub fn movableContentOf<K: Hash>(key: K, content: impl Fn() + 'static) -> Movabl
 pub struct MovableContent {
     id: Key,
     content: Rc<dyn Fn()>,
+    owner: Option<WeakOwned<RememberedMovable>>,
 }
 
 impl MovableContent {
@@ -102,7 +167,56 @@ impl MovableContent {
     pub fn show(&self) {
         let content = Rc::clone(&self.content);
         let id = self.id;
-        with_current_composer(|composer| composer.with_movable_group(id, |_| content()));
+        with_current_composer(|composer| {
+            let lookup = self
+                .owner
+                .as_ref()
+                .and_then(|owner| {
+                    owner.with(|owner| {
+                        let outside =
+                            composer.active_slots_host_storage_key() != owner.owner_host_key;
+                        let (next, lookup) = match owner.state.get() {
+                            MovableOwnerState::NeverShown => (
+                                if outside {
+                                    MovableOwnerState::ShownOutsideOwnerHost
+                                } else {
+                                    MovableOwnerState::ShownInOwnerHost
+                                },
+                                MovableLookup::FreshUnshown,
+                            ),
+                            MovableOwnerState::ShownInOwnerHost => {
+                                if outside {
+                                    (
+                                        MovableOwnerState::ShownOutsideOwnerHost,
+                                        MovableLookup::AnyHost,
+                                    )
+                                } else {
+                                    (
+                                        MovableOwnerState::ShownInOwnerHost,
+                                        MovableLookup::OwnerHostOnly,
+                                    )
+                                }
+                            }
+                            MovableOwnerState::ShownOutsideOwnerHost => (
+                                MovableOwnerState::ShownOutsideOwnerHost,
+                                MovableLookup::AnyHost,
+                            ),
+                            MovableOwnerState::DisposedWithSubtree => (
+                                if outside {
+                                    MovableOwnerState::ShownOutsideOwnerHost
+                                } else {
+                                    MovableOwnerState::ShownInOwnerHost
+                                },
+                                MovableLookup::AnyHost,
+                            ),
+                        };
+                        owner.state.set(next);
+                        lookup
+                    })
+                })
+                .unwrap_or(MovableLookup::AnyHost);
+            composer.with_movable_group(id, lookup, |_| content());
+        });
     }
 
     /// Releases the content's state once no parent is showing it, for

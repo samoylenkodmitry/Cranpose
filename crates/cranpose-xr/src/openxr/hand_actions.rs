@@ -109,6 +109,11 @@ impl HandInput {
         })
     }
 
+    // The space of the hand's aim pose, which the panels that ride on the controller go in.
+    pub(crate) fn aim_space(&self) -> xr::sys::Space {
+        self.aim_space.as_raw()
+    }
+
     // Writes what the hand reports at `time` into `controller`, except its profile and its
     // presses. The actions must have been synced.
     pub(crate) fn read(&self, xr_session: &XrSession, time: xr::Time, controller: &mut Controller) {

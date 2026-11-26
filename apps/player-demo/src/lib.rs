@@ -9,20 +9,98 @@ use cranpose::{DecodedFrames, DecoderStats, VideoCodec, prelude::*};
 use cranpose_ui::text::{FontWeight, TextUnit};
 
 mod clip_feed;
+#[cfg(not(target_arch = "wasm32"))]
 mod feed_thread;
+mod video_feed;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use feed_thread::FeedThread;
+pub use video_feed::VerticalVideoFeed;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DemoTab {
+    Decoders,
+    Feed,
+}
+
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub async fn run_player_demo(canvas_id: String) -> Result<(), wasm_bindgen::JsValue> {
+    AppLauncher::new()
+        .with_title("Player demo")
+        .with_size(1280, 720)
+        .with_web_fill_viewport(true)
+        .run_web(&canvas_id, PlayerDemo)
+        .await
+}
+
+fn initial_tab() -> DemoTab {
+    if launch_args()
+        .string("tab")
+        .is_some_and(|v| v.eq_ignore_ascii_case("feed"))
+    {
+        return DemoTab::Feed;
+    }
+    #[cfg(target_arch = "wasm32")]
+    if web_query_has_feed_tab() {
+        return DemoTab::Feed;
+    }
+    DemoTab::Decoders
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_query_has_feed_tab() -> bool {
+    web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .is_some_and(|q| q.contains("tab=feed"))
+}
 
 // The whole screen of the demo.
 #[composable]
 pub fn PlayerDemo() {
+    let tab = rememberMutableStateOf(initial_tab);
     Column(
         Modifier::empty()
             .fill_max_size()
             .background(Color(0.08, 0.1, 0.12, 1.0))
             .padding(24.0),
         ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(12.0)),
-        Clips,
+        move || {
+            Row(
+                Modifier::empty().fill_max_width(),
+                RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(12.0)),
+                move || {
+                    Button(
+                        Modifier::empty(),
+                        ButtonSpec::default(),
+                        move || tab.set(DemoTab::Decoders),
+                        || {
+                            Text(
+                                "Hardware Decoders",
+                                Modifier::empty(),
+                                sized(15.0, Some(FontWeight::BOLD)),
+                            );
+                        },
+                    );
+                    Button(
+                        Modifier::empty(),
+                        ButtonSpec::default(),
+                        move || tab.set(DemoTab::Feed),
+                        || {
+                            Text(
+                                "Vertical Video Feed",
+                                Modifier::empty(),
+                                sized(15.0, Some(FontWeight::BOLD)),
+                            );
+                        },
+                    );
+                },
+            );
+            match tab.value() {
+                DemoTab::Decoders => Clips(),
+                DemoTab::Feed => VerticalVideoFeed(),
+            }
+        },
     );
 }
 
@@ -61,6 +139,7 @@ fn Clip(title: &'static str, codec: VideoCodec, rate: u32, content_scale: Conten
     let frames = rememberMutableStateOf(|| None::<DecodedFrames>);
     let stats = rememberMutableStateOf(DecoderStats::default);
     let failure = rememberMutableStateOf(|| None::<String>);
+    #[cfg(not(target_arch = "wasm32"))]
     DisposableEffect(codec, move |_| {
         let feed = match clip_feed::start(codec, rate) {
             Ok((feed, decoded)) => {
@@ -73,6 +152,14 @@ fn Clip(title: &'static str, codec: VideoCodec, rate: u32, content_scale: Conten
             }
         };
         DisposableEffectResult::new(move || drop(feed))
+    });
+    #[cfg(target_arch = "wasm32")]
+    LaunchedEffect(codec, async move |_| {
+        if let Err(error) =
+            clip_feed::run_async(codec, rate, move |decoded| frames.set(Some(decoded))).await
+        {
+            failure.set(Some(error.to_string()));
+        }
     });
     LaunchedEffect(frames.value(), async move |_| {
         let Some(decoded) = frames.value() else {

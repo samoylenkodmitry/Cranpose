@@ -32,6 +32,8 @@ pub(crate) struct SlotWriteSessionState {
     pub(crate) request_compaction: bool,
     pub(crate) request_anchor_storage_compaction: bool,
     pub(crate) request_payload_storage_compaction: bool,
+    // Up to two spare states chain here in a single Cell on the thread state.
+    pub(crate) next_spare: Option<Box<Self>>,
 }
 
 // The frames of a host whose state goes back to the spare states: a frame
@@ -61,6 +63,7 @@ impl SlotWriteSessionState {
             request_compaction: false,
             request_anchor_storage_compaction: false,
             request_payload_storage_compaction: false,
+            next_spare: None,
         }
     }
 

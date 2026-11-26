@@ -50,11 +50,13 @@ pub mod memory_pressure;
 pub mod microphone_permission;
 pub mod microphone_standby;
 pub mod navigation;
+pub mod network_request;
 pub mod network_status;
 pub mod notifier;
 pub mod opened_links;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod peer;
+pub mod player;
 pub mod power;
 pub mod preferences;
 pub mod purchases;
@@ -240,14 +242,15 @@ pub use launcher::{
     rememberSaveDocumentLauncher, rememberWritableFolderLauncher,
 };
 pub use media::{
-    AudioFocus, DUCKED_GAIN, EqualizerBand, EqualizerSettings, MediaArtwork, MediaCapabilities,
-    MediaCommand, MediaError, MediaItem, MediaMetadata, MediaObserver, MediaPlayer, MediaPlayerRef,
-    MediaSamples, MediaSourceHandle, MediaSourceOpener, MediaSourceOpenerRef,
-    OCTAVE_BAND_CENTERS_HZ, PlaybackProgress, PlaybackState, audio_focus,
-    clear_platform_media_player, clear_platform_media_source_opener, current_media_item,
-    dropped_media_samples, latest_media_samples, media_capabilities, media_equalizer,
-    media_equalizer_bands, media_playback_supported, media_player, media_volume,
-    observe_audio_focus, observe_media_commands, observe_media_metadata, observe_media_samples,
+    AudioFocus, ClippingConfiguration, DUCKED_GAIN, EqualizerBand, EqualizerSettings, MediaArtwork,
+    MediaCapabilities, MediaCommand, MediaError, MediaItem, MediaMetadata, MediaObserver,
+    MediaPlayer, MediaPlayerRef, MediaSamples, MediaSourceHandle, MediaSourceOpener,
+    MediaSourceOpenerRef, OCTAVE_BAND_CENTERS_HZ, PlaybackProgress, PlaybackState,
+    SubtitleConfiguration, audio_focus, clear_platform_media_player,
+    clear_platform_media_source_opener, current_media_item, dropped_media_samples,
+    latest_media_samples, media_capabilities, media_equalizer, media_equalizer_bands,
+    media_playback_supported, media_player, media_volume, observe_audio_focus,
+    observe_media_commands, observe_media_metadata, observe_media_samples,
     observe_playback_progress, observe_playback_state, octave_equalizer_bands, open_media,
     open_media_source, path_from_uri, pause_media, play_media, playback_progress, playback_state,
     probe_media_duration, publish_audio_focus, publish_media_command, publish_media_samples,
@@ -278,6 +281,14 @@ pub use navigation::{
     back_interception_enabled, exit_requested, observe_back_requests, push_back_gesture,
     push_back_request, request_exit, set_back_interception, take_back_requests, take_exit_request,
 };
+#[cfg(any(unix, windows))]
+pub use network_request::SocketHandle;
+pub use network_request::{
+    LinkSpeed, Network, NetworkHandle, NetworkReach, NetworkRequest, NetworkRequestId,
+    NetworkRequestState, NetworkRequester, NetworkRequesterRef, NetworkTransport, RequestedNetwork,
+    clear_platform_network_requester, publish_network_request_state, request_network,
+    set_platform_network_requester,
+};
 pub use network_status::{
     Connectivity, Metering, NetworkMonitor, NetworkMonitorRef, NetworkStatus,
     clear_platform_network_monitor, network_monitor, network_status, set_platform_network_monitor,
@@ -293,6 +304,21 @@ pub use opened_links::{
 pub use peer::{
     ByteSource, BytesSource, FetchResult, PeerError, PeerServer, SourceResolver, content_length,
     fetch_range, fetch_to_writer,
+};
+pub use player::{
+    AbrVariant, AudioRole, AvailableCommands, Cue, CueAlignment, CueGroup, DashAdaptationSet,
+    DashManifest, DashRepresentation, DashSegment, FrameTiming, HlsMasterPlaylist,
+    HlsMediaPlaylist, HlsRendition, HlsRenditionType, HlsSegment, HlsVariant, LIP_SYNC_TOLERANCE,
+    LoadControl, ManifestError, MasterClock, MediaCache, MediaCacheError, MediaCacheStats,
+    MediaProperties, PlaybackParameters, Player, PlayerBackend, PlayerBackendFactory,
+    PlayerBuilder, PlayerCapabilities, PlayerCommand, PlayerError, PlayerEvent, PlayerId,
+    PlayerObserver, PlayerPool, PlayerPoolConfig, PlayerPriority, PlayerSink, PlayerState,
+    PositionDiscontinuityReason, RepeatMode, SubtitleTrack, TrackEntry, TrackFormat, TrackGroup,
+    TrackSelectionOverride, TrackSelectionParameters, TrackType, Tracks, VideoContainer, VideoSize,
+    clear_platform_player_factory, parse_dash_mpd, parse_hls_master, parse_hls_media, parse_srt,
+    parse_subtitles, parse_webvtt, platform_player_factory, player_capabilities, rememberIsLoading,
+    rememberIsPlaying, rememberPlayerError, rememberPlayerEvents, rememberPlayerState,
+    select_abr_variant, set_platform_player_factory,
 };
 pub use power::{
     BatteryStatus, PowerCapabilities, PowerMonitor, PowerMonitorRef, PowerObserverRegistration,
@@ -331,10 +357,23 @@ pub use uri_handler::{
     ProvideUriHandler, UriHandler, UriHandlerError, UriHandlerRef, clear_platform_uri_handler,
     default_uri_handler, local_uri_handler, set_platform_uri_handler,
 };
+#[cfg(all(feature = "video-web", target_arch = "wasm32", target_os = "unknown"))]
+pub use video_decoder::WebVideoSource;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub use video_decoder::video_frame_from_pixel_buffer_ptr;
 pub use video_decoder::{
-    AccessUnit, CropRect, DecodedFrames, DecoderCapabilities, DecoderCapabilitySource,
-    DecoderConfig, DecoderError, DecoderOutput, DecoderStats, FrameInfo, VideoCodec, VideoDecoder,
-    VideoFrame, set_platform_decoder_capabilities, split_access_units,
+    AccessUnit, ColorPrimaries, ColorRange, ColorTransfer, CropRect, DecodeOrder, DecodedFrames,
+    DecoderCapabilities, DecoderCapabilitySource, DecoderConfig, DecoderError, DecoderOutput,
+    DecoderStats, FrameInfo, FrameProducer, VideoCodec, VideoColorInfo, VideoDecoder, VideoFrame,
+    VideoRotation, set_platform_decoder_capabilities, split_access_units,
+};
+#[cfg(target_os = "windows")]
+pub use video_decoder::{
+    D3d11FrameDescriptor, D3d11SurfaceExporter, DxgiPixelFormat, DxgiSharedFrame,
+};
+#[cfg(target_os = "linux")]
+pub use video_decoder::{
+    DmaBufFrame, DmaBufPlane, LinuxFrameMemory, LinuxPixelFormat, SoftwareBiPlanarPlanes,
 };
 pub use wearable::{
     WearableError, WearableEvent, WearableLink, WearablePeer, WearableReceiver, WearableStream,

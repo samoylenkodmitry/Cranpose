@@ -17,6 +17,8 @@ mod host;
 mod panel_layers;
 mod passthrough;
 mod ray_layers;
+#[cfg(all(feature = "scripted-hand", feature = "gltf"))]
+mod ray_start_log;
 mod recenter_events;
 mod refresh_rate;
 mod render_model_calls;
@@ -34,7 +36,9 @@ mod surface_layers;
 mod surface_swapchain;
 mod system_properties;
 mod tracked_pose;
+mod tracked_spaces;
 mod tracking;
+mod trial_layer;
 mod volume_layers;
 
 pub use host::run;

@@ -31,6 +31,7 @@ internal val DECLARED_SERVICES: Map<String, DeclaredService> = mapOf(
     "heart-rate" to DeclaredService(javaSource = "java-heart-rate"),
     "device-auth" to DeclaredService(javaSource = "java-device-auth"),
     "device-motion" to DeclaredService(javaSource = "java-device-motion"),
+    "network-request" to DeclaredService(javaSource = "java-network-request"),
     "microphone" to DeclaredService(javaSource = "java-microphone"),
     // One class asks for the run-time permissions of every tracking and room service
     "hand-tracking" to DeclaredService(javaSource = "java-permissions"),

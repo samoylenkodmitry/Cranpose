@@ -66,6 +66,10 @@ fmt:
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/ferro-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/zgui-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/floem-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/freya-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/vizia-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/makepad-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/layout-parity/cranpose-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/shopbench/Cargo.toml
 
 # Verify formatting without touching the tree. This is the CI gate.
@@ -88,6 +92,10 @@ fmt-check:
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/ferro-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/zgui-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/floem-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/freya-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/vizia-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/makepad-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/layout-parity/cranpose-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/shopbench/Cargo.toml
 
 # --- lint ------------------------------------------------------------------
@@ -160,8 +168,9 @@ optional_backend_features := "desktop,renderer-wgpu,camera-desktop,robot,audio-d
 test-watchos:
     cargo test -p cranpose-render-pixels
     cargo test -p cranpose --no-default-features --features watchos,embedded-default-font --test integration -- --test-threads=1
+    cargo test -p cranpose --no-default-features --features watchos,embedded-default-font,video --test integration -- --test-threads=1
     cargo test -p cranpose --no-default-features --features framebuffer,embedded-default-font --test framebuffer_memory
-    cargo clippy -p cranpose --no-default-features --features watchos,embedded-default-font --all-targets -- -D warnings
+    cargo clippy -p cranpose --no-default-features --features watchos,embedded-default-font,video --all-targets -- -D warnings
     python3 -m unittest discover -s crates/cranpose/watchos/tests -v
 
 # Native simulator and arm64 device builds, with a simulator launch on macOS.
@@ -409,8 +418,8 @@ check-forks base="origin/main":
     done
 
 # The wgpu fork's own tests, the Metal backend's among them, which only a Mac
-# compiles: the workspace leaves the forks out, so `test` runs none of them.
-# Runs when the diff against `base` touches `forks/`.
+# compiles, and the GL backend's: the workspace leaves the forks out, so `test`
+# runs none of them. Runs when the diff against `base` touches `forks/`.
 test-forks base="origin/main":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -418,7 +427,7 @@ test-forks base="origin/main":
         echo "test-forks: forks/ unchanged against {{base}}"
         exit 0
     fi
-    cargo test --manifest-path forks/wgpu/wgpu-hal/Cargo.toml --features metal --target-dir target/forks --lib
+    cargo test --manifest-path forks/wgpu/wgpu-hal/Cargo.toml --features metal,gles --target-dir target/forks --lib
 
 # Copy-paste budget for a block the diff adds, at either end of the copy.
 # Same on-demand install as above, through the same pinned-path resolver.
@@ -510,8 +519,16 @@ _size-ceiling path max what:
 # 1,361,119 bytes: the Explainer tab of #2284, its screens and shaders, and
 # `cranpose/localization`, which #2284 turned on in the web demo, with the
 # program's merges after it. The release owner allowed both shares on
-# 2026-11-17 for the v0.26.0 release.
-web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "16955000" "web demo wasm")
+# 2026-11-17 for the v0.26.0 release. The Video Playground showcase tab and
+# `cranpose/video` (WebCodecs player, zero-copy GPU surface intake, HLS/DASH,
+# 64-video wall, WGSL shaders; offline clips are served statically outside wasm)
+# took the CI wasm-opt 130 module to 17,481,430 bytes (+610,455 bytes).
+# Adding the Video Playground vertical Reels gallery (`VerticalPager` +
+# `PlayerPool`), interactive `Slider` seek bar, player error/speed hooks,
+# fixed-duration DASH / fMP4 HLS audio MSE support, and 8K/4K open catalog
+# brought the CI module to ~17.63 MB (+149 KB after de-monomorphizing chips
+# and sharing video frame intake).
+web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "17720000" "web demo wasm")
 
 # Fail when a built wasm module needs a WebAssembly feature past Safari 15.
 # WebKit rejects such a module whole, in Safari and in every other iOS browser.
@@ -606,6 +623,17 @@ bench-app-check:
     cargo clippy --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml --all-targets -- -D warnings
     cargo test --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml
 
+# Fast static check for benchmarks/layout-parity: clippy on the standalone
+# Cranpose app plus unit tests for the divergence ledger comparator.
+layout-parity-check:
+    cargo clippy --manifest-path benchmarks/layout-parity/cranpose-app/Cargo.toml --all-targets -- -D warnings
+    python3 benchmarks/layout-parity/tests/test_compare.py
+
+# End-to-end Compose Desktop vs Cranpose 20-zone layout atlas (1.0x and 1.75x)
+# and behavioral stress suite, checked against divergences.toml. Nightly runs it.
+layout-parity out="target/layout-parity": _benchmark-python layout-parity-check
+    {{benchmark_python}} benchmarks/layout-parity/compare.py --run --check-ledger --out {{out}}
+
 # The steady-frame ledger (#2247): the `malloc` and `realloc` calls, the
 # blocks left live and the bytes copied a steady frame of every bench layout,
 # and the still wall's start a layout node, against
@@ -617,6 +645,14 @@ bench-app-check:
 # on H; `--repeats 3` measures the spread for the budget file.
 steady-ledger *args:
     scripts/perf/steady_ledger.sh {{args}}
+
+# Video playback steady-frame 0-allocation and 100-swipe vertical feed memory gate.
+test-player-memory:
+    cargo test --locked --profile ci -p cranpose --features desktop,renderer-wgpu,video --test player_memory -- --nocapture
+
+# Live Linux VA-API DMABUF + FFmpeg zero-copy Player e2e (MP4 TTFF, seek, HLS headers, HDR PQ/HLG).
+test-video-linux:
+    cargo test --locked --profile ci -p cranpose --features desktop,renderer-wgpu,video --test linux_player -- --nocapture
 
 # The shop app benchmark's Everbloom app (benchmarks/shopbench), a Cargo
 # project of its own: Everbloom.app for an iPhone, or for the Simulator with
@@ -668,6 +704,8 @@ test-ide:
 test-features: test-watchos test-localization
     cargo test --profile ci -p cranpose-core --features std-hash
     cargo test --profile ci -p cranpose-core --features internal
+    cargo test --profile ci -p cranpose-core --features host-timers --test integration host_timers
+    cargo clippy -p cranpose-core --all-targets --features host-timers -- -D warnings
     cargo test --profile ci -p cranpose-ui --features svg
     cargo test --profile ci -p cranpose-ui --features text-hyphenation-embedded
     cargo test --profile ci -p cranpose-text --features hyphenation-embedded --test text_engine hyphenation
@@ -734,6 +772,7 @@ _benchmark-python:
 test-shell-helpers: _benchmark-python ci-contract-gates
     python3 scripts/ci/tests/test_rustup_lock.py
     python3 scripts/ci/tests/test_wasm_feature_floor.py
+    python3 benchmarks/layout-parity/tests/test_compare.py
     scripts/ci/clippy_budget_test.sh
     scripts/ci/source_budgets_test.sh
     bash scripts/ci/sccache_lifetime_test.sh
@@ -758,6 +797,8 @@ test-shell-helpers: _benchmark-python ci-contract-gates
     python3 benchmarks/compose-vs-cranpose/tests/test_chrome_first_run.py
     python3 benchmarks/compose-vs-cranpose/tests/test_browser_server.py
     python3 benchmarks/compose-vs-cranpose/tests/test_browser_tiers.py
+    python3 benchmarks/compose-vs-cranpose/tests/test_shared_apks.py
+    python3 benchmarks/compose-vs-cranpose/tests/test_android_devices.py
     python3 benchmarks/compose-vs-cranpose/tests/test_starts.py
     python3 benchmarks/compose-vs-cranpose/tests/test_window_launch.py
     python3 benchmarks/compose-vs-cranpose/tests/test_release_tree.py
@@ -1459,17 +1500,36 @@ liquid-reference-device-test device team results suite:
 liquid-reference-device-run device run results suite architecture="arm64":
     xcodebuild -xctestrun '{{run}}' -destination 'platform=iOS,arch={{architecture}},id={{device}}' -resultBundlePath '{{results}}' -parallel-testing-enabled NO -test-timeouts-enabled NO -only-testing:LiquidReferenceTests/{{suite}} test-without-building
 
-# Nightly comparison of the latest release's benchmark app against main's on
-# an attached Android device: builds both, compares them with the short A/B
-# protocol and writes OUTPUT/run.json.
-perf-nightly serial output:
-    python3 scripts/perf/nightly.py --serial {{serial}} --output {{output}}
+# Measure both boots of each screen on a physical ESP32 board.
+perf-esp32 board output:
+    . "$HOME/export-{{esp32_toolchain}}.sh" && scripts/ci/with_host_lock.sh --shared python3 scripts/esp32/nightly.py build --board {{quote(board)}} --output {{quote(output)}}
+    scripts/ci/with_host_lock.sh --exclusive python3 scripts/esp32/nightly.py measure --board {{quote(board)}} --output {{quote(output)}}
+
+perf-android-devices output serial:
+    python3 scripts/perf/android_devices.py --output {{quote(output)}} --serial {{quote(serial)}}
+
+perf-mi-tv output apks:
+    scripts/android/mi_tv.sh just perf-measure-frameworks-at {{quote(output)}} {{quote(apks)}} 3
+
+# Compare the latest release with main on the attached Android device.
+perf-nightly serial output apks="":
+    python3 scripts/perf/nightly.py --serial {{quote(serial)}} --output {{quote(output)}} {{if apks == "" { "" } else { "--apks " + quote(apks) }}}
 
 # Every framework's app on the phone: the builds in `apks` (APP.apk, from
 # benchmarks/compose-vs-cranpose/build_apps.sh) beside Cranpose's latest
 # release and main, built from this checkout.
 perf-frameworks serial output apks:
-    python3 scripts/perf/frameworks_phone.py --serial {{serial}} --output {{output}} --apks {{apks}}
+    just perf-framework-apks {{quote(apks)}}
+    just perf-measure-frameworks {{quote(output)}} {{quote(apks)}} {{quote(serial)}}
+
+perf-framework-apks apks:
+    python3 scripts/perf/framework_apks.py --apks {{quote(apks)}}
+
+perf-measure-frameworks output apks serial:
+    just perf-measure-frameworks-at {{quote(output)}} {{quote(apks)}} 12 {{quote(serial)}}
+
+perf-measure-frameworks-at output apks tier serial:
+    python3 benchmarks/compose-vs-cranpose/frameworks.py --tier {{quote(tier)}} --serial {{quote(serial)}} --output {{quote(output)}} --install {{quote(apks)}} --full-run --main "$(git rev-parse HEAD)" --release "$(git describe --tags --abbrev=0 --match 'v*')"
 
 # The apps that target the browser, open in Chrome on the phone: the pages in
 # `pages` (from `build_apps.sh browser`), at the browser's tiers on the phone.

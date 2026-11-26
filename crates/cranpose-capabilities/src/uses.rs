@@ -125,6 +125,17 @@ impl Use {
         }
     }
 
+    /// Networks that the application asks the system for by the link they
+    /// run over, such as a USB cable's, and sockets bound to them; see
+    /// `cranpose_services::network_request`. Asking asks the person for
+    /// nothing.
+    pub const fn network_request() -> Self {
+        Self {
+            service: Service::NetworkRequest,
+            reason: None,
+        }
+    }
+
     /// The wearer's heart rate, with what the person is told before the
     /// sensor is read. Declaring it is the only way an application's build
     /// asks for the permission; reading it still takes an explicit request

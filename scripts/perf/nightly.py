@@ -68,7 +68,8 @@ BUILD_RETRY_DELAY_S = 60
 
 
 def build(tree, suffix=None):
-    command = ['./gradlew', '--no-daemon', '-q', ':app:assembleRelease']
+    command = ['./gradlew', '--no-daemon', '-q', '--init-script', str(Path(__file__).with_name('benchmark_abis.gradle')),
+               ':app:assembleRelease']
     if suffix:
         command.append('-PperfCompareSuffix=' + suffix)
     # Each tree builds into its own target: one target shared by two trees
@@ -123,8 +124,12 @@ def nightly(args):
     # A scenario the release's app does not know falls back to the feed.
     if not release_has(release, BENCH / 'measure.py', f"'{SCENARIO}': '"):
         return {'skipped': f'{release} draws no {SCENARIO}'}
-    release_apk = build(release_tree_at(args.release_tree, release), '.release')
-    main_apk = build(REPO)
+    if args.apks is None:
+        release_apk = build(release_tree_at(args.release_tree, release), '.release')
+        main_apk = build(REPO)
+    else:
+        release_apk = args.apks / 'cranpose-release.apk'
+        main_apk = args.apks / 'cranpose.apk'
     with device_lock(args.serial):
         device = Device(args.serial)
         device.install('cranpose-release', release_apk)
@@ -143,6 +148,7 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--serial', required=True)
     parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--apks', type=Path, help='use the APK pair prepared by framework_apks.py for this checkout')
     parser.add_argument('--release-tree', type=Path, default=Path.home() / 'perf-nightly' / 'release-tree',
                         help='worktree the release builds in, kept across nights')
     args = parser.parse_args()

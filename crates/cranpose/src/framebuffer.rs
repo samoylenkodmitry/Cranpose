@@ -12,6 +12,7 @@ use std::rc::Rc;
 
 pub use cranpose_app_shell::FrameSchedule;
 use cranpose_app_shell::{AppShell, default_root_key};
+pub use cranpose_foundation::PointerButton;
 use cranpose_foundation::PointerSource;
 use cranpose_render_pixels::{Picture, PixelsRenderer};
 pub use cranpose_render_pixels::{PixelRect, Rgb565Order};
@@ -20,6 +21,7 @@ use cranpose_services::{
     host::{LifecycleState, dispatch_lifecycle_state},
 };
 use cranpose_ui::{EdgeInsets, current_memory_headroom, set_memory_headroom};
+pub use cranpose_ui::{Key, KeyEvent, KeyEventType, Modifiers};
 use web_time::Instant;
 
 use crate::platform_env::PlatformEnvironment;
@@ -301,10 +303,10 @@ impl Framebuffer {
         if !self.active() || !x.is_finite() || !y.is_finite() {
             return;
         }
+        self.shell.set_pointer_source(PointerSource::Touch);
         match phase {
             TouchPhase::Down => {
-                self.shell.set_cursor(x, y);
-                self.shell.pointer_pressed();
+                self.shell.pointer_pressed_at_position(x, y);
             }
             TouchPhase::Move => {
                 self.shell.set_cursor(x, y);
@@ -324,6 +326,56 @@ impl Framebuffer {
             return false;
         }
         self.shell.rotary_scrolled_by_detents(delta, elapsed_millis)
+    }
+
+    /// Routes a keyboard event through focus and text input handling. Returns
+    /// whether a focused node consumed the event.
+    pub fn key_event(&mut self, event: &KeyEvent) -> bool {
+        if !self.active() {
+            return false;
+        }
+        self.shell.on_key_event(event)
+    }
+
+    /// Moves the pointer cursor to `x`, `y` in display points. Non-finite
+    /// coordinates are ignored. Returns whether hover or drag state changed.
+    pub fn mouse_move(&mut self, x: f32, y: f32) -> bool {
+        if !self.active() || !x.is_finite() || !y.is_finite() {
+            return false;
+        }
+        self.shell.set_pointer_source(PointerSource::Mouse);
+        self.shell.set_cursor(x, y)
+    }
+
+    /// Presses `button` at the current cursor position. Returns whether a node
+    /// received the press.
+    pub fn mouse_button_pressed(&mut self, button: PointerButton) -> bool {
+        if !self.active() {
+            return false;
+        }
+        self.shell.set_pointer_source(PointerSource::Mouse);
+        self.shell.primary().mouse_button_pressed(button)
+    }
+
+    /// Releases `button` at the current cursor position. Returns whether a node
+    /// received the release.
+    pub fn mouse_button_released(&mut self, button: PointerButton) -> bool {
+        if !self.active() {
+            return false;
+        }
+        self.shell.set_pointer_source(PointerSource::Mouse);
+        self.shell.primary().mouse_button_released(button)
+    }
+
+    /// Scrolls at the current cursor position by `delta_x`, `delta_y` in
+    /// display points. Non-finite deltas are ignored. Returns whether a
+    /// scrollable took the input.
+    pub fn mouse_scroll(&mut self, delta_x: f32, delta_y: f32) -> bool {
+        if !self.active() || !delta_x.is_finite() || !delta_y.is_finite() {
+            return false;
+        }
+        self.shell.set_pointer_source(PointerSource::Mouse);
+        self.shell.pointer_scrolled(delta_x, delta_y)
     }
 
     /// Suspends frame production and cancels held touches when the display

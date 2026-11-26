@@ -60,6 +60,7 @@ pub mod focus_order;
 mod focus_within;
 pub mod font_scale;
 mod gesture_velocity;
+mod indication;
 mod interaction;
 mod key_event;
 mod keyboard_options;
@@ -186,6 +187,7 @@ pub use focus_order::{
 };
 pub use focus_within::FocusWithin;
 pub use font_scale::{FontScaleCurve, MAX_FONT_SCALE_KNOTS};
+pub use indication::{Indication, IndicationState, local_indication};
 pub use interaction::{
     HoverInteraction, HoverInteractionEnter, HoverInteractionExit, Interaction,
     MutableInteractionSource, PressInteraction, PressInteractionCancel, PressInteractionPress,

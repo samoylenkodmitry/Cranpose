@@ -41,6 +41,25 @@ fn the_layer_carries_depth_only_when_the_runtime_takes_it() {
 }
 
 #[test]
+fn a_frame_whose_content_leaves_no_depth_carries_none_and_nothing_tests_it() {
+    let plan = |writes| plan(1, BOTH, FULL.for_content(writes)).expect("a layer");
+    assert!(!plan(false).submits_depth, "glow alone leaves no depth");
+    assert!(
+        !plan(false).tests_depth,
+        "no layer tests a depth that is not there"
+    );
+    assert!(
+        plan(true).submits_depth,
+        "a mesh that leaves depth brings it back"
+    );
+    assert!(plan(true).tests_depth);
+    assert!(
+        !NEITHER.for_content(true).submits,
+        "a runtime that takes no depth gets none"
+    );
+}
+
+#[test]
 fn layers_over_the_projection_test_its_depth_only_with_both_extensions() {
     let plan = |depth| plan(1, BOTH, depth);
     assert!(!plan(NEITHER).expect("a layer").tests_depth);

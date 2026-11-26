@@ -1,6 +1,6 @@
 # Cranpose services
 
-`cranpose-services` defines platform service contracts for Cranpose applications. The crate groups APIs for HTTP, files and folders, URI handlers, audio and media, camera, hardware video decoding and the surfaces it writes into, image pickers, haptics, heart rate, the device's rotation, the device unlock, accessibility, device and power information, app updates, purchases, navigation, preferences, and shared content.
+`cranpose-services` defines platform service contracts for Cranpose applications. The crate groups APIs for HTTP, files and folders, URI handlers, audio and media, camera, hardware video decoding and the surfaces it writes into, image pickers, haptics, heart rate, network requests, the device's rotation, the device unlock, accessibility, device and power information, app updates, purchases, navigation, preferences, and shared content.
 
 Most applications use these APIs through the `cranpose` facade. Add `cranpose-services` directly when an application provides a custom backend or needs a service contract outside the facade. Platform adapters register implementations through each module's `set_platform_*` function. Composition-local services use `local_*` functions and `Provide*` composables; process-wide services use plain functions.
 
@@ -52,6 +52,42 @@ one that was refused sees `Denied`. `live_bpm()` is a reading only while the
 sensor is on the skin. On Android the service is compiled into the app only
 when declared, and the sensor pauses with the activity; other platforms report
 `Unavailable`.
+
+## Example: find a computer over a USB cable
+
+A headset that is plugged into a computer can offer a network over the
+cable. The application asks the system for it by its transport, binds its
+sockets to it and finds the computer by a query to every node on the link.
+The service is in a build only when its build script declares
+`cranpose_capabilities::Use::network_request()`.
+
+```rust
+use std::net::{Ipv6Addr, SocketAddr};
+
+use cranpose_services::{
+    NetworkRequest, NetworkTransport, RequestedNetwork, request_network,
+};
+
+// Held while the application wants the cable. Dropping it gives the network
+// back.
+fn ask_for_the_cable() -> RequestedNetwork {
+    request_network(NetworkRequest::local(NetworkTransport::Usb))
+}
+
+// The computer answers from its link-local address on the cable.
+fn find_the_computer(cable: &RequestedNetwork, port: u16) -> Option<SocketAddr> {
+    let network = cable.network()?;
+    let socket = network.bind_udp((Ipv6Addr::UNSPECIFIED, 0).into()).ok()?;
+    socket.send_to(b"who is there", network.all_nodes(port)).ok()?;
+    let mut answer = [0u8; 64];
+    socket.recv_from(&mut answer).ok().map(|(_, from)| from)
+}
+```
+
+On Android the request asks `ConnectivityManager.requestNetwork`. Android
+serves it while the application is in front, so the application asks again
+after `NetworkRequestState::Unavailable`. Other platforms hand no network to
+one application and answer `Unavailable` at once.
 
 ## Example: turn a view with the device
 

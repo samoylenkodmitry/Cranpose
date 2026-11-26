@@ -8,7 +8,6 @@
 use super::{
     super::{
         GroupRecord, NodeRecord, checked_usize_to_i64,
-        payload_store::ParkedOrder,
         segments::{GroupSegment, NodeSegment, PayloadSegment, shift_group_segment_starts_from},
     },
     SlotTable,
@@ -21,6 +20,59 @@ use crate::AnchorId;
 // A subtree with no more inserts than this, such as a typical list row,
 // keeps them in place and pays nothing more than before.
 const PARK_AFTER_INSERTS: u32 = 16;
+
+// The most records a kept tail buffer has room for. A larger one grew during a
+// large table shift, and keeping it would hold its memory on this thread.
+const SPARE_PARKED_TAIL_CAPACITY: usize = 1024;
+
+#[derive(Default)]
+pub(crate) struct ParkedTailStorage {
+    groups: Vec<GroupRecord>,
+    nodes: Vec<NodeRecord>,
+    payload_order: Vec<u32>,
+    // Up to two spare tails chain here in a single Cell on the thread state.
+    next: Option<Box<Self>>,
+}
+
+impl ParkedTailStorage {
+    fn is_small_for_reuse(&self) -> bool {
+        self.groups.capacity() <= SPARE_PARKED_TAIL_CAPACITY
+            && self.nodes.capacity() <= SPARE_PARKED_TAIL_CAPACITY
+            && self.payload_order.capacity() <= SPARE_PARKED_TAIL_CAPACITY
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn spare_parked_tail() -> Box<ParkedTailStorage> {
+    crate::thread_state::try_runtimes(|state| {
+        let mut head = state.spare_parked_tails.take()?;
+        state.spare_parked_tails.set(head.next.take());
+        Some(head)
+    })
+    .flatten()
+    .unwrap_or_default()
+}
+
+#[cold]
+#[inline(never)]
+fn recycle_parked_tail(mut storage: Box<ParkedTailStorage>) {
+    if !storage.is_small_for_reuse() {
+        return;
+    }
+    storage.groups.clear();
+    storage.nodes.clear();
+    storage.payload_order.clear();
+    crate::thread_state::try_runtimes(|state| {
+        let head = state.spare_parked_tails.take();
+        if head.as_ref().is_none_or(|first| first.next.is_none()) {
+            storage.next = head;
+            state.spare_parked_tails.set(Some(storage));
+        } else {
+            state.spare_parked_tails.set(head);
+        }
+    });
+}
 
 // The writer ends the run when it closes the root's frame.
 pub(in crate::slot) struct InsertRun {
@@ -37,9 +89,7 @@ enum RunTail {
 }
 
 struct ParkedTail {
-    groups: Vec<GroupRecord>,
-    nodes: Vec<NodeRecord>,
-    payload_order: ParkedOrder,
+    storage: Box<ParkedTailStorage>,
     // Where the parked groups, nodes and payloads began in the table.
     group_start: usize,
     node_start: usize,
@@ -146,10 +196,19 @@ impl SlotTable {
             self.insert_run = None;
             return;
         };
+        let mut storage = spare_parked_tail();
+        debug_assert!(
+            storage.groups.is_empty()
+                && storage.nodes.is_empty()
+                && storage.payload_order.is_empty(),
+            "spare parked tail must be cleared before reuse"
+        );
+        storage.groups.extend(self.groups.drain(tail_start..));
+        storage.nodes.extend(self.nodes.drain(node_start..));
+        self.payloads
+            .split_off_order_into(payload_start, &mut storage.payload_order);
         let parked = ParkedTail {
-            groups: self.groups.split_off(tail_start),
-            nodes: self.nodes.split_off(node_start),
-            payload_order: self.payloads.split_off_order(payload_start),
+            storage,
             group_start: tail_start,
             node_start,
             payload_start,
@@ -176,9 +235,11 @@ impl SlotTable {
             tail.payload_start,
             PayloadSegment::NAME,
         );
-        self.groups.append(&mut tail.groups);
-        self.nodes.append(&mut tail.nodes);
-        self.payloads.append_order(tail.payload_order);
+        self.groups.append(&mut tail.storage.groups);
+        self.nodes.append(&mut tail.storage.nodes);
+        self.payloads
+            .append_order_from(&mut tail.storage.payload_order);
+        recycle_parked_tail(tail.storage);
         shift_group_segment_starts_from::<NodeSegment>(&mut self.groups, base, node_delta);
         shift_group_segment_starts_from::<PayloadSegment>(&mut self.groups, base, payload_delta);
         if write_indexes {

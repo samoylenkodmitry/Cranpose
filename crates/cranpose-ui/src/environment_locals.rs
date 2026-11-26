@@ -26,6 +26,7 @@ pub(crate) struct EnvironmentLocals {
     pub(crate) selection_registrar:
         OnceCell<CompositionLocal<Option<crate::selection_container::SelectionRegistrar>>>,
     pub(crate) on_light_surface: OnceCell<CompositionLocal<bool>>,
+    pub(crate) indication: OnceCell<CompositionLocal<crate::Indication>>,
     pub(crate) eye: OnceCell<CompositionLocal<Option<crate::Eye>>>,
     pub(crate) text_selection_colors: OnceCell<CompositionLocal<crate::TextSelectionColors>>,
     pub(crate) popup_registry: OnceCell<StaticCompositionLocal<crate::widgets::PopupRegistry>>,
@@ -61,6 +62,7 @@ impl EnvironmentLocals {
             shared_entry: OnceCell::new(),
             selection_registrar: OnceCell::new(),
             on_light_surface: OnceCell::new(),
+            indication: OnceCell::new(),
             eye: OnceCell::new(),
             text_selection_colors: OnceCell::new(),
             popup_registry: OnceCell::new(),

@@ -13,7 +13,9 @@ fn panel() -> PanelSlot {
         shape: Shape::Flat,
         resize: Some(ResizeLimits::new()),
         room: [800.0, 500.0],
+        priority: 0,
         ride: Ride::Free,
+        tracked: None,
     }
 }
 

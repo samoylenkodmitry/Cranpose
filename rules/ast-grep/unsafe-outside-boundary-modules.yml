@@ -18,9 +18,12 @@ rule:
     - kind: inner_attribute_item
       regex: \b(allow|expect)\s*\([^)]*\bunsafe_code\b
 ignores:
+  - crates/cranpose-audio/src/backend/aaudio/input_stream.rs
   - crates/cranpose-audio/src/backend/aaudio/library.rs
   - crates/cranpose-audio/src/backend/aaudio/output_stream.rs
+  - crates/cranpose-audio/src/backend/aaudio/stream.rs
   - crates/cranpose-audio/src/backend/avaudio.rs
+  - crates/cranpose-audio/src/backend/avaudio_microphone.rs
   - crates/cranpose-audio/src/ring.rs
   - crates/cranpose-macros/src/branch_groups.rs
   - crates/cranpose-macros/src/tests/branch_groups_tests.rs
@@ -38,12 +41,21 @@ ignores:
   - crates/cranpose-storekit/src/tests/apple_tests.rs
   - apps/xr-demo/src/pattern_writer.rs
   - crates/cranpose-services/src/external_surface.rs
+  - crates/cranpose-services/src/video_decoder/d3d11_frame.rs
   - crates/cranpose-services/src/video_decoder/decompression_session.rs
   - crates/cranpose-services/src/video_decoder/image_reader.rs
+  - crates/cranpose-services/src/video_decoder/linux_decoder.rs
+  - crates/cranpose-services/src/video_decoder/linux_frame.rs
   - crates/cranpose-services/src/video_decoder/media_codec.rs
+  - crates/cranpose-services/src/video_decoder/media_foundation.rs
+  - crates/cranpose-services/src/video_decoder/media_foundation_capabilities.rs
+  - crates/cranpose-services/src/video_decoder/media_foundation_transform.rs
   - crates/cranpose-services/src/video_decoder/pixel_buffer.rs
+  - crates/cranpose-services/src/video_decoder/vaapi_capabilities.rs
+  - crates/cranpose-services/src/video_decoder/vaapi_loader.rs
   - crates/cranpose-services/src/video_decoder/video_toolbox.rs
   - crates/cranpose-services/src/video_decoder/video_toolbox_capabilities.rs
+  - crates/cranpose-services/src/video_decoder/web_frame.rs
   - crates/cranpose-xr/src/android_main.rs
   - crates/cranpose-xr/src/openxr/clock/performance_counter.rs
   - crates/cranpose-xr/src/openxr/clock/timespec.rs
@@ -84,6 +96,7 @@ ignores:
   - crates/cranpose/src/android/jni.rs
   - crates/cranpose/src/android/media.rs
   - crates/cranpose/src/android/microphone_standby.rs
+  - crates/cranpose/src/android/network_request.rs
   - crates/cranpose/src/android/perf_hint.rs
   - crates/cranpose/src/android/permissions.rs
   - crates/cranpose/src/android/pipeline_update.rs
@@ -108,6 +121,11 @@ ignores:
   - crates/cranpose/src/apple/device_motion.rs
   - crates/cranpose/src/apple/network.rs
   - crates/cranpose/src/apple/now_playing.rs
+  - crates/cranpose/src/android/media_session.rs
+  - crates/cranpose/src/android/player_extractor.rs
+  - crates/cranpose/src/apple/player.rs
+  - crates/cranpose/src/apple/player_media.rs
+  - crates/cranpose/src/apple/player_route.rs
   - crates/cranpose/src/apple/wearable.rs
   - crates/cranpose/src/desktop/accessibility.rs
   - crates/cranpose/src/desktop/media_controls/macos.rs
@@ -144,3 +162,8 @@ ignores:
   - crates/cranpose/src/web/heap.rs
   - crates/cranpose/src/desktop/windows_cursor.rs
   - crates/cranpose/src/desktop/windows_menu.rs
+  - crates/cranpose/src/linux/player_demux.rs
+  - crates/cranpose/src/linux/player_ffmpeg.rs
+  - crates/cranpose/src/linux/video_converter.rs
+  - crates/cranpose/src/windows/d3d12_converter.rs
+  - crates/cranpose/src/windows/player_source.rs

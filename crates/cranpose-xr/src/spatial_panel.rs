@@ -29,7 +29,9 @@ const CURSOR_DOT: f32 = 12.0;
 pub fn SpatialPanel(modifier: SubspaceModifier, content: impl FnMut() + 'static) {
     let size = modifier.size_or(DEFAULT_PANEL_SIZE);
     match local_space().current() {
-        Some(space) => PlacedPanel(space, modifier, size, content),
+        Some(space) => {
+            PlacedPanel(space, modifier, size, content);
+        }
         None => {
             Box(
                 Modifier::empty().size_points(size[0], size[1]),
@@ -40,13 +42,14 @@ pub fn SpatialPanel(modifier: SubspaceModifier, content: impl FnMut() + 'static)
     }
 }
 
+// A panel that the space places, whose id it returns.
 #[composable]
-fn PlacedPanel(
+pub(crate) fn PlacedPanel(
     space: Space,
     modifier: SubspaceModifier,
     size: [f32; 2],
     content: impl FnMut() + 'static,
-) {
+) -> u64 {
     let panel = remember({
         let space = space.clone();
         move || space.new_panel()
@@ -62,7 +65,7 @@ fn PlacedPanel(
     space.set_move_policy(id, modifier.move_policy());
     space.set_point_source(id, modifier.attached_point_source());
     space.set_resizable(id, modifier.resize());
-    space.set_shape(id, shape);
+    space.set_layer(id, shape, modifier.priority());
     space.set_dock(id, modifier.dock());
     DisposableEffect(id, move |_| {
         DisposableEffectResult::new(move || space.remove(id))
@@ -83,6 +86,7 @@ fn PlacedPanel(
             CursorDots(panel.dots);
         },
     );
+    id
 }
 
 // The dots read the cursors' state, so a cursor that moves composes only its dot.

@@ -66,7 +66,11 @@ STD_REALLOC = re.compile(r"\brealloc_fallback\b|\b__rust_realloc\b")
 
 # The example's functions whose stacks make up its phases.
 START = "steady_frames::start"
-STEADY = "steady_frames::steady_frames"
+STEADY = (
+    "steady_frames::steady_frames",
+    "movable_content::steady_frames",
+    "subcompose_chain::steady_frames",
+)
 # The outermost frame of a whole stack: a thread's entry. valgrind keeps
 # the innermost 500 frames, so a deep layout's stack can end before it.
 ENTRY = re.compile(r"^0x[0-9A-Fa-f]+: (main|start_thread|clone3?|\(below main\)) \(")
@@ -78,8 +82,9 @@ def points(path, window):
     whole stacks that hold that function and every cut stack."""
     data = json.load(open(path))
     table = data["ftbl"]
+    wanted = (window,) if isinstance(window, str) else tuple(window or ())
     marks = {index for index, entry in enumerate(table)
-             if (frame := FRAME.match(entry)) and frame.group(1) == window}
+             if (frame := FRAME.match(entry)) and frame.group(1) in wanted}
     for point in data["pps"]:
         indices = point["fs"]
         whole = bool(ENTRY.match(table[indices[-1]]))

@@ -65,6 +65,9 @@ impl DecoderCapabilitySource for AndroidDecoderCapabilities {
                 max_width: Some(width.max(0).cast_unsigned()),
                 max_height: Some(height.max(0).cast_unsigned()),
                 max_bitrate: Some(bitrate.max(0).cast_unsigned()),
+                b_frame_reordering: true,
+                hdr_10bit: None,
+                zero_copy_gpu: true,
             }),
             Ok(None) => None,
             Err(error) => {

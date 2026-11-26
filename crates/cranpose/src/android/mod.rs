@@ -25,6 +25,8 @@ mod configuration;
 ))]
 mod crop_window;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+pub(crate) mod declared_services;
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod decoder_capabilities;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod device;
@@ -55,7 +57,7 @@ pub(crate) mod frame_work;
 #[cfg(any(test, feature = "renderer-wgpu"))]
 pub(crate) mod haptics_queue;
 #[cfg(all(feature = "video", feature = "renderer-wgpu", target_os = "android"))]
-mod hardware_buffer_device;
+pub(crate) mod hardware_buffer_device;
 #[cfg(any(
     test,
     all(feature = "video", feature = "renderer-wgpu", target_os = "android")
@@ -82,6 +84,11 @@ pub(crate) mod launch_args;
 #[cfg(all(feature = "media-backend", target_os = "android"))]
 pub(crate) mod media;
 #[cfg(all(
+    any(feature = "media-backend", feature = "video"),
+    target_os = "android"
+))]
+pub(crate) mod media_session;
+#[cfg(all(
     feature = "meta-entitlement",
     feature = "renderer-wgpu",
     target_os = "android"
@@ -101,6 +108,8 @@ pub(crate) mod microphone;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod microphone_standby;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+pub(crate) mod network_request;
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod overlay_window;
 #[cfg(any(test, feature = "renderer-wgpu"))]
 pub(crate) mod panic_hook;
@@ -114,6 +123,10 @@ pub(crate) mod permissions;
 mod pipeline_cache;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod pipeline_update;
+#[cfg(all(feature = "video", target_os = "android"))]
+pub(crate) mod player;
+#[cfg(all(feature = "video", target_os = "android"))]
+mod player_extractor;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod pointer_icon;
 #[cfg(any(test, feature = "renderer-wgpu"))]

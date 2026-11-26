@@ -27,13 +27,15 @@ pub struct ScriptedButtons {
     pub menu: bool,
 }
 
-// One step of the script: where the controller and its aim end, and what the buttons do.
+// One step of the script: where the controller and its aim end, and what the buttons do. A step
+// that is not tracked gives the frame a controller that the runtime does not track.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Step {
     duration: Duration,
     position: [f32; 3],
     at: [f32; 3],
     buttons: ScriptedButtons,
+    tracked: bool,
 }
 
 /// A controller that the backend plays in place of the runtime's controller, so that a build shows
@@ -85,6 +87,7 @@ impl ScriptedController {
             position,
             at,
             buttons,
+            tracked: true,
         });
         self
     }
@@ -95,6 +98,24 @@ impl ScriptedController {
     pub fn holding(self, duration: Duration, buttons: ScriptedButtons) -> Self {
         let (position, at) = self.end();
         self.moving_to(duration, (position, at), buttons)
+    }
+
+    /// The script with a step that lasts `duration` in which the runtime does not track the
+    /// controller, as when its battery is flat or it lies out of the cameras' view: the frame's
+    /// [`Controller`] of the hand has no profile, no pose and no button down. A step after it
+    /// starts where the controller was before it. A script that ends with such a step keeps the
+    /// controller untracked, so a script of one such step plays a controller that is missing.
+    #[must_use]
+    pub fn untracked(mut self, duration: Duration) -> Self {
+        let (position, at) = self.end();
+        self.steps.push(Step {
+            duration,
+            position,
+            at,
+            buttons: ScriptedButtons::default(),
+            tracked: false,
+        });
+        self
     }
 
     /// The script that starts again with its first step after its last.
@@ -134,9 +155,11 @@ impl ScriptedController {
         };
         let (mut position, mut at) = self.start;
         let mut buttons = ScriptedButtons::default();
+        let mut tracked = true;
         let mut passed = Duration::ZERO;
         for step in &self.steps {
             let into = time.saturating_sub(passed);
+            tracked = step.tracked;
             if into >= step.duration {
                 (position, at, buttons) = (step.position, step.at, step.buttons);
                 passed += step.duration;
@@ -148,7 +171,11 @@ impl ScriptedController {
             buttons = step.buttons;
             break;
         }
-        controller(position, at, &buttons)
+        if tracked {
+            controller(position, at, &buttons)
+        } else {
+            Controller::default()
+        }
     }
 }
 

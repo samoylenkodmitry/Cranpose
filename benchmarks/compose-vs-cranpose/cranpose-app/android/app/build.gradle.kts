@@ -8,7 +8,6 @@ cranpose {
     cargoPackage.set("perf-compare-cranpose")
     libraryName.set("perf_compare")
     label.set("Perf Cranpose")
-    releaseAbis.set(listOf("arm64-v8a"))
     // The plugin builds without default features, which include `entry`: the
     // library this application packages exports the Android entry symbol.
     features.set(listOf("android", "renderer-wgpu", "entry"))

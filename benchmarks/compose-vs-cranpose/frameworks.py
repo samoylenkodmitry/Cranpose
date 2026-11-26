@@ -28,8 +28,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ab import DECIDING, REPORTED, leg_record, summarize
+from android_benchmark_support import digest
+from app_size import artifact_bytes
 from browser import BrowserServer
-from measure import (APPS, CHROME, HEAVY, HERE, REMOTE_WINDOW, STARTS, AppTarget, Device, PageTarget,
+from measure import (APPS, CHROME, load_extras, HERE, REMOTE_WINDOW, STARTS, AppTarget, Device, PageTarget,
                      device_lock, figure, measure_run)
 from timelines import slow_rule
 import versions
@@ -37,25 +39,35 @@ import versions
 DEFAULT_APPS = 'compose,cranpose,views,flutter,rn,nativescript,lynx,maui,avalonia,egui,slint,web'
 
 
-def measure_scenario(device, name, extras, targets, args):
+def measure_scenario(device, name, extras, targets, args, install_errors):
     """Measures every app of `targets` (app to target) on one scenario: its
     record in the run."""
     # An app whose first launch fails leaves its legs out and the run goes
     # on: a page can fail where the browser lacks what its framework needs.
-    legs, failures, running = [], [], list(targets)
+    legs = []
+    failures = [{'subject': app, 'round': 0, 'start': start, 'error': error}
+                for app, error in install_errors.items() for start in STARTS]
+    running = [app for app in targets if app not in install_errors]
     for round_index in range(args.rounds):
         for app in list(running if round_index % 2 == 0 else running[::-1]):
             target = targets[app]
+            try:
+                target.reset(device)
+            except RuntimeError as failure:
+                print(f'{app:10} clear failed: {failure}', flush=True)
+                failures.extend({'subject': app, 'round': round_index, 'start': start, 'error': str(failure)[:300]}
+                                for start in STARTS)
+                continue
             for start in STARTS:
                 try:
-                    if start == STARTS[0]:
-                        target.reset(device)
                     run = measure_run(device, target, name, args, args.output)
                 except (RuntimeError, ValueError) as failure:
                     print(f'{app:10} {start:6} failed: {failure}', flush=True)
                     # Kept, so the dashboard shows why the app has no frames.
                     failures.append({'subject': app, 'round': round_index, 'start': start,
                                      'error': str(failure)[:300]})
+                    if args.full_run:
+                        continue
                     if round_index == 0:
                         running.remove(app)
                     break
@@ -76,10 +88,15 @@ def measure_scenario(device, name, extras, targets, args):
 def measure_frameworks(args):
     """Runs the whole comparison: the caller holds the device lock."""
     args.load, args.screenshots = 'heavy', False
+    if args.tier is not None:
+        args.load = 'default'
+        args.extra = f'--ei tier {args.tier} {args.extra}'.strip()
     args.started = time.monotonic()
     args.output.mkdir(parents=True, exist_ok=True)
     device = Device(args.serial)
     apps = args.apps.split(',')
+    install_errors = {}
+    apks = {app: args.install / f'{app}.apk' for app in apps} if args.install else {}
     if args.browser:
         server = BrowserServer(args.browser)
         device.reverse(server.port)
@@ -88,11 +105,14 @@ def measure_frameworks(args):
         loads = [(args.scenario if index == 0 else f'{args.scenario}-tier-{tier}', f'tier {tier}, in Chrome',
                   {app: PageTarget(server, app, tier) for app in apps}) for index, tier in enumerate(args.tiers)]
     else:
-        loads = [(args.scenario, (HEAVY.get(args.scenario, '') + ' ' + args.extra).strip(),
+        loads = [(args.scenario, load_extras(args.scenario, args),
                   {app: AppTarget(app) for app in apps})]
-        for app in apps:
-            if args.install and (apk := args.install / f'{app}.apk').exists():
+        for app, apk in apks.items():
+            try:
                 device.install(app, apk)
+            except RuntimeError as error:
+                install_errors[app] = str(error)[:300]
+                print(f'{app}: {error}', flush=True)
     device.adb('push', str(HERE / 'perf_window.sh'), REMOTE_WINDOW)
     # The versions macm3 built with, and the browser or WebView the web page
     # runs in.
@@ -106,7 +126,15 @@ def measure_frameworks(args):
         webview = device.shell('dumpsys', 'package', 'com.google.android.webview')
         if match := re.search(r'versionName=(\S+)', webview):
             built['web'] = f'WebView {match.group(1)}, {built.get("web") or versions.version("web", "android")}'
-    scenarios = [measure_scenario(device, name, extras, targets, args) for name, extras, targets in loads]
+    scenarios = [measure_scenario(device, name, extras, targets, args, install_errors) for name, extras, targets in loads]
+    if args.browser:
+        sizes = {app: artifact_bytes(args.browser / app) for app in apps}
+    elif apks:
+        sizes = {app: apk.stat().st_size for app, apk in apks.items() if apk.is_file()}
+    else:
+        sizes = {app: size for app in apps if (size := device.apk_bytes(app)) is not None}
+    for scenario in scenarios:
+        scenario['app_bytes'] = sizes
     identity = {key: device.shell('getprop', key).strip() for key in
                 ['ro.product.model', 'ro.build.version.release', 'ro.hardware']}
     if args.browser:
@@ -117,6 +145,10 @@ def measure_frameworks(args):
     else:
         subjects = [{**versions.subject(app, 'android', built, args.release), 'package': APPS[app]['package']}
                     for app in apps]
+        for subject in subjects:
+            apk = apks.get(subject['name'])
+            if apk and apk.is_file():
+                subject['apk_sha256'] = digest(apk)
     return {
         'kind': 'browser' if args.browser else 'frameworks',
         'started_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
@@ -124,7 +156,8 @@ def measure_frameworks(args):
         'release': args.release,
         'device': identity,
         'subjects': subjects,
-        'protocol': {'run_s': args.run, 'starts': list(STARTS), 'rounds': args.rounds, **slow_rule()},
+        'protocol': {'run_s': args.run, 'starts': list(STARTS), 'rounds': args.rounds,
+                     **({} if args.full_run else slow_rule())},
         'scenarios': scenarios,
         'duration_s': round(time.monotonic() - args.started),
     }
@@ -135,6 +168,7 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--serial', required=True)
     parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--full-run', action='store_true', help='measure the full span even on a slow device')
     parser.add_argument('--apps', help='by default every app built, or every page in `--browser`')
     parser.add_argument('--scenario', default='gauntlet')
     parser.add_argument('--rounds', type=int, default=1,
@@ -153,10 +187,20 @@ def main():
                              "make Cranpose's losses large (README)")
     parser.add_argument('--main', help="the commit the Cranpose app was built at, recorded with the run")
     parser.add_argument('--release', help='the release tag `cranpose-release` was built at')
+    parser.add_argument('--tier', type=int, choices=range(1, 17), help='native Gauntlet tier')
     args = parser.parse_args()
+    if args.tier is not None and (args.browser or args.scenario != 'gauntlet'):
+        parser.error('--tier selects the native Gauntlet workload')
     if not args.apps:
-        args.apps = ','.join(name for name in versions.BROWSER_APPS if (args.browser / name / 'index.html').exists()
-                             ) if args.browser else DEFAULT_APPS
+        if args.browser:
+            args.apps = ','.join(name for name in versions.BROWSER_APPS if (args.browser / name / 'index.html').exists())
+        elif args.install:
+            apps = sorted(apk.stem for apk in args.install.glob('*.apk'))
+            if not apps:
+                parser.error(f'no benchmark APKs in {args.install}')
+            args.apps = ','.join(apps)
+        else:
+            args.apps = DEFAULT_APPS
     with device_lock(args.serial):
         run = measure_frameworks(args)
     (args.output / 'frameworks.json').write_text(json.dumps(run, indent=1))

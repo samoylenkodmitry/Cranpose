@@ -15,7 +15,7 @@
 		<ApplicationVersion>1</ApplicationVersion>
 		<ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
 		<SupportedOSPlatformVersion>28</SupportedOSPlatformVersion>
-		<RuntimeIdentifier>android-arm64</RuntimeIdentifier>
+		<RuntimeIdentifiers>android-arm;android-arm64</RuntimeIdentifiers>
 		<AndroidManifest>Android/AndroidManifest.xml</AndroidManifest>
 		<MonoAndroidResourcePrefix>Android/Resources</MonoAndroidResourcePrefix>
 	</PropertyGroup>
@@ -33,18 +33,18 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.6" />
+		<PackageReference Include="Avalonia.Themes.Fluent" Version="12.2.0" />
 		<Compile Include="../shared-cs/PerfData.cs" Link="PerfData.cs" />
 		<!-- The browser head is a project of its own. -->
 		<Compile Remove="Browser/**" />
 		<None Remove="Browser/**" />
 	</ItemGroup>
 	<ItemGroup Condition="'$(TargetFramework)' == 'net10.0-android'">
-		<PackageReference Include="Avalonia.Android" Version="12.1.6" />
+		<PackageReference Include="Avalonia.Android" Version="12.2.0" />
 		<Compile Remove="Desktop/**" />
 	</ItemGroup>
 	<ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
-		<PackageReference Include="Avalonia.Desktop" Version="12.1.6" />
+		<PackageReference Include="Avalonia.Desktop" Version="12.2.0" />
 		<Compile Remove="Android/**" />
 		<!-- The patchwork is desktop only: its screen is in Desktop/. -->
 		<Compile Include="../shared-cs/PatchworkData.cs" Link="PatchworkData.cs" />

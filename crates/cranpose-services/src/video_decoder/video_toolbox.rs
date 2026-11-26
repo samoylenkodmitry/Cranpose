@@ -1,5 +1,6 @@
 //! The Apple decoder: a `VTDecompressionSession` fed by the app's thread. VideoToolbox's own
-//! thread outputs each picture to a callback, which queues it for the app.
+//! thread outputs each picture to a callback, which reorders B-frames when configured for
+//! presentation order and queues ready pictures for the app.
 //!
 //! The app's thread waits only for room: it sleeps in a condition variable while the decoder
 //! holds too many pictures, and wakes when the callback frees a place.
@@ -13,7 +14,7 @@ use std::{
     ptr::NonNull,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering::Relaxed},
+        atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -28,13 +29,16 @@ use objc2_video_toolbox::{
 use parking_lot::{Condvar, Mutex};
 
 use super::{
-    AccessUnit, DecoderConfig, DecoderError, DecoderOutput, FrameInfo, VideoCodec, VideoFrame,
+    AccessUnit, DecodeOrder, DecoderConfig, DecoderError, DecoderOutput, VideoCodec,
+    VideoColorInfo, VideoFrame, VideoRotation,
     admission::Admission,
     annex_b::AccessUnitNals,
     decompression_session::{Format, Session, TIMESCALE},
     frame_queue::{FrameQueue, Frames},
     pending_units::{PendingUnit, PendingUnits},
     pixel_buffer::{Image, LivePictures},
+    reorder_buffer::{DEFAULT_REORDER_DEPTH, ReorderBuffer},
+    sps::StreamMetadata,
 };
 
 // The most access units that the decoder holds before it outputs a picture. A stream in real
@@ -48,10 +52,18 @@ struct Shared {
     // Wakes the app's thread when the callback takes a unit from `pending`
     room: Condvar,
     queue: Arc<FrameQueue>,
-    // The pictures in `frames` and the pictures that the app holds
+    // Holds decoded pictures while reordering B-frames into presentation order
+    reorder: Mutex<ReorderBuffer>,
+    // The pictures in `frames`, `reorder`, and the pictures that the app holds
     live: LivePictures,
     // The most pictures that wait for the app or are in its hands
     depth: usize,
+    order: DecodeOrder,
+    rotation: VideoRotation,
+    config_color: Option<VideoColorInfo>,
+    stream_meta: Mutex<StreamMetadata>,
+    // Set during `flush` so in-flight callbacks discard stale pictures
+    discard_output: AtomicBool,
     // Set by the callback when the session reports that it can decode no more
     session_lost: AtomicBool,
 }
@@ -84,8 +96,11 @@ impl Backend {
             height,
             output,
             input_wait,
+            order,
+            rotation,
+            color,
         } = config;
-        if codec == VideoCodec::Av1 {
+        if matches!(codec, VideoCodec::Av1 | VideoCodec::Vp9) {
             return Err(DecoderError::NoDecoder(codec));
         }
         let DecoderOutput::Frames { depth } = output else {
@@ -93,19 +108,29 @@ impl Backend {
             return Err(DecoderError::Unavailable);
         };
         let depth = depth.max(2);
+        let initial_reorder = match order {
+            DecodeOrder::LowLatency => 0,
+            DecodeOrder::Presentation => DEFAULT_REORDER_DEPTH,
+        };
         Ok(Self {
             stream: Stream::default(),
             shared: Arc::new(Shared {
                 pending: Mutex::new(PendingUnits::new()),
                 room: Condvar::new(),
                 queue: Arc::new(FrameQueue::new(depth, 0)),
+                reorder: Mutex::new(ReorderBuffer::new(initial_reorder)),
                 live: LivePictures::default(),
                 depth,
+                order,
+                rotation,
+                config_color: color,
+                stream_meta: Mutex::new(StreamMetadata::default()),
+                discard_output: AtomicBool::new(false),
                 session_lost: AtomicBool::new(false),
             }),
             codec,
             nals: AccessUnitNals::default(),
-            admission: Admission::new((width as usize) * (height as usize)),
+            admission: Admission::new((width as usize) * (height as usize), order),
             input_wait,
         })
     }
@@ -113,6 +138,11 @@ impl Backend {
     pub(super) fn submit(&mut self, unit: AccessUnit<'_>) -> Result<(), DecoderError> {
         let pts_us = self.admission.check(&unit)?;
         self.nals.parse(self.codec, unit.data);
+        if let Some(sps) = self.nals.sequence_parameter_set(unit.data)
+            && let Some(meta) = StreamMetadata::parse_sps(self.codec, sps)
+        {
+            self.shared.apply_stream_metadata(meta);
+        }
         if let Some(sets) = self.nals.parameter_sets(self.codec, unit.data) {
             self.stream.follow(self.codec, sets)?;
         }
@@ -121,6 +151,29 @@ impl Backend {
         }
         self.admission.accept(pts_us);
         self.shared.queue.stats.submitted();
+        Ok(())
+    }
+
+    pub(super) fn drain(&mut self) -> Result<(), DecoderError> {
+        if let Some(session) = &self.stream.session {
+            session.wait_for_asynchronous_frames();
+        }
+        self.shared.drain_reordered();
+        self.admission.reset();
+        Ok(())
+    }
+
+    pub(super) fn flush(&mut self) -> Result<(), DecoderError> {
+        self.shared.discard_output.store(true, Ordering::Release);
+        if let Some(session) = &self.stream.session {
+            session.wait_for_asynchronous_frames();
+        }
+        self.shared.pending.lock().clear();
+        self.shared.reorder.lock().clear();
+        self.shared.queue.frames.lock().clear();
+        self.shared.discard_output.store(false, Ordering::Release);
+        self.shared.room.notify_all();
+        self.admission.reset();
         Ok(())
     }
 
@@ -152,7 +205,7 @@ impl Backend {
                 return Err(error);
             }
         };
-        let status = session.decode(&sample);
+        let status = session.decode(&sample, self.shared.order);
         if status == 0 {
             return Ok(());
         }
@@ -201,7 +254,7 @@ impl Stream {
     // Makes the session that decodes the next picture, if there is none. Only a keyframe starts
     // a session.
     fn start(&mut self, shared: &Arc<Shared>, keyframe: bool) -> Result<(), DecoderError> {
-        if shared.session_lost.swap(false, Relaxed) {
+        if shared.session_lost.swap(false, Ordering::Relaxed) {
             self.session = None;
         }
         if self.session.is_some() {
@@ -215,17 +268,40 @@ impl Stream {
             decompressionOutputCallback: Some(on_output),
             decompressionOutputRefCon: Arc::as_ptr(shared).cast_mut().cast(),
         };
-        self.session = Some(Session::new(format, callback)?);
+        self.session = Some(Session::new(format, callback, shared.order)?);
         Ok(())
     }
 }
 
 impl Shared {
+    fn apply_stream_metadata(&self, meta: StreamMetadata) {
+        *self.stream_meta.lock() = meta;
+        if self.order == DecodeOrder::Presentation
+            && let Some(reorder_depth) = meta.max_reorder_frames
+        {
+            self.reorder.lock().set_depth(reorder_depth);
+            loop {
+                let (picture, buffered) = {
+                    let mut reorder = self.reorder.lock();
+                    let picture = reorder.pop_excess();
+                    (picture, reorder.len())
+                };
+                let Some(picture) = picture else {
+                    break;
+                };
+                let decode_time = picture.info().decode_time;
+                self.enqueue(picture, buffered);
+                self.queue.stats.decoded(decode_time);
+            }
+        }
+    }
+
     // Records `unit` as waiting for its picture. It waits up to `wait` for room.
     fn reserve(&self, unit: PendingUnit, wait: Duration) -> Result<(), DecoderError> {
         let deadline = Instant::now() + wait;
+        let max_in_flight = MAX_IN_FLIGHT + self.reorder.lock().depth();
         let mut pending = self.pending.lock();
-        while pending.len() >= MAX_IN_FLIGHT {
+        while pending.len() >= max_in_flight {
             if self.room.wait_until(&mut pending, deadline).timed_out() {
                 self.queue.stats.refused();
                 return Err(DecoderError::Full);
@@ -246,11 +322,14 @@ impl Shared {
     fn output(&self, status: i32, info: VTDecodeInfoFlags, image: *mut CVImageBuffer, pts_us: u64) {
         let unit = self.pending.lock().remove(pts_us);
         self.room.notify_one();
+        if self.discard_output.load(Ordering::Acquire) {
+            return;
+        }
         let Some(image) = NonNull::new(image).filter(|_| status == 0) else {
             if status != 0 {
                 log::warn!("video decoder: picture at {pts_us} us failed: {status}");
                 if is_session_lost(status) {
-                    self.session_lost.store(true, Relaxed);
+                    self.session_lost.store(true, Ordering::Relaxed);
                 }
             }
             self.queue.stats.dropped();
@@ -262,30 +341,56 @@ impl Shared {
         }
         // SAFETY: the callback's image is valid for the call, and this takes a count of its own.
         let image = Image::new(unsafe { CFRetained::retain(image) }, &self.live);
-        let frame_info = unit.map_or_else(
-            || FrameInfo {
-                timestamp: Duration::from_micros(pts_us),
-                metadata: 0,
-                decode_time: Duration::ZERO,
-            },
-            |unit| FrameInfo {
-                timestamp: unit.timestamp,
-                metadata: unit.metadata,
-                decode_time: unit.submitted.elapsed(),
-            },
+        let frame_info = PendingUnit::into_frame_info(unit, pts_us);
+        let stream_meta = *self.stream_meta.lock();
+        let color = image.color(stream_meta, self.config_color);
+        let frame = VideoFrame::new(
+            frame_info,
+            image.size(),
+            image.crop(),
+            color,
+            self.rotation,
+            image,
         );
-        let decode_time = frame_info.decode_time;
-        let frame = VideoFrame::new(frame_info, image.size(), image.crop(), image);
-        self.enqueue(frame);
-        // The count follows the queue: an app that sees a picture counted finds it in `frames`.
-        self.queue.stats.decoded(decode_time);
+        self.push_reordered(frame);
+    }
+
+    fn push_reordered(&self, frame: VideoFrame) {
+        let (ready, buffered) = {
+            let mut reorder = self.reorder.lock();
+            let ready = reorder.push(frame);
+            (ready, reorder.len())
+        };
+        if let Some(picture) = ready {
+            let decode_time = picture.info().decode_time;
+            self.enqueue(picture, buffered);
+            // The count follows the queue: an app that sees a picture counted finds it in `frames`.
+            self.queue.stats.decoded(decode_time);
+        }
+    }
+
+    fn drain_reordered(&self) {
+        loop {
+            let (picture, remaining) = {
+                let mut reorder = self.reorder.lock();
+                let picture = reorder.pop_front();
+                (picture, reorder.len())
+            };
+            let Some(picture) = picture else {
+                break;
+            };
+            let decode_time = picture.info().decode_time;
+            self.enqueue(picture, remaining);
+            self.queue.stats.decoded(decode_time);
+        }
     }
 
     // Queues `frame` and wakes the task that waits for a picture. The oldest queued pictures go
     // until the new one fits. If the app holds the rest, the new one goes.
-    fn enqueue(&self, frame: VideoFrame) {
+    fn enqueue(&self, frame: VideoFrame, buffered_in_reorder: usize) {
+        let budget = self.depth + buffered_in_reorder;
         let mut frames = self.queue.frames.lock();
-        while self.live.load(Relaxed) > self.depth {
+        while self.live.load(Ordering::Relaxed) > budget {
             self.queue.stats.dropped();
             if frames.pop_front().is_none() {
                 return;

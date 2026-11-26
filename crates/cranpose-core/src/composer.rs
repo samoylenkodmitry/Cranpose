@@ -9,27 +9,31 @@ use std::{
 use smallvec::SmallVec;
 
 use crate::{
-    AnchorId, Applier, ApplierGuard, ApplierHost, COMMAND_FLUSH_THRESHOLD, Command, CommandQueue,
+    Applier, ApplierGuard, ApplierHost, COMMAND_FLUSH_THRESHOLD, Command, CommandQueue,
     CompositionLocal, ComputedLocalEntry, DirtyBubble, Key, LocalKey, LocalStackSnapshot,
     LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned, ProvidedValue, RecomposeOptions,
-    RecomposeScope, RecomposeScopeInner, RecycledNode, RetentionMode, RuntimeHandle, ScopeId,
-    SlotId, SlotPassOutcome, SlotTable, SlotsHost, SnapshotStateList, SnapshotStateMap,
-    StaticCompositionLocal, SubcomposeState, composer_context,
-    retention::RetainKey,
-    runtime,
-    slot::{FinishGroupResult, GroupStart, GroupStartKind, PayloadKind, RootNodeIds, ValueSlotId},
+    RecomposeScope, RecomposeScopeInner, RecycledNode, RuntimeHandle, ScopeId, SlotId,
+    SlotPassOutcome, SlotTable, SlotsHost, SnapshotStateList, SnapshotStateMap,
+    StaticCompositionLocal, SubcomposeState, composer_context, runtime,
+    slot::{FinishGroupResult, GroupStartKind, PayloadKind, RootNodeIds, ValueSlotId},
 };
 
 mod composable_group;
+mod detach;
+mod movable;
+mod movable_owners;
 mod parent_frame;
 mod runtime_state;
 mod scope_frame;
 mod subcompose_slot;
 mod subcompose_stack;
 pub use composable_group::{ComposableGroup, ParameterChange};
+use movable::{GroupEntry, movable_retain_key};
+pub(crate) use movable::{MovableLookup, PendingMovable, enable_movable_hooks};
+use movable_owners::{DroppedMovable, MovableOwners};
 use parent_frame::{InitialParentFrame, push_root_frame};
 pub(crate) use parent_frame::{ParentAttachMode, ParentFrame};
-pub(crate) use runtime_state::ComposerRuntimeState;
+pub(crate) use runtime_state::{ComposerRuntimeState, HostTableDisposal};
 pub(crate) use scope_frame::ScopeFrame;
 use subcompose_slot::{measure_slot_state, subcompose_slot_at};
 use subcompose_stack::{SubcomposeFrame, SubcomposeStack};
@@ -62,7 +66,7 @@ impl<T: 'static> ValueSlotHandle<'_, T> {
     }
 }
 
-fn slots_storage_key(host: &Rc<SlotsHost>) -> usize {
+fn slots_storage_key(host: &SlotsHost) -> usize {
     host.storage_key()
 }
 
@@ -97,13 +101,6 @@ fn bind_slots_host_to_runtime_state(
     Rc::clone(host)
 }
 
-struct GroupEntry {
-    key: crate::slot::GroupKey,
-    /// Boxed: a restore is rare, and the entry moves on every call.
-    restored: Option<Box<crate::slot::DetachedSubtree>>,
-    placeholder_for: Option<crate::slot::GroupKey>,
-}
-
 struct GroupScopeEntry<'a> {
     options: RecomposeOptions,
     start_kind: GroupStartKind,
@@ -117,14 +114,11 @@ struct SlotHostPassGuard {
     host: Rc<SlotsHost>,
     /// The branch fold depth the pass began at.
     fold_base: usize,
-    active: bool,
 }
 
 impl SlotHostPassGuard {
+    #[inline(never)]
     fn close(&mut self) {
-        if !self.active {
-            return;
-        }
         if self.host.has_active_pass() {
             self.host.abandon_active_pass();
         }
@@ -138,7 +132,7 @@ impl SlotHostPassGuard {
             }
         }
         self.core.branch_folds.end_pass(self.fold_base);
-        self.active = false;
+        self.core.shared_state.movable_owners.leave_pass_depth();
     }
 }
 
@@ -146,12 +140,6 @@ impl Drop for SlotHostPassGuard {
     fn drop(&mut self) {
         self.close();
     }
-}
-
-pub(crate) struct PendingMovable {
-    pub(crate) key: crate::slot::GroupKey,
-    pub(crate) placeholder: AnchorId,
-    pub(crate) parent_scope: Option<Weak<RecomposeScopeInner>>,
 }
 
 fn reparent_restored_scopes(
@@ -168,13 +156,6 @@ fn reparent_restored_scopes(
             scope.reactivate();
         });
     });
-}
-
-fn movable_retain_key(id: Key) -> RetainKey {
-    RetainKey::for_group(
-        None,
-        crate::slot::GroupKey::new(crate::slot::MOVABLE_STATIC_KEY, Some(id), 0),
-    )
 }
 
 /// How many applied command queues a thread keeps for its passes.
@@ -822,14 +803,14 @@ impl Composer {
 
     pub(crate) fn try_with_slot_host_pass<R>(
         &self,
-        slots: Rc<SlotsHost>,
+        slots: &Rc<SlotsHost>,
         mode: crate::slot::SlotPassMode,
         f: impl FnOnce(&Self) -> R,
     ) -> Result<(R, SlotPassOutcome), NodeError> {
-        let mut guard = self.begin_slot_host_pass(&slots, mode);
+        let guard = self.begin_slot_host_pass(slots, mode);
         let result = f(self);
         let outcome = self.finish_slot_host_pass(&guard.host)?;
-        guard.close();
+        drop(guard);
         Ok((result, outcome))
     }
 
@@ -839,16 +820,15 @@ impl Composer {
         mode: crate::slot::SlotPassMode,
         f: impl FnOnce(&Self) -> R,
     ) -> (R, SlotPassOutcome) {
-        let mut guard = self.begin_slot_host_pass(&slots, mode);
+        let guard = self.begin_slot_host_pass(&slots, mode);
         let result = f(self);
-        let outcome = match self.finish_slot_host_pass(&guard.host) {
-            Ok(outcome) => outcome,
-            Err(err) => {
+        let outcome = self
+            .finish_slot_host_pass(&guard.host)
+            .unwrap_or_else(|err| {
                 log::error!("slot host pass finalization failed: {err}");
                 SlotPassOutcome::default()
-            }
-        };
-        guard.close();
+            });
+        drop(guard);
         (result, outcome)
     }
 
@@ -860,12 +840,14 @@ impl Composer {
         self.with_slot_host_pass(slots, crate::slot::SlotPassMode::Compose, f)
     }
 
+    #[inline(never)]
     fn begin_slot_host_pass(
         &self,
         slots: &Rc<SlotsHost>,
         mode: crate::slot::SlotPassMode,
     ) -> SlotHostPassGuard {
         let slots = bind_slots_host_to_runtime_state(&self.core.shared_state, slots);
+        self.core.shared_state.movable_owners.enter_pass_depth();
         let fold_base = self.core.branch_folds.len();
         slots.begin_pass(mode, &self.core.branch_folds);
         {
@@ -881,66 +863,25 @@ impl Composer {
             core: self.clone_core(),
             host: slots,
             fold_base,
-            active: true,
         }
     }
 
-    fn finish_slot_host_pass(&self, slots: &Rc<SlotsHost>) -> Result<SlotPassOutcome, NodeError> {
+    fn finish_slot_host_pass(&self, slots: &SlotsHost) -> Result<SlotPassOutcome, NodeError> {
         let finished = {
             let mut applier = self.core.applier.borrow_dyn();
             slots.finish_pass(&mut *applier)
         }?;
-        self.handle_detached_children_in_host(slots, None, finished.detached_root_children)?;
-        self.wake_sites_whose_movable_arrived();
-        self.evict_retained_subtrees_for_host(slots)?;
+        if !finished.detached_root_children.is_empty() {
+            self.core.handle_detached_children_in_host(
+                slots,
+                None,
+                finished.detached_root_children,
+            )?;
+        }
+        self.core.evict_retained_subtrees_for_host(slots)?;
+        self.settle_pass_movables(slots)?;
         slots.complete_pass_cleanup(&finished.outcome);
         Ok(finished.outcome)
-    }
-
-    fn wake_sites_whose_movable_arrived(&self) {
-        for host in self.core.shared_state.hosts_awaiting_movables() {
-            self.wake_sites_in_host(&host);
-        }
-    }
-
-    fn wake_sites_in_host(&self, slots: &Rc<SlotsHost>) {
-        let pending = self.core.shared_state.take_pending_movables(slots);
-        if pending.is_empty() {
-            return;
-        }
-        let mut waiting = Vec::new();
-        for site in pending {
-            if !slots.borrow().group_is_active(site.placeholder) {
-                continue;
-            }
-            let retain_key = RetainKey::for_group(None, site.key);
-            if !self.core.shared_state.movable_retained_anywhere(retain_key) {
-                waiting.push(site);
-                continue;
-            }
-            match site.parent_scope.as_ref().and_then(RecomposeScope::upgrade) {
-                Some(scope) => {
-                    scope.force_recompose();
-                    scope.invalidate();
-                }
-                None => log::error!(
-                    "movable content {:?} arrived for a site whose scope is gone",
-                    site.key
-                ),
-            }
-        }
-        self.core.shared_state.keep_pending_movables(slots, waiting);
-    }
-
-    pub(crate) fn forget_movables(&self, ids: &[Key]) -> Result<(), NodeError> {
-        for id in ids {
-            let Some((host, subtree)) = self.core.shared_state.take_retained_movable(*id) else {
-                continue;
-            };
-            self.dispose_detached_subtree_in_host(&host, subtree)?;
-            host.flush_pending_drops();
-        }
-        Ok(())
     }
 
     pub(crate) fn parent_stack(&self) -> RefMut<'_, Vec<ParentFrame>> {
@@ -1158,129 +1099,6 @@ impl Composer {
         self.apply_pending_commands()
     }
 
-    fn resolve_group_entry(
-        &self,
-        host: &Rc<SlotsHost>,
-        seed: crate::slot::GroupKeySeed,
-        parent_scope_id: Option<ScopeId>,
-    ) -> GroupEntry {
-        let key = host.with_write_session(|slots| slots.reserve_group_key(seed));
-        let retain_key = RetainKey::for_group(parent_scope_id, key);
-        let restored = self
-            .core
-            .shared_state
-            .take_retained(host, retain_key, |subtree| {
-                host.with_write_session(|slots| slots.retained_restore_ready(key, subtree))
-            })
-            .or_else(|| self.take_movable_from_another_table(host, retain_key, key))
-            .map(Box::new);
-        if restored.is_some() || !key.is_movable() {
-            return GroupEntry {
-                key,
-                restored,
-                placeholder_for: None,
-            };
-        }
-        let attached_elsewhere = self.movable_attached_elsewhere(host, key);
-        if !attached_elsewhere {
-            return GroupEntry {
-                key,
-                restored: None,
-                placeholder_for: None,
-            };
-        }
-        let id = key.explicit_key.unwrap_or_default();
-        let placeholder = host.with_write_session(|slots| {
-            slots.reserve_group_key(crate::slot::GroupKeySeed::movable_placeholder(id))
-        });
-        GroupEntry {
-            key: placeholder,
-            restored: None,
-            placeholder_for: Some(key),
-        }
-    }
-
-    /// Movable content that was let go by a parent composed in another slot
-    /// table — a `SubcomposeLayout`'s, or the one a subcomposition owns — is
-    /// retained there, not here. Bring it over: the table that held it lets
-    /// go of its anchors, and this one issues its own.
-    fn take_movable_from_another_table(
-        &self,
-        host: &Rc<SlotsHost>,
-        retain_key: RetainKey,
-        key: crate::slot::GroupKey,
-    ) -> Option<crate::slot::DetachedSubtree> {
-        if !key.is_movable() {
-            return None;
-        }
-        let (source, mut subtree) = self
-            .core
-            .shared_state
-            .take_retained_movable_elsewhere(host, retain_key)?;
-        source
-            .borrow_mut()
-            .invalidate_detached_subtree_anchors(&subtree);
-        if host.with_write_session(|slots| slots.retained_restore_ready(key, &mut subtree)) {
-            return Some(subtree);
-        }
-        log::error!(
-            "movable content {key:?} could not be taken over by the slot table that asked for it"
-        );
-        if let Err(error) = self.dispose_detached_subtree_in_host(host, subtree) {
-            log::error!("disposing movable content that could not move failed: {error}");
-        }
-        None
-    }
-
-    /// Whether the movable's content is attached to some parent that is not
-    /// the one composing, in this slot table or in another.
-    fn movable_attached_elsewhere(&self, host: &Rc<SlotsHost>, key: crate::slot::GroupKey) -> bool {
-        if host.with_write_session(|slots| slots.movable_attached_elsewhere(key)) {
-            return true;
-        }
-        let Some(id) = key.movable_id() else {
-            return false;
-        };
-        self.core
-            .shared_state
-            .host_holding_movable(id)
-            .is_some_and(|holder| !Rc::ptr_eq(&holder, host))
-    }
-
-    fn start_group(
-        &self,
-        host: &Rc<SlotsHost>,
-        seed: crate::slot::GroupKeySeed,
-        parent_node: Option<NodeId>,
-    ) -> (
-        GroupStart<crate::slot::ActiveGroupId>,
-        Option<crate::slot::GroupKey>,
-    ) {
-        if !self.core.shared_state.retains_any() {
-            let started = host.with_write_session(|slots| {
-                let key = slots.reserve_group_key(seed);
-                (!key.is_movable()).then(|| slots.begin_group(key, None, parent_node))
-            });
-            if let Some(started) = started {
-                return (started, None);
-            }
-        }
-        // Retained content is found again by its parent's scope.
-        let parent_scope_id = {
-            let mut stack = self.scope_stack();
-            let top = stack.len().checked_sub(1);
-            top.map(|top| self.frame_scope(&mut stack, top).id())
-        };
-        let GroupEntry {
-            key,
-            restored,
-            placeholder_for,
-        } = self.resolve_group_entry(host, seed, parent_scope_id);
-        let started =
-            host.with_write_session(|slots| slots.begin_group(key, restored, parent_node));
-        (started, placeholder_for)
-    }
-
     #[doc(hidden)]
     pub fn __branch_group_deferred(&self, key: Key) -> BranchGroupGuard<'_> {
         let folds = &*self.core.branch_folds;
@@ -1288,126 +1106,6 @@ impl Composer {
             token: folds.push(key),
             folds,
         }
-    }
-
-    fn dispose_detached_nodes(&self, nodes: impl IntoIterator<Item = NodeId>) {
-        for node_id in nodes {
-            self.commands_mut().push(Command::callback(move |applier| {
-                crate::slot::dispose_detached_node_now(applier, node_id)
-            }));
-        }
-    }
-
-    fn detached_root_parent_commands(
-        &self,
-        subtree: &crate::slot::DetachedSubtree,
-        context: &'static str,
-    ) -> Result<Vec<(NodeId, Option<NodeId>)>, NodeError> {
-        let mut root_nodes = Vec::new();
-        subtree.collect_root_nodes_checked_into(&mut root_nodes, context);
-        let mut roots = Vec::with_capacity(root_nodes.len());
-        for root in root_nodes {
-            let parent_id = {
-                let mut applier = self.borrow_applier();
-                applier.get_mut(root)?.parent()
-            };
-            roots.push((root, parent_id));
-        }
-        Ok(roots)
-    }
-
-    fn retain_detached_subtree_in_host(
-        &self,
-        slots_host: &Rc<SlotsHost>,
-        parent_scope: Option<ScopeId>,
-        subtree: crate::slot::DetachedSubtree,
-    ) -> Result<(), NodeError> {
-        let Some(root_key) = subtree.root_key_checked() else {
-            log::error!("retention rejected detached subtree without a root group");
-            self.dispose_detached_subtree_in_host(slots_host, subtree)?;
-            return Ok(());
-        };
-        let root_detaches = self.detached_root_parent_commands(&subtree, "retention")?;
-        subtree.scopes().for_each(RecomposeScope::deactivate);
-        for (root, parent_id) in root_detaches {
-            if let Some(parent_id) = parent_id {
-                self.commands_mut().push(Command::DetachChild {
-                    parent_id,
-                    child_id: root,
-                });
-            }
-        }
-        let evicted = self.core.shared_state.insert_retained(
-            slots_host,
-            RetainKey::for_group(parent_scope, root_key),
-            subtree,
-            root_key.is_movable(),
-        );
-        for subtree in evicted {
-            self.dispose_detached_subtree_in_host(slots_host, subtree)?;
-        }
-        Ok(())
-    }
-
-    fn evict_retained_subtrees_for_host(
-        &self,
-        slots_host: &Rc<SlotsHost>,
-    ) -> Result<(), NodeError> {
-        let evicted = self.core.shared_state.advance_retention_pass(slots_host);
-        for subtree in evicted {
-            self.dispose_detached_subtree_in_host(slots_host, subtree)?;
-        }
-        Ok(())
-    }
-
-    fn dispose_detached_subtree_in_host(
-        &self,
-        slots_host: &Rc<SlotsHost>,
-        subtree: crate::slot::DetachedSubtree,
-    ) -> Result<(), NodeError> {
-        let root_nodes = self
-            .detached_root_parent_commands(&subtree, "disposal")?
-            .into_iter()
-            .map(|(root, _)| root);
-        subtree.scopes().for_each(RecomposeScope::deactivate);
-        self.dispose_detached_nodes(root_nodes);
-        slots_host.with_table_and_lifecycle_mut(|table, lifecycle| {
-            table.invalidate_detached_subtree_anchors(&subtree);
-            lifecycle.queue_subtree_disposal(subtree);
-        });
-        Ok(())
-    }
-
-    fn handle_detached_children_in_host(
-        &self,
-        slots_host: &Rc<SlotsHost>,
-        parent_scope: Option<ScopeId>,
-        detached: Vec<crate::slot::DetachedSubtree>,
-    ) -> Result<(), NodeError> {
-        for mut subtree in detached {
-            for movable in subtree.split_off_nested_movables() {
-                self.retain_detached_subtree_in_host(slots_host, None, movable)?;
-            }
-            if subtree
-                .root_key_checked()
-                .is_some_and(crate::slot::GroupKey::is_movable)
-            {
-                self.retain_detached_subtree_in_host(slots_host, None, subtree)?;
-                continue;
-            }
-            let retention_mode = subtree
-                .root_scope()
-                .map_or_default(RecomposeScope::retention_mode);
-            match retention_mode {
-                RetentionMode::DisposeWhenInactive => {
-                    self.dispose_detached_subtree_in_host(slots_host, subtree)?;
-                }
-                RetentionMode::RetainWhenInactive => {
-                    self.retain_detached_subtree_in_host(slots_host, parent_scope, subtree)?;
-                }
-            }
-        }
-        Ok(())
     }
 
     fn handle_finished_group_result(
@@ -1425,15 +1123,16 @@ impl Composer {
         if was_skipped {
             self.attach_root_nodes(root_nodes);
         }
-        self.dispose_detached_nodes(direct_nodes);
-        if detached_children.is_empty() {
-            return;
-        }
-        if let Err(err) =
-            self.handle_detached_children_in_host(host, parent_scope, detached_children)
+        // Handle detached child groups before disposing direct nodes so
+        // retained or movable children detach from a leaving parent node first.
+        if !detached_children.is_empty()
+            && let Err(err) =
+                self.core
+                    .handle_detached_children_in_host(host, parent_scope, detached_children)
         {
             log::error!("detached subtree handling failed while closing a group: {err}");
         }
+        self.core.dispose_detached_nodes(&direct_nodes);
     }
 
     pub(crate) fn close_current_group_body_for_scope(&self, scope: &RecomposeScope) {
@@ -1769,7 +1468,7 @@ impl Composer {
         let composer = Self::from_core(core);
         let (result, commands, side_effects, compact_applier) = composer.install(|composer| {
             let (output, outcome) = composer.try_with_slot_host_pass(
-                Rc::clone(slots),
+                slots,
                 crate::slot::SlotPassMode::Compose,
                 |composer| f(composer),
             )?;

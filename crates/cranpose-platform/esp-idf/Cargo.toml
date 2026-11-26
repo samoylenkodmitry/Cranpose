@@ -16,6 +16,8 @@ default = ["small-block-alloc"]
 # Makes `SmallBlockAllocator` the global allocator. Turn it off to keep the
 # standard one or to install another.
 small-block-alloc = []
+# Records the first ten seconds for the physical-board comparison.
+bench-frames = []
 
 [dependencies]
 cranpose = { path = "../../cranpose", default-features = false, features = ["framebuffer"] }

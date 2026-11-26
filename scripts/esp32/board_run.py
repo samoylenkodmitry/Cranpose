@@ -36,9 +36,9 @@ IDF_VERSION = "v5.5.5"
 
 BOARDS = {
     "es3c35p": {"mcu": "esp32s3", "console": "usb", "port": "/dev/cu.usbmodem*",
-                "baud": 921600, "partitions": "partitions.csv"},
+                "baud": 921600, "flash_size": "8mb", "partitions": "partitions.csv"},
     "e32r35t": {"mcu": "esp32", "console": "uart", "port": "/dev/cu.usbserial-*",
-                "baud": 2000000, "partitions": "partitions_4mb.csv"},
+                "baud": 2000000, "flash_size": "4mb", "partitions": "partitions_4mb.csv"},
 }
 SUMMARY = re.compile(r"first frame|frames in|PERF|HEAP|SAMPLER total|panic|abort\(\)|memory allocation")
 
@@ -148,12 +148,16 @@ def build_lvgl(board, component, extra_sdkconfig, log):
     return build / "lvgl_bench.elf", build / "bootloader/bootloader.bin", DEMO / config["partitions"]
 
 
-def flash(board, port, elf, bootloader, partitions, log):
+def flash_command(board, port, bootloader, partitions):
     # The bootloader ESP-IDF built turns QIO on; the header stays DIO, as
     # ESP-IDF writes it for a QIO app.
-    run(["espflash", "flash", "--port", port, "--baud", str(BOARDS[board]["baud"]),
-         "--flash-mode", "dio", "--flash-freq", "80mhz", "--bootloader", str(bootloader),
-         "--partition-table", str(partitions), str(elf)], ROOT, None, log.with_suffix(".flash"))
+    return ["espflash", "flash", "--chip", BOARDS[board]["mcu"], "--port", port,
+            "--baud", str(BOARDS[board]["baud"]), "--flash-mode", "dio", "--flash-freq", "80mhz",
+            "--bootloader", str(bootloader), "--partition-table", str(partitions)]
+
+
+def flash(board, port, elf, bootloader, partitions, log):
+    run([*flash_command(board, port, bootloader, partitions), str(elf)], ROOT, None, log.with_suffix(".flash"))
 
 
 def capture_uart(port, seconds):

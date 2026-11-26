@@ -20,16 +20,18 @@ use cranpose_core::CompositionLocal;
 mod carry_snap;
 #[cfg(any(test, headset))]
 pub(crate) mod field_dock;
+mod panel_slot;
 mod surface_delivery;
+
+pub(crate) use panel_slot::{Mobility, PanelKind, PanelSlot, Ride, Shape, TrackedSpace};
 
 #[cfg(any(test, headset))]
 use crate::spatial_store::SpatialStore;
 use crate::{
-    FollowTarget, Hand, METERS_PER_DP, MovePolicy, PanelHit, Pose, Ray, Recenter, ResizeLimits,
-    ResizePolicy, SpatialMoveEvent, SpatialMoveEventType, SpatialResizeEvent,
-    SpatialResizeEventType, StereoMode,
+    FollowTarget, Hand, MovePolicy, Pose, Recenter, ResizeLimits, ResizePolicy, SpatialMoveEvent,
+    SpatialMoveEventType, SpatialResizeEvent, SpatialResizeEventType, StereoMode,
     dock::Dock,
-    follow_origin::{FollowOrigins, Standing},
+    follow_origin::{FollowOrigins, Poses, Standing},
     locals::with_locals,
     sound_sources::SoundSources,
     stream_source::StreamSource,
@@ -93,122 +95,6 @@ impl From<Pose> for Origin {
     }
 }
 
-// What a panel shows.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum PanelKind {
-    // Cranpose content, drawn into the atlas.
-    Content,
-    // A surface that another producer writes into. It has no part of the atlas, and no
-    // composition: a ray stops on it and presses nothing.
-    Surface(StereoMode),
-    // 3D content that the scene of the volumes draws. The panel's pose is the center of its box,
-    // its size is the box's width and height in dp, and `depth` is the box's depth in dp. It has no
-    // part of the atlas: a ray stops on the box.
-    Volume { depth: f32 },
-}
-
-// A panel as the backend sees it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct PanelSlot {
-    pub(crate) id: u64,
-    pub(crate) kind: PanelKind,
-    // The panel's part of the atlas: left, top, width and height in dp. A surface or a volume holds
-    // its size here and no room in the atlas.
-    pub(crate) atlas: [f32; 4],
-    // The panel's center and turn in the room.
-    pub(crate) pose: Pose,
-    // Whether the user may carry the panel with a controller.
-    pub(crate) mobility: Mobility,
-    // The shape the panel shows on. A surface panel is flat.
-    pub(crate) shape: Shape,
-    // The sizes that the user may give the panel, if the content set a resize.
-    pub(crate) resize: Option<ResizeLimits>,
-    // The width and height in dp of the room that the panel holds in the atlas and in its image:
-    // its size, or more while the user resizes it.
-    pub(crate) room: [f32; 2],
-    // Whether a controller places the panel
-    pub(crate) ride: Ride,
-}
-
-impl PanelSlot {
-    // The panel's width and height in dp.
-    pub(crate) fn size(&self) -> [f32; 2] {
-        [self.atlas[2], self.atlas[3]]
-    }
-
-    #[cfg_attr(
-        not(any(test, headset)),
-        expect(dead_code, reason = "the headset backend calls it")
-    )]
-    // The pose of the flat face that the panel's handles stand at and that a resize measures on:
-    // the panel's own pose, or for a volume the pose of its front face, which lies half the box's
-    // depth toward the viewer. A handle at the center plane of a deep box would lie behind a ray's
-    // meeting with the box.
-    pub(crate) fn face(&self) -> Pose {
-        match self.kind {
-            PanelKind::Volume { depth } => {
-                self.pose
-                    .then(&Pose::at([0.0, 0.0, depth * METERS_PER_DP / 2.0]))
-            }
-            PanelKind::Content | PanelKind::Surface(_) => self.pose,
-        }
-    }
-
-    #[cfg_attr(
-        not(any(test, headset)),
-        expect(dead_code, reason = "the headset backend calls it")
-    )]
-    // The sizes that the user may give the panel with its corner handle, or `None` for a panel
-    // that has none. A panel on a curve has none: its corner does not lie on its tangent plane.
-    pub(crate) fn resize_limits(&self) -> Option<ResizeLimits> {
-        self.resize.filter(|_| self.shape == Shape::Flat)
-    }
-
-    #[cfg_attr(
-        not(any(test, headset)),
-        expect(dead_code, reason = "the headset backend calls it")
-    )]
-    // Where `ray` meets the panel as it shows: flat or on its curve.
-    pub(crate) fn hit(&self, ray: &Ray) -> Option<PanelHit> {
-        let size = self.size().map(|dp| dp * METERS_PER_DP);
-        match (self.kind, self.shape) {
-            (PanelKind::Volume { depth }, _) => {
-                ray.hit_box(&self.pose, [size[0], size[1], depth * METERS_PER_DP])
-            }
-            (_, Shape::Flat) => ray.hit_panel(&self.pose, size),
-            (_, Shape::Curved { radius }) => ray.hit_cylinder(&self.pose, size, radius),
-        }
-    }
-}
-
-// The shape a panel shows on.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum Shape {
-    Flat,
-    // A cylinder of `radius` meters. Its upright axis stands that far from the panel's center
-    // along the panel's +z, and the panel's width is arc length.
-    Curved { radius: f32 },
-}
-
-// How a following subspace places a panel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Ride {
-    // No controller places the panel.
-    Free,
-    // The panel stands where the controller of this hand puts it.
-    On(Hand),
-    // The panel's subspace has no place: it follows a controller that the runtime does not
-    // track. The panel shows nowhere and takes no hits.
-    Hidden,
-}
-
-// Whether the user may carry a panel with a controller.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Mobility {
-    Fixed,
-    Movable,
-}
-
 // Where a controller points on a panel.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Cursor {
@@ -259,6 +145,9 @@ pub(crate) struct Panel {
     pub(crate) surface: MutableState<Option<ExternalSurface>>,
     // The pose of a volume in the room, which the scene of the volumes reads while it draws.
     pub(crate) volume_pose: MutableState<Pose>,
+    // Whether a volume stands in a place: a volume of a following subspace whose target the
+    // headset does not track shows nowhere, and the scene leaves its content out.
+    pub(crate) volume_shown: MutableState<bool>,
 }
 
 // The panels of the app in a headset. The headset's backend provides it around the app's
@@ -342,11 +231,25 @@ struct Following {
 }
 
 impl Entry {
+    // The panel that this volume stands under, if it is such a volume.
+    fn under(&self) -> Option<u64> {
+        match self.slot.kind {
+            PanelKind::Volume { under, .. } => under,
+            PanelKind::Content | PanelKind::Surface(_) => None,
+        }
+    }
+
     // Gives the scene of the volumes the pose of a volume, which draws it there without
     // composing. Other panels have no use for the state.
     fn publish_pose(&self) {
         if matches!(self.slot.kind, PanelKind::Volume { .. }) {
-            self.panel.volume_pose.set(self.slot.pose);
+            if self.slot.ride != Ride::Hidden {
+                self.panel.volume_pose.set(self.slot.pose);
+            }
+            let shown = self.slot.ride != Ride::Hidden;
+            if self.panel.volume_shown.get_non_reactive() != shown {
+                self.panel.volume_shown.set(shown);
+            }
         }
     }
 
@@ -361,9 +264,14 @@ impl Entry {
                 self.origin = origin;
                 self.slot.pose = origin.then(&self.carried.unwrap_or(follow.local));
                 self.slot.ride = standing.hand.map_or(Ride::Free, Ride::On);
+                self.slot.tracked = standing.tracked;
                 self.publish_pose();
             }
-            None => self.slot.ride = Ride::Hidden,
+            None => {
+                self.slot.ride = Ride::Hidden;
+                self.slot.tracked = None;
+                self.publish_pose();
+            }
         }
     }
 }
@@ -435,7 +343,10 @@ impl Space {
             .entries
             .borrow()
             .iter()
-            .filter(|entry| matches!(entry.slot.kind, PanelKind::Volume { .. }))
+            .filter(|entry| {
+                matches!(entry.slot.kind, PanelKind::Volume { .. })
+                    && entry.slot.ride != Ride::Hidden
+            })
             .count()
     }
 
@@ -490,25 +401,21 @@ impl Space {
         not(any(test, headset)),
         expect(dead_code, reason = "the headset backend calls it")
     )]
-    // Tells the following subspaces where the head and the controllers are in the frame at `time`,
-    // and whether the runtime recentered the room. The panels of a subspace that moved take
-    // their new poses.
-    pub(crate) fn track(
-        &self,
-        head: Option<Pose>,
-        controllers: [Option<Pose>; 2],
-        time: Duration,
-        recenter: Option<Recenter>,
-    ) {
+    // Tells the following subspaces where the head, the controllers and the hands are in the frame
+    // at `time`, and whether the runtime recentered the room. The panels of a subspace that moved
+    // take their new poses.
+    pub(crate) fn track(&self, poses: &Poses, time: Duration, recenter: Option<Recenter>) {
         let mut origins = self.inner.follow_origins.borrow_mut();
-        if !origins.track(head, controllers, time, recenter) {
+        if !origins.track(poses, time, recenter) {
             return;
         }
-        for entry in self.inner.entries.borrow_mut().iter_mut() {
+        let mut entries = self.inner.entries.borrow_mut();
+        for entry in entries.iter_mut() {
             if let Some(standing) = entry.follow.and_then(|follow| origins.moved(follow.id)) {
                 entry.stand(standing);
             }
         }
+        stand_under(&mut entries);
     }
 
     // A new panel with its states. A composable calls it inside a `remember`, so that the states
@@ -522,6 +429,7 @@ impl Space {
             dots: mutableStateOf([None; 2]),
             surface: mutableStateOf(None),
             volume_pose: mutableStateOf(Pose::IDENTITY),
+            volume_shown: mutableStateOf(true),
         }
     }
 
@@ -559,6 +467,7 @@ impl Space {
 
     // Registers the volume `panel` with a box of `size` dp (width, height and depth) centered at
     // `pose`, in a subspace whose origin is `origin`. It takes no room in the atlas.
+    #[cfg(test)]
     pub(crate) fn place_volume(
         &self,
         panel: Panel,
@@ -566,9 +475,26 @@ impl Space {
         origin: impl Into<Origin>,
         pose: Pose,
     ) {
+        self.place_volume_under(panel, size, None, origin, pose);
+    }
+
+    // `place_volume` for a volume that may stand `under` a panel of content. Such a volume stands
+    // where that panel stands, also while the user carries it or its subspace follows a target,
+    // and takes no ray.
+    pub(crate) fn place_volume_under(
+        &self,
+        panel: Panel,
+        size: [f32; 3],
+        under: Option<u64>,
+        origin: impl Into<Origin>,
+        pose: Pose,
+    ) {
         self.place_kind(
             panel,
-            PanelKind::Volume { depth: size[2] },
+            PanelKind::Volume {
+                depth: size[2],
+                under,
+            },
             [size[0], size[1]],
             origin.into(),
             pose,
@@ -619,9 +545,11 @@ impl Space {
                         pose,
                         mobility: Mobility::Fixed,
                         shape: Shape::Flat,
+                        priority: 0,
                         resize: None,
                         room: size,
                         ride: Ride::Free,
+                        tracked: None,
                     },
                     panel,
                     dots: [None; 2],
@@ -652,10 +580,15 @@ impl Space {
             .and_then(|id| self.inner.follow_origins.borrow().standing(id))
         {
             Some(standing) => entry.stand(standing),
-            None => entry.slot.ride = Ride::Free,
+            None => {
+                entry.slot.ride = Ride::Free;
+                entry.slot.tracked = None;
+            }
         }
         entry.publish_pose();
-        entry.slot.atlas
+        let atlas = entry.slot.atlas;
+        stand_under(&mut entries);
+        atlas
     }
 
     // Sets what the panel `id` does when the user carries it. A panel with no policy stays.
@@ -668,6 +601,18 @@ impl Space {
                 Mobility::Fixed
             };
             entry.policy = policy.cloned();
+        }
+    }
+
+    // Lets the content of the movable panel `id` draw its own handle: the handle's sphere shows
+    // only while a ray points at it or presses it.
+    pub(crate) fn draw_own_handle(&self, id: u64) {
+        let mut entries = self.inner.entries.borrow_mut();
+        if let Some(entry) = entries
+            .iter_mut()
+            .find(|entry| entry.slot.id == id && entry.slot.mobility.movable())
+        {
+            entry.slot.mobility = Mobility::MovableByOwnHandle;
         }
     }
 
@@ -735,11 +680,12 @@ impl Space {
             .map(|entry| entry.slot.id)
     }
 
-    // Sets the shape of the panel `id`.
-    pub(crate) fn set_shape(&self, id: u64, shape: Shape) {
+    // Sets the shape of the panel `id` and how strongly it holds a layer of its own.
+    pub(crate) fn set_layer(&self, id: u64, shape: Shape, priority: i32) {
         let mut entries = self.inner.entries.borrow_mut();
         if let Some(entry) = entries.iter_mut().find(|entry| entry.slot.id == id) {
             entry.slot.shape = shape;
+            entry.slot.priority = priority;
         }
     }
 
@@ -783,6 +729,7 @@ impl Space {
                 entry.carried = Some(pose);
                 entry.publish_pose();
             }
+            let moved = entry.slot.id;
             let event = SpatialMoveEvent {
                 event_type: step.event_type,
                 pose,
@@ -790,7 +737,11 @@ impl Space {
                 room_pose: entry.origin.then(&pose),
             };
             let listener = entry.policy.as_ref().and_then(MovePolicy::listener);
-            listener.map(|listener| (listener, event))
+            let heard = listener.map(|listener| (listener, event));
+            if entries.iter().any(|entry| entry.under() == Some(moved)) {
+                stand_under(&mut entries);
+            }
+            heard
         };
         // The callback runs with no borrow held, so that it may call the space
         if let Some((listener, event)) = heard {
@@ -932,6 +883,28 @@ impl Space {
 
 // Stacks the panels from the top of the atlas in the order they registered. A panel that moves
 // gets its new origin in its state.
+// Puts each volume that stands under a panel where that panel stands, with its ride, so it moves,
+// follows and hides with the panel.
+fn stand_under(entries: &mut [Entry]) {
+    for index in 0..entries.len() {
+        let Some(panel) = entries[index].under() else {
+            continue;
+        };
+        let Some((pose, ride, tracked)) = entries
+            .iter()
+            .find(|entry| entry.slot.id == panel)
+            .map(|entry| (entry.slot.pose, entry.slot.ride, entry.slot.tracked))
+        else {
+            continue;
+        };
+        let entry = &mut entries[index];
+        entry.slot.pose = pose;
+        entry.slot.ride = ride;
+        entry.slot.tracked = tracked;
+        entry.publish_pose();
+    }
+}
+
 fn restack(entries: &mut [Entry]) {
     let mut top = 0.0;
     for entry in entries

@@ -259,6 +259,10 @@ uses `cranpose/embed` for a Rust UI inside an IDE tool window.
 
 [ESP32-S3 example](https://samoylenkodmitry.github.io/cranpose-esp32/)
 
+## Bare metal OS
+
+[cranos](https://github.com/samoylenkodmitry/cranos)
+
 ## Choose APIs
 
 Start with the `cranpose` crate and its prelude. Add a crate for each feature the
@@ -277,6 +281,7 @@ app needs.
 | UI tests and robot tests | `cranpose-testing` | [Testing](docs/guide.md#testing), [robot tests](docs/guide.md#robot-tests) |
 | Liquid and Wear components | `cranpose-liquid`, `cranpose-ui` | [Liquid](docs/guide.md#liquid-components), [Wear](docs/guide.md#wear-components) |
 | Composables drawn on 3D meshes in a scene | `cranpose-ui`, `cranpose-ui-graphics` | [3D scenes](docs/guide.md#draw-composables-on-3d-meshes) |
+| Headset panels, 3D content and 3D controls | `cranpose-xr` | [XR](docs/xr_architecture.md), [3D controls](docs/xr_architecture.md#3d-controls) |
 | Audio and media playback | `cranpose-audio`, `cranpose-media` | [Audio API](https://docs.rs/cranpose-audio/latest/cranpose_audio/), [media API](https://docs.rs/cranpose-media/latest/cranpose_media/) |
 
 ## Set the release profile

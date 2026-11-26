@@ -92,6 +92,7 @@ mod wgl;
 mod adapter;
 mod command;
 mod conv;
+mod debug_text;
 mod device;
 mod fence;
 mod gl_state;
@@ -1168,7 +1169,8 @@ enum Command {
 
 #[derive(Default)]
 pub struct CommandBuffer {
-    label: Option<String>,
+    // A NUL follows the label's text: a driver may read it up to the NUL (see debug_text.rs)
+    label: Option<alloc::ffi::CString>,
     commands: Vec<Command>,
     data_bytes: Vec<u8>,
     queries: Vec<glow::Query>,

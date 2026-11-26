@@ -62,12 +62,13 @@ robot-app = ["logging", "cranpose-ui/test-helpers", "cranpose/desktop-menus"]
 logging = ["dep:env_logger"]
 
 [dependencies]
-cranpose = { path = "../../crates/cranpose", default-features = false, features = ["webview", "localization"] }
+cranpose = { path = "../../crates/cranpose", default-features = false, features = ["webview", "localization", "video"] }
 cranpose-animation = { path = "../../crates/cranpose-animation" }
 cranpose-core = { path = "../../crates/cranpose-core" }
 cranpose-ui = { path = "../../crates/cranpose-ui" }
 cranpose-foundation = { path = "../../crates/cranpose-foundation" }
 log = "0.4"
+portable-atomic = { workspace = true }
 web-time = { workspace = true }
 getrandom = { version = "0.4.3", features = ["wasm_js"] }
 anyhow = "1.0"

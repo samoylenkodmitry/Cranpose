@@ -7,7 +7,7 @@ use crate::{
     Hand as Side, PointerMapping,
     aim::Aim,
     gestures::Gestures,
-    handle::HandleKind,
+    handle::HandleFocus,
     pointer::{Frame, Pointer},
     ray::Beam,
     reach::Scene,
@@ -109,10 +109,15 @@ impl Pointers {
         [0, 1].map(|hand| self.sides[hand].pressed_surface())
     }
 
-    // The panel whose handle each hand holds or would grab, and which of its handles, left then
-    // right.
-    pub(crate) fn handles(&self) -> [Option<(u64, HandleKind)>; 2] {
+    // The handle that each hand presses or would grab, left then right.
+    pub(crate) fn handles(&self) -> [Option<HandleFocus>; 2] {
         [0, 1].map(|hand| self.sides[hand].handle())
+    }
+
+    // The hands whose press took or ended in this frame, left then right. Each gets a light
+    // vibration.
+    pub(crate) fn ticks(&self) -> [bool; 2] {
+        self.gestures.ticks
     }
 
     // The rays to show, left then right. A ray shows only while the app lets beams show and a panel
@@ -133,3 +138,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/two_pointer_tests.rs"]
 mod two_pointer_tests;
+
+#[cfg(test)]
+#[path = "tests/press_slop_tests.rs"]
+mod press_slop_tests;

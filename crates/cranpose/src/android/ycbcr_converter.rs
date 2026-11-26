@@ -83,13 +83,15 @@ impl YcbcrConverter {
     // the composition has not drawn the pictures that it holds.
     pub(crate) fn convert(&mut self, frame: VideoFrame) -> Option<ImageBitmap> {
         let crop = frame.crop();
-        let size = (crop.width, crop.height);
+        let rotation = frame.rotation();
+        let color = frame.color();
+        let size = frame.display_size();
         if size != self.size {
             self.frames.set_size(size.0, size.1);
             self.size = size;
         }
         let buffer = frame.as_hardware_buffer_ptr();
-        let properties = BufferProperties::of(&self.raw, buffer)?;
+        let properties = BufferProperties::of(&self.raw, buffer, color)?;
         let pipeline = self.pipeline_for(properties.format)?;
         let set = pipeline.lease().or_else(|| {
             log::warn!("player surface: the GPU holds too many pictures");
@@ -100,7 +102,7 @@ impl YcbcrConverter {
         set.bind(image.view);
         let target = self.writer.begin()?;
         let framebuffer = Framebuffer::new(&self.raw, &target, size)?;
-        let window = CropWindow::new(crop, properties.size);
+        let window = CropWindow::new(crop, properties.size, rotation);
         let commands = self.raw.record(|commands| {
             self.record_pass(commands, &set, &image, &framebuffer, size, &window);
         })?;

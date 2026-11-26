@@ -16,8 +16,10 @@ use super::{
 use crate::{
     Pose,
     billboard_pose::billboard_pose,
-    handle::{HANDLE_RADIUS, HandleKind},
-    space::PanelSlot,
+    eye_camera::FirstRow,
+    handle::{HANDLE_RADIUS, HandleFocus, HandleKind},
+    projected_pass::{Picture, ProjectedLayer},
+    space::{Mobility, PanelSlot},
     vector::{dot, normalize},
 };
 
@@ -36,8 +38,10 @@ const LIGHT: [f32; 3] = [-0.35, 0.45, 1.0];
 // The sharpness of the sphere's highlight and its strength.
 const SHININESS: f32 = 40.0;
 const HIGHLIGHT: f32 = 0.5;
-// The handle that the pointer would grab or carries shows this much larger.
-const ACTIVE_SCALE: f32 = 1.3;
+// The handle that a pointer would grab shows this much larger, and the one that a trigger presses
+// larger still, so the hand sees which handle a pull takes and that the pull took it.
+const HOVERED_SCALE: f32 = 1.3;
+const PRESSED_SCALE: f32 = 1.6;
 
 pub(crate) struct HandleLayers {
     move_sphere: xr::Swapchain<Api>,
@@ -50,61 +54,115 @@ impl HandleLayers {
         gpu: &GpuContext,
         format: SwapchainFormat,
     ) -> Result<Self, String> {
-        let sphere = |color| {
-            static_image(
-                xr_session,
-                gpu,
-                format,
-                (SIZE, SIZE),
-                &sphere_pixels(color, xr_session.top_row_first()),
-            )
+        let sphere = |kind| {
+            let first_row = if xr_session.top_row_first() {
+                FirstRow::Top
+            } else {
+                FirstRow::Bottom
+            };
+            let (side, pixels) = picture(kind, first_row);
+            static_image(xr_session, gpu, format, (side, side), &pixels)
         };
         Ok(Self {
-            move_sphere: sphere(MOVE_COLOR)?,
-            resize_sphere: sphere(RESIZE_COLOR)?,
+            move_sphere: sphere(HandleKind::Move)?,
+            resize_sphere: sphere(HandleKind::Resize)?,
         })
     }
 
-    // The layers of the handles at `slot`'s panel: the one that moves it if the panel is movable,
-    // then the one that resizes it if the panel is resizable. The layers face the head at `head`.
-    // A headset that tracks no head shows them facing the way the panel faces. A handle that a
-    // hand in `active` holds or would grab shows larger.
+    // The layers of the handles at `slot`'s panel, in the order of `placed`.
     pub(crate) fn layers<'a>(
         &'a self,
         slot: &PanelSlot,
-        active: [Option<(u64, HandleKind)>; 2],
+        active: [Option<HandleFocus>; 2],
         head: Option<[f32; 3]>,
     ) -> impl Iterator<Item = QuadLayer<'a>> + use<'a> {
-        let slot = *slot;
-        HandleKind::ALL
-            .into_iter()
-            .filter(move |kind| kind.offered_by(&slot))
-            .map(move |kind| {
-                let center = kind.center(&slot);
-                let pose = head.map_or(
-                    Pose {
-                        position: center,
-                        orientation: slot.pose.orientation,
-                    },
-                    |head| billboard_pose(center, head),
-                );
-                let scale = if active.contains(&Some((slot.id, kind))) {
-                    ACTIVE_SCALE
-                } else {
-                    1.0
-                };
-                let side = 2.0 * HANDLE_RADIUS * scale;
-                QuadLayer {
-                    swapchain: match kind {
-                        HandleKind::Move => &self.move_sphere,
-                        HandleKind::Resize => &self.resize_sphere,
-                    },
-                    source: LayerSource::Drawn((SIZE, SIZE)),
-                    pose,
-                    size: [side, side],
-                }
-            })
+        placed(slot, active, head).map(move |handle| QuadLayer {
+            swapchain: match handle.kind {
+                HandleKind::Move => &self.move_sphere,
+                HandleKind::Resize => &self.resize_sphere,
+            },
+            source: LayerSource::Drawn((SIZE, SIZE)),
+            pose: handle.pose,
+            size: [handle.side; 2],
+            space: None,
+        })
     }
+}
+
+// A handle where it shows in a frame.
+#[derive(Clone, Copy)]
+pub(crate) struct Handle {
+    kind: HandleKind,
+    // The pose of the sphere's picture, which faces the head
+    pose: Pose,
+    // The picture's width and height in meters
+    side: f32,
+}
+
+impl Handle {
+    // The handle as the projection layer draws it in place of its layer.
+    pub(crate) fn projected(self) -> ProjectedLayer {
+        ProjectedLayer {
+            picture: Picture::Handle(self.kind),
+            pose: self.pose,
+            size: [self.side; 2],
+            radius: None,
+        }
+    }
+}
+
+// The handles at `slot`'s panel: the one that moves it if the panel is movable, then the one that
+// resizes it if the panel is resizable. The handles face the head at `head`. A headset that tracks
+// no head shows them facing the way the panel faces. A handle that a hand in `active` holds or
+// would grab shows larger, and one that a trigger presses larger still. The move handle of a panel
+// that draws its own handle shows only then.
+pub(crate) fn placed(
+    slot: &PanelSlot,
+    active: [Option<HandleFocus>; 2],
+    head: Option<[f32; 3]>,
+) -> impl Iterator<Item = Handle> + use<> {
+    let slot = *slot;
+    HandleKind::ALL
+        .into_iter()
+        .filter(move |kind| kind.offered_by(&slot))
+        .filter_map(move |kind| {
+            let center = kind.center(&slot);
+            let pose = head.map_or(
+                Pose {
+                    position: center,
+                    orientation: slot.pose.orientation,
+                },
+                |head| billboard_pose(center, head),
+            );
+            let scale = active
+                .iter()
+                .flatten()
+                .filter(|focus| focus.panel == slot.id && focus.kind == kind)
+                .map(|focus| {
+                    if focus.pressed {
+                        PRESSED_SCALE
+                    } else {
+                        HOVERED_SCALE
+                    }
+                })
+                .fold(1.0, f32::max);
+            let drawn = kind == HandleKind::Move && slot.mobility == Mobility::MovableByOwnHandle;
+            (!drawn || scale > 1.0).then_some(Handle {
+                kind,
+                pose,
+                side: 2.0 * HANDLE_RADIUS * scale,
+            })
+        })
+}
+
+// The picture of the sphere of a handle of `kind`, `SIZE` pixels square, in rows of RGBA bytes
+// from `first_row`.
+pub(crate) fn picture(kind: HandleKind, first_row: FirstRow) -> (u32, Vec<u8>) {
+    let color = match kind {
+        HandleKind::Move => MOVE_COLOR,
+        HandleKind::Resize => RESIZE_COLOR,
+    };
+    (SIZE, sphere_pixels(color, first_row == FirstRow::Top))
 }
 
 // The picture of a sphere of `color` in rows of RGBA bytes with premultiplied alpha. The sphere

@@ -23,7 +23,7 @@ use cranpose_xr::{
     DEFAULT_PANEL_SIZE, FieldOfView, FollowMode, FollowTarget, FollowingSubspace, Hand,
     OnNotEntitled, Pose, ResizeLimits, ResizePolicy, SpatialCurvedRow, SpatialExternalSurface,
     SpatialPanel, StereoMode, StreamStats, StreamedScene, StreamedView, StreamedViews, Subspace,
-    SubspaceModifier, local_entitlement_check, local_spatial_capabilities,
+    SubspaceModifier, TrackedDimensions, local_entitlement_check, local_spatial_capabilities,
     local_spatial_environment,
 };
 #[cfg(not(target_os = "android"))]
@@ -37,6 +37,7 @@ mod decoder_limits;
 mod foveated_player;
 mod headset_readout;
 mod hum;
+mod panel_grid;
 mod pattern_writer;
 mod presses_panel;
 mod ray_target;
@@ -54,6 +55,7 @@ use crate_model::CrateModel;
 use foveated_player::FoveatedPlayer;
 use headset_readout::{HeadsetClock, HeadsetReadout, Readout, StreamLogs};
 use hum::rememberHum;
+use panel_grid::{PanelGrid, grid_build};
 use pattern_writer::PatternWriter;
 use presses_panel::PressesPanel;
 use ray_target::rememberRayTarget;
@@ -76,6 +78,10 @@ const BALL: f32 = 40.0;
 // shows a different color to each eye.
 #[composable]
 pub fn XrDemo() {
+    if let Some(count) = grid_build() {
+        PanelGrid(count);
+        return;
+    }
     if depth_test_build() {
         DepthTest();
         return;
@@ -128,8 +134,8 @@ pub fn XrDemo() {
         );
         // A volume takes two of the compositor's layers, one for the 3D content and one for its
         // handle. A Quest takes 16. With both rays, the ball and the text panel the demo has more,
-        // and the open keyboard is one more, so the frame leaves out the panels that stand
-        // farthest from the head. The torus hums: the sound comes from the torus and follows it
+        // and the open keyboard is one more, so the projection layer draws the handles and the
+        // farthest panels in place of their own layers. The torus hums: the sound comes from the torus and follows it
         // when a controller carries it. A build that plays the hum from the head's side leaves
         // the torus silent.
         TorusVolume(
@@ -203,42 +209,48 @@ fn depth_test_build() -> bool {
 #[composable]
 fn DepthTest() {
     if VOLUME_BUILD == Some("model") {
-        FollowingSubspace(FollowTarget::View(FollowMode::Snap), || {
-            CrateModel(
-                SubspaceModifier::new().rotate(20.0, 30.0, 0.0),
-                false,
-                rememberRayTarget(),
-            );
-        });
+        FollowingSubspace(
+            FollowTarget::View(FollowMode::Snap(TrackedDimensions::TranslationAndYaw)),
+            || {
+                CrateModel(
+                    SubspaceModifier::new().rotate(20.0, 30.0, 0.0),
+                    false,
+                    rememberRayTarget(),
+                );
+            },
+        );
         return;
     }
-    FollowingSubspace(FollowTarget::View(FollowMode::Snap), || {
-        if VOLUME_BUILD != Some("alone") {
-            SpatialPanel(SubspaceModifier::new().size(600.0, 600.0), || {
-                Box(
-                    Modifier::empty()
-                        .fill_max_size()
-                        .background(Color(0.85, 0.2, 0.5, 1.0))
-                        .rounded_corners(24.0)
-                        .padding(24.0),
-                    BoxSpec::default(),
-                    || {
-                        Text(
-                            "This panel stands at z = 0",
-                            Modifier::empty(),
-                            sized(28.0, Some(FontWeight::BOLD)),
-                        );
-                    },
-                );
-            });
-        }
-        TorusVolume(
-            SubspaceModifier::new().rotate(0.0, 45.0, 0.0),
-            false,
-            rememberRayTarget(),
-            None,
-        );
-    });
+    FollowingSubspace(
+        FollowTarget::View(FollowMode::Snap(TrackedDimensions::TranslationAndYaw)),
+        || {
+            if VOLUME_BUILD != Some("alone") {
+                SpatialPanel(SubspaceModifier::new().size(600.0, 600.0), || {
+                    Box(
+                        Modifier::empty()
+                            .fill_max_size()
+                            .background(Color(0.85, 0.2, 0.5, 1.0))
+                            .rounded_corners(24.0)
+                            .padding(24.0),
+                        BoxSpec::default(),
+                        || {
+                            Text(
+                                "This panel stands at z = 0",
+                                Modifier::empty(),
+                                sized(28.0, Some(FontWeight::BOLD)),
+                            );
+                        },
+                    );
+                });
+            }
+            TorusVolume(
+                SubspaceModifier::new().rotate(0.0, 45.0, 0.0),
+                false,
+                rememberRayTarget(),
+                None,
+            );
+        },
+    );
 }
 
 // A ball of 4 cm that floats 10 cm above the left controller, upright wherever the hand tilts.
@@ -254,7 +266,10 @@ fn ControllerBall(strip_shown: MutableState<bool>) {
         return;
     }
     FollowingSubspace(
-        FollowTarget::Controller(Hand::Left, FollowMode::Tight),
+        FollowTarget::Controller(
+            Hand::Left,
+            FollowMode::Tight(TrackedDimensions::TranslationAndYaw),
+        ),
         move || {
             SpatialPanel(
                 SubspaceModifier::new()

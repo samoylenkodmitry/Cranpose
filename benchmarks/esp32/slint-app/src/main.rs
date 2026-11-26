@@ -38,6 +38,10 @@ unsafe extern "C" {
 const WIDTH: usize = 320;
 const HEIGHT: usize = 480;
 const FRAME: Duration = Duration::from_micros(16_667);
+#[cfg(feature = "bench-frames")]
+#[path = "../../boot_frames.rs"]
+mod boot_frames;
+
 const STATS_WINDOW: Duration = Duration::from_secs(5);
 /// FreeRTOS's portMAX_DELAY: wait without a timeout.
 const BLOCK: sys::TickType_t = sys::TickType_t::MAX;
@@ -357,6 +361,10 @@ fn main() {
     let mut shown = timeline::Shown::default();
     let mut stats = None;
     let mut first_frame = None;
+    #[cfg(feature = "bench-frames")]
+    let mut boot_frames = boot_frames::BootFrames::new(
+        esp_idf_svc::timer::EspTaskTimerService::new().expect("ESP timer service"),
+    );
     loop {
         let frame_start = Instant::now();
         let first = *first_frame.get_or_insert(frame_start);
@@ -378,6 +386,8 @@ fn main() {
         });
         let now = Instant::now();
         if drew {
+            #[cfg(feature = "bench-frames")]
+            boot_frames.present();
             let was_first = stats.is_none();
             Stats::record(
                 &mut stats,

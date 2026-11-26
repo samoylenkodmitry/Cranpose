@@ -16,8 +16,7 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
-        // One arm64 build, as every app of the comparison.
-        ndk { abiFilters += "arm64-v8a" }
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
     buildTypes {

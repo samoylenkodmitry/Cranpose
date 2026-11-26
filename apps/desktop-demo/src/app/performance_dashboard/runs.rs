@@ -36,6 +36,9 @@ pub struct PerfProtocol {
     /// Seconds each launch was measured for, from its start.
     #[serde(default)]
     pub run_s: Option<f64>,
+    // The desktop sampler's limit on CPU use by other processes.
+    #[serde(default)]
+    pub max_other_cores: Option<f64>,
     /// The starts each round measured of every subject: its first after its
     /// install and its second. An older run did not keep them apart, and the
     /// dashboard leaves it out.
@@ -52,7 +55,17 @@ pub struct PerfRunFrames {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct PerfFramesScenario {
     pub scenario: String,
+    #[serde(default)]
+    extras: String,
     pub legs: Vec<PerfFramesLeg>,
+}
+
+impl PerfFramesScenario {
+    fn tier(&self) -> Option<u16> {
+        let mut words = self.extras.split(|c: char| c.is_whitespace() || c == ',');
+        words.find(|word| *word == "tier")?;
+        words.next()?.parse().ok()
+    }
 }
 
 /// One launch of one subject.
@@ -111,6 +124,13 @@ impl LegSamples {
 }
 
 impl PerfRunFrames {
+    pub(super) fn tier(&self, scenario: &str) -> Option<u16> {
+        self.scenarios
+            .iter()
+            .find(|case| case.scenario == scenario)?
+            .tier()
+    }
+
     pub fn parse(json: &str) -> Result<Self, String> {
         serde_json::from_str(json)
             .map_err(|error| format!("The run's frames did not parse: {error}"))
@@ -130,9 +150,29 @@ pub struct PerfSubject {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct PerfScenario {
     pub legs: usize,
+    /// Packaged app size in bytes for each subject that builds this screen.
+    #[serde(default)]
+    pub app_bytes: BTreeMap<String, u64>,
+    // Subjects whose benchmark app lacked this layout at the measured revision.
+    #[serde(default)]
+    pub unimplemented: Vec<String>,
     /// The results of each start, by its name in [`STARTS`].
     #[serde(default)]
     pub starts: BTreeMap<String, PerfStart>,
+}
+
+impl PerfScenario {
+    pub(super) fn includes(&self, name: &str) -> bool {
+        if self.unimplemented.iter().any(|subject| subject == name) {
+            return false;
+        }
+        self.app_bytes.is_empty()
+            || self.app_bytes.contains_key(name)
+            || self
+                .starts
+                .values()
+                .any(|start| start.summary.contains_key(name) || start.failures.contains_key(name))
+    }
 }
 
 /// One start's results in a scenario.
@@ -162,6 +202,32 @@ impl PerfRun {
         self.started_at.get(..10).unwrap_or(&self.started_at)
     }
 
+    pub(super) fn duration_ms(&self) -> f64 {
+        self.protocol.run_s.unwrap_or(10.0) * 1000.0
+    }
+
+    pub(super) fn omission(&self, scenario: &str, subject: &PerfSubject) -> String {
+        let measured = &self.scenarios[scenario];
+        // The desktop sampler first recorded only the app sizes of supported layouts.
+        let desktop = self.kind == "frameworks" && self.protocol.max_other_cores.is_some();
+        if measured.unimplemented.contains(&subject.name)
+            || (desktop && !measured.app_bytes.is_empty())
+        {
+            let layout = match scenario {
+                "gauntlet" => "Gauntlet",
+                "patchwork" => "Patchwork",
+                "wall" => "Still Wall",
+                name => name,
+            };
+            format!(
+                "The {} benchmark app did not implement {layout} in this run",
+                subject.label
+            )
+        } else {
+            format!("This run recorded no measurement for {}", subject.label)
+        }
+    }
+
     pub(super) fn start(&self, scenario: &str, start: &str) -> Option<&PerfStart> {
         self.scenarios.get(scenario)?.starts.get(start)
     }
@@ -174,6 +240,14 @@ impl PerfRun {
         metric: &str,
     ) -> Option<f64> {
         let name = &self.subjects.get(subject)?.name;
+        if metric == "app_mib" {
+            return self
+                .scenarios
+                .get(scenario)?
+                .app_bytes
+                .get(name)
+                .map(|bytes| *bytes as f64 / 1_048_576.0);
+        }
         self.start(scenario, start)?
             .summary
             .get(name)?
@@ -189,10 +263,9 @@ impl PerfRun {
             .all(|(start, _)| self.protocol.starts.iter().any(|kept| kept == start))
     }
 
-    /// Whether the run compares frameworks: Compose is among its subjects,
-    /// or it is the browser run, whose Compose may have failed to start.
+    // Older framework comparisons can be identified by the Compose subject.
     pub(super) fn compares_frameworks(&self) -> bool {
-        self.kind == "browser"
+        matches!(self.kind.as_str(), "browser" | "frameworks" | "esp32")
             || self
                 .subjects
                 .iter()

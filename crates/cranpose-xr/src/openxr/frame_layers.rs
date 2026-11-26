@@ -2,6 +2,8 @@
 //!
 //! The list keeps its capacity from frame to frame. A raw layer names its swapchain by handle, so
 //! the list holds no borrow. `fill` takes the borrowed layers and ends their use when it returns.
+//! The runner's plan of the layer budget chose them, so the list holds no more than the runtime
+//! takes.
 
 use std::{ffi::c_void, ptr};
 
@@ -11,6 +13,7 @@ use super::{
     cylinder_layers::CylinderLayer,
     graphics::Api,
     session::{ProjectionLayer, QuadLayer, RawProjection},
+    tracked_spaces::LocatedSpace,
 };
 use crate::volume_plan::{STAGES, Stage, VolumePlan, tests_depth, writes_depth};
 
@@ -18,6 +21,23 @@ use crate::volume_plan::{STAGES, Stage, VolumePlan, tests_depth, writes_depth};
 pub(crate) enum Layer<'a> {
     Quad(QuadLayer<'a>),
     Cylinder(CylinderLayer<'a>),
+}
+
+impl Layer<'_> {
+    // The layer in the space of `place`, at its pose relative to that space. A layer with no place
+    // stays in the room.
+    pub(crate) fn in_space(mut self, place: Option<LocatedSpace>) -> Self {
+        let Some(place) = place else {
+            return self;
+        };
+        let (pose, space) = match &mut self {
+            Layer::Quad(quad) => (&mut quad.pose, &mut quad.space),
+            Layer::Cylinder(cylinder) => (&mut cylinder.pose, &mut cylinder.space),
+        };
+        *pose = place.relative(pose);
+        *space = Some(place.space);
+        self
+    }
 }
 
 // The layers of a frame in the stages that the compositor draws, from the bottom to the top. The
@@ -30,6 +50,7 @@ pub(crate) struct Stages<'a, Streams, Panels, Overlay> {
     pub(crate) overlay: Overlay,
 }
 
+#[derive(Clone, Copy)]
 enum RawLayer {
     // The index in the frame's projection layers, which hold the structs of the layer's views, so
     // that the pointers to them are set when the frame ends.
@@ -49,6 +70,7 @@ enum Depth {
     Written,
 }
 
+#[derive(Clone, Copy)]
 struct Raw {
     layer: RawLayer,
     depth: Depth,
@@ -63,8 +85,8 @@ pub(crate) struct Counts {
     pub(crate) tested: usize,
     // How many write their depth into the compositor's buffer
     pub(crate) written: usize,
-    // The panels that the frame leaves out, because the runtime takes no more layers
-    pub(crate) left_out: usize,
+    // How many ride in a tracked space: the head's or a controller's aim
+    pub(crate) tracked: usize,
 }
 
 // The structs that the `next` pointer of a quad or a cylinder names, by what the layer is.
@@ -83,7 +105,8 @@ pub(crate) struct FrameLayers {
     layers: Vec<Raw>,
     projections: Vec<RawProjection>,
     headers: Vec<*const xr::sys::CompositionLayerBaseHeader>,
-    left_out: usize,
+    // The empty layers at the end of the list, which try how many layers the runtime takes
+    padding: usize,
 }
 
 impl FrameLayers {
@@ -94,13 +117,12 @@ impl FrameLayers {
             layers: Vec::new(),
             projections: Vec::new(),
             headers: Vec::new(),
-            left_out: 0,
+            padding: 0,
         }
     }
 
     // Replaces the layers with those of `stages`, in the order that the compositor draws them.
-    // `plan` says which stages test depth. The list holds `room` layers at most. A frame with more
-    // leaves out the panels that stand farthest from the head, which are the first ones.
+    // `plan` says which stages test depth.
     pub(crate) fn fill<'a>(
         &mut self,
         stages: Stages<
@@ -110,7 +132,6 @@ impl FrameLayers {
             impl Iterator<Item = QuadLayer<'a>>,
         >,
         plan: Option<VolumePlan>,
-        room: usize,
     ) {
         self.clear();
         let space = self.space;
@@ -121,7 +142,6 @@ impl FrameLayers {
             overlay,
         } = stages;
         let (mut streams, mut panels, mut overlay) = (Some(streams), Some(panels), Some(overlay));
-        let mut panel_layers = 0..0;
         for stage in STAGES {
             let depth = if tests_depth(stage, plan) {
                 Depth::Tested
@@ -147,7 +167,6 @@ impl FrameLayers {
                     }
                 }
                 Stage::Panels => {
-                    let first = self.layers.len();
                     self.layers
                         .extend(panels.take().into_iter().flatten().map(|panel| {
                             raw(match panel {
@@ -157,7 +176,6 @@ impl FrameLayers {
                                 }
                             })
                         }));
-                    panel_layers = first..self.layers.len();
                 }
                 Stage::Overlay => {
                     self.layers.extend(
@@ -170,13 +188,29 @@ impl FrameLayers {
                 }
             }
         }
-        self.left_out = self
-            .layers
-            .len()
-            .saturating_sub(room)
-            .min(panel_layers.len());
+    }
+
+    // The number of layers in the list.
+    pub(crate) fn len(&self) -> usize {
+        self.layers.len()
+    }
+
+    // Puts `count` copies of the empty `layer` over the others, for a frame that tries how many
+    // layers the runtime takes.
+    pub(crate) fn pad(&mut self, layer: &QuadLayer<'_>, count: usize) {
+        let raw = Raw {
+            layer: RawLayer::Quad(layer.to_raw(self.space)),
+            depth: Depth::Ignored,
+        };
+        self.layers.extend(std::iter::repeat_n(raw, count));
+        self.padding = count;
+    }
+
+    // Takes the empty layers of `pad` away again.
+    pub(crate) fn unpad(&mut self) {
         self.layers
-            .drain(panel_layers.start..panel_layers.start + self.left_out);
+            .truncate(self.layers.len().saturating_sub(self.padding));
+        self.padding = 0;
     }
 
     // The pointers to the layers' structs, with `bottom` first, for the call that ends the frame.
@@ -234,11 +268,20 @@ impl FrameLayers {
     // What the frame holds, when the runtime gets `layers` layers.
     pub(crate) fn counts(&self, layers: usize) -> Counts {
         let count = |wanted| self.layers.iter().filter(|raw| raw.depth == wanted).count();
+        let tracked = self
+            .layers
+            .iter()
+            .filter(|raw| match raw.layer {
+                RawLayer::Projection(_) => false,
+                RawLayer::Quad(quad) => quad.space != self.space,
+                RawLayer::Cylinder(cylinder) => cylinder.space != self.space,
+            })
+            .count();
         Counts {
             layers,
             tested: count(Depth::Tested),
             written: count(Depth::Written),
-            left_out: self.left_out,
+            tracked,
         }
     }
 
@@ -248,6 +291,6 @@ impl FrameLayers {
         self.headers.clear();
         self.layers.clear();
         self.projections.clear();
-        self.left_out = 0;
+        self.padding = 0;
     }
 }

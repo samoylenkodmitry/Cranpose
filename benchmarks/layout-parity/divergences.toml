@@ -1,0 +1,125 @@
+# Machine-readable divergence ledger for benchmarks/layout-parity.
+# Keep every entry synchronized with the Layout and behavioral parity section
+# of docs/compose_api_parity.md.
+#
+# compare.py --check-ledger enforces a two-way ratchet:
+#   1. Unlisted divergences, worsened deltas, non-finite bounds, missing nodes,
+#      and unlisted stress failures fail the run.
+#   2. Any unexpected entry that starts passing also fails the run so it gets
+#      removed from this ledger and from docs/compose_api_parity.md.
+
+[suite]
+width_dp = 1760
+height_dp = 980
+tol_dp = 0.5
+densities = ["1.0", "1.75"]
+
+[[layout.expected]]
+id = "text-line-height-and-glyph-metrics"
+densities = ["1.0", "1.75"]
+kind = "bounds_delta"
+max_dp = 2.0
+doc_ref = "docs/text.md"
+reason = "SkParagraph and Cranpose text layout round font ascent, descent, and ellipsis advance differently by 0.5 to 2.0 dp."
+tags = [
+  "ftr_left",
+  "ftr_right",
+  "hdr_meta",
+  "hdr_sub",
+  "hdr_title",
+  "z5_hmax_bar",
+  "z5_hmax_fill",
+  "z5_hmax_p1",
+  "z5_hmax_p2",
+  "z5_hmax_row",
+  "z5_imin_div",
+  "z5_imin_left",
+  "z5_imin_right",
+  "z5_imin_row",
+  "z5_wmax_bar",
+  "z5_wmax_col",
+  "z5_wmin_bar",
+  "z5_wmin_col",
+  "z5_wmin_txt",
+  "z6_base_big",
+  "z6_base_custom",
+  "z6_base_med",
+  "z6_base_row",
+  "z6_base_small",
+  "z6_base_wrap",
+  "z6_ta_center",
+  "z6_ta_end",
+  "z6_ta_start",
+  "z6_txt_annotated",
+  "z6_txt_ellipsis",
+  "z6_txt_ellipsis_box",
+  "z6_txt_minlines",
+  "z6_txt_minlines_box",
+  "z6_txt_nowrap",
+  "z6_txt_nowrap_box",
+]
+
+[[layout.unexpected]]
+id = "semantics-bounds-ignore-layer-and-offset-with"
+issue = "#2459"
+densities = ["1.0", "1.75"]
+kind = "bounds_delta"
+max_dp = 10.5
+reason = "Semantics bounds ignore ancestor graphicsLayer transforms (z11_gl_nest_c) and Modifier::offset_with translation (z11_off_lam)."
+tags = [
+  "z11_gl_nest_c",
+  "z11_off_lam",
+]
+
+[[layout.unexpected]]
+id = "fractional-density-rounding-drift"
+issue = "#2460"
+densities = ["1.75"]
+kind = "bounds_delta"
+max_dp = 1.2
+reason = "Layout rounding at 1.75x density drifts by 1 to 2 physical pixels (0.57 to 1.14 dp) from Compose pixel-snapped constraints and placements."
+tags = [
+  "z1_chain_inner",
+  "z1_frac_child",
+  "z1_sizein_min",
+  "z1_sizein_min_c",
+  "z1_wh_in",
+  "z1_wh_in_c",
+  "z2_a_tc",
+  "z7_bwc",
+  "z7_bwc_nested",
+  "z7_custom_layout",
+  "z7_diag_2",
+  "z7_diag_3",
+  "z7_mod_layout_inner",
+  "z7_mod_layout_outer",
+  "z8_sub_anchor",
+  "z8_sub_bot_r",
+  "z8_sub_rem",
+  "z8_sub_t4",
+  "z8_sub_t5",
+  "z8_sub_t6",
+  "z8_sub_under",
+  "z9_rtl_off_rel",
+  "z10_fc_5",
+  "z10_fc_6",
+  "z10_fr_4",
+  "z15_sg_2",
+  "z15_sg_3",
+  "z15_sg_7",
+  "z15_vg_0",
+  "z15_vg_3",
+  "z15_vg_5",
+  "z19_ag0",
+  "z19_ag1",
+  "z19_ag2",
+  "z19_ag3",
+  "z19_ag4",
+  "z19_ag5",
+]
+
+[[stress.unexpected]]
+framework = "cranpose"
+scenario = "scroll_state_owner_disposed_before_scroll_node_detaches"
+issue = "#2457"
+reason = "ScrollState::remove_invalidate_callback panics in ScrollNode::on_detach when the ScrollState owner is disposed before the scroll node detaches."

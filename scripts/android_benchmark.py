@@ -135,7 +135,7 @@ def verify_first_gesture(device, route, destination, report):
 
 def run_leg(device, route, apk, proof, dex, destination, report, installed_source, recorder=None):
     package = route['package']
-    report.update(apk_sha256=proof['apk_sha256'], native_sha256=proof['build']['native_sha256'], route=route)
+    report.update(app_bytes=apk.stat().st_size, apk_sha256=proof['apk_sha256'], native_sha256=proof['build']['native_sha256'], route=route)
     verify_apk(apk, proof, proof['native_member'])
     install_staged(device, package, installed_source, proof['apk_sha256'], report)
     launch_route(device, route, report)

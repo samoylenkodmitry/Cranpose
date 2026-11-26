@@ -34,10 +34,18 @@ enum Role {
 struct Nal {
     start: usize,
     #[cfg_attr(
-        not(any(test, target_os = "macos", target_os = "ios")),
+        not(any(
+            test,
+            target_os = "android",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "windows",
+            target_os = "linux",
+            all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
+        )),
         expect(
             dead_code,
-            reason = "only a decoder that rewrites the units reads their ends"
+            reason = "only targets with hardware decoders read NAL payload slices"
         )
     )]
     end: usize,
@@ -107,8 +115,7 @@ impl AccessUnitNals {
         for (index, nal) in self.nals.iter().enumerate() {
             let begins = index == 0
                 || match nal.kind {
-                    Kind::Delimiter => true,
-                    Kind::ParameterSet(_) => in_picture,
+                    Kind::Delimiter | Kind::ParameterSet(_) => in_picture,
                     Kind::Slice { first, .. } => first && in_picture,
                     Kind::Other | Kind::Skipped => false,
                 };
@@ -140,11 +147,33 @@ impl AccessUnitNals {
     }
 
     // Whether the access unit holds a slice that a decoder can start with.
-    #[cfg(any(test, target_os = "macos", target_os = "ios"))]
+    #[cfg(any(
+        test,
+        target_os = "macos",
+        target_os = "ios",
+        all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
+    ))]
     pub(super) fn has_keyframe(&self) -> bool {
         self.nals
             .iter()
             .any(|nal| matches!(nal.kind, Kind::Slice { key: true, .. }))
+    }
+
+    // The first sequence parameter set NAL payload in the parsed access unit, if any.
+    #[cfg(any(
+        test,
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows",
+        target_os = "linux",
+        all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
+    ))]
+    pub(super) fn sequence_parameter_set<'a>(&self, data: &'a [u8]) -> Option<&'a [u8]> {
+        self.nals
+            .iter()
+            .find(|nal| nal.kind == Kind::ParameterSet(Role::Sequence))
+            .map(|nal| &data[nal.start..nal.end])
     }
 
     // The parameter sets in the order of the access unit, if it holds a full set: a sequence
@@ -224,7 +253,7 @@ fn classify(codec: VideoCodec, nal: &[u8]) -> Kind {
             10..=12 => Kind::Skipped,
             _ => Kind::Other,
         },
-        VideoCodec::Hevc | VideoCodec::Av1 => match (header >> 1) & 0x3f {
+        VideoCodec::Hevc | VideoCodec::Av1 | VideoCodec::Vp9 => match (header >> 1) & 0x3f {
             kind @ 0..=31 => Kind::Slice {
                 // Slices of random access pictures
                 key: (16..=23).contains(&kind),

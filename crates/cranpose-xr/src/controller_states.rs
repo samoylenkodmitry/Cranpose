@@ -9,7 +9,9 @@
 use cranpose::{MutableState, mutableStateOf, space::Mat4};
 
 use crate::{
-    Controller, ControllerModel, ControllerModels, Hand, Pose, controller_grips,
+    Controller, ControllerModel, ControllerModels, Hand, Pose,
+    aim::Aim,
+    controller_grips,
     controller_look::{Load, Look, Offer, look},
     controller_models::Settings,
     controller_placement::scene_from_grip,
@@ -49,7 +51,7 @@ impl ControllerStates {
 
     // The app's handle on the settings.
     pub(crate) fn handle(&self) -> ControllerModels {
-        ControllerModels::over(self.settings)
+        ControllerModels::over(self.settings, self.shown)
     }
 
     // Records the runtime's model of `hand`'s controller.
@@ -58,14 +60,36 @@ impl ControllerStates {
     }
 
     // Takes the controllers of a frame: each hand that holds a controller shows a model at its grip,
-    // unless the app turned the models off.
+    // unless the app turned the hand's model off. The parts of a shown model take the controller's
+    // inputs.
     pub(crate) fn track(&self, controllers: [&Controller; 2]) {
-        let grips = if self.settings.get_non_reactive().enabled {
-            controller_grips::shown(controllers)
-        } else {
-            [None; 2]
-        };
+        let enabled = self.settings.get_non_reactive().enabled;
+        let mut grips = controller_grips::shown(controllers);
+        for (grip, enabled) in grips.iter_mut().zip(enabled) {
+            if !enabled {
+                *grip = None;
+            }
+        }
         self.show(grips);
+        #[cfg(feature = "gltf")]
+        self.follow(controllers, grips);
+    }
+
+    // Poses the parts of each shown model that has loaded from its controller's inputs.
+    #[cfg(feature = "gltf")]
+    fn follow(&self, controllers: [&Controller; 2], grips: [Option<Pose>; 2]) {
+        let loads = self.loads.get_non_reactive();
+        for ((load, controller), grip) in loads.iter().zip(controllers).zip(grips) {
+            if grip.is_none() {
+                continue;
+            }
+            if let Some(loaded) = load
+                .as_ref()
+                .and_then(crate::SpatialGltfModelState::loaded_now)
+            {
+                loaded.follow(controller);
+            }
+        }
     }
 
     // Moves the models to the controllers' grips, `None` for a hand that shows none. A hand that
@@ -81,6 +105,22 @@ impl ControllerStates {
                 map.set(scene_from_grip(&grip));
             }
         }
+    }
+
+    // Where the grip of each shown model stands in the room, in meters, outside the composition.
+    #[cfg(headset)]
+    pub(crate) fn shown_grips(&self) -> impl Iterator<Item = [f32; 3]> + '_ {
+        let shown = self.shown.get_non_reactive();
+        self.maps
+            .iter()
+            .zip(shown)
+            .filter(|(_, shown)| *shown)
+            .map(|(map, _)| {
+                let grip = map
+                    .get_non_reactive()
+                    .transform_point(cranpose::space::Vec3::ZERO);
+                [grip.x, -grip.y, -grip.z].map(|mm| mm / crate::eye_camera::UNITS_PER_METER)
+            })
     }
 
     // How many hands show a model now, outside the composition.
@@ -147,6 +187,79 @@ impl ControllerStates {
     #[cfg(feature = "gltf")]
     pub(crate) fn set_load(&self, hand: Hand, state: Option<crate::SpatialGltfModelState>) {
         self.loads.update(|loads| loads[hand.index()] = state);
+    }
+
+    // Where the ray of `hand`'s controller starts when the controller's grip stands at `grip`: the
+    // place of the loaded model's `laser_begin`, or `None` while the hand has loaded no model with
+    // that node. The model stays loaded for a while after it hides, so the ray's start does not
+    // jump when the model shows or hides.
+    #[cfg(feature = "gltf")]
+    #[cfg_attr(
+        not(headset),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    pub(crate) fn ray_start(&self, hand: Hand, grip: &Pose) -> Option<[f32; 3]> {
+        let loaded = self.loads.read(|loads| {
+            loads[hand.index()]
+                .as_ref()
+                .and_then(crate::SpatialGltfModelState::loaded_now)
+        })?;
+        let start = loaded.model.ray_start?;
+        Some(grip.then(&Pose::at(start)).position)
+    }
+
+    #[cfg(not(feature = "gltf"))]
+    #[cfg_attr(
+        not(headset),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    pub(crate) fn ray_start(&self, _hand: Hand, _grip: &Pose) -> Option<[f32; 3]> {
+        None
+    }
+
+    // The pointers' aims with each controller's ray starting at the tip of its model, where the
+    // drawn controller shows the ray leave it. `controllers` are the frame's, left then right.
+    #[cfg_attr(
+        not(headset),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    pub(crate) fn start_rays(
+        &self,
+        aims: [Option<Aim>; 2],
+        controllers: [&Controller; 2],
+    ) -> [Option<Aim>; 2] {
+        Hand::BOTH.map(|hand| {
+            let aim = aims[hand.index()]?;
+            let grip = controllers[hand.index()].grip?;
+            Some(match self.ray_start(hand, &grip.pose) {
+                Some(start) => aim.starting_near(start),
+                None => aim,
+            })
+        })
+    }
+
+    // Where the scene draws `hand`'s model's ray start now, in the room in meters, or `None` while
+    // the hand shows no loaded model with that node. A test compares it with the start of the ray
+    // that the frame drew.
+    #[cfg(all(feature = "gltf", feature = "scripted-hand"))]
+    #[cfg_attr(
+        not(headset),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    pub(crate) fn drawn_ray_start(&self, hand: Hand) -> Option<[f32; 3]> {
+        if !self.shown.get_non_reactive()[hand.index()] {
+            return None;
+        }
+        let loaded = self.loaded(hand)?;
+        let start = loaded.model.ray_start?;
+        let scene = self.maps[hand.index()]
+            .get_non_reactive()
+            .transform_point(cranpose::space::Vec3::from_array(start));
+        let room = crate::eye_camera::scene_direction(scene.to_array());
+        Some(
+            room.to_array()
+                .map(|mm| mm / crate::eye_camera::UNITS_PER_METER),
+        )
     }
 
     // The glTF model that `hand` has loaded, once it has.

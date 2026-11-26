@@ -6,10 +6,27 @@
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rustc-check-cfg=cfg(cranpose_first_screen_glsl)");
+    println!("cargo::rustc-check-cfg=cfg(cranpose_gpu_video)");
+    emit_gpu_video_cfg();
     first_screen_pipelines();
     println!("cargo::rerun-if-changed=examples/localization/locales");
     println!("cargo::rerun-if-env-changed=CARGO_NDK_ANDROID_PLATFORM");
     println!("cargo::rerun-if-env-changed=ANDROID_PLATFORM");
+}
+
+fn emit_gpu_video_cfg() {
+    let has = |name: &str| std::env::var_os(name).is_some();
+    if !has("CARGO_FEATURE_VIDEO") || !has("CARGO_FEATURE_RENDERER_WGPU") {
+        return;
+    }
+    let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let supported = matches!(os.as_str(), "macos" | "ios" | "windows" | "linux")
+        || (os == "android" && has("CARGO_FEATURE_ANDROID"))
+        || (arch == "wasm32" && os == "unknown" && has("CARGO_FEATURE_WEB"));
+    if supported {
+        println!("cargo::rustc-cfg=cranpose_gpu_video");
+    }
 }
 
 /// Writes `OUT_DIR/first_screen_pipelines.bin`: the file

@@ -4,6 +4,9 @@
 //! the bottom layer and the rays are the top. The 3D content is one projection layer between
 //! the streamed scenes and the panels, so every panel stands over it in the list.
 //!
+//! A frame with more layers than the runtime takes draws the pictures of some panels and handles
+//! into the projection layer too, so they stand under every layer of the panels in the list.
+//!
 //! A runtime that offers `XR_KHR_composition_layer_depth` and `XR_FB_composition_layer_depth_test`
 //! tests each layer over the projection layer against its depth. A panel behind a 3D object then
 //! shows behind it, and a panel in front shows in front. Without the test, a panel covers the
@@ -41,6 +44,18 @@ pub(crate) struct DepthSupport {
     pub(crate) tests: bool,
 }
 
+impl DepthSupport {
+    // What a frame can do with the depth of its projection layer, whose content `leaves_depth` or
+    // not. A layer whose content leaves none, such as holograms alone, carries no depth. The frame
+    // then skips the depth's pass and its store. The compositor tests no layer against it.
+    pub(crate) fn for_content(self, leaves_depth: bool) -> Self {
+        Self {
+            submits: self.submits && leaves_depth,
+            ..self
+        }
+    }
+}
+
 // What a frame does for its 3D content.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct VolumePlan {
@@ -50,11 +65,12 @@ pub(crate) struct VolumePlan {
     pub(crate) tests_depth: bool,
 }
 
-// The plan for a frame with `volumes` volumes in the app's composition, or `None` when the frame
-// has no projection layer: it draws nothing and costs the GPU nothing. The layer needs a view of
-// each eye, which `eyes` says the runtime located.
-pub(crate) fn plan(volumes: usize, eyes: [bool; 2], depth: DepthSupport) -> Option<VolumePlan> {
-    (volumes > 0 && eyes == [true, true]).then_some(VolumePlan {
+// The plan for a frame with `contents` things that the projection layer draws: the volumes and
+// controller models of the app's composition and the pictures of layers that the frame draws in
+// place of their own. `None` when the frame has no projection layer: it draws nothing and costs
+// the GPU nothing. The layer needs a view of each eye, which `eyes` says the runtime located.
+pub(crate) fn plan(contents: usize, eyes: [bool; 2], depth: DepthSupport) -> Option<VolumePlan> {
+    (contents > 0 && eyes == [true, true]).then_some(VolumePlan {
         submits_depth: depth.submits,
         // The test reads the depth that the layer carries
         tests_depth: depth.submits && depth.tests,

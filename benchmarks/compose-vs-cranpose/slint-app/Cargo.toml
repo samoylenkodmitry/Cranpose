@@ -18,7 +18,7 @@ crate-type = ["cdylib", "rlib"]
 log = "0.4"
 perf-data = { path = "../perf-data" }
 # Slint's Android backend renders with Skia.
-slint = { version = "1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06"] }
+slint = { version = "1.19.1", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = "0.15"
@@ -29,19 +29,19 @@ android_logger = "0.15"
 # was drawn only with wgpu's API exposed.
 [target.'cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))'.dependencies]
 gif = "0.14.2"
-slint = { version = "1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-skia", "unstable-fontique-011", "unstable-wgpu-30"] }
+slint = { version = "1.19.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-skia", "unstable-fontique-012", "unstable-wgpu-30"] }
 
 # In a browser: winit's canvas and Slint's FemtoVG renderer on WebGL2, which
 # Skia does not run on, and the same fontique collection for Roboto.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-slint = { version = "1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "unstable-fontique-011"] }
+slint = { version = "1.19.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "unstable-fontique-012"] }
 wasm-bindgen = "0.2"
 wasm-logger = "0.2"
 console_error_panic_hook = "0.1"
 web-sys = { version = "0.3", features = ["Window", "Location"] }
 
 [build-dependencies]
-slint-build = "1.18.1"
+slint-build = "1.19.1"
 
 # Its own workspace, like a real application, built as the Cranpose app is.
 [workspace]

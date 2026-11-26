@@ -14,8 +14,9 @@
 //! the volumes. The runtime's own model of the controller shows where the app declared
 //! `Use::controller_models()` in its build and the runtime has one. A Meta Quest has one through
 //! `XR_FB_render_model`, and the `gltf` feature loads it. Elsewhere a plain model that Cranpose builds
-//! shows. [`ControllerModels`], which [`local_controller_models`] gives, turns the models off or
-//! replaces them. A tracked hand with no controller in it shows no model.
+//! shows. [`ControllerModels`], which [`local_controller_models`] gives, turns each hand's model off
+//! or replaces it. A tracked hand with no controller in it shows no model. The trigger, the grip,
+//! the buttons and the thumbstick of a runtime's model move with the inputs.
 //!
 //! A [`SpatialExternalSurface`] gives the app a surface that a hardware video decoder or a camera
 //! writes into. The compositor shows its pictures as a layer with no copy. A [`StreamedScene`]
@@ -93,6 +94,8 @@ mod controller_loaders;
 mod controller_look;
 mod controller_model;
 mod controller_models;
+#[cfg(feature = "gltf")]
+mod controller_parts;
 #[cfg(any(test, headset))]
 mod controller_placement;
 #[cfg(any(test, headset))]
@@ -127,6 +130,7 @@ mod field_of_view;
 mod flat_stream;
 mod follow_mode;
 mod follow_origin;
+mod follow_thresholds;
 mod following_subspace;
 mod foveated_encoding;
 #[cfg(any(test, all(headset, target_os = "android")))]
@@ -158,10 +162,13 @@ mod gltf_model;
 mod gltf_model_node;
 #[cfg(feature = "gltf")]
 mod gltf_placement;
+#[cfg(feature = "gltf")]
+mod gltf_skin;
 mod hand;
 mod hand_aim;
 mod hand_joint;
 mod hand_joint_type;
+mod hand_model;
 mod hand_state;
 #[cfg(any(test, headset))]
 mod handle;
@@ -170,6 +177,12 @@ mod headset_properties;
 #[cfg(any(test, headset))]
 mod hit;
 mod hit_info;
+mod hologram;
+mod hologram_material;
+mod hologram_meshes;
+mod hologram_objects;
+mod hologram_scene;
+mod hologram_stage;
 mod input_action;
 mod input_event;
 mod input_source;
@@ -183,6 +196,8 @@ mod keyboard;
 mod keyboard_panel;
 #[cfg(any(test, headset))]
 mod keyboard_state;
+#[cfg(any(test, headset))]
+mod layer_budget;
 #[cfg(any(test, headset))]
 mod layer_limit;
 mod locals;
@@ -224,6 +239,10 @@ mod pointers;
 mod pose;
 #[cfg(any(test, headset))]
 mod press_threshold;
+#[cfg(any(test, headset))]
+mod projected_pass;
+#[cfg(any(test, headset))]
+mod projection_crop;
 mod ray;
 #[cfg(any(test, headset))]
 mod reach;
@@ -233,6 +252,8 @@ mod render_viewpoint;
 mod resize;
 mod resize_limits;
 mod resize_policy;
+#[cfg(any(test, headset))]
+mod scene_hold;
 #[cfg(any(test, all(feature = "scripted-hand", headset)))]
 #[cfg_attr(
     not(all(feature = "scripted-hand", headset)),
@@ -253,14 +274,18 @@ mod scripted_controller;
 mod scripted_hand;
 #[cfg(any(test, headset))]
 mod session_status;
+mod soft_follow_mode;
 #[cfg(any(test, headset))]
 mod soft_keyboard;
 mod sound_sources;
 #[cfg(any(test, headset))]
 mod sound_stage;
 mod space;
+mod spatial_button;
 mod spatial_capabilities;
+mod spatial_choice_group;
 mod spatial_curved_row;
+mod spatial_emblem;
 mod spatial_environment;
 mod spatial_external_surface;
 mod spatial_frame_effect;
@@ -272,19 +297,25 @@ mod spatial_gltf_model_source;
 mod spatial_gltf_model_state;
 #[cfg(feature = "gltf")]
 mod spatial_gltf_model_status;
+mod spatial_hologram;
 mod spatial_move_event;
 #[cfg(any(test, headset))]
 mod spatial_offer;
 mod spatial_panel;
+mod spatial_particle_wave;
 mod spatial_point_source;
 #[cfg(any(test, headset))]
 mod spatial_request;
 mod spatial_resize_event;
+mod spatial_ribbon;
 #[cfg(any(test, headset))]
 mod spatial_setup;
+mod spatial_slider;
 mod spatial_store;
 #[cfg(any(test, headset))]
 mod spatial_support;
+mod spatial_switch;
+mod spatial_tray;
 mod spatial_volume;
 mod stereo_mode;
 mod stream_source;
@@ -306,6 +337,10 @@ mod tracking_permission;
 #[cfg(any(test, headset))]
 mod tracking_request;
 mod tracking_state;
+mod tray_material;
+mod tray_meshes;
+mod tray_part;
+mod tray_scene;
 mod uuid;
 #[cfg(any(test, headset))]
 mod vector;
@@ -363,7 +398,8 @@ pub use face_tracking_provider::FaceTrackingProvider;
 pub use field_of_view::FieldOfView;
 #[cfg(all(desktop_run, not(headset)))]
 pub use flat_run::run;
-pub use follow_mode::{FollowMode, FollowTarget};
+pub use follow_mode::{FollowMode, FollowTarget, TrackedDimensions};
+pub use follow_thresholds::FollowThresholds;
 pub use following_subspace::FollowingSubspace;
 pub use foveated_encoding::FoveatedEncoding;
 #[cfg(feature = "gltf")]
@@ -376,10 +412,12 @@ pub use hand::Hand;
 pub use hand_aim::HandAim;
 pub use hand_joint::HandJoint;
 pub use hand_joint_type::HandJointType;
+pub use hand_model::HandModel;
 pub use hand_state::HandState;
 pub use haptics::{Haptics, Vibration, local_haptics};
 pub use headset_properties::{EyeImageSize, HeadsetProperties, local_headset_properties};
 pub use hit_info::HitInfo;
+pub use hologram::{HologramColors, HologramStage};
 pub use input_action::InputAction;
 pub use input_event::InputEvent;
 pub use input_source::InputSource;
@@ -417,8 +455,12 @@ pub use run_error::RunError;
 pub use scripted_controller::{ScriptedButtons, ScriptedController, script_controller};
 #[cfg(all(feature = "scripted-hand", headset))]
 pub use scripted_hand::{PinchCycle, ScriptedHand, script_hand};
+pub use soft_follow_mode::SoftFollowMode;
+pub use spatial_button::{ButtonShape, SpatialButton};
 pub use spatial_capabilities::{SpatialCapabilities, local_spatial_capabilities};
+pub use spatial_choice_group::{ChoiceForm, SpatialChoiceGroup};
 pub use spatial_curved_row::SpatialCurvedRow;
+pub use spatial_emblem::SpatialEmblem;
 pub use spatial_environment::{SpatialEnvironment, local_spatial_environment};
 pub use spatial_external_surface::{SpatialExternalSurface, SpatialExternalSurfaceScope};
 pub use spatial_frame_effect::SpatialFrameEffect;
@@ -430,10 +472,16 @@ pub use spatial_gltf_model_source::SpatialGltfModelSource;
 pub use spatial_gltf_model_state::{SpatialGltfModelState, rememberSpatialGltfModelState};
 #[cfg(feature = "gltf")]
 pub use spatial_gltf_model_status::SpatialGltfModelStatus;
+pub use spatial_hologram::SpatialHologram;
 pub use spatial_move_event::{SpatialMoveEvent, SpatialMoveEventType};
 pub use spatial_panel::SpatialPanel;
+pub use spatial_particle_wave::SpatialParticleWave;
 pub use spatial_point_source::SpatialPointSource;
 pub use spatial_resize_event::{SpatialResizeEvent, SpatialResizeEventType};
+pub use spatial_ribbon::SpatialRibbon;
+pub use spatial_slider::{SliderColors, SpatialSlider};
+pub use spatial_switch::{SpatialSwitch, SwitchColors};
+pub use spatial_tray::SpatialTray;
 pub use spatial_volume::{SpatialVolume, SpatialVolumeScope};
 pub use stereo_mode::StereoMode;
 pub use stream_stats::{StreamCounts, StreamStats};

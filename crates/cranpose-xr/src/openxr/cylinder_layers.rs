@@ -18,11 +18,14 @@ pub(crate) struct CylinderLayer<'a> {
     pub(crate) radius: f32,
     // The panel's arc length and height in meters.
     pub(crate) size: [f32; 2],
+    // The tracked space that `pose` is in, or `None` for the frame's space: the room
+    pub(crate) space: Option<xr::sys::Space>,
 }
 
 impl CylinderLayer<'_> {
-    // The compositor's struct for the layer in `space`. It names the swapchain by its handle, so
-    // the struct is valid for as long as the swapchain lives.
+    // The compositor's struct for the layer in its own space, or in `space` for a layer in the
+    // room. It names the swapchain by its handle, so the struct is valid for as long as the
+    // swapchain lives.
     pub(crate) fn to_raw(&self, space: xr::sys::Space) -> xr::sys::CompositionLayerCylinderKHR {
         // OpenXR places the layer by its cylinder's axis, and the visible part lies on the
         // axis's -z side
@@ -47,7 +50,7 @@ impl CylinderLayer<'_> {
             .central_angle((self.size[0] / self.radius).min(TAU - 0.01))
             .aspect_ratio(self.size[0] / self.size[1])
             .into_raw();
-        raw.space = space;
+        raw.space = self.space.unwrap_or(space);
         raw.next = ptr::null();
         raw
     }

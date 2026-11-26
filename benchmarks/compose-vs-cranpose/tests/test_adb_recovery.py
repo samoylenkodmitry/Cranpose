@@ -58,6 +58,21 @@ class AdbRecoveryTest(unittest.TestCase):
                          ['kill-server', 'start-server', '-s SERIAL wait-for-device',
                           '-s SERIAL reverse tcp:8123 tcp:8123', '-s SERIAL shell cat /proc/uptime'], lines)
 
+    def test_a_hung_relay_install_reconnects_only_the_tv(self):
+        with tempfile.TemporaryDirectory() as folder:
+            tools, calls = Path(folder), Path(folder) / 'calls'
+            adb = tools / 'adb'
+            adb.write_text(FAKE_ADB)
+            adb.chmod(adb.stat().st_mode | stat.S_IEXEC)
+            environment = {'PATH': f'{tools}{os.pathsep}{os.environ["PATH"]}', 'ADB_CALLS': str(calls),
+                           'ADB_SERVER_SOCKET': 'localfilesystem:/tmp/test-relay'}
+            with patch.dict(os.environ, environment), patch.object(measure, 'INSTALL_TIMEOUT_S', 1):
+                measure.Device('127.0.0.1:1234').install('compose', tools / 'compose.apk')
+            lines = calls.read_text().splitlines()
+        self.assertEqual(lines[1:4], ['disconnect 127.0.0.1:1234', 'connect 127.0.0.1:1234',
+                                     '-s 127.0.0.1:1234 wait-for-device'])
+        self.assertNotIn('kill-server', lines)
+
     def test_an_adb_that_hangs_again_after_the_restart_fails_the_install(self):
         with tempfile.TemporaryDirectory() as folder:
             tools, calls = Path(folder), Path(folder) / 'calls'

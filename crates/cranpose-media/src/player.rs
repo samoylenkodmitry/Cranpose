@@ -237,6 +237,7 @@ impl MediaPlayer for SoftwareMediaPlayer {
             session: false,
             equalizer: true,
             probing: true,
+            video: false,
         }
     }
 

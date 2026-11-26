@@ -23,20 +23,21 @@ while it gains enough to justify the fork; each one is offered upstream.
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
-`cranpose-wgpu-hal` is at 30.0.23 for the catch-up barrier, the Metal
+`cranpose-wgpu-hal` is at 30.0.25 for the catch-up barrier, the Metal
 pipeline switch, the dedicated Vulkan allocations, the GL point size, the
 GL state tracker, the web surface usages, the boxed GL copy commands, the
 Vulkan command pools that give a burst's memory back, the GL shaders
 without the branches their constants decide, the GL program status read
 only on failure, the GLSL templates, the GL link reads, the WebGL
 extensions, the GL varying minimum, the presentable image identities, the
-WebGL frames drawn into the canvas and the GL bindings a link already
-sets below. `cranpose-wgpu-core` is at
-30.0.26 to require those, to make
+WebGL frames drawn into the canvas, the GL bindings a link already
+sets, the NUL after each GL debug string and WebGL `VideoFrame` uploads
+without `web_sys_unstable_apis` below. `cranpose-wgpu-core` is at
+30.0.28 to require those, to make
 template modules, to configure a surface while another thread submits, to
 let Vulkan pipelines drop their shader modules, to hand presented
 images back as they presented and to encode a buffer copy without a heap
-list. `cranpose-wgpu` is at 30.0.30 for
+list. `cranpose-wgpu` is at 30.0.32 for
 the background compiles, the pipeline readiness and the kept swapchain
 images below and to require them.
 
@@ -532,6 +533,34 @@ in an `ArrayVec` of two. Cranpose's uploads encode one copy for each
 changed piece of shape data: about 325 copies in each steady frame of the
 gauntlet, and as many heap allocations, now gone. Every backend gets the
 same barriers.
+
+### A NUL follows each GL debug string
+
+The GL debug functions take a length with each string, so GL lets the
+string end without a NUL. The Adreno driver of the Quest 3 copies the
+message of `glPushDebugGroup` with `strlcpy`, which reads past that length
+until it meets a NUL. Upstream hands GL a command buffer's label as a
+`String` of exactly its length, and each marker of a command buffer sits
+right before the next one. A 16-byte pass label such as `Scene Shadow Map`
+fills its heap block, so the driver read on past the block. When the block
+ended at a page that could not be read, the app crashed with SIGSEGV in
+`strlcpy` within 1 to 3 s of its start. A test program on a Quest 3 gives the same fault on
+every call of `glPushDebugGroup` with a string that ends at such a page,
+and none with a NUL after the string. `glDebugMessageInsert` and
+`glObjectLabel` give no fault in the same test. The command buffer now keeps
+its label as a `CString`, and a NUL follows each marker it records
+(`gles/debug_text.rs`). A label or marker ends at its first NUL, as the
+driver reads it. The label takes one allocation, as before.
+
+### WebGL uploads `VideoFrame` without `web_sys_unstable_apis`
+
+`glow` 0.18 and `web-sys` 0.3.107 expose WebGL2 `texSubImage2D` and
+`texSubImage3D` for WebCodecs `VideoFrame` on stable Rust without
+`--cfg=web_sys_unstable_apis`. Upstream `wgpu-hal` still gated those two
+`ExternalImageSource::VideoFrame` arms in `gles/queue.rs` on
+`web_sys_unstable_apis`, panicking with `unimplemented!` on standard web
+builds. Removing the stale cfg guards lets `Queue::copy_external_image_to_texture`
+import WebCodecs `VideoFrame` objects directly on both WebGPU and WebGL2.
 
 ### Update the fork
 

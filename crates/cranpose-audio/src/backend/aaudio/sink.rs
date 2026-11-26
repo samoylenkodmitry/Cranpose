@@ -10,7 +10,7 @@ use std::{
 
 use cranpose_services::AudioError;
 
-use super::output_stream::{OutputStream, StreamState};
+use super::{output_stream::OutputStream, stream::StreamState};
 use crate::backend::{AudioSink, Renderer, atomic_duration::AtomicDuration};
 
 // How often the owner thread reads the stream's latency and underrun count while the stream

@@ -12,6 +12,9 @@ publish = false
 name = "slint-bench"
 harness = false
 
+[features]
+bench-frames = []
+
 [dependencies]
 esp-idf-svc = "0.53"
 log = "0.4"

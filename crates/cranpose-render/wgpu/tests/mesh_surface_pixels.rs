@@ -1023,6 +1023,133 @@ fn a_shaded_surface_whose_shader_does_not_build_draws_lit() {
     );
 }
 
+// The colour of the first three values, with an alpha that the glow's
+// blending leaves out.
+const GLOW_WGSL: &str = r"
+fn shade(surface: ShadedSurface) -> vec4<f32> {
+    return vec4<f32>(shaded_param(0u), shaded_param(1u), shaded_param(2u), 1.0);
+}
+";
+
+fn glow_of(source: &'static OnceLock<Arc<str>>, text: &str, color: [f32; 3]) -> Material {
+    let mut params = [0.0; Shaded::PARAMS];
+    params[..3].copy_from_slice(&color);
+    Material::ShadedGlow(Shaded {
+        shader: Arc::clone(source.get_or_init(|| Arc::from(text))),
+        params,
+    })
+}
+
+// The middle of the two glowing walls of `CrossedGlowScene`, and their
+// turn about y each way.
+const CROSSING: Vec3 = Vec3::new(0.0, 0.0, 300.0);
+const CROSS_TURN: f32 = 0.5;
+
+fn crossed_wall(turn: f32) -> Mat4 {
+    Mat4::translation(Vec3::new(-0.5, -0.5, 0.0))
+        .then(&Mat4::scaling(Vec3::new(1200.0, 900.0, 1.0)))
+        .then(&Mat4::rotation_y(turn))
+        .then(&Mat4::translation(CROSSING))
+}
+
+// The point of the wall turned by `turn` that lies `along` from its middle.
+fn on_crossed_wall(turn: f32, along: f32) -> Vec3 {
+    CROSSING + Mat4::rotation_y(turn).transform_vector(Vec3::new(along, 0.0, 0.0))
+}
+
+// A red and a green glowing wall that cross in the middle of the frame,
+// each nearer the eye on one side, on a black page.
+#[composable]
+fn CrossedGlowScene() {
+    static SHADER: OnceLock<Arc<str>> = OnceLock::new();
+    let (plane, _) = meshes();
+    Scene(0.0, move || {
+        for (turn, color) in [
+            (CROSS_TURN, [1.0, 0.0, 0.0]),
+            (-CROSS_TURN, [0.0, 1.0, 0.0]),
+        ] {
+            Surface(
+                Arc::clone(&plane),
+                crossed_wall(turn),
+                (
+                    glow_of(&SHADER, GLOW_WGSL, color),
+                    false,
+                    Color(0.2, 0.2, 0.2, 1.0),
+                ),
+            );
+        }
+    });
+}
+
+#[test]
+fn shaded_glow_adds_its_shader_colour_and_hides_nothing_behind_it() {
+    for samples in [Multisample::Off, Multisample::X4] {
+        let Some(frame) = capture_with(CrossedGlowScene, samples) else {
+            return;
+        };
+        for along in [-250.0, 250.0] {
+            let both = pixel_at(&frame, on_crossed_wall(CROSS_TURN, along));
+            assert!(
+                both[0] > 230 && both[1] > 230 && both[2] < 20,
+                "the red and the green wall both add where either lies in front ({along}): {both:?}"
+            );
+        }
+    }
+}
+
+// A green glowing wall whose node draws nothing: the glow's shader alone colours it.
+#[composable]
+fn GlowWithoutContentScene() {
+    static SHADER: OnceLock<Arc<str>> = OnceLock::new();
+    let (plane, _) = meshes();
+    Scene(0.0, move || {
+        let material = glow_of(&SHADER, GLOW_WGSL, [0.0, 1.0, 0.0]);
+        Box(
+            surface(
+                &plane,
+                panel((2000.0, 1500.0), Vec3::new(0.0, 0.0, 600.0)),
+                (material, false),
+            ),
+            BoxSpec::default(),
+            || {},
+        );
+    });
+}
+
+#[test]
+fn shaded_glow_on_a_mesh_with_no_content_draws_its_shader_colour() {
+    for samples in [Multisample::Off, Multisample::X4] {
+        let Some(frame) = capture_with(GlowWithoutContentScene, samples) else {
+            return;
+        };
+        let wall = pixel_at(&frame, Vec3::new(-400.0, 300.0, 600.0));
+        assert!(
+            wall[1] > 240 && wall[0] < 10 && wall[2] < 10,
+            "the wall glows green with no content behind its mesh: {wall:?}"
+        );
+    }
+}
+
+#[composable]
+fn BrokenGlowScene() {
+    static SHADER: OnceLock<Arc<str>> = OnceLock::new();
+    ShadedScene(glow_of(&SHADER, "fn shade() {}", [0.0, 1.0, 0.0]));
+}
+
+#[test]
+fn shaded_glow_whose_shader_does_not_build_draws_nothing() {
+    let Some(frame) = capture(BrokenGlowScene) else {
+        return;
+    };
+    let wall = pixel_at(&frame, Vec3::new(-400.0, 300.0, 600.0));
+    assert!(
+        wall[0] < 10 && wall[1] < 10 && wall[2] < 10,
+        "the glowing wall shows neither its content nor a colour: {wall:?}"
+    );
+    let ball = pixel_at(&frame, SPHERE + Vec3::new(0.0, 0.0, -SPHERE_RADIUS));
+    assert!(ball[0] > 100, "the ball in front of it shows: {ball:?}");
+}
+
 /// A ball of radius 0.4 about the middle of the unit cube, in its content's
 /// colour times the first value.
 const BALL_VOLUME_WGSL: &str = r"
@@ -1351,6 +1478,56 @@ fn a_shaded_surface_behind_a_doorway_takes_its_colour_from_its_shader() {
             through[0] > 240 && through[1] > 200 && through[2] > 240,
             "the ball behind the doorway faces the eye in a space without light, all of which \
          reaches it: {through:?}"
+        );
+    }
+}
+
+// A ball behind the doorway of [`PortalScene`] that adds the green of
+// [`GLOW_WGSL`], in front of a red and blue wall in the same space.
+#[composable]
+fn PortalShadedGlowScene() {
+    static SHADER: OnceLock<Arc<str>> = OnceLock::new();
+    let (plane, sphere) = meshes();
+    Scene(0.0, move || {
+        let (inner_plane, sphere) = (Arc::clone(&plane), Arc::clone(&sphere));
+        Box(blue_wall(&plane), BoxSpec::default(), move || {
+            let (plane, sphere) = (Arc::clone(&inner_plane), Arc::clone(&sphere));
+            doorway(move || {
+                Surface(
+                    Arc::clone(&sphere),
+                    nested_ball(Vec3::ZERO, SPHERE_RADIUS / 4.0),
+                    (
+                        glow_of(&SHADER, GLOW_WGSL, [0.0, 1.0, 0.0]),
+                        false,
+                        Color(0.2, 0.2, 0.2, 1.0),
+                    ),
+                );
+                red_blue_wall(&plane, panel((500.0, 375.0), Vec3::new(0.0, 0.0, 100.0)));
+            });
+        });
+    });
+}
+
+#[test]
+fn a_shaded_glow_behind_a_doorway_adds_its_shader_colour_over_its_space() {
+    // Each pipeline the scene draws with has a variant of four samples.
+    for samples in [Multisample::Off, Multisample::X4] {
+        let Some(frame) = capture_with(PortalShadedGlowScene, samples) else {
+            return;
+        };
+        let middle = Vec3::new(0.0, 0.0, 1400.0);
+        let left = pixel_at(
+            &frame,
+            middle + Vec3::new(-0.5, 0.0, -0.866) * SPHERE_RADIUS,
+        );
+        assert!(
+            left[0] > 200 && left[1] > 200 && left[2] < 40,
+            "the ball adds its green to the red left half of the wall behind it: {left:?}"
+        );
+        let right = pixel_at(&frame, middle + Vec3::new(0.5, 0.0, -0.866) * SPHERE_RADIUS);
+        assert!(
+            right[0] < 40 && right[1] > 200 && right[2] > 200,
+            "the ball adds its green to the blue right half of the wall behind it: {right:?}"
         );
     }
 }

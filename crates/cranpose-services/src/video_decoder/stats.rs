@@ -30,15 +30,12 @@ pub struct DecoderStats {
     pub max_decode: Duration,
 }
 
-#[cfg(any(target_os = "android", target_os = "macos", target_os = "ios"))]
 pub(super) use counters::StatsCounters;
 
-#[cfg(any(target_os = "android", target_os = "macos", target_os = "ios"))]
 mod counters {
-    use std::{
-        sync::atomic::{AtomicU64, Ordering::Relaxed},
-        time::Duration,
-    };
+    use std::time::Duration;
+
+    use portable_atomic::{AtomicU64, Ordering::Relaxed};
 
     use super::DecoderStats;
 
@@ -56,10 +53,26 @@ mod counters {
     }
 
     impl StatsCounters {
+        #[cfg(any(
+            target_os = "android",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "windows",
+            target_os = "linux",
+            all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
+        ))]
         pub(crate) fn submitted(&self) {
             self.submitted.fetch_add(1, Relaxed);
         }
 
+        #[cfg(any(
+            target_os = "android",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "windows",
+            target_os = "linux",
+            all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
+        ))]
         pub(crate) fn refused(&self) {
             self.refused.fetch_add(1, Relaxed);
         }

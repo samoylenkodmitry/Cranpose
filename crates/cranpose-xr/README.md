@@ -27,8 +27,34 @@ pixels once at the display's resolution, so its text stays sharp. A dp is a mill
 room. Each controller points at the panels, and its trigger presses. Both controllers work at once.
 Outside a headset the panels draw flat, side by side.
 
+A press never becomes a move by accident:
+- A pull of the trigger turns the controller. A press therefore takes what the ray pointed at just
+  before the pull, a handle or a place on a panel, so a pull on a button just above a handle presses
+  the button.
+- A press holds its point while the hand shakes, and a click goes through. A press that the ray turns
+  off its control ends there: the control stops showing it pressed, and the release clicks nothing.
+- A pull on a handle moves nothing. The panel moves only once the hand moves it more than 24 dp, as
+  Compose's touch slop holds a drag back. It then takes the whole move since the pull.
+- The controller plays `PointerSettings::press_vibration` when a press takes, when a click ends and
+  when a handle's panel starts and stops moving. A press that turned into a drag ends with no tick.
+- Each press logs how far its ray turned and how far its point moved on the panel, so a device run
+  measures the drift of real presses.
+
+Every Cranpose `clickable` shows its `Indication` while a ray rests on it and while one presses it,
+as it does for a mouse.
+
+A runtime takes a limited number of layers in a frame: a Quest 3 takes 16. When a frame needs
+more, the projection layer of the 3D content draws some pictures in place of their own layers, so
+every panel still shows. The handles go there first, then the panels of the lowest rank, whose text
+then shows softer. A panel ranks by its `SubspaceModifier::layer_priority(priority)` (0 by default,
+higher first), then by whether a hand points at it, then by its nearness to the head. Streamed
+scenes and the rays keep their layers. Surfaces keep theirs before every panel. A frame within the
+limit costs nothing more.
+`docs/xr_architecture.md` ("The layer limit") has the details.
+
 A panel or a surface with `SubspaceModifier::movable()` has a handle under it: a sphere that shows
-from any side. A controller grabs it from any side and carries the panel.
+from any side. A controller grabs it from any side and carries the panel. The sphere grows by a third
+while a ray points at it, and to 1.6 times its size while a trigger presses it.
 `movable_with(MovePolicy::system(...))` calls back with a `SpatialMoveEvent` for the grab
 (`Start`), each change of the pose (`Moving`) and the release (`End`). The event's pose is in
 meters, relative to the subspace's origin. An app that saves it places the panel there at its next
@@ -82,40 +108,84 @@ SpatialPanel(
 A panel inside a `SpatialCurvedRow` has no corner handle.
 
 A `Subspace` stands a meter ahead of where the head was when the app started. A
-`FollowingSubspace(FollowTarget::View(FollowMode::Snap), ...)` stands a meter ahead of the head as
-it is when the subspace first composes, and again after the user recenters. Its panels stay
-movable. Jetpack XR spells this `Subspace(follow = FollowTarget.view(FollowMode.snap()))`. Rust has
-no overloads, so the composable has its own name.
+`FollowingSubspace(FollowTarget::View(FollowMode::Snap(TrackedDimensions::TranslationAndYaw)), ...)`
+stands a meter ahead of the head as it is when the subspace first composes, and again after the
+user recenters. Its panels stay movable. Jetpack XR spells this
+`Subspace(follow = FollowTarget.view(FollowMode.snap(dimensions)))`. Rust has no overloads, so the
+composable has its own name.
 
 `FollowMode::Tight` follows the target in every frame with no lag, as Jetpack XR's
 `FollowMode.tight` does. The follow moves the panels' poses in the frame loop and composes nothing.
-Jetpack XR's `TrackedDimensions` chooses the tracked axes and tracks all six by default. Here the
-subspace tracks the target's place and its turn about the vertical axis, so the panels stand
-upright. `FollowMode.soft` is not available.
+Each mode takes a `TrackedDimensions`, as in Jetpack XR. `TrackedDimensions::All` tracks all six
+dimensions, so the panels turn with the target about every axis. `TrackedDimensions::TranslationAndYaw`
+tracks the target's place and its turn about the vertical axis, so the panels stand upright. Jetpack
+XR's other sets of flags are not available.
+
+`FollowMode::soft(dimensions)` is Jetpack XR's `FollowMode.soft`. The panels hold still while the
+target moves a little, and glide after it once it stayed past a threshold for the start delay: 0.2 m,
+16 degrees of pitch, 24 degrees of yaw or 20 degrees of roll for 200 ms. They then cover half of their
+way to the target in each half life of 175 ms, and rest again when they reach it.
+`FollowMode::Soft(SoftFollowMode { .. })` sets other values. A menu in front of the user thus holds
+still for the small moves of the head that come with pointing at it, and comes back into view after a
+turn. An upright soft follow of the view (`TrackedDimensions::TranslationAndYaw`) never moves for a
+look down, so the user can look at a panel low in the view.
 
 `FollowTarget::Controller(hand, mode)` follows the controller in a hand. Jetpack XR has no such
-target. The origin is where the controller's grip pose is. It turns about the vertical axis with
-the heading of the controller's aim pose, which is the direction of its ray seen from above. A ball
-10 cm above the controller stays straight above it when the hand tilts. A ray that points straight
-up keeps the heading that it had. While the runtime does not track the controller, the subspace's
-panels do not show and take no hits. A controller's own ray ignores the panels that ride on it. The
-other hand's ray presses them. The user can show or hide the app's panels with a ball above the
-left controller that the right ray presses:
+target. The origin is where the controller's grip pose is, turned as its aim pose is turned. The
+aim's forward axis is the ray, so a panel with no turn of its own faces back along the ray, toward
+the user. While the runtime does not track the controller, the subspace's panels do not show and
+take no hits. A controller's own ray ignores the panels that ride on it. The other hand's ray
+presses them and carries them by their handle. A carry sets the panel's offset from the
+controller, and the panel follows the hand at that offset after it.
+
+`FollowTarget::Hand(hand, joint, mode)` follows a joint of a hand that the cameras track, such as
+`HandJointType::Palm` for a ball on the palm. Jetpack XR has no hand target: its ARCore `Hand` gives
+the joints' poses. The origin has the joint's pose with OpenXR's axes of a hand joint: -z toward the
+finger tips and +y out of the back of the hand. While the hand is not tracked or the joint has no
+valid pose, the panels do not show and take no hits. The hand's own pointer ignores them, so the
+other hand's pinch presses them. The app needs `Use::hand_tracking()`.
+
+With `FollowMode::Tight(TrackedDimensions::All)` a panel holds its place against the controller as
+the hand tilts and rolls. The headset hands the panel's layers to the compositor in the space of
+the controller's aim pose, at the panel's pose relative to it. The compositor places them with
+the newest pose of the controller at the time the frame shows, so the panel shows no lag behind the
+hand. A head-locked subspace of `FollowTarget::View(FollowMode::Tight(TrackedDimensions::All))`
+rides in the head's space the same way. A menu that the left hand holds:
 
 ```rust
-FollowingSubspace(FollowTarget::Controller(Hand::Left, FollowMode::Tight), move || {
-    SpatialPanel(SubspaceModifier::new().size(40.0, 40.0).offset(0.0, 100.0, 0.0), move || {
-        Box(
-            Modifier::empty()
-                .fill_max_size()
-                .background(Color(0.2, 0.6, 0.45, 1.0))
-                .rounded_corners(20.0)
-                .clickable(move |_| panels_shown.set(!panels_shown.get())),
-            BoxSpec::default(),
-            || {},
+FollowingSubspace(
+    FollowTarget::Controller(Hand::Left, FollowMode::Tight(TrackedDimensions::All)),
+    move || {
+        SpatialPanel(
+            SubspaceModifier::new().size(400.0, 300.0).offset(200.0, 250.0, 50.0).movable(),
+            move || Menu(),
         );
-    });
-});
+    },
+);
+```
+
+With `TrackedDimensions::TranslationAndYaw` the origin turns about the vertical axis with the
+heading of the controller's ray seen from above. A ball 10 cm above the controller stays straight
+above it when the hand tilts. A ray that points straight up keeps the heading that it had. The user
+can show or hide the app's panels with a ball above the left controller that the right ray presses:
+
+```rust
+FollowingSubspace(
+    FollowTarget::Controller(Hand::Left, FollowMode::Tight(TrackedDimensions::TranslationAndYaw)),
+    move || {
+        SpatialPanel(SubspaceModifier::new().size(40.0, 40.0).offset(0.0, 100.0, 0.0), move || {
+            Box(
+                Modifier::empty()
+                    .fill_max_size()
+                    .background(Color(0.2, 0.6, 0.45, 1.0))
+                    .rounded_corners(20.0)
+                    .clickable(move |_| panels_shown.set(!panels_shown.get())),
+                BoxSpec::default(),
+                || {},
+            );
+        });
+    },
+);
 ```
 
 A panel that has rounded corners and no background around them shows as that shape. The headset
@@ -298,11 +368,36 @@ plain model has a handle, a head, a thumbstick, two buttons, a trigger and a tip
 front. It has no texture and no asset file. It uses the axes of the runtime's models around the
 grip pose: x to the right, y up and z toward the user.
 
-`local_controller_models()` gives the app a `ControllerModels` handle. `set_enabled(false)` turns the
-models off, so no frame draws a scene for them. `set_model(hand, model)` replaces the model of one
-hand with a `ControllerModel`. `Runtime` is the default. `Plain` is the built-in model. `Gltf(source)`
-is a model of the app's own, which needs the `gltf` feature. Its origin lies at the grip pose, and
-its unit is the meter.
+The ray of a controller whose loaded model has a node named `laser_begin` starts at that node, as
+Meta's runtime models mark the tip of the controller. The ray keeps the line and the direction of
+the runtime's aim pose, so it meets the panels where it did. Only its visible start moves: on a
+Quest 3 the aim pose lies 63.7 mm from that node. The start stays while the model hides, so it does
+not jump when the model shows.
+
+The runtime's model moves its parts with the controller's inputs: the trigger, the grip, the two face
+buttons, the menu button and the thumbstick. A Meta Quest's file is one mesh with a skin, and each
+vertex follows one joint. The loader cuts such a rigid skin into one mesh for each joint, so a part
+moves with its node and no vertex is skinned in a frame. The file's first animation holds the pose of
+each part at a fixed key, which is a place in its list of keys: the trigger pulled at key 16, the
+grip squeezed at 21, the first face button down at 5, the second at 8, the menu button down at 24 and
+the thumbstick leaned to the eight points of the compass at 29, 39, 34, 40, 31, 36, 32 and 37, from
+forward going to the right. A node's name holds the name of its input (`b_trigger_front`,
+`b_trigger_grip`, `b_button_a` or `b_button_x`, `b_button_b` or `b_button_y`, `b_button_oculus`,
+`b_thumbstick`). These are the keys and the names that Meta's Unity SDK reads from the same files
+(`OVRGLTFAnimatinonNode`). The trigger and the grip go from the rest pose to their key as their value
+goes from 0 to 1, a button takes its key while it is down, and the thumbstick takes the pose between
+the keys of the two nearest points of the compass, as far from the rest as the stick leans. A model
+of the app's own with the same names and keys moves the same way. On the right controller the node
+`b_button_oculus` is the Meta button, which no app sees, so it stays at rest. The files have no pose
+for a press of the thumbstick.
+
+`local_controller_models()` gives the app a `ControllerModels` handle. `hand(hand)` gives the
+`HandModel` of one hand: `set_enabled(false)` turns that hand's model off, and with both off no frame
+draws a scene for them. An app that shows the model of the hand that points at its panels turns each
+hand on and off apart. `set_model(hand, model)` replaces the model of one hand with a
+`ControllerModel`. `Runtime` is the default. `Plain` is the built-in model. `Gltf(source)` is a model
+of the app's own, which needs the `gltf` feature. Its origin lies at the grip pose, and its unit is
+the meter.
 
 ```rust,ignore
 use cranpose_xr::{ControllerModel, Hand, SpatialGltfModelSource, local_controller_models};
@@ -313,32 +408,34 @@ if let Some(models) = local_controller_models().current() {
         Hand::Right,
         ControllerModel::Gltf(SpatialGltfModelSource::from_bytes(MY_CONTROLLER)),
     );
-    // models.set_enabled(false) shows none
+    // models.hand(Hand::Left).set_enabled(false) shows no model in the left hand
 }
 ```
 
-Jetpack XR has no controller models. Its `Entity.setEnabled` and `isEnabled` name the switch. The
-names of the model choices are Cranpose's own.
+Jetpack XR has no controller models. Its `Entity.setEnabled` and `isEnabled` name the switch of
+`HandModel`, since each hand's model is an entity of its own. The names of the model choices are
+Cranpose's own.
 
 A model costs the projection layer of the volumes while a controller is in use. An app with no
 volume pays for that layer, its swapchains and its pass only then. With the models off, or with no
 controller in use, no frame draws the scene. Every app gets the models at its next update, since
 they are on by default. An app that draws its own controllers, such as one that streams a scene,
-calls `set_enabled(false)`.
+turns them off with `set_enabled(false)` on each hand.
 
 The frame loop moves a model by writing one state that the draw reads. A controller that moves
 composes nothing. The draw reuses the spaces of a model's surfaces, so it builds no list and no
 space. The write of the state is the framework's: it keeps a record for each changed value, as it
 does for a volume that a user carries.
 
-No headset has run this path. The runtime's listing of the extension under the manifest entries, the
-render model paths, the contents of the runtime's file, the loader on that file, the alignment of
-the file with the grip pose, the depth test against panels and the frame rate of an app with no
-volume are untested. The permission name, the path names and the origin of the models at the grip
-pose follow the extension's documentation and stay assumptions until a headset confirms them. The
-extension has three calls and none gives the state of a button, so a model moves its buttons only
-if its file holds clips, which no run has shown. Android XR and the desktop runtimes use the plain
-model.
+A Quest 3 (Horizon OS runtime 210) lists the extension under the manifest entries and hands out
+"Meta Quest Touch Plus Controller Left" and "Right", 508,088 and 507,568 bytes, the same bytes for
+both glTF subsets. Each loads with six moving parts. The model is in meters with no scale: its
+longest span is 126.5 mm and its box in its own axes 124.7 by 67.7 by 52.0 mm, where a Touch Plus
+measures about 126 by 67 by 43 mm. A run with scripted controllers on that headset changed the
+picture where the parts are: a pulled trigger and the thumbstick in each direction by far more than
+the noise of a still head, and the A button by about twice that noise. The alignment of the file with
+a real controller's grip, the depth test against panels and the frame rate of an app with no volume
+are untested. Android XR and the desktop runtimes use the plain model.
 
 ## Spatial audio
 
@@ -660,7 +757,8 @@ A build that turns on the `scripted-hand` feature can play a hand in place of th
 check where no hand can be tracked, such as an emulator. `script_hand(ScriptedHand::pointing(hand,
 from, at, PinchCycle::default()))` installs a hand whose aim pose points at a place in the room and
 whose index finger pinches in a cycle. The frame holds it as a tracked hand, so the pointer treats
-it as the cameras' hand. A script for each hand plays at once. The feature is off by default.
+it as the cameras' hand. `with_palm(pose)` also holds its palm joint at a pose, for content that
+follows the palm. A script for each hand plays at once. The feature is off by default.
 
 ## One pointer for each hand
 
@@ -762,8 +860,10 @@ A build with the `scripted-hand` feature can also play controllers in place of t
 check where no controller exists, such as an emulator. `script_controller(script)` installs a
 `ScriptedController` for one hand, and a script for each hand plays at once. A script lists steps
 with `moving_to(duration, (position, at), ScriptedButtons)` and `holding(duration, buttons)`: in each
-step the controller and its aim move in a straight line, and the buttons stay as given.
-`ScriptedController::handle_of(panel, size)` gives the place of the handle that carries a movable
+step the controller and its aim move in a straight line, and the buttons stay as given. A step of
+`untracked(duration)` plays a controller that the runtime does not track, as one with a flat battery,
+so a check can lose a controller and find it again. A script of one such step plays a missing
+controller. `ScriptedController::handle_of(panel, size)` gives the place of the handle that carries a movable
 panel. The frame holds the result as the `Controller` of that hand with the Touch Plus profile, so
 the pointer, the buttons and the haptics take it as they take a real controller.
 
@@ -818,7 +918,7 @@ fn Notes() {
         DisposableEffectResult::new(|| {})
     });
     match placed.get() {
-        Some(anchor) => FollowingSubspace(FollowTarget::Anchor(anchor, FollowMode::Tight), move || {
+        Some(anchor) => FollowingSubspace(FollowTarget::Anchor(anchor, FollowMode::Tight(TrackedDimensions::All)), move || {
             SpatialPanel(SubspaceModifier::new().movable_with(policy.clone()), || {});
         }),
         None => Subspace(move || {
@@ -879,9 +979,8 @@ A key does not take the focus from the field.
   keyboard again.
 - The keyboard has the Latin alphabet only. It has no other layout, no suggestions, no composing
   text and no repeat of a held key.
-- The open keyboard is one more layer of the frame. A runtime takes 16 layers at least, so an app
-  that stands near the limit loses the panel that stands farthest from the head, as with any other
-  panel.
+- The open keyboard is one more layer of the frame. In an app that stands at the runtime's limit,
+  the projection layer then draws one more handle or panel of the lowest rank.
 
 On Android XR the system shows its own input method over an immersive app. A text field then opens
 that keyboard in place of the drawn one, through the same request. The keyboard is a panel of the

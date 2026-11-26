@@ -49,12 +49,19 @@ Cranpose developers too:
   Jetpack XR 1.0.0-beta02 spells it `Subspace(follow = FollowTarget.view(FollowMode.snap()))`. It
   replaced `FollowingSubspace(target, behavior)` and the `UserSubspace(lockingBehavior)` of the
   alpha releases. Rust has no overloads, so the composable keeps the name `FollowingSubspace`.
-  `FollowTarget::View(FollowMode::Snap)` places it when it first composes and again after a
-  recenter. `FollowMode::Tight` follows the target in every frame, as Jetpack XR's
-  `FollowMode.tight` does. `FollowTarget::Controller(Hand, FollowMode)` follows a controller's
-  grip pose. Jetpack XR has no controller target. `FollowTarget::Anchor(Anchor, FollowMode)` holds
-  the panels to an anchor, as Jetpack XR's `FollowTarget.anchor` does. Its `FollowMode.soft` is not
-  there yet.
+  `FollowTarget::View(FollowMode::Snap(dimensions))` places it when it first composes and again
+  after a recenter. `FollowMode::Tight(dimensions)` follows the target in every frame, as Jetpack
+  XR's `FollowMode.tight` does. `TrackedDimensions::All` tracks all six dimensions of the target's
+  pose, as Jetpack XR's `TrackedDimensions.All` does. `TrackedDimensions::TranslationAndYaw` tracks
+  its place and its yaw, so the panels stand upright. `FollowTarget::Controller(Hand, FollowMode)`
+  follows a controller's grip pose, turned as its aim pose is. Jetpack XR has no controller target.
+  `FollowTarget::Hand(Hand, HandJointType, FollowMode)` follows a joint of a tracked hand, such as
+  the palm. Jetpack XR has no hand target either.
+  `FollowTarget::Anchor(Anchor, FollowMode)` holds the panels to an anchor, as Jetpack XR's
+  `FollowTarget.anchor` does. `FollowMode::soft(dimensions)` holds the panels still until the
+  target moves past `SoftFollowMode`'s start thresholds for its start delay, then glides after the
+  target with a half life, as Jetpack XR's `FollowMode.soft(dimensions, halfLifeMillis, startDelay,
+  startThresholds)` does.
 - `SpatialRow`, `SpatialColumn`, `SpatialBox`, `SpatialCurvedRow`, `SpatialSpacer`: layouts in
   meters.
 - `SpatialExternalSurface(stereo_mode, modifier) { scope }`: hands the app a surface that a
@@ -92,6 +99,21 @@ Cranpose developers too:
 
 - `SpatialVolume(modifier, content)`: 3D content in a box, drawn by Cranpose's own scene. See "3D
   content".
+- `SpatialTray(modifier, visible, base, content)`: 2D content on a panel over a tray of 3D
+  geometry, with `SpatialButton(on_click, modifier, enabled, shape, color, content)`,
+  `SpatialSwitch(checked, on_checked_change, modifier, enabled, colors)` and
+  `SpatialSlider(value, on_value_change, modifier, enabled, steps, on_value_change_finished,
+  colors)` on it. Jetpack XR has no 3D controls: its Material components for XR put flat controls
+  on a `SpatialPanel`. The controls keep the names and the arguments of Compose's `Button`,
+  `Switch` and `Slider` with the `Spatial` prefix. See "3D controls".
+- `SpatialHologram(modifier, visible, colors, stage, content)`: 2D content whose controls float as
+  objects of glowing glass with no panel behind them, with
+  `SpatialChoiceGroup(selected, on_select, count, form, modifier, label)` (each option an object
+  of a `ChoiceForm`: cubes, gems, petals, an arc with a knob or a stepper), `SpatialEmblem` and
+  `SpatialRibbon` on it, and the controls of a tray. `HologramColors` (`CYAN`, `VIOLET_GOLD`) and
+  `HologramStage` (`NONE`, `PAGE`: a projector, ribbons and sparks) pick the look. Jetpack XR has
+  no hologram, no material that glows by the angle to the eye, no glow that hides nothing, no
+  field of sparks that draws as one mesh and no choice of 3D objects. See "Holograms".
 - `SpatialGltfModel(state, modifier, content)`: a glTF 2.0 model in a volume, behind the `gltf`
   feature. `rememberSpatialGltfModelState(source)` loads it. See "glTF models".
 - `SpatialPointSource(modifier, source)` and `SubspaceModifier::point_source(source)`: sound that
@@ -181,6 +203,13 @@ Wgpu maps `Depth24PlusStencil8` to one of two Vulkan formats by the driver and o
 says which, so a Vulkan headset has no depth swapchain and submits none. A runtime that offers no
 depth swapchain format submits none either. The picture still shows.
 
+A frame whose 3D content leaves no depth submits none either. Such a frame draws only surfaces that
+add light, as the objects of a `SpatialHologram` do. It shows no controller's model and no picture
+of another layer. A volume says whether its content may leave depth. A `SpatialVolume` and a
+`SpatialTray` may leave depth. A hologram leaves none. With no depth the frame skips the depth's
+pass and its store. The compositor then tests no layer against the projection layer. The depth comes back in the
+first frame that shows a controller's model or such a volume.
+
 ### Anti-aliasing
 
 The scene takes four samples in each pixel (`Multisample::X4`) where the device takes four in the
@@ -241,6 +270,20 @@ depth that the projection layer wrote. A panel behind a 3D object shows behind i
 front of the object shows in front of it. Panels still draw over each other in the order of their
 distance, and a panel's rounded corners still blend.
 
+The depth that the projection layer carries is `1 - near / z`, with `z` along each eye's axis, as
+OpenXR says. A Quest 3's compositor tests a panel as if it measured the panel's depth along the
+middle of the eye's vertical field of view, 5.5 degrees below the axis (an angle of 44 degrees up and
+55 down). A panel below the axis then tests farther than it stands, by about a tenth of its distance
+below the axis. On a Quest 3, 45 cm ahead, a key 6 mm behind a panel hid it from 11 cm below the
+axis down, and a key 24 mm behind it from 24 cm. A depth measured along the turned axis showed nearly
+all of them, and views pitched to that middle changed nothing: the compositor turns from whatever
+view the layer names. So the layer's depth names a near plane farther than the camera's, and the
+compositor reads every depth that much farther: one plus the turn in radians times the tangent of
+the field's farther vertical edge, 14% on a Quest 3 (`eye_camera::depth_scale`). That share covers
+the error over the whole field of view, so a panel 0.7 mm in front of a mesh shows anywhere in it. A
+mesh still covers a panel where it stands 14% nearer. A field of view as high as it is low names
+the camera's own plane.
+
 The compositor's depth buffer starts at the far plane. The depth that a projection layer carries in
 its views does not reach the buffer. A layer writes its depth only when it chains the test struct
 with `depthMask` set. The projection layer chains one with `ALWAYS` as the compare operation and the
@@ -254,8 +297,121 @@ list. The order is the same on every runtime. The depth test corrects it where i
 `volume_plan` holds the rule as a function of the number of volumes, the
 eyes the runtime located and the extensions, and its tests cover it.
 
-A frame with no volume has no projection layer, no swapchain and no draw. The first frame with a
-volume makes the swapchains. The frame after the last volume leaves frees them.
+A frame with no volume has no projection layer and no draw. The first frame with a volume makes the
+swapchains. The scene's window makes its renderer in that frame. Both stay 5 seconds after the last
+volume, controller model and picture of another layer go. `scene_hold` holds that rule. A pointer that
+crosses the gap between two panels can hide a controller's model and show it again within a second.
+On a Quest 3 a scene made again held one frame for about 36 ms: 15 ms for the four swapchains of
+1680 by 1760 and 15 ms for the new renderer's first draw. The swapchains hold about 143 MB during
+the hold. After it no swapchain exists.
+
+### 3D controls
+
+A `SpatialTray` is two things at one pose: a panel of 2D content and, under it, a volume whose
+box is centered on the panel's plane. The panel carries the words and takes the input. It draws no
+background, and its layer shows the words at the compositor's full resolution. The volume carries
+the meshes: the base and a body for each control. The meshes stand behind the panel's plane, from
+0.7 mm for a key under a resting ray to 10 mm for the base, so the words lie on the parts. The
+volume takes no ray and follows the panel when the user carries it or its subspace follows a
+target.
+
+Each control on the tray lays out on the panel as a Compose control does and reports its rectangle
+in the panel. The tray's scene puts the control's body there. `SpatialButton` is a key cap or a
+ball that sinks 5 mm under a press and rises at the release. `SpatialSwitch` is a rocker that flips
+and lights its end. `SpatialSlider` is a knob in a groove with a mark at each step. A ray that rests
+on a control lifts it 0.8 mm and makes it glow. The bodies read their animations while the scene
+draws, so a press or a hover draws the scene again and composes nothing.
+
+The tray shows in 180 ms: it rises 30 mm from behind its place and grows from 85% of its size. It
+hides in 140 ms. Once it has hidden, it composes neither the panel nor the meshes, so a hidden tray
+costs no layer and no draw. The light of a tray takes four taps of the shadow map. A light with a
+size and 32 to 48 taps for a penumbra took 5.2 ms of the GPU for an open tray of a menu on a
+Quest 3, against 3.0 ms with four taps.
+
+The panel of a tray takes the compositor's depth test as any panel does. Its words stand 0.7 to 10
+mm in front of the tray's meshes, which the margin of the layer's depth leaves in front anywhere in
+the view. A controller's model or another tray that stands in front of the words covers them.
+
+Controls on no base, such as a single ball, cast no shadow, and their light has none: the scene's
+light is that of the first volume whose light casts shadows, so the frame draws a shadow map only
+while a tray with a base shows. A ball takes 24 segments around.
+
+Measured on a Quest 3 with a stream of 120 frames a second under a hand menu of an app, over 3 s
+for each case. The app shows a flat ball while no controller model shows, and the 3D ball once a
+model shows:
+
+| Case | Frame rate | Layers | App GPU | Compositor | GPU busy |
+| --- | --- | --- | --- | --- | --- |
+| Flat panels, menu closed | 120 | 3 | 1.02 ms | 0.91 ms | 27% |
+| Trays, menu closed | 120 | 3 | 1.00 ms | 0.90 ms | 31% |
+| Flat panels, menu closed, a panel and a controller model show | 120 | 8 | 2.84 ms | 2.51 ms | 68% |
+| Trays, menu closed, a panel and a controller model show | 120 | 8 | 2.84 ms | 2.50 ms | 69% |
+| Flat panels, menu open | 120 | 4 | 1.01 ms | 1.06 ms | 29% |
+| Trays, menu open | 120 | 5 | 3.58 ms | 2.35 ms | 70% |
+| Trays, menu open, with no shadow map | 120 | 5 | 3.19 ms | 2.52 ms | 73% |
+
+A closed menu of trays costs what a flat menu costs. Its ball draws in the projection layer that the
+controller's model already needs, and it casts no shadow. The open trays add one layer and 2.6 ms of
+the GPU. The shadow map takes 0.4 ms of that. The open trays had 7 or 8 stale frames in the second
+in which the menu first showed and none after.
+
+### Holograms
+
+A `SpatialHologram` is a tray with another look. The panel carries the words and takes the input
+as a tray's does. The volume under it holds an object for each control. The objects float with
+no base and no panel behind them. `SpatialChoiceGroup` gives each option of a choice an object whose
+form shows its value: cubes that grow, gems of which the chosen one is larger and stands in a beam,
+flowers whose petals grow from a closed bud, an arc with a tick for each option and a crystal knob,
+or a stepper with a crystal between two arrows. `SpatialButton` is a key of glass or a crystal,
+`SpatialSwitch` a capsule whose lit half slides, `SpatialEmblem` a lens with two orbiting rings and
+`SpatialRibbon` a band of glass behind words. The words of an option stand under its object, or
+over the crystal of a stepper.
+
+Every object draws with one WGSL shader through `Material::ShadedGlow`, so the scene builds one
+pipeline for all of them. The shader adds four parts of light in the theme's colour: a rim where
+the surface turns from the eye, a faint fill where it faces the eye, glowing edges of the faces,
+facets or bands that the mesh's texture coordinates mark, and a halo that is brightest where the
+surface faces the eye and fades to zero at its outline. A beam and the projector's cone fade along
+the mesh. Moving lines across the cone make the scan of a projector. Each part ends at exact
+zero, so the space around an object stays black. The pipeline adds the colour to the picture and
+writes no depth. The objects therefore need no order among themselves. The panel's words
+always show over them. No pass over the whole picture draws a bloom: the glow is the objects' own
+light and their halos.
+
+`HologramStage::PAGE` adds a projector under the page, two ribbons and forty sparks. The projector
+is a disc of rings with a cone of light up to the page. Each ribbon winds two turns about an
+upright line beside the page and turns slowly about it. Every other ribbon stands on the left. The sparks
+stand beside the page within a quarter turn of each side, so nothing of the stage stands over a
+control. The forty sparks are one mesh and one draw. Each other object is a draw of its own: the
+renderer has no instancing.
+
+The page shows in 420 ms: it rises out of the projector and grows from 12% of its size. It hides in
+260 ms. A chosen object grows by 22% with a spring and gets a halo. A press sinks an object 6 mm and
+flashes it. A ray that rests on an object makes it brighter. A clock of frames runs only while
+something moves: the stage, a crystal that turns or an animation. A hologram with no stage and no
+such object, such as a single crystal button, asks for no frame while it holds still. A hidden
+hologram composes neither its panel nor its objects. Its clock stops.
+
+Measured on a Quest 3 with a stream of 120 frames a second under an app's page of settings, over 4 s
+for each case. The page has nine rows: an arc of three options, four gems, four flowers, five
+cubes, a stepper, three switches and two keys, with `HologramStage::PAGE`. The flat page is the same
+page on a panel:
+
+| Case | Frame rate | Layers | App GPU | Compositor | CPU and GPU | GPU busy |
+| --- | --- | --- | --- | --- | --- | --- |
+| Flat page | 120 | 5 | 1.02 ms | 0.91 ms | 2.20 ms | 26% |
+| Hologram page | 120 | 6 | 2.58 ms | 1.50 ms | 6.30 ms | 54% |
+| Hologram page, with the depth submitted | 120 | 6 | 2.94 ms | 2.35 ms | 8.16 ms | 68% |
+| Hologram page, depth submitted, one sample a pixel | 120 | 6 | 2.74 ms | 2.35 ms | 7.88 ms | 66% |
+| Flat page, a controller's model shows | 120 | 7 | 2.79 ms | 2.36 ms | 8.05 ms | 66% |
+| Hologram page, a controller's model shows | 120 | 7 | 3.50 ms | 2.37 ms | 9.75 ms | 75% |
+
+The hologram page adds 1.6 ms of the app's GPU and 0.6 ms of the compositor while no controller's
+model shows. Most of that is the projection layer, which the flat page does not need. While a
+model shows, the layer is there for the model already. The page then adds 0.7 ms. A frame with
+holograms alone carries no depth (see "The projection layer and its depth"): the depth took 0.4 ms
+of the app's GPU, 0.9 ms of the compositor and 1.9 ms of the frame's CPU and GPU time. Four samples
+a pixel against one cost 0.2 ms. Each case had at most 3 stale frames in its 4 s.
 
 ### Pointer
 
@@ -394,7 +550,8 @@ the crate's region of the right eye, 33,137 magenta and 32,355 lime pixels show,
 change their class between two screenshots a second apart, so the animation runs in the headset's
 frame loop. The crate shares the projection layer of the torus's volume, so it adds no layer. The
 log shows the layer count that the earlier measurement of the depth test gave (18 asked, 16 taken,
-two panels left out; see "The layer limit"), with no change after the model loads. It has no
+two panels left out by the code of that time, which had no layer budget), with no change after the
+model loads. It has no
 `glTF model:` failure and no `the 3D content ends`.
 
 The `gltf` feature adds 770 KB to the stripped arm64 library of the demo, which is 11,835 KB without
@@ -420,8 +577,8 @@ A controller shows a model while the runtime tracks its grip pose and the hand's
 profile is not that of a hand (`InteractionProfile::is_hand`). A runtime keeps the hand profile's
 poses valid with no hand in view, and a tracked hand with no controller holds nothing to draw, so
 the hand profiles show no model. The state of the pointer decides nothing: a controller that lies on
-a desk is in use. `ControllerStates::track` applies the app's switch. With `set_enabled(false)` no
-hand shows a model.
+a desk is in use. `ControllerStates::track` applies the app's switch, which each hand has apart
+(`HandModel::set_enabled`). A hand whose model the app turned off shows none.
 
 **Which model a hand shows.** `controller_look::look` decides from three inputs: the app's
 `ControllerModel` for the hand, the runtime's `Offer`, and how far the load of the glTF source has
@@ -458,6 +615,35 @@ that the runtime answered with no model asks again when a controller comes into 
 composition while the scene is empty, so a controller that leaves and returns finds its model
 loaded. The XR session stays on the frame thread, and only bytes cross to the worker.
 
+**Moving parts.** A Meta Quest 3's runtime model of a Touch Plus controller (about 508 KB, the same
+bytes for the glTF subsets 1 and 2) is one mesh of 3529 vertices with a skin of seven joints: the
+controller's body and `b_button_x` or `b_button_a`, `b_button_y` or `b_button_b`, `b_button_oculus`,
+`b_trigger_front`, `b_trigger_grip` and `b_thumbstick`. Every vertex has its whole weight on one
+joint, and no triangle spans two joints. `gltf_skin::rigid_pieces` cuts such a primitive into a mesh
+for each joint, moves the vertices into the joint's space through its inverse bind matrix and hangs
+the piece on the joint's node. A part then moves with its node, and no vertex is skinned in a frame.
+A skin that weighs a vertex between joints keeps its bind pose at the mesh's node, as before.
+
+The file's one animation, "All Animations", has 121 keys for each part. It is no clip to play: each
+key holds a pose for an input. `controller_parts::ControllerParts` finds the parts by the words in the
+nodes' names (`trigger_front`, `trigger_grip`, `button_a` or `button_x`, `button_b` or `button_y`,
+`button_oculus`, `thumbstick`) and takes their poses at fixed keys of the first animation: 16 for the
+trigger pulled, 21 for the grip squeezed, 5 and 8 for the face buttons down, 24 for the menu button
+down, and 29, 39, 34, 40, 31, 36, 32 and 37 for the thumbstick leaned forward, forward right, right,
+back right, back, back left, left and forward left. Meta's Unity SDK reads the same names and keys
+(`OVRGLTFAnimatinonNode`), and a check of both hands' files shows the stick's cap at each key on the
+side that its point of the compass names. The node's own transform is the rest. A part counts only
+where the file has its node and a pose at its key that differs from the rest. The trigger and the
+grip mix from the rest to their key by their value. A button takes its key while it is down. The
+thumbstick mixes the keys of the two nearest points by the angle of its lean, then mixes from the
+rest by the lean's length.
+
+`ControllerStates::track` hands each shown model its controller, and `LoadedModel::follow` poses the
+nodes when the inputs changed since the last frame. It writes the part nodes' transforms between the
+clips and the world transforms, so the frame allocates nothing, and it bumps the revision that the
+draws read. On the right controller `b_button_oculus` is the Meta button, which a controller reports
+to no app, so it stays at rest. The files hold no pose for a press of the thumbstick.
+
 **Where the model stands.** The runtime's models are glTF files in meters with x to the right, y up
 and z toward the user. The origin of a model lies at the controller's grip pose.
 `controller_placement::scene_from_grip` carries a point of the model to the scene, whose units are
@@ -486,17 +672,29 @@ part uses it.
 **The scene's light.** A volume sets the scene's light. Where no volume sets one, the controllers'
 models stand in the default light of the glTF models.
 
-**What no headset has run.** The runtime's listing of the extension under the manifest entries, the
-render model paths, the contents of the runtime's file, the loader on that file, the alignment of
-the file with the grip pose, the depth test against panels and the frame rate of an app with no
-volume are untested. The permission name, the path names and the origin of the models at the grip
-pose follow the extension's documentation and stay assumptions until a headset confirms them. If
-the runtime does not list the extension on its first run, the permission name is the first suspect:
-the other services of `cranpose-capabilities` write a `horizonos` name beside the `com.oculus` one.
-The extension has three calls and none gives the state of a button, so a model moves its buttons
-only if its file holds clips. `scripts/dev/xr_controller_session.sh` and
-`scripts/dev/xr_controller_check.py` are the procedure for the first run. Neither has run on a
-headset. The check script ran on pictures that a script drew.
+**On a Quest 3.** The runtime (Horizon OS runtime 210) lists the extension under the manifest
+entries and lists the paths `/model_fb/controller/left`, `/model_fb/controller/right`,
+`/model_fb/keyboard/local` and `/model_fb/keyboard/remote`. The models are "Meta Quest Touch Plus
+Controller Left" and "Right", 508,088 and 507,568 bytes, with the flag of subset 1. A question with
+both subsets gives the same key and the same bytes. Each model loads with six parts and draws in
+eight pieces: the battery quad and the body on the body's joint, and one piece for each part. The
+file is in meters with no scale on the nodes that draw. The model's longest span is 126.5 mm, and
+its smallest box over turns about its x axis is 124.7 by 67.7 by 52.0 mm. A Touch Plus measures
+about 126 by 67 by 43 mm by third-party figures. The root of the file is the grip pose, and
+its node `grip` turns the model 60 degrees about x and moves it 46 mm forward and 20 mm down.
+
+A build with scripted controllers held the right controller still a quarter meter ahead of the eyes
+and pressed one input at a time. Raw screen captures stayed in memory, each press against the rest
+captures before and after it, in cells of 32 by 32 pixels: the fullest cell's change past the change
+between the two rests. A pulled trigger scored 947 to 964 of 1024 in 14 cells, the thumbstick 657 to
+722 forward and 303 to 378 to the right, and the A button 196 to 236 in the same cell each time. A
+rest between two rests scored 4 to 113 in 19 runs. The grip faces away from the eyes in that view
+and scored 23 to 36.
+
+Untested: the alignment of the file with a real controller's grip (the controllers on the desk
+slept and gave no pose), the depth test against panels, the ray against a model and the frame rate
+of an app with no volume. `scripts/dev/xr_controller_session.sh` and
+`scripts/dev/xr_controller_check.py` do not fit the screenshots of a Quest 3 (see the script).
 
 **The demo.** The counter panel has a button that cycles the choice of both hands: the runtime's
 model, the plain model and none. The environment variable `XR_DEMO_CONTROLLERS` builds the
@@ -529,16 +727,64 @@ handle. The projection layer is one layer however many volumes there are.
 
 ### The layer limit
 
-A runtime takes a limited number of layers in a frame. The system properties report the number.
-A Quest 3 reports 32 and ends a frame of 18 layers with `XR_ERROR_LAYER_LIMIT_EXCEEDED`. The
-session starts with the reported number. After that error the limit falls to 16, the number that
-the specification guarantees (`layer_limit`). The frame that failed is lost. The frames after it
-leave out the panels that stand farthest from the head, which are the first layers of the panel
-stage, until the frame fits. The projection layers and the rays stay. The log names the refusal
-(`the runtime refused 18 layers and takes 16`) and each change of the frame's layer count with the
-number of panels left out. A frame whose other layers alone pass the limit still fails, and the
-session ends. The demo with a controller in view submits 18 layers on a Quest 3, so it leaves out
-the two panels that stand farthest.
+A runtime takes a limited number of layers in a frame. The system properties report the number,
+and the specification guarantees 16. A Quest 3 reports 32 and ends a frame of 17 or more layers with
+`XR_ERROR_LAYER_LIMIT_EXCEEDED`. So the session plans its frames for 16 layers until the runtime
+takes a frame of the reported number (`layer_limit`). The first frame that the runtime shows tries
+it: copies of an empty layer, a clear picture of 4 by 4 pixels, fill that frame up to the reported
+number. A runtime that refuses the frame gets the same frame again in the same `xrEndFrame` turn
+without the copies, so no frame is lost. The limit then stays at 16. A runtime that ends a frame
+when it refuses it takes no second end of it, so that one frame is lost. The log names the result
+once (`the runtime takes 16 layers of the 32 that it reports`).
+
+When a frame needs more layers than the limit, the projection layer of the 3D content draws some
+pictures in place of their layers (`layer_budget`, `projected_pass`). No panel goes missing.
+
+- The room's layer, the streamed scenes, the projection layer and the rays keep their layers. A
+  surface keeps its layers too, because only the compositor reads what its producer writes.
+- The handles go into the projection layer first. A handle is a small sphere, so its picture needs
+  no sharpness. Then the content panels of the lowest rank go there.
+- A panel ranks by its `SubspaceModifier::layer_priority` first, then by whether a hand points at
+  it or holds one of its handles, then by the distance of its plane from the head: the nearer panel
+  ranks higher. A panel that the last frame drew into the projection layer counts 5 cm farther than
+  it stands, so two panels at about one distance do not trade places at each small move of the head.
+- A frame with no 3D content gets a projection layer for the pictures. That layer takes one place
+  of the budget. 17 panels with no room's layer keep 15 layers and draw 2 into the
+  projection layer.
+- Surfaces that do not fit beside the fixed layers are left out, the farthest first. A frame whose
+  3D content failed has no projection layer. That frame leaves out the pictures of the lowest
+  rank.
+
+The pass draws each picture into both eyes' images after the scene of the volumes, back to front, as
+a flat rectangle or as 32 strips of a cylinder for a curved panel. A panel samples its part of the
+panels' atlas, which the composition already draws. A handle samples a texture of its sphere.
+Where the layer carries depth, the pass tests against the scene's depth and writes its own, so a
+picture hides behind a nearer volume. The panels over the projection layer test against the
+pictures as they test against the volumes. A runtime with no depth test shows every panel of its own
+layer over the pictures. The default rank keeps that order right, because the pictures are the
+farthest panels. A priority or a pointer that keeps a far panel on its layer can put it over a
+nearer picture there. The pictures in the projection layer are sampled twice, once by the pass and
+once by the compositor, so their text shows softer than on a layer of their own. Each content panel
+keeps its own swapchain filled, so a panel that gets its layer back shows its picture at once.
+
+A frame within the limit plans with one count of its layers. It draws nothing more and submits the
+same layers in the same order as before the budget existed. The pass, its pipelines and the
+textures of the handles exist from the first frame that draws a picture. The log names each change
+of the plan (`the frame needs 19 layers and gets 16 of the 16 that the runtime takes: the projection
+layer draws 4 of them, 0 are left out`) and of the submitted count.
+
+A Quest 3 (runtime "Oculus" 210.137.0) refuses the trial frame of 32 layers. The same frame then
+ends with its 16 layers, so no frame is lost. The runtime logs one warning for the trial
+(`optimized layer count 32 exceeds compositor resource limit 16`). The build `XR_DEMO_PANELS=19`
+needs 21 layers: 19 panels and two rays. It gets 16: 13 panels, the rays and a projection layer
+that draws the other 6 panels. All 19 panels show in both eyes of the compositor's screenshot
+(`scripts/dev/xr_layer_budget_check.py`). The frame rate is 120 in every second after the start.
+The app's GPU time is 0.82 ms, the GPU's share 35.3 percent and the compositor's time 1.89 ms. A
+build of 14 panels fills the 16 layers with nothing in the projection layer: 0.14 ms, 10.5 percent
+and 0.65 ms. The same 14-panel build of the code before the budget gives the same three numbers, so
+a frame within the limit costs nothing that the runtime measures. The full demo with both scripted
+controllers needs 19 layers. Its projection layer draws 3 handles, and every panel and surface keeps
+its own layer, the clip's video surface included.
 
 ### Measured
 
@@ -607,7 +853,8 @@ A target and a mode make six cases:
   subspaces again in the first frame at or after that time.
 - `View(Tight)`: the same origin in every frame. A frame in which the runtime loses the head keeps
   the origin of the frame before.
-- `Controller(hand, Tight)`: the origin is the place of the hand's grip pose, with no offset.
+- `Controller(hand, Tight)`: the origin is the place of the hand's grip pose with the turn of its aim
+  pose, with no offset.
 - `Controller(hand, Snap)`: the origin is that place in the first frame that tracks the controller.
   A recenter places it again. The panels do not show before the first place.
 - `Anchor(anchor, Tight)`: the origin is the anchor's pose in every frame, with all six degrees of
@@ -618,11 +865,25 @@ A target and a mode make six cases:
   its place at once, and one that the app loaded from storage waits for the runtime to recognize the
   room. A detached anchor leaves the panels where they were.
 
-For a view and a controller only the target's turn about the vertical axis counts, so the panels stand upright. A ball that
-sits 10 cm above a controller stays straight above it when the hand tilts. Jetpack XR's
-`TrackedDimensions.All` would tilt the ball with the hand. The turn is the heading of the pose's
-forward axis seen from above. A pose whose forward axis is within about 6 degrees of vertical has no
-heading, so the origin keeps the last one.
+`TrackedDimensions::All` gives the origin the target's whole pose: the head's pose a meter ahead, the
+controller's pose or the anchor's pose. A menu at a controller tilts and rolls with the hand.
+`TrackedDimensions::TranslationAndYaw` keeps only the target's turn about the vertical axis, so the
+panels stand upright. A ball that sits 10 cm above a controller stays straight above it when the
+hand tilts. The turn is the heading of the pose's forward axis seen from above. A pose whose forward
+axis is within about 6 degrees of vertical has no heading, so the origin keeps the last one.
+
+A `Tight` subspace of all six dimensions of the view or of a controller rides in a tracked space:
+the head's `VIEW` space or the space of the controller's aim action. Its panels get
+`PanelSlot::tracked`. The end of the frame hands each layer of such a panel to the compositor in
+that space: the content's quad or cylinder, the surfaces and the handles. Its pose there is the
+panel's pose in the room relative to the pose that the frame located for the space. The pose in the
+room places the panel for the hits, the sort and the layer budget in the same frame. The compositor
+places the layer with the newest pose that it has of the space at the time the frame shows, so the
+panel holds still against the hand. The aim of a scripted controller is not the runtime's space, so
+its panels stay in the room's space at the pose that the script gives. A `Snap` subspace and an
+upright one stay in the room's space: they do not turn with every move of the target. An anchor
+holds still, so the room's space places its panels exactly. The log line `the frame has N layers`
+says how many of them ride in a tracked space.
 
 A controller gives its place from the grip pose and its turn from the aim pose. The OpenXR grip
 pose has its forward axis along the controller's handle. The handle points steeply upward when
@@ -631,7 +892,10 @@ hand rises a few tens of degrees. A quad layer shows its front face only, so a f
 vanish. The aim pose points where the ray points. That direction stays steady. A controller counts
 as tracked when the runtime tracks both poses.
 
-A panel that the user carried keeps its pose relative to the origin, so it moves with the origin.
+A panel that the user carried keeps its pose relative to the origin, so it moves with the origin. A
+carry of a panel at a controller therefore sets the panel's offset from the controller. The carry
+skips the snap to the room's planes for such a panel. A panel that the other hand grabs from nearer
+than 30 cm stays as near as the grab found it.
 A panel that another following subspace takes over, as when the app names a new anchor, is placed by its modifier again, because the place that the user carried it to is relative to the old origin.
 
 A following subspace of a controller has no place while the runtime does not track the controller.
@@ -1137,9 +1401,10 @@ presses the counter's button (`Pressed 6 times`). The pad and the list stand bet
 and the torus's volume: a ray at the panel's top meets the pattern surface first, and a ray at its
 bottom meets the torus first, and a surface or a volume stops the ray as a panel does.
 
-With the controllers on, the frame has 16 layers of the 16 that the runtime takes, and 3 panels are
-left out. The clip's video surface is gone from the picture, which fits the back-to-front order: it
-stands farthest from the head. The other two layers were not identified. With no controller active, the same frame has 16 layers and none left
+With the controllers on, the frame has 16 layers of the 16 that the runtime takes, and the code of
+that time, which had no layer budget, left 3 panels out. The clip's video surface is gone from the
+picture, which fits the back-to-front order: it stands farthest from the head. The layer budget of
+"The layer limit" shows every panel of that frame. The other two layers were not identified. With no controller active, the same frame has 16 layers and none left
 out, because no beam shows. On a Quest 3 the system's "Finding position in room" dialog held the launch of the demo, and a press
 clears that dialog, so no frame ran there. The layer count of a Quest 3 and the buttons of a real
 controller are not measured. The long press and the zoom gesture work with a
@@ -1209,8 +1474,8 @@ The selection rules and the pointer's behavior with hand states are covered by
 availability and what the frame gives, and it draws a map of the hands: a dot for each fingertip
 that the cameras track, seen from the front. The map is part of the panel. The compositor of a
 Quest 3 takes 16 layers at most (`xrEndFrame` fails above that, although the system properties
-report 32), and the demo already submits that many, so a panel for the section would push
-another panel out of the frame. The demo's volume takes two of them, one for the 3D content and one for its handle. A panel for each fingertip would add ten layers, and a hand's own pointing ray would stop
+report 32), and the demo already submits that many, so a panel for the section would put another
+panel into the projection layer. The demo's volume takes two of them, one for the 3D content and one for its handle. A panel for each fingertip would add ten layers, and a hand's own pointing ray would stop
 at the dot at its fingertip. The build script asks for hand tracking, which needs no prompt on a
 Quest. `XR_DEMO_TRACKING=none` asks for nothing, and `XR_DEMO_TRACKING=all` adds the body, the face
 and the eyes, which the system asks the user to allow.

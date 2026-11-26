@@ -58,6 +58,8 @@ pub(super) struct BuilderFunctions {
     pub(super) create: unsafe extern "C" fn(builder: *mut *mut RawBuilder) -> i32,
     pub(super) set_direction: BuilderSetter,
     pub(super) set_format: BuilderSetter,
+    // Android 9 (API 28) and newer
+    pub(super) set_input_preset: Option<BuilderSetter>,
     pub(super) set_channel_count: BuilderSetter,
     pub(super) set_performance_mode: BuilderSetter,
     pub(super) set_sharing_mode: BuilderSetter,
@@ -90,6 +92,7 @@ pub(super) struct StreamFunctions {
     pub(super) frames_per_burst: StreamFunction,
     pub(super) xrun_count: StreamFunction,
     pub(super) frames_written: FramesFunction,
+    pub(super) frames_read: FramesFunction,
     pub(super) timestamp: TimestampFunction,
 }
 
@@ -148,6 +151,7 @@ impl BuilderFunctions {
                 create: function(handle, c"AAudio_createStreamBuilder")?,
                 set_direction: function(handle, c"AAudioStreamBuilder_setDirection")?,
                 set_format: function(handle, c"AAudioStreamBuilder_setFormat")?,
+                set_input_preset: function(handle, c"AAudioStreamBuilder_setInputPreset"),
                 set_channel_count: function(handle, c"AAudioStreamBuilder_setChannelCount")?,
                 set_performance_mode: function(handle, c"AAudioStreamBuilder_setPerformanceMode")?,
                 set_sharing_mode: function(handle, c"AAudioStreamBuilder_setSharingMode")?,
@@ -178,10 +182,26 @@ impl StreamFunctions {
                 frames_per_burst: function(handle, c"AAudioStream_getFramesPerBurst")?,
                 xrun_count: function(handle, c"AAudioStream_getXRunCount")?,
                 frames_written: function(handle, c"AAudioStream_getFramesWritten")?,
+                frames_read: function(handle, c"AAudioStream_getFramesRead")?,
                 timestamp: function(handle, c"AAudioStream_getTimestamp")?,
             })
         }
     }
+}
+
+// The time on the clock that AAudio's timestamps use, in nanoseconds.
+#[allow(
+    clippy::unnecessary_cast,
+    reason = "`time_t` is 64 bits wide on some Android ABIs and 32 bits on the others"
+)]
+pub(super) fn monotonic_nanos() -> i64 {
+    let mut now = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `now` is a place for the time. Every Android has `CLOCK_MONOTONIC`.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) };
+    now.tv_sec as i64 * 1_000_000_000 + now.tv_nsec as i64
 }
 
 // The caller guarantees that `F` is the type of the C function `name`.

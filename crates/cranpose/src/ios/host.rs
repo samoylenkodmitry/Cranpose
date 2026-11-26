@@ -72,4 +72,6 @@ pub(crate) fn register() {
     }
     set_host_controller(Arc::new(IosHost));
     crate::pipeline_cache_file::publish();
+    #[cfg(feature = "video")]
+    crate::install_player();
 }

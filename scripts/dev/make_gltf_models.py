@@ -96,7 +96,7 @@ class Model:
         return len(self.views) - 1
 
     def accessor(self, values, kind, component, target=None, bounds=False):
-        width = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}[kind]
+        width = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}[kind]
         rows = [value if width > 1 else (value,) for value in values]
         fmt = "<%d%s" % (len(rows) * width, "f" if component == FLOAT else "H")
         flat = [v for row in rows for v in row]
@@ -327,6 +327,126 @@ def tower():
     (TESTS / "tower.glb").write_bytes(glb(document, model.data))
 
 
+def turn(axis, degrees):
+    """The quaternion of a turn by `degrees` about `axis`."""
+    half = math.radians(degrees) / 2
+    length = math.sqrt(sum(a * a for a in axis))
+    return [a / length * math.sin(half) for a in axis] + [math.cos(half)]
+
+
+# The parts of the test controller: the node's name, where it stands, the path that its keys move,
+# and the pose at each key that differs from the rest. The keys are the ones of a Meta Quest's
+# runtime models (crates/cranpose-xr/src/controller_parts.rs). A second key after each press holds a
+# smaller pose, so a reader that takes the wrong key, or a time, finds a wrong pose.
+STICK_TILT = 15
+CONTROLLER_PARTS = [
+    ("b_trigger_front", (0.0, -0.02, -0.04), "rotation",
+     {16: turn((1, 0, 0), 20), 17: turn((1, 0, 0), 7)}),
+    ("b_trigger_grip", (0.02, -0.05, 0.0), "rotation",
+     {21: turn((0, 0, 1), -12), 22: turn((0, 0, 1), -4)}),
+    ("b_button_a", (0.01, 0.02, 0.0), "translation",
+     {5: (0.01, 0.018, 0.0), 6: (0.01, 0.019, 0.0)}),
+    ("b_button_b", (-0.01, 0.02, 0.0), "translation",
+     {8: (-0.01, 0.018, 0.0), 9: (-0.01, 0.019, 0.0)}),
+    ("b_button_oculus", (0.0, 0.02, 0.02), "translation", {24: (0.0, 0.019, 0.02)}),
+    # The cap leans toward -z for forward and toward +x for the right: the turn's axis is up
+    # crossed with the lean
+    ("b_thumbstick", (0.0, 0.02, -0.02), "rotation", {
+        key: turn((dz, 0, -dx), STICK_TILT)
+        for key, (dx, dz) in {
+            29: (0, -1), 39: (1, -1), 34: (1, 0), 40: (1, 1),
+            31: (0, 1), 36: (-1, 1), 32: (-1, 0), 37: (-1, -1),
+        }.items()
+    } | {30: turn((1, 0, 0), 3)}),
+]
+CONTROLLER_KEYS = 42
+LASER_BEGIN = (0.0001, -0.0122, -0.0415)
+
+
+def controller(name, blended):
+    """A test controller in the layout of a Meta Quest's runtime models: a body and a cube of 1 cm
+    for each part, in one skinned mesh, and one animation whose fixed keys hold the parts' poses.
+    The trigger is a lever of 3 cm that hangs from its joint, so its turn swings its end by 1 cm.
+    Every vertex follows one joint, unless `blended`: then one corner of the trigger's cube weighs
+    the trigger and the body half each. The body's box is x -0.02 to 0.02, y -0.01 to 0.01 and z
+    -0.05 to 0.05. With the parts, the model's box at rest is x -0.02 to 0.025, y -0.055 to 0.025 and
+    z -0.05 to 0.05."""
+    model = Model()
+    positions, normals, joints, weights, indices = [], [], [], [], []
+
+    def block(center, half, joint):
+        for normal, corners in CUBE_FACES:
+            base = len(positions)
+            for x, y, z in corners:
+                positions.append(
+                    (center[0] + x * half[0], center[1] + y * half[1], center[2] + z * half[2])
+                )
+                normals.append(normal)
+                joints.append((joint, 0, 0, 0))
+                weights.append((1.0, 0.0, 0.0, 0.0))
+            indices.extend([base, base + 2, base + 1, base + 1, base + 2, base + 3])
+
+    block((0, 0, 0), (0.02, 0.01, 0.05), 0)
+    for joint, (part, at, _, _) in enumerate(CONTROLLER_PARTS, start=1):
+        if part == "b_trigger_front":
+            block((at[0], at[1] - 0.015, at[2]), (0.005, 0.015, 0.005), joint)
+        else:
+            block(at, (0.005, 0.005, 0.005), joint)
+    if blended:
+        trigger_corner = 24
+        joints[trigger_corner] = (1, 0, 0, 0)
+        weights[trigger_corner] = (0.5, 0.5, 0.0, 0.0)
+    primitive = {
+        "attributes": {
+            "POSITION": model.accessor(positions, "VEC3", FLOAT, ARRAY_BUFFER, bounds=True),
+            "NORMAL": model.accessor(normals, "VEC3", FLOAT, ARRAY_BUFFER),
+            "JOINTS_0": model.accessor(joints, "VEC4", USHORT, ARRAY_BUFFER),
+            "WEIGHTS_0": model.accessor(weights, "VEC4", FLOAT, ARRAY_BUFFER),
+        },
+        "indices": model.accessor(indices, "SCALAR", USHORT, ELEMENT_ARRAY_BUFFER),
+        "material": 0,
+    }
+    # The joints stand at their parts without a turn, so each inverse bind matrix moves back by
+    # the joint's place: four columns, the last one the translation
+    unbind = [
+        (1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -x, -y, -z, 1)
+        for x, y, z in [(0, 0, 0)] + [at for _, at, _, _ in CONTROLLER_PARTS]
+    ]
+    times = model.accessor(
+        [key / 24 for key in range(CONTROLLER_KEYS)], "SCALAR", FLOAT, bounds=True
+    )
+    samplers, channels = [], []
+    for node, (_, at, path, poses) in enumerate(CONTROLLER_PARTS, start=2):
+        rest = list(at) if path == "translation" else [0.0, 0.0, 0.0, 1.0]
+        values = [poses.get(key, rest) for key in range(CONTROLLER_KEYS)]
+        kind = "VEC3" if path == "translation" else "VEC4"
+        output = model.accessor(values, kind, FLOAT)
+        samplers.append({"input": times, "output": output, "interpolation": "LINEAR"})
+        channels.append({"sampler": len(samplers) - 1, "target": {"node": node, "path": path}})
+    document = model.document(
+        scene=0,
+        scenes=[{"nodes": [0]}],
+        nodes=[
+            {"name": "root", "children": [1, 8, 9]},
+            {"name": "body", "children": [2, 3, 4, 5, 6, 7]},
+        ]
+        + [{"name": part, "translation": list(at)} for part, at, _, _ in CONTROLLER_PARTS]
+        + [{"name": "controller_mesh", "mesh": 0, "skin": 0}]
+        # Where the ray starts, as a Touch Plus model of a Meta Quest 3 has it
+        + [{"name": "laser_begin", "translation": list(LASER_BEGIN)}],
+        meshes=[{"primitives": [primitive]}],
+        materials=[{"pbrMetallicRoughness": {"baseColorFactor": [0.8, 0.8, 0.8, 1.0]}}],
+        skins=[
+            {
+                "joints": [1, 2, 3, 4, 5, 6, 7],
+                "inverseBindMatrices": model.accessor(unbind, "MAT4", FLOAT),
+            }
+        ],
+        animations=[{"name": "All Animations", "samplers": samplers, "channels": channels}],
+    )
+    (TESTS / name).write_bytes(glb(document, model.data))
+
+
 def triangle_external():
     """One triangle whose buffer is the file next to it, with no material and no normals."""
     model = Model()
@@ -395,5 +515,7 @@ if __name__ == "__main__":
     basisu_quad()
     basisu_fallback_quad()
     tower()
+    controller("controller_parts.glb", blended=False)
+    controller("controller_blended.glb", blended=True)
     triangle_external()
     crate()

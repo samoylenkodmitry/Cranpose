@@ -22,6 +22,8 @@ use objc2_core_video::{
     kCVPixelBufferIOSurfacePropertiesKey, kCVPixelBufferMetalCompatibilityKey,
     kCVPixelBufferPixelFormatTypeKey, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
     kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+    kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+    kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
 };
 #[cfg(target_os = "macos")]
 use objc2_video_toolbox::kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder;
@@ -30,16 +32,18 @@ use objc2_video_toolbox::{
     kVTDecompressionPropertyKey_RealTime,
 };
 
-use super::{DecoderError, VideoCodec, annex_b::LENGTH_SIZE};
+use super::{DecodeOrder, DecoderError, VideoCodec, annex_b::LENGTH_SIZE};
 
-// The pictures that the decoder outputs are NV12 in an IOSurface that Metal samples, in the
-// range of the stream. NV12 is what the hardware decoder writes: a request for BGRA makes
-// VideoToolbox convert each picture, which took 2.0 to 2.7 ms for a picture of 2560 by 1440
-// pixels against 1.0 to 1.2 ms without the conversion. The renderer converts a picture to RGB
-// in one pass.
-const OUTPUT_FORMATS: [u32; 2] = [
+// The pictures that the decoder outputs are NV12 (8-bit) or P010 (10-bit) in an IOSurface that
+// Metal samples, in the range of the stream. Bi-planar YCbCr is what the hardware decoder writes:
+// a request for BGRA makes VideoToolbox convert each picture, which took 2.0 to 2.7 ms for a
+// picture of 2560 by 1440 pixels against 1.0 to 1.2 ms without the conversion. The renderer
+// converts a picture to RGB in one pass.
+const OUTPUT_FORMATS: [u32; 4] = [
     kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
     kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+    kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+    kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
 ];
 
 // The timescale of the presentation times that the decoder takes and returns: microseconds.
@@ -96,7 +100,7 @@ impl Format {
                     None,
                     NonNull::from(&mut description),
                 ),
-                VideoCodec::Av1 => return Err(DecoderError::NoDecoder(codec)),
+                VideoCodec::Av1 | VideoCodec::Vp9 => return Err(DecoderError::NoDecoder(codec)),
             }
         };
         let description = NonNull::new(description.cast_mut())
@@ -215,6 +219,7 @@ impl Session {
     pub(super) fn new(
         format: &Format,
         callback: VTDecompressionOutputCallbackRecord,
+        order: DecodeOrder,
     ) -> Result<Self, DecoderError> {
         let attributes = destination_attributes();
         let specification = decoder_specification();
@@ -238,17 +243,19 @@ impl Session {
             .ok_or_else(|| {
                 DecoderError::Configure(format!("the decompression session: {status}"))
             })?;
-        // The decoder outputs each picture as soon as it is ready
-        // SAFETY: the key is a constant of VideoToolbox, and true is a boolean.
+        // Low-latency mode asks the hardware for immediate output; presentation mode allows
+        // B-frame reference reordering without real-time throttling.
+        let real_time_flag = order == DecodeOrder::LowLatency;
+        // SAFETY: the key is a constant of VideoToolbox, and the value is a CFBoolean.
         let real_time = unsafe {
             objc2_video_toolbox::VTSessionSetProperty(
                 &raw,
                 kVTDecompressionPropertyKey_RealTime,
-                Some(CFBoolean::new(true).as_ref()),
+                Some(CFBoolean::new(real_time_flag).as_ref()),
             )
         };
         if real_time != 0 {
-            log::debug!("video decoder: no real-time mode: {real_time}");
+            log::debug!("video decoder: real-time property {real_time_flag}: {real_time}");
         }
         Ok(Self { raw })
     }
@@ -260,16 +267,27 @@ impl Session {
     }
 
     // Queues `sample` for decoding and returns at once. The status is VideoToolbox's.
-    pub(super) fn decode(&self, sample: &CMSampleBuffer) -> i32 {
+    pub(super) fn decode(&self, sample: &CMSampleBuffer, order: DecodeOrder) -> i32 {
+        let flags = match order {
+            DecodeOrder::LowLatency => VTDecodeFrameFlags::Frame_EnableAsynchronousDecompression,
+            DecodeOrder::Presentation => {
+                VTDecodeFrameFlags::Frame_EnableAsynchronousDecompression
+                    | VTDecodeFrameFlags::Frame_EnableTemporalProcessing
+            }
+        };
         // SAFETY: the session and the sample are valid, and the other values are null or
         // flags. The picture comes back through the callback.
         unsafe {
-            self.raw.decode_frame(
-                sample,
-                VTDecodeFrameFlags::Frame_EnableAsynchronousDecompression,
-                ptr::null_mut(),
-                ptr::null_mut(),
-            )
+            self.raw
+                .decode_frame(sample, flags, ptr::null_mut(), ptr::null_mut())
+        }
+    }
+
+    // Waits until every queued asynchronous decode callback has returned.
+    pub(super) fn wait_for_asynchronous_frames(&self) {
+        // SAFETY: the session is valid while this struct lives.
+        unsafe {
+            self.raw.wait_for_asynchronous_frames();
         }
     }
 }

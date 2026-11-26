@@ -120,3 +120,57 @@ fn the_apps_model_replaces_the_runtimes_for_the_hand_that_it_names() {
     // The left hand keeps the choice that it had
     assert_eq!(states.handle().model(Hand::Left), ControllerModel::Runtime);
 }
+
+// The pixels that differ between two pictures of an eye.
+fn differing(a: &[u8], b: &[u8]) -> usize {
+    a.as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0)
+        .filter(|(a, b)| a != b)
+        .count()
+}
+
+#[test]
+fn the_runtimes_model_pulls_its_trigger_in_the_picture_and_lets_it_go_again() {
+    let mut headset = headset_without_volumes();
+    let states = headset.space.volumes().controllers();
+    // The test controller in the layout of a Meta Quest's runtime models, whose trigger is a lever
+    // of 3 cm that turns 20 degrees about the grip's x when pulled
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/models/controller_parts.glb");
+    states.set_offer(
+        Hand::Left,
+        Offer::Bytes(Arc::from(std::fs::read(path).expect("the test controller"))),
+    );
+    // Across the view, 15 cm from the eye: the trigger turns in the picture's plane
+    let mut controller = held([0.0, 0.0, -0.15]);
+    states.track([&controller, &Controller::default()]);
+    settle(&mut headset, |headset| {
+        headset
+            .space
+            .volumes()
+            .controllers()
+            .loaded(Hand::Left)
+            .is_some()
+    });
+    let image = Eye::new(&headset.gpu);
+    let picture = |headset: &mut Headset, controller: &Controller| {
+        states.track([controller, &Controller::default()]);
+        shown_in(headset, &eye(0.0), &image).expect("the model shows");
+        read(&headset.gpu, &image.color, 4)
+    };
+    let released = picture(&mut headset, &controller);
+    controller.trigger.value = 1.0;
+    let pulled = picture(&mut headset, &controller);
+    controller.trigger.value = 0.0;
+    let again = picture(&mut headset, &controller);
+    // The lever's end swings by 1 cm, about 4 pixels at this distance
+    let moved = differing(&released, &pulled);
+    assert!(moved >= 8, "the pull changed {moved} pixels");
+    assert_eq!(
+        differing(&released, &again),
+        0,
+        "the released trigger came back elsewhere"
+    );
+}

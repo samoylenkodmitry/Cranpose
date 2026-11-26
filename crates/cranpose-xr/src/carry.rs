@@ -9,7 +9,8 @@ use crate::{
     vector::{cross, dot},
 };
 
-// The nearest and the farthest a carried panel gets from the controller, in meters.
+// The nearest and the farthest a carried panel gets from the controller, in meters. A panel that
+// the user grabs from nearer may stay as near as it was at the grab.
 const MIN_DISTANCE: f32 = 0.3;
 const MAX_DISTANCE: f32 = 5.0;
 
@@ -42,22 +43,28 @@ pub(crate) struct Carry {
     relative: Pose,
     // How far the thumbstick moved the panel away along the aim, in meters
     push: f32,
+    // The nearest the panel gets to the controller, in meters: MIN_DISTANCE, or the distance at
+    // the grab when that is less. A panel at the other hand stays where the grab found it.
+    nearest: f32,
 }
 
 impl Carry {
     pub(crate) fn grab(aim: &Pose, panel: &Pose) -> Self {
+        let relative = aim.inverse().then(panel);
+        let distance = relative.position.iter().map(|v| v * v).sum::<f32>().sqrt();
         Self {
-            relative: aim.inverse().then(panel),
+            relative,
             push: 0.0,
+            nearest: MIN_DISTANCE.min(distance),
         }
     }
 
-    // Moves the panel `meters` farther along the aim, between MIN_DISTANCE and MAX_DISTANCE
-    // from the controller.
+    // Moves the panel `meters` farther along the aim, between the nearest distance and
+    // MAX_DISTANCE from the controller.
     pub(crate) fn push(&mut self, meters: f32) {
         let ahead = -self.relative.position[2];
         self.push = (self.push + meters).clamp(
-            (MIN_DISTANCE - ahead).min(0.0),
+            (self.nearest - ahead).min(0.0),
             (MAX_DISTANCE - ahead).max(0.0),
         );
     }
@@ -74,7 +81,7 @@ impl Carry {
         let position = if length < 1e-6 {
             [0.0, 0.0, -MIN_DISTANCE]
         } else {
-            let scale = length.clamp(MIN_DISTANCE, MAX_DISTANCE) / length;
+            let scale = length.clamp(self.nearest, MAX_DISTANCE) / length;
             pushed.map(|v| v * scale)
         };
         let held = Pose {

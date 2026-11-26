@@ -22,6 +22,52 @@ Use the [application guide](guide.md) for current usage and the
 [release ledger](release_readiness.md) for 1.0 acceptance. The historical
 comparison below is not a claim of complete behavioral parity.
 
+## Layout and behavioral parity
+
+Nightly CI runs [benchmarks/layout-parity](../benchmarks/layout-parity/README.md)
+against Jetpack Compose Desktop (`1.12.2`) on a single-screen 20-zone layout
+atlas (`1760x980` dp, 462 tagged nodes) at `1.0x` and `1.75x` density. The suite
+also runs 20 Cranpose and 8 Compose behavioral stress scenarios covering scroll
+detachment, modifier permutations, lazy container nesting, RTL/LTR flipping, and
+viewport resizing.
+
+Run the full suite locally with `just layout-parity`. The comparator validates
+every measured node and stress scenario against
+[divergences.toml](../benchmarks/layout-parity/divergences.toml). Any unlisted
+divergence, worsened delta, non-finite bound, missing node, or new panic fails
+the job. Any tracked unexpected bug that starts passing also fails the job until
+the entry is removed from `divergences.toml` and from the table below.
+
+Current counts (`0.5` dp tolerance):
+
+- `1.0x`: 429/462 common nodes pass (`92.9%`, all 429 exact within `0.01` dp),
+  0 non-finite bounds, 0 nodes absent from Cranpose, 31 expected text-metric
+  divergences, 2 unexpected divergences.
+- `1.75x`: 405/462 common nodes pass (`87.7%`, 335 exact), 0 non-finite bounds,
+  0 nodes absent from Cranpose, 18 expected text-metric divergences, 39
+  unexpected divergences.
+- Stress suite: Compose `8/8` pass. Cranpose `19/20` pass.
+
+### Expected divergences
+
+These differences come from deliberate renderer or text-engine choices. They are
+tracked as bounded allowances in `divergences.toml` rather than bugs.
+
+| Ledger rule | Densities | Scope | Bound | Reason |
+|---|---|---|---|---|
+| `text-line-height-and-glyph-metrics` | `1.0x`, `1.75x` | Chrome (`hdr_*`, `ftr_*`), Zone 5 intrinsics (`z5_*`), Zone 6 baselines and text boxes (`z6_*`) | `<= 2.0` dp | SkParagraph and Cranpose text layout round font ascent, descent, and ellipsis advance differently ([text.md](text.md)). |
+
+### Unexpected divergences to fix
+
+Every unexpected divergence in the layout atlas or behavioral stress suite has a
+linked GitHub issue and a ratchet entry in `divergences.toml`.
+
+| Ledger rule | Issue | Densities | Kind | Observed impact | Summary |
+|---|---|---|---|---|---|
+| `scroll_state_owner_disposed_before_scroll_node_detaches` (stress) | [#2457](https://github.com/samoylenkodmitry/Cranpose/issues/2457) | stress | panic | `19/20` pass | `ScrollState::remove_invalidate_callback` panics in `ScrollNode::on_detach` after the owner of the `ScrollState` is disposed. |
+| `semantics-bounds-ignore-layer-and-offset-with` | [#2459](https://github.com/samoylenkodmitry/Cranpose/issues/2459) (see also [#2059](https://github.com/samoylenkodmitry/Cranpose/issues/2059), [#2386](https://github.com/samoylenkodmitry/Cranpose/issues/2386)) | `1.0x`, `1.75x` | `bounds_delta` | 2 nodes (`z11_gl_nest_c` `5.44` dp, `z11_off_lam` `10.00`–`10.29` dp) | Semantics bounds ignore ancestor `graphicsLayer` transforms and `Modifier::offset_with` layer translation. |
+| `fractional-density-rounding-drift` | [#2460](https://github.com/samoylenkodmitry/Cranpose/issues/2460) | `1.75x` | `bounds_delta` | 37 nodes across Zones 1, 2, 7, 8, 9, 10, 15, 19 (`0.57`–`1.14` dp) | Layout rounding at `1.75x` drifts by 1 to 2 physical pixels from Compose pixel-snapped constraints and placements. |
+
 ## Generated comparison, 2026-10-15
 
 Cranpose at [`75e5c04f9`](https://github.com/samoylenkodmitry/Cranpose/tree/75e5c04f99f9a96542a405693c21c6b9ef601f5d) against

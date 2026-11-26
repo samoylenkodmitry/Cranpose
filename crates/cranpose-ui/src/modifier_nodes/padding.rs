@@ -41,6 +41,64 @@ impl PaddingElement {
             device_padding(self.padding, density)
         }
     }
+
+    #[inline]
+    pub(crate) fn inner_constraints_prepared(&self, constraints: Constraints) -> Constraints {
+        let padding = self.padding;
+        let horizontal_padding = padding.horizontal_sum();
+        let vertical_padding = padding.vertical_sum();
+        Constraints {
+            min_width: (constraints.min_width - horizontal_padding).max(0.0),
+            max_width: (constraints.max_width - horizontal_padding).max(0.0),
+            min_height: (constraints.min_height - vertical_padding).max(0.0),
+            max_height: (constraints.max_height - vertical_padding).max(0.0),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn place_size_prepared(
+        &self,
+        constraints: Constraints,
+        child: Size,
+    ) -> (Size, crate::modifier::Point) {
+        let padding = self.padding;
+        let (width, height) = constraints.constrain(
+            child.width + padding.horizontal_sum(),
+            child.height + padding.vertical_sum(),
+        );
+        (
+            Size { width, height },
+            crate::modifier::Point {
+                x: padding.left,
+                y: padding.top,
+            },
+        )
+    }
+
+    #[inline]
+    fn inner_constraints(&self, constraints: Constraints, density: f32) -> Constraints {
+        let padding = self.device(density);
+        Self {
+            padding,
+            on_device_pixels: true,
+        }
+        .inner_constraints_prepared(constraints)
+    }
+
+    #[inline]
+    fn place_size(
+        &self,
+        constraints: Constraints,
+        child: Size,
+        density: f32,
+    ) -> (Size, crate::modifier::Point) {
+        let padding = self.device(density);
+        Self {
+            padding,
+            on_device_pixels: true,
+        }
+        .place_size_prepared(constraints, child)
+    }
 }
 
 impl PlainElement for PaddingElement {
@@ -122,31 +180,18 @@ impl PlainLayout for PaddingElement {
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        let padding = self.device(context.density());
-        let horizontal_padding = padding.horizontal_sum();
-        let vertical_padding = padding.vertical_sum();
-
-        let inner_constraints = Constraints {
-            min_width: (constraints.min_width - horizontal_padding).max(0.0),
-            max_width: (constraints.max_width - horizontal_padding).max(0.0),
-            min_height: (constraints.min_height - vertical_padding).max(0.0),
-            max_height: (constraints.max_height - vertical_padding).max(0.0),
-        };
-
+        let density = context.density();
+        let inner_constraints = self.inner_constraints(constraints, density);
         let inner_placeable = measurable.measure(inner_constraints);
-        let inner_width = inner_placeable.width();
-        let inner_height = inner_placeable.height();
-
-        let (width, height) = constraints.constrain(
-            inner_width + horizontal_padding,
-            inner_height + vertical_padding,
+        let (size, offset) = self.place_size(
+            constraints,
+            Size {
+                width: inner_placeable.width(),
+                height: inner_placeable.height(),
+            },
+            density,
         );
-
-        cranpose_ui_layout::LayoutModifierMeasureResult::new(
-            Size { width, height },
-            padding.left,
-            padding.top,
-        )
+        cranpose_ui_layout::LayoutModifierMeasureResult::new(size, offset.x, offset.y)
     }
 
     fn intrinsic(&self, measurable: &dyn Measurable, kind: PlainIntrinsic, density: f32) -> f32 {

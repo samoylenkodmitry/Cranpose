@@ -47,6 +47,10 @@ diagnostics = []
 leak-debug = []
 # The workspace's one answer to where a test writes real files.
 test-helpers = []
+# Host-driven alarms for `delay`: keeps deadlines in runtime thread state so
+# hosts without background timer threads (such as bare-metal or single-threaded
+# embeddings) drive them during UI drains and read `next_alarm_deadline`.
+host-timers = []
 
 [dev-dependencies]
 # Path-only dev-dep: stripped from the published manifest (publish order ignores dev edges).
@@ -73,6 +77,11 @@ event-listener = "5.4.2"
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+
+[[test]]
+name = "movable_host_memory"
+path = "tests/movable_host_memory/main.rs"
+harness = false
 
 
 [[bench]]

@@ -10,6 +10,7 @@ use cranpose::{
 
 use crate::{
     Pose,
+    controller_parts::ControllerParts,
     gltf_clip::{Clip, Trs},
 };
 
@@ -52,8 +53,13 @@ pub(crate) struct GltfModel {
     pub(crate) draws: Vec<Draw>,
     pub(crate) layers: Vec<MaterialLayer>,
     pub(crate) clips: Vec<Clip>,
+    // The nodes that a controller's inputs move, when the model is a controller's
+    pub(crate) parts: ControllerParts,
     // The lowest and highest corner of the box around the meshes at rest, in glTF units
     pub(crate) bounds: ([f32; 3], [f32; 3]),
+    // Where a controller's ray starts, in the model's space at rest: the node that the runtime's
+    // controller models name `laser_begin`, when the model has one
+    pub(crate) ray_start: Option<[f32; 3]>,
 }
 
 // The map from a node's own space to its parent's.
@@ -84,15 +90,13 @@ impl GltfModel {
         std::array::from_fn(|axis| (low[axis] + high[axis]) / 2.0)
     }
 
-    // Writes the map from each node's space to the model's into `worlds`. `poses` are the clips
-    // that move the nodes, each with its time in seconds, in rising order of clip index: a later
-    // clip overrides an earlier one on the same property of the same node. `locals` is room for
-    // the transforms, so a frame allocates nothing once both have grown.
-    pub(crate) fn world_transforms(
+    // Writes the transform of each node into `locals`: the rest pose, then the clips that move the
+    // nodes. `poses` are the clips, each with its time in seconds, in rising order of clip index: a
+    // later clip overrides an earlier one on the same property of the same node.
+    pub(crate) fn local_transforms(
         &self,
         poses: impl IntoIterator<Item = (usize, f32)>,
         locals: &mut Vec<Trs>,
-        worlds: &mut Vec<Mat4>,
     ) {
         locals.clone_from(&self.rest);
         for (clip, time) in poses {
@@ -100,6 +104,24 @@ impl GltfModel {
                 clip.apply(time, locals);
             }
         }
+    }
+
+    // Writes the map from each node's space to the model's into `worlds`, for the nodes at rest
+    // and moved by the clips of `poses` (see `local_transforms`). `locals` is room for the
+    // transforms, so a frame allocates nothing once both have grown.
+    pub(crate) fn world_transforms(
+        &self,
+        poses: impl IntoIterator<Item = (usize, f32)>,
+        locals: &mut Vec<Trs>,
+        worlds: &mut Vec<Mat4>,
+    ) {
+        self.local_transforms(poses, locals);
+        self.worlds_of(locals, worlds);
+    }
+
+    // Writes the map from each node's space to the model's into `worlds`, from the transform of
+    // each node in `locals`.
+    pub(crate) fn worlds_of(&self, locals: &[Trs], worlds: &mut Vec<Mat4>) {
         worlds.resize(self.rest.len(), Mat4::IDENTITY);
         for &node in &self.order {
             let local = local_matrix(&locals[node]);

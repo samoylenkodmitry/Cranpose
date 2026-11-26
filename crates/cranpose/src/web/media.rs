@@ -6,9 +6,9 @@ use std::{
 
 use cranpose_services::{
     EqualizerBand, EqualizerSettings, MediaCapabilities, MediaCommand, MediaError, MediaItem,
-    MediaMetadata, MediaPlayer, MediaSamples, PlaybackProgress, PlaybackState,
-    publish_media_command, publish_media_samples, publish_playback_progress,
-    publish_playback_state,
+    MediaMetadata, MediaObserver, MediaPlayer, MediaSamples, PlaybackProgress, PlaybackState,
+    observe_playback_progress, observe_playback_state, publish_media_command,
+    publish_media_samples, publish_playback_progress, publish_playback_state,
 };
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{
@@ -27,6 +27,8 @@ pub(crate) struct Browser {
     element: HtmlAudioElement,
     _element_listeners: Vec<Closure<dyn FnMut()>>,
     _session_handlers: Vec<Closure<dyn FnMut(JsValue)>>,
+    _session_state_observer: MediaObserver,
+    _session_progress_observer: MediaObserver,
     artwork_url: Option<String>,
     graph: Option<AudioGraph>,
 }
@@ -53,11 +55,15 @@ pub(crate) fn install() {
     element.set_preload("auto");
     let listeners = attach_listeners(&element);
     let handlers = attach_session_handlers();
+    let state_observer = observe_playback_state(sync_session_playback_state);
+    let progress_observer = observe_playback_progress(sync_session_position_state);
     crate::thread_state::with(|state| {
         *state.web.media_browser.borrow_mut() = Some(Browser {
             element,
             _element_listeners: listeners,
             _session_handlers: handlers,
+            _session_state_observer: state_observer,
+            _session_progress_observer: progress_observer,
             artwork_url: None,
             graph: None,
         });
@@ -142,7 +148,7 @@ fn publish_position() {
     publish_playback_progress(progress);
 }
 
-fn seconds(value: f64) -> Duration {
+pub(super) fn seconds(value: f64) -> Duration {
     if value.is_finite() && value > 0.0 {
         Duration::from_secs_f64(value)
     } else {
@@ -150,17 +156,63 @@ fn seconds(value: f64) -> Duration {
     }
 }
 
-fn finite_seconds(value: f64) -> Option<Duration> {
+pub(super) fn finite_seconds(value: f64) -> Option<Duration> {
     (value.is_finite() && value > 0.0).then(|| Duration::from_secs_f64(value))
 }
 
-fn buffered_end(element: &HtmlAudioElement) -> Option<Duration> {
+pub(super) fn buffered_end(element: &web_sys::HtmlMediaElement) -> Option<Duration> {
     let ranges = element.buffered();
     let count = ranges.length();
     if count == 0 {
         return None;
     }
     ranges.end(count - 1).ok().map(seconds)
+}
+
+fn sync_session_playback_state(state: PlaybackState) {
+    let Some(session) = media_session() else {
+        return;
+    };
+    let value = match state {
+        PlaybackState::Playing => "playing",
+        PlaybackState::Paused | PlaybackState::Loading => "paused",
+        PlaybackState::Idle | PlaybackState::Ended | PlaybackState::Failed(_) => "none",
+    };
+    set_string(&session, "playbackState", value);
+}
+
+fn sync_session_position_state(progress: PlaybackProgress) {
+    let Some(duration) = progress.duration.filter(|d| !d.is_zero()) else {
+        return;
+    };
+    let Some(session) = media_session() else {
+        return;
+    };
+    let Ok(func) = js_sys::Reflect::get(&session, &JsValue::from_str("setPositionState")) else {
+        return;
+    };
+    let Ok(func) = func.dyn_into::<js_sys::Function>() else {
+        return;
+    };
+    let duration_secs = duration.as_secs_f64();
+    let position_secs = progress.position.as_secs_f64().clamp(0.0, duration_secs);
+    let state = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(
+        &state,
+        &JsValue::from_str("duration"),
+        &JsValue::from_f64(duration_secs),
+    );
+    let _ = js_sys::Reflect::set(
+        &state,
+        &JsValue::from_str("playbackRate"),
+        &JsValue::from_f64(1.0),
+    );
+    let _ = js_sys::Reflect::set(
+        &state,
+        &JsValue::from_str("position"),
+        &JsValue::from_f64(position_secs),
+    );
+    let _ = func.call1(&session, &state);
 }
 
 fn media_session() -> Option<js_sys::Object> {
@@ -447,6 +499,7 @@ impl MediaPlayer for WebMediaPlayer {
             session: media_session().is_some(),
             equalizer: true,
             probing: false,
+            video: false,
         }
     }
 

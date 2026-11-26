@@ -1,18 +1,28 @@
 //! The measure of a layout node through its modifier chain and measure
 //! policy.
 
-use cranpose_core::NodeId;
-use cranpose_foundation::InvalidationKind;
+use cranpose_core::{Applier, NodeId};
 use cranpose_ui_layout::{Constraints, Placement};
 
 use super::{
-    LayoutBuilderState, LayoutRuntimeState, ModifierChainInputs, ModifierChainMeasurement,
+    LayoutBuilderState, LayoutNodeContext, LayoutRuntimeState, ModifierChainInputs,
     coordinator_chain::CoordinatorFrame, inherited_alignment_lines,
 };
 use crate::{
     modifier::{Point, Size},
     widgets::nodes::LayoutNode,
 };
+
+pub(super) struct ModifierChainMeasurement {
+    pub(super) size: Size,
+    pub(super) alignment_lines: cranpose_ui_layout::AlignmentLines,
+    pub(super) content_offset: Point,
+    pub(super) offset: Point,
+    pub(super) window_root: bool,
+    pub(super) hold: Option<cranpose_ui_layout::ConstraintsHold>,
+    pub(super) ignores_child_sizes: bool,
+    pub(super) invalidations: u8,
+}
 
 #[expect(
     clippy::multiple_inherent_impl,
@@ -62,33 +72,38 @@ impl LayoutBuilderState {
                     && runtime_state
                         .measure_policy
                         .ignores_child_sizes(runtime_state.child_measurables(), constraints),
+                invalidations: 0,
             };
         }
 
-        let frame = CoordinatorFrame::new(
-            &runtime_state.measure_policy,
-            &scope,
-            runtime_state.child_measurables(),
-            runtime_state.child_states(),
-            placements,
-            placement_indices,
-        );
-        let placeable = runtime_state
-            .coordinator_chain
-            .measure_from(0, &frame, constraints);
-        let (content_x, content_y) = placeable.content_offset();
-
-        self.mark_invalidations(node_id, frame.take_invalidations());
+        let density = cranpose_ui_layout::MeasureScope::density(&scope);
+        let (size, accumulated, alignment_lines, invalidations) =
+            if runtime_state.coordinator_chain.is_direct() {
+                let (size, accumulated, alignment_lines) = measure_through_direct_chain(
+                    runtime_state,
+                    &scope,
+                    density,
+                    constraints,
+                    placements,
+                    placement_indices,
+                );
+                (size, accumulated, alignment_lines, 0)
+            } else {
+                measure_through_general_chain(
+                    runtime_state,
+                    &scope,
+                    constraints,
+                    placements,
+                    placement_indices,
+                )
+            };
 
         ModifierChainMeasurement {
-            alignment_lines: placeable.alignment_lines(),
-            size: Size {
-                width: placeable.width(),
-                height: placeable.height(),
-            },
+            alignment_lines,
+            size,
             content_offset: Point {
-                x: content_x - chain.offset.x,
-                y: content_y - chain.offset.y,
+                x: accumulated.x - chain.offset.x,
+                y: accumulated.y - chain.offset.y,
             },
             offset: chain.offset,
             window_root: chain.window_root,
@@ -96,7 +111,7 @@ impl LayoutBuilderState {
                 None
             } else {
                 runtime_state.coordinator_chain.measured_hold(
-                    cranpose_ui_layout::MeasureScope::density(&scope),
+                    density,
                     runtime_state.measure_policy.as_ref(),
                     runtime_state.child_measurables(),
                 )
@@ -106,27 +121,123 @@ impl LayoutBuilderState {
                     runtime_state.measure_policy.as_ref(),
                     runtime_state.child_measurables(),
                 ),
+            invalidations,
         }
     }
+
     // Marks the node `node_id` with what its modifier chain invalidated while
     // it measured.
-    fn mark_invalidations(&self, node_id: NodeId, invalidations: Vec<InvalidationKind>) {
-        if invalidations.is_empty() {
-            return;
+    #[inline]
+    pub(super) fn mark_invalidations(&self, node_id: NodeId, invalidations: u8) {
+        if invalidations != 0 {
+            self.mark_invalidations_slow(node_id, invalidations);
         }
+    }
+
+    #[inline(never)]
+    fn mark_invalidations_slow(&self, node_id: NodeId, invalidations: u8) {
         self.with_applier_result(|applier| {
-            applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
-                for kind in invalidations {
-                    match kind {
-                        InvalidationKind::Layout => layout_node.mark_needs_measure(),
-                        InvalidationKind::Draw => layout_node.mark_needs_redraw(),
-                        InvalidationKind::Semantics => layout_node.mark_needs_semantics(),
-                        InvalidationKind::PointerInput => layout_node.mark_needs_pointer_pass(),
-                        InvalidationKind::Focus => layout_node.mark_needs_focus_sync(),
-                    }
+            let Ok(node) = applier.get_mut(node_id) else {
+                return Ok(());
+            };
+            let any = node.as_any_mut();
+            if let Some(layout_node) = any.downcast_mut::<LayoutNode>() {
+                if invalidations & LayoutNodeContext::LAYOUT_BIT != 0 {
+                    layout_node.mark_needs_measure();
                 }
-            })
+                if invalidations & LayoutNodeContext::DRAW_BIT != 0 {
+                    layout_node.mark_needs_redraw();
+                }
+                if invalidations & LayoutNodeContext::SEMANTICS_BIT != 0 {
+                    layout_node.mark_needs_semantics();
+                }
+                if invalidations & LayoutNodeContext::POINTER_INPUT_BIT != 0 {
+                    layout_node.mark_needs_pointer_pass();
+                }
+                if invalidations & LayoutNodeContext::FOCUS_BIT != 0 {
+                    layout_node.mark_needs_focus_sync();
+                }
+            } else if let Some(subcompose) =
+                any.downcast_mut::<crate::subcompose_layout::SubcomposeLayoutNode>()
+            {
+                if invalidations & LayoutNodeContext::LAYOUT_BIT != 0 {
+                    subcompose.mark_needs_measure();
+                }
+                if invalidations & LayoutNodeContext::DRAW_BIT != 0 {
+                    subcompose.mark_needs_redraw();
+                }
+                if invalidations & LayoutNodeContext::SEMANTICS_BIT != 0 {
+                    subcompose.mark_needs_semantics();
+                }
+                if invalidations & LayoutNodeContext::POINTER_INPUT_BIT != 0 {
+                    subcompose.mark_needs_pointer_pass();
+                }
+                if invalidations & LayoutNodeContext::FOCUS_BIT != 0 {
+                    subcompose.mark_needs_focus_sync();
+                }
+            }
+            Ok(())
         })
         .ok();
     }
+}
+
+fn measure_through_general_chain(
+    runtime_state: &LayoutRuntimeState,
+    scope: &crate::density::DensityMeasureScope,
+    constraints: Constraints,
+    placements: &mut Vec<Placement>,
+    placement_indices: &mut Vec<usize>,
+) -> (Size, Point, cranpose_ui_layout::AlignmentLines, u8) {
+    let frame = CoordinatorFrame::new(
+        &runtime_state.measure_policy,
+        scope,
+        runtime_state.child_measurables(),
+        runtime_state.child_states(),
+        placements,
+        placement_indices,
+    );
+    let placeable = runtime_state
+        .coordinator_chain
+        .measure_from(0, &frame, constraints);
+    let (content_x, content_y) = placeable.content_offset();
+    let invalidations = frame.take_invalidations();
+
+    (
+        Size {
+            width: placeable.width(),
+            height: placeable.height(),
+        },
+        Point {
+            x: content_x,
+            y: content_y,
+        },
+        placeable.alignment_lines(),
+        invalidations,
+    )
+}
+
+fn measure_through_direct_chain(
+    runtime_state: &LayoutRuntimeState,
+    scope: &crate::density::DensityMeasureScope,
+    density: f32,
+    constraints: Constraints,
+    placements: &mut Vec<Placement>,
+    placement_indices: &mut Vec<usize>,
+) -> (Size, Point, cranpose_ui_layout::AlignmentLines) {
+    let inner_constraints = runtime_state
+        .coordinator_chain
+        .enter_direct(constraints, density);
+    let measurement = runtime_state.measure_policy.measure_into(
+        scope,
+        runtime_state.child_measurables(),
+        inner_constraints,
+        placements,
+    );
+    let inner_lines =
+        inherited_alignment_lines(runtime_state.child_states(), placements, placement_indices)
+            .with_overrides(measurement.alignment_lines);
+    runtime_state
+        .coordinator_chain
+        .exit_direct(inner_constraints, measurement.size, inner_lines)
 }

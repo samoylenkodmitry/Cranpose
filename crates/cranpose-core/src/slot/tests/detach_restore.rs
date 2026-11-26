@@ -99,11 +99,9 @@ fn detached_subtree_root_node_metadata_falls_back_to_all_nodes() {
             child_groups_before: 0,
         }],
     };
-    let mut root_nodes = Vec::new();
+    let root_nodes = subtree.collect_checked_root_nodes("test");
 
-    subtree.collect_root_nodes_checked_into(&mut root_nodes, "test");
-
-    assert_eq!(root_nodes, vec![NODE_ID]);
+    assert_eq!(root_nodes.as_slice(), &[NODE_ID]);
 }
 
 #[test]

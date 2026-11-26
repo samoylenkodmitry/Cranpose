@@ -127,6 +127,9 @@ jobs:
       - name: Menu bar drawn in the window, secure and Unicode input, navigation
         if: ${{ !cancelled() }}
         run: just robot-runtime-linux
+      - name: Zero-copy VA-API/FFmpeg Player e2e (MP4, HLS, seek, subtitles, HDR)
+        if: ${{ !cancelled() }}
+        run: just test-video-linux
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

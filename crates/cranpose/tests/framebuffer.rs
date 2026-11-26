@@ -9,7 +9,10 @@ use std::{
 };
 
 use cranpose::{
-    framebuffer::{FrameSchedule, Framebuffer, PixelRect, Rgb565Order},
+    framebuffer::{
+        FrameSchedule, Framebuffer, Key, KeyEvent, KeyEventType, Modifiers, PixelRect,
+        PointerButton, Rgb565Order, TouchPhase,
+    },
     prelude::*,
 };
 use cranpose_animation::{
@@ -720,4 +723,182 @@ fn the_dashboard_drawn_as_rgb565_keeps_the_high_bits_of_its_bytes() {
             "frame {frame}: {stepped} pixels differ"
         );
     }
+}
+
+fn active_framebuffer(width: u32, height: u32, content: impl FnMut() + 'static) -> Framebuffer {
+    let mut framebuffer = Framebuffer::new(width, height, 1.0, SystemTheme::Light, &[], content)
+        .expect("valid surface");
+    framebuffer.set_active(true);
+    assert!(framebuffer.tick(1));
+    framebuffer
+}
+
+#[test]
+fn mouse_click_and_button_routing_reach_content() {
+    let clicks = Rc::new(Cell::new(0u32));
+    let secondary_events = Rc::new(Cell::new(0u32));
+    let clicks_in_ui = Rc::clone(&clicks);
+    let secondary_in_ui = Rc::clone(&secondary_events);
+
+    let mut framebuffer = active_framebuffer(60, 40, move || {
+        let active = rememberMutableStateOf(|| false);
+        let interaction = rememberMutableInteractionSource();
+        let _hovered = collect_is_hovered_as_state(&interaction);
+        let bg = if active.get() { GREEN } else { RED };
+        let clicks_outer = Rc::clone(&clicks_in_ui);
+        let secondary_outer = Rc::clone(&secondary_in_ui);
+        Box(
+            Modifier::empty().fill_max_size().padding(10.0),
+            BoxSpec::default(),
+            move || {
+                let clicks_cb = Rc::clone(&clicks_outer);
+                let secondary_cb = Rc::clone(&secondary_outer);
+                Box(
+                    Modifier::empty()
+                        .fill_max_size()
+                        .background(bg)
+                        .hoverable(interaction, true)
+                        .pointer_input((), move |scope| {
+                            let secondary_cb = Rc::clone(&secondary_cb);
+                            async move {
+                                scope
+                                    .await_pointer_event_scope(|await_scope| async move {
+                                        loop {
+                                            let event = await_scope.await_pointer_event().await;
+                                            if matches!(
+                                                event.kind,
+                                                PointerEventKind::ButtonDown(
+                                                    PointerButton::Secondary
+                                                ) | PointerEventKind::ButtonUp(
+                                                    PointerButton::Secondary
+                                                )
+                                            ) {
+                                                secondary_cb.set(secondary_cb.get() + 1);
+                                            }
+                                        }
+                                    })
+                                    .await;
+                            }
+                        })
+                        .clickable(move |_| {
+                            clicks_cb.set(clicks_cb.get() + 1);
+                            active.set(!active.get());
+                        }),
+                    BoxSpec::default(),
+                    || {},
+                );
+            },
+        );
+    });
+    assert_eq!(center(&mut framebuffer), [255, 0, 0, 255]);
+
+    assert!(!framebuffer.mouse_move(f32::NAN, 10.0));
+    assert!(!framebuffer.mouse_move(10.0, f32::INFINITY));
+
+    assert!(framebuffer.mouse_move(30.0, 20.0));
+    assert!(framebuffer.mouse_button_pressed(PointerButton::Primary));
+    assert!(framebuffer.mouse_button_released(PointerButton::Primary));
+    assert_eq!(clicks.get(), 1);
+    assert!(framebuffer.tick(16_666_667));
+    assert_eq!(center(&mut framebuffer), [0, 255, 0, 255]);
+
+    assert!(framebuffer.mouse_button_pressed(PointerButton::Secondary));
+    assert!(framebuffer.mouse_button_released(PointerButton::Secondary));
+    assert_eq!(secondary_events.get(), 2);
+
+    framebuffer.touch(TouchPhase::Down, 30.0, 20.0);
+    framebuffer.touch(TouchPhase::Up, 30.0, 20.0);
+    assert_eq!(clicks.get(), 2);
+    assert!(framebuffer.tick(33_333_333));
+    assert_eq!(center(&mut framebuffer), [255, 0, 0, 255]);
+}
+
+#[test]
+fn mouse_scroll_moves_a_scrollable_column() {
+    let mut framebuffer = active_framebuffer(40, 30, || {
+        let scroll_state = rememberScrollState!();
+        Column(
+            Modifier::empty()
+                .fill_max_size()
+                .vertical_scroll(scroll_state, false),
+            ColumnSpec::default(),
+            || {
+                Spacer(
+                    Modifier::empty()
+                        .fill_max_width()
+                        .height(30.0)
+                        .background(RED),
+                );
+                Spacer(
+                    Modifier::empty()
+                        .fill_max_width()
+                        .height(30.0)
+                        .background(GREEN),
+                );
+            },
+        );
+    });
+    assert_eq!(center(&mut framebuffer), [255, 0, 0, 255]);
+
+    let _ = framebuffer.mouse_move(20.0, 15.0);
+    assert!(!framebuffer.mouse_scroll(f32::NAN, -20.0));
+    assert!(!framebuffer.mouse_scroll(0.0, f32::INFINITY));
+    assert!(framebuffer.mouse_scroll(0.0, -30.0));
+    assert!(framebuffer.tick(16_666_667));
+    assert_eq!(center(&mut framebuffer), [0, 255, 0, 255]);
+}
+
+#[test]
+fn key_event_reaches_a_focused_text_field() {
+    let text_seen = Rc::new(std::cell::RefCell::new(String::new()));
+    let text_sink = Rc::clone(&text_seen);
+
+    let mut framebuffer = active_framebuffer(120, 40, move || {
+        let state = remember(|| TextFieldState::new("")).with(Clone::clone);
+        *text_sink.borrow_mut() = state.text();
+        BasicTextField(
+            state,
+            Modifier::empty().fill_max_size(),
+            TextStyle::default(),
+        );
+    });
+
+    let _ = framebuffer.mouse_move(20.0, 20.0);
+    assert!(framebuffer.mouse_button_pressed(PointerButton::Primary));
+    assert!(framebuffer.mouse_button_released(PointerButton::Primary));
+    let _ = framebuffer.tick(16_666_667);
+
+    let key = KeyEvent::new(Key::A, "a", Modifiers::NONE, KeyEventType::KeyDown);
+    assert!(framebuffer.key_event(&key));
+    let _ = framebuffer.tick(33_333_333);
+    assert_eq!(text_seen.borrow().as_str(), "a");
+}
+
+#[test]
+fn inactive_framebuffer_ignores_mouse_and_key_input() {
+    let clicks = Rc::new(Cell::new(0u32));
+    let clicks_in_ui = Rc::clone(&clicks);
+
+    let mut framebuffer = active_framebuffer(40, 30, move || {
+        let clicks_cb = Rc::clone(&clicks_in_ui);
+        Box(
+            Modifier::empty()
+                .fill_max_size()
+                .background(RED)
+                .clickable(move |_| {
+                    clicks_cb.set(clicks_cb.get() + 1);
+                }),
+            BoxSpec::default(),
+            || {},
+        );
+    });
+    framebuffer.set_active(false);
+
+    let key = KeyEvent::new(Key::Enter, "", Modifiers::NONE, KeyEventType::KeyDown);
+    assert!(!framebuffer.mouse_move(20.0, 15.0));
+    assert!(!framebuffer.mouse_button_pressed(PointerButton::Primary));
+    assert!(!framebuffer.mouse_button_released(PointerButton::Primary));
+    assert!(!framebuffer.mouse_scroll(0.0, -20.0));
+    assert!(!framebuffer.key_event(&key));
+    assert_eq!(clicks.get(), 0);
 }

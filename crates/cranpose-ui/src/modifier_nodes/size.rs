@@ -167,6 +167,127 @@ impl SizeElement {
             max_height,
         }
     }
+    #[inline]
+    pub(crate) fn inner_constraints_prepared(&self, constraints: Constraints) -> Constraints {
+        let [min_width, max_width, min_height, max_height] = self.values;
+        self.inner_constraints_with_target(
+            constraints,
+            Constraints {
+                min_width,
+                max_width,
+                min_height,
+                max_height,
+            },
+        )
+    }
+
+    #[inline]
+    fn inner_constraints(&self, constraints: Constraints, density: f32) -> Constraints {
+        self.inner_constraints_with_target(constraints, self.target_constraints(density))
+    }
+
+    #[inline]
+    fn inner_constraints_with_target(
+        &self,
+        constraints: Constraints,
+        target: Constraints,
+    ) -> Constraints {
+        if self.enforce_incoming() {
+            Constraints {
+                min_width: target
+                    .min_width
+                    .max(constraints.min_width)
+                    .min(constraints.max_width),
+                max_width: target
+                    .max_width
+                    .min(constraints.max_width)
+                    .max(constraints.min_width),
+                min_height: target
+                    .min_height
+                    .max(constraints.min_height)
+                    .min(constraints.max_height),
+                max_height: target
+                    .max_height
+                    .min(constraints.max_height)
+                    .max(constraints.min_height),
+            }
+        } else {
+            let resolved_min_width = if self.min_width().is_some() {
+                target.min_width
+            } else {
+                constraints.min_width.min(target.max_width)
+            };
+            let resolved_max_width = if self.max_width().is_some() {
+                target.max_width
+            } else {
+                constraints.max_width.max(target.min_width)
+            };
+            let resolved_min_height = if self.min_height().is_some() {
+                target.min_height
+            } else {
+                constraints.min_height.min(target.max_height)
+            };
+            let resolved_max_height = if self.max_height().is_some() {
+                target.max_height
+            } else {
+                constraints.max_height.max(target.min_height)
+            };
+            Constraints {
+                min_width: resolved_min_width,
+                max_width: resolved_max_width,
+                min_height: resolved_min_height,
+                max_height: resolved_max_height,
+            }
+        }
+    }
+
+    #[inline]
+    pub(crate) fn place_size_prepared(
+        &self,
+        wrapped_constraints: Constraints,
+        child: Size,
+    ) -> Size {
+        let [min_width, _, min_height, _] = self.values;
+        let width = if self.flags & FIXED_WIDTH != 0
+            && min_width >= wrapped_constraints.min_width
+            && min_width <= wrapped_constraints.max_width
+        {
+            min_width
+        } else {
+            child.width
+        };
+        let height = if self.flags & FIXED_HEIGHT != 0
+            && min_height >= wrapped_constraints.min_height
+            && min_height <= wrapped_constraints.max_height
+        {
+            min_height
+        } else {
+            child.height
+        };
+        Size { width, height }
+    }
+
+    #[inline]
+    fn place_size(&self, wrapped_constraints: Constraints, child: Size, density: f32) -> Size {
+        let target = self.target_constraints(density);
+        let width = if self.fixes_width()
+            && target.min_width >= wrapped_constraints.min_width
+            && target.min_width <= wrapped_constraints.max_width
+        {
+            target.min_width
+        } else {
+            child.width
+        };
+        let height = if self.fixes_height()
+            && target.min_height >= wrapped_constraints.min_height
+            && target.min_height <= wrapped_constraints.max_height
+        {
+            target.min_height
+        } else {
+            child.height
+        };
+        Size { width, height }
+    }
 }
 
 impl PlainElement for SizeElement {
@@ -252,83 +373,18 @@ impl PlainLayout for SizeElement {
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        let target = self.target_constraints(context.density());
-
-        let wrapped_constraints = if self.enforce_incoming() {
-            Constraints {
-                min_width: target
-                    .min_width
-                    .max(constraints.min_width)
-                    .min(constraints.max_width),
-                max_width: target
-                    .max_width
-                    .min(constraints.max_width)
-                    .max(constraints.min_width),
-                min_height: target
-                    .min_height
-                    .max(constraints.min_height)
-                    .min(constraints.max_height),
-                max_height: target
-                    .max_height
-                    .min(constraints.max_height)
-                    .max(constraints.min_height),
-            }
-        } else {
-            let resolved_min_width = if self.min_width().is_some() {
-                target.min_width
-            } else {
-                constraints.min_width.min(target.max_width)
-            };
-            let resolved_max_width = if self.max_width().is_some() {
-                target.max_width
-            } else {
-                constraints.max_width.max(target.min_width)
-            };
-            let resolved_min_height = if self.min_height().is_some() {
-                target.min_height
-            } else {
-                constraints.min_height.min(target.max_height)
-            };
-            let resolved_max_height = if self.max_height().is_some() {
-                target.max_height
-            } else {
-                constraints.max_height.max(target.min_height)
-            };
-
-            Constraints {
-                min_width: resolved_min_width,
-                max_width: resolved_max_width,
-                min_height: resolved_min_height,
-                max_height: resolved_max_height,
-            }
-        };
-
+        let density = context.density();
+        let wrapped_constraints = self.inner_constraints(constraints, density);
         let placeable = measurable.measure(wrapped_constraints);
-        let measured_width = placeable.width();
-        let measured_height = placeable.height();
-
-        let result_width = if self.fixes_width()
-            && target.min_width >= wrapped_constraints.min_width
-            && target.min_width <= wrapped_constraints.max_width
-        {
-            target.min_width
-        } else {
-            measured_width
-        };
-
-        let result_height = if self.fixes_height()
-            && target.min_height >= wrapped_constraints.min_height
-            && target.min_height <= wrapped_constraints.max_height
-        {
-            target.min_height
-        } else {
-            measured_height
-        };
-
-        cranpose_ui_layout::LayoutModifierMeasureResult::with_size(Size {
-            width: result_width,
-            height: result_height,
-        })
+        let size = self.place_size(
+            wrapped_constraints,
+            Size {
+                width: placeable.width(),
+                height: placeable.height(),
+            },
+            density,
+        );
+        cranpose_ui_layout::LayoutModifierMeasureResult::with_size(size)
     }
 
     fn intrinsic(&self, measurable: &dyn Measurable, kind: PlainIntrinsic, density: f32) -> f32 {

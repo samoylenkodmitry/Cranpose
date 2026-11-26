@@ -1,16 +1,26 @@
 //! The decoder and the handle that receives its pictures.
 
-#[cfg(any(target_os = "android", target_os = "macos", target_os = "ios"))]
-use super::frame_queue::Frames;
 #[cfg(target_os = "android")]
 use super::media_codec::Backend;
-#[cfg(not(any(target_os = "android", target_os = "macos", target_os = "ios")))]
-use super::unavailable::{Backend, Frames};
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "linux",
+    all(feature = "video-web", target_arch = "wasm32", target_os = "unknown")
+)))]
+use super::unavailable::Backend;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use super::video_toolbox::Backend;
+#[cfg(all(feature = "video-web", target_arch = "wasm32", target_os = "unknown"))]
+use super::web_codecs::Backend;
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+use super::worker_mailbox::ThreadedBackend as Backend;
 use super::{
     AccessUnit, DecoderCapabilities, DecoderConfig, DecoderError, DecoderStats, FrameInfo,
     VideoCodec, VideoFrame, capabilities,
+    frame_queue::{FrameProducer, Frames},
 };
 
 /// A hardware video decoder for one stream.
@@ -19,8 +29,12 @@ use super::{
 /// thread of the decoder drains the pictures, so a picture is ready as soon as the hardware has
 /// it. [`frames`](Self::frames) gives the handle that receives them.
 ///
-/// The decoder holds no picture back for reordering, so the stream must have no B-frames.
-/// Dropping the decoder stops it. It never waits for the app's threads.
+/// With [`DecodeOrder::LowLatency`](super::DecodeOrder::LowLatency) the decoder holds no picture
+/// back for reordering, so the stream must have no B-frames. With
+/// [`DecodeOrder::Presentation`](super::DecodeOrder::Presentation) the decoder reorders B-frames
+/// into presentation-timestamp order; call [`drain`](Self::drain) at end of stream to release the
+/// tail of the reorder queue and [`flush`](Self::flush) before a seek. Dropping the decoder stops
+/// it. It never waits for the app's threads.
 pub struct VideoDecoder {
     backend: Backend,
 }
@@ -29,9 +43,13 @@ impl VideoDecoder {
     /// Makes a decoder for `config`. The decoder is unavailable on a platform without a hardware
     /// decoder that Cranpose drives.
     pub fn new(config: DecoderConfig) -> Result<Self, DecoderError> {
-        Ok(Self {
-            backend: Backend::new(config)?,
-        })
+        #[cfg(target_os = "windows")]
+        let backend = super::media_foundation::open(config)?;
+        #[cfg(target_os = "linux")]
+        let backend = super::linux_decoder::open(config)?;
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        let backend = Backend::new(config)?;
+        Ok(Self { backend })
     }
 
     /// The limits of the hardware decoder that [`new`](Self::new) opens for `codec`: its largest
@@ -54,6 +72,20 @@ impl VideoDecoder {
         self.backend.submit(unit)
     }
 
+    /// Signals end of stream so pictures held for B-frame reordering finish decoding and enter
+    /// [`DecodedFrames`] in presentation order. Resets timestamp admission so a subsequent stream
+    /// segment may start at any presentation timestamp. Call from the feeding thread, never from
+    /// the frame loop.
+    pub fn drain(&mut self) -> Result<(), DecoderError> {
+        self.backend.drain()
+    }
+
+    /// Discards pending input, reordered pictures, and queued output frames, resetting timestamp
+    /// admission so playback can resume cleanly at a new keyframe (for example after a seek).
+    pub fn flush(&mut self) -> Result<(), DecoderError> {
+        self.backend.flush()
+    }
+
     /// The handle that receives the decoded pictures. It stays usable after the decoder drops,
     /// and returns the pictures that were left.
     pub fn frames(&self) -> DecodedFrames {
@@ -71,6 +103,13 @@ pub struct DecodedFrames {
 }
 
 impl DecodedFrames {
+    /// Creates a bounded `(FrameProducer, DecodedFrames)` pair for a platform [`PlayerBackend`](crate::PlayerBackend)
+    /// that delivers zero-copy GPU [`VideoFrame`]s directly to `PlayerSurface`.
+    pub fn channel(depth: usize) -> (FrameProducer, Self) {
+        let (producer, frames) = FrameProducer::channel(depth);
+        (producer, Self { frames })
+    }
+
     /// The oldest picture that the decoder has output, if the output is
     /// [`DecoderOutput::Frames`](super::DecoderOutput::Frames).
     pub fn next_frame(&self) -> Option<VideoFrame> {

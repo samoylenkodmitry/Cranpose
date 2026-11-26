@@ -85,6 +85,11 @@ impl Controllers {
         }
     }
 
+    // The space of the aim pose of the controller in `hand`.
+    pub(crate) fn aim_space(&self, hand: Hand) -> xr::sys::Space {
+        self.hands[hand.index()].aim_space()
+    }
+
     // Plays or stops the vibrations that the app asked for, left hand first. A hand that the
     // runtime does not track drops its request.
     pub(crate) fn vibrate(&self, xr_session: &XrSession, commands: [Option<HapticCommand>; 2]) {

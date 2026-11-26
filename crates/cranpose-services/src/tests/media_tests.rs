@@ -19,6 +19,7 @@ impl FakePlayer {
                 session: true,
                 equalizer: true,
                 probing: true,
+                video: false,
             },
             calls: Mutex::new(Vec::new()),
             volume: Mutex::new(1.0),

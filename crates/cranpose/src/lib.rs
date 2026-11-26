@@ -5,12 +5,80 @@ extern crate self as cranpose;
 
 #[cfg(feature = "image-loading")]
 mod async_image;
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(all(
+    feature = "video",
+    any(
+        all(feature = "android", target_os = "android"),
+        target_os = "linux",
+        target_os = "windows"
+    )
+))]
+mod player_audio;
+#[cfg(all(
+    feature = "video",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        all(feature = "android", target_os = "android"),
+        target_os = "linux",
+        target_os = "windows",
+        all(
+            feature = "web",
+            feature = "renderer-wgpu",
+            target_arch = "wasm32",
+            target_os = "unknown"
+        )
+    )
+))]
+mod player_control;
+#[cfg(all(
+    feature = "video",
+    any(all(feature = "android", target_os = "android"), target_os = "linux")
+))]
+mod player_demux_engine;
+#[cfg(all(
+    feature = "video",
+    any(
+        all(feature = "android", target_os = "android"),
+        target_os = "linux",
+        target_os = "windows"
+    )
+))]
+mod player_stream;
 #[cfg(feature = "video")]
 mod player_surface;
-#[cfg(all(feature = "video", not(target_arch = "wasm32")))]
+#[cfg(feature = "video")]
 mod player_surface_intake;
+#[cfg(feature = "video")]
+mod player_ui;
+#[cfg(all(
+    feature = "video",
+    any(
+        all(feature = "android", target_os = "android"),
+        target_os = "linux",
+        target_os = "windows"
+    )
+))]
+mod player_worker;
 #[cfg(feature = "localization")]
 mod system_languages;
+#[cfg(all(
+    feature = "video",
+    feature = "renderer-wgpu",
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows",
+        target_os = "linux"
+    )
+))]
+mod video_convert;
+#[cfg(any(test, cranpose_gpu_video))]
+mod video_transform;
+#[cfg(target_os = "windows")]
+mod windows;
 #[cfg(feature = "localization")]
 pub use system_languages::{
     ProvideApplicationLocalization, local_system_languages, system_languages,
@@ -28,7 +96,7 @@ mod cover_pipeline;
 #[cfg(feature = "renderer-wgpu")]
 mod external_frames;
 #[cfg(feature = "renderer-wgpu")]
-pub use external_frames::{ExternalFrames, FrameTexture, FrameWriter};
+pub use external_frames::{ExternalFrames, FrameTexture, FrameWriter, external_frame_gpu_bytes};
 #[cfg(feature = "renderer-wgpu")]
 mod gpu_context;
 #[cfg(feature = "renderer-wgpu")]
@@ -243,15 +311,17 @@ pub use cranpose_capabilities as capabilities;
 mod composition_api {
     pub use cranpose_core::{
         BlockingError, BlockingExecutor, BlockingExecutorConfig, BlockingTask, BlockingWork,
-        CollectEvents, ComputedState, CoroutineScope, DisposableEffect, DisposableEffectResult,
-        DisposableEffectScope, EventStream, LaunchedEffect, LaunchedEffectScope, MovableContent,
-        MutableState, SnapshotStateList, SnapshotStateMap, State, TaskHandle, WorkerCall,
-        WorkerData, WorkerJob, collectAsState, computedStateOf, delay, derivedStateOf,
+        CollectEvents, CompositionLocal, CompositionLocalProvider, ComputedState, CoroutineScope,
+        DisposableEffect, DisposableEffectResult, DisposableEffectScope, EventStream,
+        LaunchedEffect, LaunchedEffectScope, MovableContent, MutableState, SnapshotStateList,
+        SnapshotStateMap, State, StaticCompositionLocal, TaskHandle, WorkerCall, WorkerData,
+        WorkerJob, collectAsState, compositionLocalOf, computedStateOf, delay, derivedStateOf,
         forget_movable, interval, key, launchBlocking, movable, movableContentOf, mutableStateList,
         mutableStateListOf, mutableStateMap, mutableStateMapOf, mutableStateOf,
         mutableStateOfNeverEqual, produceState, remember, rememberCoroutineScope,
         rememberEventStream, rememberKeyed, rememberMovableContentOf, rememberMutableStateOf,
-        rememberMutableStateOfNeverEqual, rememberUpdatedState, withBlocking,
+        rememberMutableStateOfNeverEqual, rememberUpdatedState, staticCompositionLocalOf,
+        withBlocking,
     };
 }
 #[cfg(feature = "image-loading")]
@@ -267,9 +337,37 @@ pub use cranpose_services::isSystemInDarkTheme;
 pub use cranpose_services::*;
 pub use cranpose_ui::*;
 #[cfg(feature = "video")]
-pub use player_surface::PlayerSurface;
-#[cfg(all(feature = "video", not(target_arch = "wasm32")))]
-pub use player_surface_intake::{FramePresenter, PlayerSurfaceIntake, PresentError};
+pub use player_surface::{PlayerSurface, VideoSurfaceSource, rememberPlayerDecodedFrames};
+#[cfg(feature = "video")]
+pub use player_surface_intake::{
+    FramePresenter, PlayerSurfaceIntake, PresentError, video_surface_supported,
+};
+#[cfg(feature = "video")]
+pub use player_ui::*;
+
+/// Installs the native zero-copy [`Player`] backend for the current
+/// platform.
+///
+/// Desktop, iOS, Android, and Web launchers call this automatically on startup when the `video`
+/// feature is enabled; embedded views and standalone tests may call it directly.
+#[cfg(feature = "video")]
+pub fn install_player() {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    apple::player::register();
+    #[cfg(all(feature = "android", target_os = "android"))]
+    android::player::register();
+    #[cfg(target_os = "linux")]
+    linux::player::register();
+    #[cfg(target_os = "windows")]
+    windows::player::register();
+    #[cfg(all(
+        feature = "web",
+        feature = "renderer-wgpu",
+        target_arch = "wasm32",
+        target_os = "unknown"
+    ))]
+    web::player::register();
+}
 
 static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
@@ -411,7 +509,11 @@ pub mod prelude {
     #[cfg(feature = "image-loading")]
     pub use crate::async_image::AsyncImage;
     #[cfg(feature = "video")]
-    pub use crate::player_surface::PlayerSurface;
+    pub use crate::player_surface::{PlayerSurface, VideoSurfaceSource};
+    #[cfg(feature = "video")]
+    pub use crate::player_surface_intake::video_surface_supported;
+    #[cfg(feature = "video")]
+    pub use crate::player_ui::*;
     #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
     pub use crate::{
         AndroidHostWindowPositionError, AndroidHostWindowSizeError, AndroidHostWindowSizeStatus,

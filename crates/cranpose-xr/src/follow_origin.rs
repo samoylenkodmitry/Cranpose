@@ -3,10 +3,24 @@
 use std::time::Duration;
 
 use crate::{
-    FollowMode, FollowTarget, Hand, Pose, Recenter,
-    pose::{heading_degrees, turn_degrees},
-    space::SUBSPACE_ORIGIN,
+    FollowMode, FollowTarget, FollowThresholds, Hand, HandState, Pose, Recenter, SoftFollowMode,
+    TrackedDimensions, TrackingState,
+    pose::{heading_degrees, pitch_yaw_roll_degrees, toward, turn_degrees},
+    space::{SUBSPACE_ORIGIN, TrackedSpace},
 };
+
+// A soft follow has reached its target when it is this close: 1 mm and a tenth of a degree.
+const ARRIVED_METERS: f32 = 0.001;
+const ARRIVED_DEGREES: f32 = 0.1;
+
+// Where the origin of a `Soft` subspace is in its follow.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Chase {
+    // The origin holds still. `since` is the time from which the target stood past a threshold.
+    Resting { since: Option<Duration> },
+    // The origin glides toward the target.
+    Moving,
+}
 
 // The origin of one following subspace.
 struct Follower {
@@ -22,6 +36,10 @@ struct Follower {
     heading: f32,
     // Whether the origin moved in the last frame tracked
     moved: bool,
+    // How a `Soft` subspace follows its target now
+    chase: Chase,
+    // The time of the last frame tracked, from which a `Soft` subspace measures its glide
+    time: Option<Duration>,
 }
 
 impl Follower {
@@ -36,6 +54,8 @@ impl Follower {
             owes: true,
             heading: 0.0,
             moved: false,
+            chase: Chase::Resting { since: None },
+            time: None,
         }
     }
 
@@ -43,64 +63,165 @@ impl Follower {
         match &self.target {
             FollowTarget::View(mode)
             | FollowTarget::Controller(_, mode)
+            | FollowTarget::Hand(_, _, mode)
             | FollowTarget::Anchor(_, mode) => *mode,
+        }
+    }
+
+    // The space in which the compositor places the subspace's panels with the target's newest
+    // pose: the head's or the controller's aim, for a subspace that follows every move of it. A
+    // `Snap` subspace stands still in the room, and an upright one does not turn with every move.
+    // An anchor holds still in the room, so the room's space places it exactly.
+    fn tracked_space(&self) -> Option<TrackedSpace> {
+        if self.mode() != FollowMode::Tight(TrackedDimensions::All) {
+            return None;
+        }
+        match &self.target {
+            FollowTarget::View(_) => Some(TrackedSpace::View),
+            FollowTarget::Controller(hand, _) => Some(TrackedSpace::Aim(*hand)),
+            FollowTarget::Hand(..) | FollowTarget::Anchor(..) => None,
         }
     }
 
     // Where the origin stands when the target is at `head`, at the pose that `controllers` holds
     // for its hand or at its anchor's pose, or `None` while the runtime does not track the target.
-    // The origin of a view or a controller has the target's place and its turn about the vertical
-    // axis, so the content stands upright. The origin of an anchor is the anchor's pose.
-    fn aligned(&mut self, head: Option<&Pose>, controllers: &[Option<Pose>; 2]) -> Option<Pose> {
+    // The origin has the target's pose in the tracked dimensions. An upright origin has the
+    // target's place and its turn about the vertical axis.
+    fn aligned(&mut self, poses: &Poses) -> Option<Pose> {
         let (pose, offset) = match &self.target {
-            FollowTarget::View(_) => (head?, SUBSPACE_ORIGIN),
-            FollowTarget::Controller(hand, _) => {
-                (controllers[hand.index()].as_ref()?, Pose::IDENTITY)
+            FollowTarget::View(_) => (poses.head?, SUBSPACE_ORIGIN),
+            FollowTarget::Controller(hand, _) => (poses.controllers[hand.index()]?, Pose::IDENTITY),
+            FollowTarget::Hand(hand, joint, _) => {
+                let state = &poses.hands[hand.index()];
+                let joint = state.joint(*joint);
+                let located = state.tracking_state == TrackingState::Tracking && joint.valid;
+                (located.then_some(joint.pose)?, Pose::IDENTITY)
             }
             FollowTarget::Anchor(anchor, _) => {
-                return anchor.is_located().then(|| anchor.pose());
+                (anchor.is_located().then(|| anchor.pose())?, Pose::IDENTITY)
             }
         };
-        if let Some(heading) = heading_degrees(pose) {
-            self.heading = heading;
-        }
-        Some(
-            Pose {
-                position: pose.position,
-                orientation: turn_degrees(0.0, self.heading, 0.0),
+        let base = match self.mode().dimensions() {
+            TrackedDimensions::All => pose,
+            TrackedDimensions::TranslationAndYaw => {
+                if let Some(heading) = heading_degrees(&pose) {
+                    self.heading = heading;
+                }
+                Pose {
+                    position: pose.position,
+                    orientation: turn_degrees(0.0, self.heading, 0.0),
+                }
             }
-            .then(&offset),
-        )
+        };
+        Some(base.then(&offset))
     }
 
-    // Moves the origin to where the target puts it now. A `Tight` subspace follows in every
-    // frame. A `Snap` subspace takes a place once, then again after each recenter.
-    fn follow(&mut self, head: Option<&Pose>, controllers: &[Option<Pose>; 2]) {
+    // Moves the origin to where the target puts it now, in the frame at `time`. A `Tight`
+    // subspace follows in every frame. A `Snap` subspace takes a place once, then again after each
+    // recenter. A `Soft` subspace takes its first place as a `Snap` one does, then glides after the
+    // target.
+    fn follow(&mut self, poses: &Poses, time: Duration) {
         let at = match self.mode() {
-            FollowMode::Tight => match (self.aligned(head, controllers), &self.target) {
+            FollowMode::Tight(_) => match (self.aligned(poses), &self.target) {
                 // A head that the headset lost, and an anchor that the runtime does not place now,
                 // leave the content where it was
                 (None, FollowTarget::View(_) | FollowTarget::Anchor(..)) => self.at,
                 (aligned, _) => aligned,
             },
-            FollowMode::Snap if self.owes => {
-                let aligned = self.aligned(head, controllers);
+            FollowMode::Snap(_) | FollowMode::Soft(_) if self.owes => {
+                let aligned = self.aligned(poses);
                 self.owes = aligned.is_none();
+                self.chase = Chase::Resting { since: None };
                 aligned.or(self.at)
             }
-            FollowMode::Snap => self.at,
+            FollowMode::Snap(_) => self.at,
+            FollowMode::Soft(soft) => match (self.aligned(poses), self.at) {
+                (Some(target), Some(at)) => Some(self.glide(&soft, &at, &target, time)),
+                // A lost controller or hand hides its content, which stands at the target again
+                // when the target comes back
+                (None, _)
+                    if matches!(
+                        self.target,
+                        FollowTarget::Controller(..) | FollowTarget::Hand(..)
+                    ) =>
+                {
+                    self.owes = true;
+                    None
+                }
+                (_, at) => at,
+            },
         };
+        self.time = Some(time);
         self.moved = at != self.at;
         self.at = at;
+    }
+
+    // The next place of a `Soft` origin at `at` whose target is at `target`. It rests until the
+    // target stays past a threshold for the start delay, then covers half its distance in each
+    // half life until it reaches the target.
+    fn glide(&mut self, soft: &SoftFollowMode, at: &Pose, target: &Pose, time: Duration) -> Pose {
+        if let Chase::Resting { since } = self.chase {
+            if !past(&soft.start_thresholds, at, target) {
+                self.chase = Chase::Resting { since: None };
+                return *at;
+            }
+            let since = since.unwrap_or(time);
+            if time.saturating_sub(since) < soft.start_delay {
+                self.chase = Chase::Resting { since: Some(since) };
+                return *at;
+            }
+            self.chase = Chase::Moving;
+        }
+        let elapsed = self
+            .time
+            .map_or(Duration::ZERO, |before| time.saturating_sub(before));
+        let half_lives = elapsed.as_secs_f32() / soft.half_life.as_secs_f32().max(f32::EPSILON);
+        let next = toward(at, target, 1.0 - 0.5_f32.powf(half_lives));
+        if past(&ARRIVED, &next, target) {
+            next
+        } else {
+            self.chase = Chase::Resting { since: None };
+            *target
+        }
     }
 
     fn standing(&self) -> Standing {
         let hand = match &self.target {
             FollowTarget::View(_) | FollowTarget::Anchor(..) => None,
-            FollowTarget::Controller(hand, _) => Some(*hand),
+            FollowTarget::Controller(hand, _) | FollowTarget::Hand(hand, ..) => Some(*hand),
         };
-        Standing { at: self.at, hand }
+        Standing {
+            at: self.at,
+            hand,
+            tracked: self.tracked_space(),
+        }
     }
+}
+
+// How close a soft follow must come to its target to stop.
+const ARRIVED: FollowThresholds = FollowThresholds {
+    translation_meters: ARRIVED_METERS,
+    pitch_degrees: ARRIVED_DEGREES,
+    yaw_degrees: ARRIVED_DEGREES,
+    roll_degrees: ARRIVED_DEGREES,
+};
+
+// Whether `target` stands past one of `thresholds` from `at`: farther away, or turned more in pitch,
+// yaw or roll.
+fn past(thresholds: &FollowThresholds, at: &Pose, target: &Pose) -> bool {
+    let distance = [0, 1, 2]
+        .map(|axis| target.position[axis] - at.position[axis])
+        .iter()
+        .map(|d| d * d)
+        .sum::<f32>()
+        .sqrt();
+    let [from, to] = [at, target].map(pitch_yaw_roll_degrees);
+    // An angle that wraps past a half turn counts the short way round
+    let turned = |axis: usize| ((to[axis] - from[axis] + 540.0).rem_euclid(360.0) - 180.0).abs();
+    distance > thresholds.translation_meters
+        || turned(0) > thresholds.pitch_degrees
+        || turned(1) > thresholds.yaw_degrees
+        || turned(2) > thresholds.roll_degrees
 }
 
 // Where a following subspace stands.
@@ -110,16 +231,29 @@ pub(crate) struct Standing {
     pub(crate) at: Option<Pose>,
     // The hand whose controller the subspace follows
     pub(crate) hand: Option<Hand>,
+    // The space in which the compositor places the subspace's panels, or `None` for the room's
+    pub(crate) tracked: Option<TrackedSpace>,
+}
+
+// Where the targets of the following subspaces are in one frame: the head, each controller (the
+// place of its grip with the turn of its aim) and the joints of each tracked hand. `None` is a target
+// that the runtime does not track.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Poses {
+    pub(crate) head: Option<Pose>,
+    pub(crate) controllers: [Option<Pose>; 2],
+    pub(crate) hands: [HandState; 2],
 }
 
 // The following subspaces of an app, and what places them.
 #[derive(Default)]
 pub(crate) struct FollowOrigins {
     followers: Vec<Follower>,
-    head: Option<Pose>,
-    controllers: [Option<Pose>; 2],
+    poses: Poses,
     // The time at which the runtime's recenter takes effect, until a frame at or after it came
     recentering: Option<Duration>,
+    // The time of the last frame tracked
+    time: Duration,
 }
 
 impl FollowOrigins {
@@ -127,7 +261,7 @@ impl FollowOrigins {
     // at once. Otherwise the first frame that tracks it does.
     pub(crate) fn add(&mut self, id: u64, target: FollowTarget) {
         let mut follower = Follower::new(id, target);
-        follower.follow(self.head.as_ref(), &self.controllers);
+        follower.follow(&self.poses, self.time);
         self.followers.push(follower);
     }
 
@@ -151,20 +285,19 @@ impl FollowOrigins {
             .map(Follower::standing)
     }
 
-    // Takes the poses of the head and of the controllers in the frame at `time`. A `Tight`
+    // Takes the poses of the head, the controllers and the hands in the frame at `time`. A `Tight`
     // subspace follows them. A `Snap` subspace that has no place yet takes one. Every `Snap`
     // subspace takes a new place when the runtime has recentered, in the first frame at or after
     // the time of the change: the poses are in the new room only from then on. Returns whether
     // an origin moved. A frame writes no state and allocates nothing.
     pub(crate) fn track(
         &mut self,
-        head: Option<Pose>,
-        controllers: [Option<Pose>; 2],
+        poses: &Poses,
         time: Duration,
         recenter: Option<Recenter>,
     ) -> bool {
-        self.head = head;
-        self.controllers = controllers;
+        self.poses = *poses;
+        self.time = time;
         if let Some(change) = recenter {
             self.recentering = Some(change.change_time);
         }
@@ -174,7 +307,7 @@ impl FollowOrigins {
         }
         for follower in &mut self.followers {
             follower.owes |= recentered;
-            follower.follow(self.head.as_ref(), &self.controllers);
+            follower.follow(&self.poses, time);
         }
         self.followers.iter().any(|follower| follower.moved)
     }
