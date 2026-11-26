@@ -67,12 +67,34 @@ impl<T> Slab<T> {
         self.entries[index] = Some(value);
     }
 
-    pub(crate) fn values(&self) -> impl Iterator<Item = &T> {
-        self.entries.iter().flatten()
+    // Takes an index for a value that `put` fills later: no other entry
+    // takes the index before.
+    pub(crate) fn reserve(&mut self) -> usize {
+        match self.free.pop() {
+            Some(index) => index as usize,
+            None => {
+                self.entries.push(None);
+                self.entries.len() - 1
+            }
+        }
     }
 
-    pub(crate) fn values_mut(&mut self) -> impl Iterator<Item = &mut T> {
-        self.entries.iter_mut().flatten()
+    // The entry at `index`, `None` for a free one.
+    pub(crate) fn slot(&self, index: usize) -> Option<&T> {
+        self.entries.get(index)?.as_ref()
+    }
+
+    pub(crate) fn slot_mut(&mut self, index: usize) -> Option<&mut T> {
+        self.entries.get_mut(index)?.as_mut()
+    }
+
+    // The slots the slab holds, free ones among them.
+    pub(crate) fn slot_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(crate) fn values(&self) -> impl Iterator<Item = &T> {
+        self.entries.iter().flatten()
     }
 
     pub(crate) fn heap_bytes(&self) -> usize {
