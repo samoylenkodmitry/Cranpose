@@ -173,6 +173,7 @@ fn valid_application_id(application_id: &str) -> bool {
         && application_id != ".."
 }
 
+#[cfg(any(unix, windows))]
 fn desktop_platform_directories() -> Option<PlatformDirectories> {
     let base = directories::BaseDirs::new()?;
     let documents = directories::UserDirs::new()
@@ -185,6 +186,11 @@ fn desktop_platform_directories() -> Option<PlatformDirectories> {
         temporary: std::env::temp_dir(),
         shared: None,
     })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn desktop_platform_directories() -> Option<PlatformDirectories> {
+    None
 }
 
 fn application_id_slot() -> &'static Mutex<Option<String>> {

@@ -234,6 +234,9 @@ renderer-pixels = ["cranpose-render-pixels"]
 # presents (`cranpose::framebuffer`), for hosts without a GPU: watchOS and
 # microcontrollers such as the ESP32-S3.
 framebuffer = ["renderer-pixels"]
+# Host-driven alarms for `delay` (no background timer thread), for bare-metal
+# and single-threaded framebuffer hosts.
+host-timers = ["cranpose-core/host-timers"]
 watchos = [
     "framebuffer",
     "dep:objc2",

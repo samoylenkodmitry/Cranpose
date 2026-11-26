@@ -486,8 +486,7 @@ impl RuntimeInner {
     }
 
     fn drain_ui(&self) {
-        #[cfg(any(target_os = "emscripten", target_os = "espidf"))]
-        crate::concurrency::fire_due_alarms();
+        crate::timer::fire_due_alarms();
         loop {
             let mut executed = false;
             // A message counts as pending from before it is sent until it
@@ -548,11 +547,10 @@ impl RuntimeInner {
             .try_borrow()
             .map_or(true, |tasks| !tasks.is_empty());
 
-        let pending =
-            local_pending || self.ui_dispatcher.has_pending() || self.has_runnable_tasks();
-        #[cfg(any(target_os = "emscripten", target_os = "espidf"))]
-        let pending = pending || crate::concurrency::has_due_alarm();
-        pending
+        local_pending
+            || self.ui_dispatcher.has_pending()
+            || self.has_runnable_tasks()
+            || crate::timer::has_due_alarm()
     }
 
     /// A finished task's waker may still wake after the task is gone; with

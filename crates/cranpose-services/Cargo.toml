@@ -24,7 +24,6 @@ workspace = true
 cranpose-core = { workspace = true, features = ["internal"] }
 cranpose-macros = { workspace = true }
 cranpose-ui-graphics.workspace = true
-directories = "6.0.0"
 log = "0.4"
 parking_lot = "0.12.5"
 portable-atomic.workspace = true
@@ -170,6 +169,7 @@ windows = { version = "0.62", features = [
 ] }
 
 [target."cfg(any(unix, windows))".dependencies]
+directories = "6.0.0"
 socket2 = "0.6"
 
 [dev-dependencies]
