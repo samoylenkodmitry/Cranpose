@@ -8,7 +8,8 @@ use cranpose_core::{CompositionLocalProvider, derivedStateOf, remember, remember
 
 use crate::{
     HologramColors, HologramStage, SubspaceModifier,
-    hologram_scene::{HOLOGRAM_HIDE_MILLIS, HOLOGRAM_SHOW_MILLIS, HologramScene, hologram_extent},
+    hologram_scene::{HOLOGRAM_HIDE_MILLIS, HOLOGRAM_SHOW_MILLIS, HologramScene},
+    hologram_stage::hologram_extent,
     space::{Space, local_space},
     spatial_panel::PlacedPanel,
     spatial_volume::PlacedVolume,
@@ -90,8 +91,9 @@ impl TrayLook {
     }
 
     // What the tray's volume draws: a hologram's objects add light and leave no depth. A tray's
-    // controls rise and lift a little out of its box, and a hologram's stage stands around it.
-    fn draws(self, size: [f32; 2]) -> VolumeDraws {
+    // controls rise and lift a little out of its box, and a hologram's stage and the handle of a
+    // `movable` one stand around it.
+    fn draws(self, size: [f32; 2], movable: bool) -> VolumeDraws {
         match self {
             Self::Solid(_) => VolumeDraws {
                 writes_depth: true,
@@ -103,7 +105,7 @@ impl TrayLook {
             },
             Self::Hologram(_, stage) => VolumeDraws {
                 writes_depth: false,
-                extent: Some(hologram_extent(size, stage)),
+                extent: Some(hologram_extent(size, (stage, movable))),
             },
         }
     }
@@ -163,6 +165,7 @@ fn PlacedTray(
     // The content composes inside two closures of the panel, which share it
     let content = Rc::new(RefCell::new(content));
     let pose = modifier.pose();
+    let movable = modifier.move_policy().is_some();
     let panel = PlacedPanel(space.clone(), modifier, size, move || {
         let content = Rc::clone(&content);
         CompositionLocalProvider([local_tray().provides(Some(tray))], move || {
@@ -180,6 +183,10 @@ fn PlacedTray(
             );
         });
     });
+    // A hologram draws its own handle: the crystal in its projector's middle
+    if movable && matches!(look, TrayLook::Hologram(..)) {
+        space.draw_own_handle(panel);
+    }
     PlacedVolume(
         space,
         SubspaceModifier::new()
@@ -188,7 +195,7 @@ fn PlacedTray(
         (
             [size[0], size[1], TRAY_DEPTH],
             Some(panel),
-            look.draws(size),
+            look.draws(size, movable),
         ),
         move |scope| match look {
             TrayLook::Solid(base) => {
@@ -201,7 +208,9 @@ fn PlacedTray(
                 TrayScene(tray, base, size);
             }
             // A hologram's objects glow and take no light
-            TrayLook::Hologram(colors, stage) => HologramScene(tray, (colors, stage), size),
+            TrayLook::Hologram(colors, stage) => {
+                HologramScene(tray, (colors, stage, movable), size);
+            }
         },
     );
 }

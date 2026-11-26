@@ -46,7 +46,7 @@ pub enum ChoiceForm {
     /// An arc of light with a tick at each option and a crystal knob that floats over the chosen
     /// one and slides to a new choice, such as rates. The words stand under the ticks.
     Arc,
-    /// The chosen option's words inside a crystal with rings that orbit it, between an arrow to the
+    /// The chosen option's words under a crystal with rings that orbit it, between an arrow to the
     /// option before and an arrow to the option after. An arrow with no option to go to dims and
     /// takes no press.
     Stepper,
@@ -55,10 +55,7 @@ pub enum ChoiceForm {
 impl ChoiceForm {
     // Where an option's words stand in its place.
     fn words(self) -> Alignment {
-        match self {
-            Self::Cubes | Self::Gems | Self::Petals | Self::Arc => Alignment::BOTTOM_CENTER,
-            Self::Stepper => Alignment::CENTER,
-        }
+        Alignment::BOTTOM_CENTER
     }
 }
 
@@ -200,7 +197,7 @@ fn Stepper(
         StepArrow(tray, false, before.map(move |index| (index, to)));
         let label = label.clone();
         let middle = Modifier::empty().weight(1.0).fill_max_height();
-        let centered = BoxSpec::default().content_alignment(Alignment::CENTER);
+        let under = BoxSpec::default().content_alignment(ChoiceForm::Stepper.words());
         let words = move || {
             if let Some(index) = selected {
                 label.run(index);
@@ -211,10 +208,10 @@ fn Stepper(
                 let source = rememberMutableInteractionSource();
                 let part = rememberPart(PartShape::Crystal, source, (true, 0.0));
                 TrayPart(tray, part);
-                Box(middle.report_window_rect_state(part.rect), centered, words);
+                Box(middle.report_window_rect_state(part.rect), under, words);
             }
             None => {
-                Box(middle, centered, words);
+                Box(middle, under, words);
             }
         }
         let to = on_select.clone();

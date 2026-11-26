@@ -180,7 +180,9 @@ mod hit_info;
 mod hologram;
 mod hologram_material;
 mod hologram_meshes;
+mod hologram_objects;
 mod hologram_scene;
+mod hologram_stage;
 mod input_action;
 mod input_event;
 mod input_source;
@@ -300,6 +302,7 @@ mod spatial_move_event;
 #[cfg(any(test, headset))]
 mod spatial_offer;
 mod spatial_panel;
+mod spatial_particle_wave;
 mod spatial_point_source;
 #[cfg(any(test, headset))]
 mod spatial_request;
@@ -472,6 +475,7 @@ pub use spatial_gltf_model_status::SpatialGltfModelStatus;
 pub use spatial_hologram::SpatialHologram;
 pub use spatial_move_event::{SpatialMoveEvent, SpatialMoveEventType};
 pub use spatial_panel::SpatialPanel;
+pub use spatial_particle_wave::SpatialParticleWave;
 pub use spatial_point_source::SpatialPointSource;
 pub use spatial_resize_event::{SpatialResizeEvent, SpatialResizeEventType};
 pub use spatial_ribbon::SpatialRibbon;

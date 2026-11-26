@@ -3,13 +3,16 @@
 //!
 //! An object adds light to what lies behind it and hides nothing (`Material::ShadedGlow`), so the
 //! objects need no order among themselves and leave no depth that could hide the panel's words.
-//! The light comes from four parts, each a value of the shader:
+//! The light comes from five parts, each a value of the shader:
 //! - the rim: a surface that turns away from the eye glows, as the edge of a glass does;
 //! - the fill: a surface that faces the eye glows a little;
 //! - the edges: the edges of a facet or a face glow, as the texture coordinates of the mesh mark
 //!   them (`hologram_meshes.rs`), with a core of at least one pixel and a soft fall around it;
 //! - the halo: light that is brightest where the surface faces the eye and fades to nothing at its
-//!   outline, so a ball of it shows as a soft round glow from every side, with no turn to the eye.
+//!   outline, so a ball of it shows as a soft round glow from every side, with no turn to the eye;
+//! - the inner light: a glow inside the object about its middle, the origin of its mesh. A pixel
+//!   takes it by how near the eye's ray through the pixel passes to the middle, so the object looks
+//!   filled with light from every side, brightest where the eye looks through its middle.
 //!
 //! A light that fades along the mesh's `v` makes a beam or a cone, and lines across the mesh's `y`
 //! that move with time make the scan of a projector. Every part ends at exact zero, so the space
@@ -43,6 +46,10 @@ fn shade(surface: ShadedSurface) -> vec4<f32> {
     light += select(0.0, shaded_param(6u) * max(soft * soft, core), kind > 0.5);
     let halo = shaded_param(9u);
     light += select(0.0, pow(facing, max(halo, 1.0e-3)), halo > 0.0);
+    let ray = normalize(surface.position - surface.eye);
+    let passing = length(surface.position - ray * dot(surface.position, ray));
+    let inner = 1.0 - smoothstep(0.0, max(shaded_param(15u), 1.0e-4), passing);
+    light += shaded_param(14u) * inner * inner;
     let fade = 1.0 - uv.y;
     light *= mix(1.0, fade * fade, shaded_param(10u));
     let lines = shaded_param(11u);
@@ -80,6 +87,8 @@ pub(crate) struct Glow {
     pub(crate) lines: (f32, f32),
     // The cells of the grid along each side of a face, whose edges glow as the face's do
     pub(crate) cells: f32,
+    // The strength of the inner light and its radius, in the units of the mesh
+    pub(crate) inner: (f32, f32),
 }
 
 impl Glow {
@@ -95,6 +104,7 @@ impl Glow {
             fade: 0.0,
             lines: (0.0, 0.0),
             cells: 1.0,
+            inner: (0.0, 0.0),
         }
     }
 
@@ -118,6 +128,7 @@ impl Glow {
             fade: 0.0,
             lines: (0.0, 0.0),
             cells: 1.0,
+            inner: (0.0, 0.0),
         }
     }
 
@@ -144,6 +155,14 @@ impl Glow {
         Self { cells, ..self }
     }
 
+    // An inner light of `strength` about the mesh's origin, which ends at `radius` from it.
+    pub(crate) const fn lit_inside(self, strength: f32, radius: f32) -> Self {
+        Self {
+            inner: (strength, radius),
+            ..self
+        }
+    }
+
     pub(crate) fn material(&self) -> Material {
         let Color(red, green, blue, _) = self.color;
         let (edges, edge, width) = self.edges;
@@ -154,7 +173,7 @@ impl Glow {
             Edges::Band => 3.0,
         };
         let mut params = [0.0; Shaded::PARAMS];
-        params[..14].copy_from_slice(&[
+        params[..16].copy_from_slice(&[
             red,
             green,
             blue,
@@ -169,6 +188,8 @@ impl Glow {
             self.lines.0,
             self.lines.1,
             self.cells,
+            self.inner.0,
+            self.inner.1,
         ]);
         Material::ShadedGlow(Shaded {
             shader: Arc::clone(HOLOGRAM.get_or_init(|| Arc::from(HOLOGRAM_WGSL))),

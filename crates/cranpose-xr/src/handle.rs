@@ -5,7 +5,7 @@ use crate::{
     Ray,
     carry::handle_center,
     resize::corner_center,
-    space::{Mobility, PanelSlot},
+    space::PanelSlot,
     vector::{dot, sub},
 };
 
@@ -43,7 +43,7 @@ impl HandleKind {
     // Whether `slot`'s panel has a handle of this kind.
     pub(crate) fn offered_by(self, slot: &PanelSlot) -> bool {
         match self {
-            Self::Move => slot.mobility == Mobility::Movable,
+            Self::Move => slot.mobility.movable(),
             Self::Resize => slot.resize_limits().is_some(),
         }
     }

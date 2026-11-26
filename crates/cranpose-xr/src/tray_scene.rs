@@ -196,7 +196,7 @@ fn PartBody(tray: TrayParts, part: Part, (size, shadows): ([f32; 2], bool)) {
         PartShape::Slider { stops } | PartShape::Track { count: stops } => {
             Slider((rect.width, stops), ([face, lit], shadows), motion, place);
         }
-        PartShape::Ribbon => {}
+        PartShape::Ribbon | PartShape::Wave => {}
     }
 }
 
