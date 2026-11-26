@@ -27,6 +27,7 @@ pub(crate) fn main() {
                 .expect("live tasks before the walk");
 
             for tab in [
+                "Video",
                 "WSZ",
                 "Shaders",
                 "Shader Rect",

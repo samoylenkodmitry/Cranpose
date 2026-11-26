@@ -1,8 +1,24 @@
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use cranpose_ui::{ExternalTexture, ImageBitmap};
+use portable_atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use crate::{GpuContext, cover_pipeline::cover_pipeline};
+
+static LIVE_EXTERNAL_FRAME_BYTES: AtomicU64 = AtomicU64::new(0);
+
+/// Total GPU texture bytes currently allocated across all live [`ExternalFrames`] rings
+/// (including zero-copy video conversion surfaces).
+pub fn external_frame_gpu_bytes() -> u64 {
+    LIVE_EXTERNAL_FRAME_BYTES.load(AtomicOrdering::Relaxed)
+}
+
+fn texture_bytes(width: u32, height: u32, format: wgpu::TextureFormat) -> u64 {
+    let bpp = u64::from(format.block_copy_size(None).unwrap_or(4));
+    u64::from(width)
+        .saturating_mul(u64::from(height))
+        .saturating_mul(bpp)
+}
 
 /// The most textures one [`ExternalFrames`] holds: the frame a writer
 /// prepares, the one it renders, the one it published and the one shown. An
@@ -69,6 +85,13 @@ struct Slot {
     state: State,
     // What the encoder reads and writes for this slot, when the ring has one.
     encode: Option<EncodeTarget>,
+    gpu_bytes: u64,
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        LIVE_EXTERNAL_FRAME_BYTES.fetch_sub(self.gpu_bytes, AtomicOrdering::Relaxed);
+    }
 }
 
 // Cranpose samples a texture as stored, so it reads an sRGB frame through a
@@ -329,12 +352,21 @@ impl Ring {
                 None,
             ),
         };
+        let gpu_bytes =
+            texture_bytes(width, height, self.format).saturating_add(if encode.is_some() {
+                texture_bytes(width, height, sampled)
+            } else {
+                0
+            });
+        let shown = ExternalTexture::new(width, height, self.opaque, shown).ok()?;
+        LIVE_EXTERNAL_FRAME_BYTES.fetch_add(gpu_bytes, AtomicOrdering::Relaxed);
         Some(Slot {
             view,
-            shown: ExternalTexture::new(width, height, self.opaque, shown).ok()?,
+            shown,
             texture,
             state: State::Free,
             encode,
+            gpu_bytes,
         })
     }
 

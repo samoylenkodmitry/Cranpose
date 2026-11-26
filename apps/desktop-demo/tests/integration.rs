@@ -38,5 +38,6 @@ mod tab_switch_regression_support;
 mod text_wrap_repro_tests;
 mod tv_tab;
 mod variable_font_instancing;
+mod video_playground_tab;
 mod web_release_bundle;
 mod wsz_tab_integration_test;

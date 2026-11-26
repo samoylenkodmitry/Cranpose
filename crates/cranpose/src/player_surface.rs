@@ -62,9 +62,13 @@ pub fn PlayerSurface<S: Into<VideoSurfaceSource> + Clone + PartialEq + 'static>(
     }
 }
 
+/// Tracks the active zero-copy [`DecodedFrames`] queue produced by `player`, updating
+/// automatically across playlist item transitions and playback state changes.
+///
+/// Use this composable when feeding a [`Player`]'s decoded frames into a custom
+/// [`PlayerSurfaceIntake`](crate::PlayerSurfaceIntake) pipeline.
 #[composable]
-fn PlayerBoundSurface(player: Player, modifier: Modifier, content_scale: ContentScale) {
-    let shown = rememberMutableStateOf(|| None::<Painter>);
+pub fn rememberPlayerDecodedFrames(player: &Player) -> Option<DecodedFrames> {
     let active_frames = rememberKeyed(player.id(), |_| mutableStateOf(player.decoded_frames()));
     let handle = player.clone();
     let updates = rememberEventStream(player.id(), move |sender| {
@@ -81,13 +85,19 @@ fn PlayerBoundSurface(player: Player, modifier: Modifier, content_scale: Content
         })
     });
     CollectEvents(updates, player.id(), move |frames| {
-        if frames.is_none() {
-            shown.set(None);
-        }
         active_frames.set(frames);
     });
-    if let Some(frames) = active_frames.value() {
+    active_frames.value()
+}
+
+#[composable]
+fn PlayerBoundSurface(player: Player, modifier: Modifier, content_scale: ContentScale) {
+    let shown = rememberMutableStateOf(|| None::<Painter>);
+    let active_frames = rememberPlayerDecodedFrames(&player);
+    if let Some(frames) = active_frames {
         pump(frames, Some(player), shown);
+    } else if shown.value().is_some() {
+        shown.set(None);
     }
     Picture(shown, modifier, content_scale);
 }
