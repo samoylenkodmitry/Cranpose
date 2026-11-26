@@ -46,6 +46,7 @@ mod computed_state;
 pub mod concurrency;
 mod debug_trace;
 mod disposable_effect;
+mod timer;
 pub use diagnostics::{DIAGNOSTICS, Diagnostic, Diagnostics};
 #[cfg(test)]
 pub(crate) use disposable_effect::DisposableEffectState;

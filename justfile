@@ -704,6 +704,8 @@ test-ide:
 test-features: test-watchos test-localization
     cargo test --profile ci -p cranpose-core --features std-hash
     cargo test --profile ci -p cranpose-core --features internal
+    cargo test --profile ci -p cranpose-core --features host-timers --test integration host_timers
+    cargo clippy -p cranpose-core --all-targets --features host-timers -- -D warnings
     cargo test --profile ci -p cranpose-ui --features svg
     cargo test --profile ci -p cranpose-ui --features text-hyphenation-embedded
     cargo test --profile ci -p cranpose-text --features hyphenation-embedded --test text_engine hyphenation
