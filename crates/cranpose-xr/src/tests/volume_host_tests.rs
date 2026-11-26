@@ -17,7 +17,7 @@ use cranpose_core::{CompositionLocalProvider, LaunchedEffect, rememberMutableSta
 use super::*;
 use crate::{
     FieldOfView, Pose, RenderViewpoint, SpatialVolume, Subspace, SubspaceModifier,
-    eye_camera::{EyeCamera, FirstRow},
+    eye_camera::{EyeCamera, FirstRow, ImageRegion},
     space::{Space, local_space},
     volume_pass::{EyeImage, VolumePass},
 };
@@ -233,12 +233,16 @@ struct Eye {
 
 impl Eye {
     fn new(gpu: &GpuContext) -> Self {
+        Self::sized(gpu, (EYE, EYE))
+    }
+
+    fn sized(gpu: &GpuContext, (width, height): (u32, u32)) -> Self {
         let texture = |format, usage| {
             gpu.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("eye"),
                 size: wgpu::Extent3d {
-                    width: EYE,
-                    height: EYE,
+                    width,
+                    height,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -277,6 +281,19 @@ impl Eye {
 // Draws the scene for `view` into `eye`, again until pipelines that were still compiling have
 // landed and something shows. Returns whether the pass found a scene.
 fn draw(headset: &mut Headset, pass: &mut VolumePass, view: &RenderViewpoint, eye: &Eye) -> bool {
+    draw_through(headset, pass, (view, eye), |moved| {
+        EyeCamera::of(moved, (EYE, EYE), FirstRow::Top).expect("a camera")
+    })
+}
+
+// Draws the scene for `view` into `eye` through the camera that `camera` makes of the view, as
+// `draw` does.
+fn draw_through(
+    headset: &mut Headset,
+    pass: &mut VolumePass,
+    (view, eye): (&RenderViewpoint, &Eye),
+    camera: impl Fn(&RenderViewpoint) -> EyeCamera,
+) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let mut attempt = 0.0_f32;
     loop {
@@ -285,7 +302,7 @@ fn draw(headset: &mut Headset, pass: &mut VolumePass, view: &RenderViewpoint, ey
         attempt += 1.0;
         let mut moved = *view;
         moved.pose.position[1] += attempt * 1e-5;
-        let camera = EyeCamera::of(&moved, (EYE, EYE), FirstRow::Top).expect("a camera");
+        let camera = camera(&moved);
         let drew = pass
             .draw(&mut headset.guest, &headset.space, &camera, &eye.image())
             .expect("a frame");
@@ -337,10 +354,11 @@ fn first_red_column(gpu: &GpuContext, color: &wgpu::Texture) -> Option<u32> {
 
 // The bytes of `texture` row by row, `texel` bytes to the pixel, without the padding of a row.
 fn read(gpu: &GpuContext, texture: &wgpu::Texture, texel: u32) -> Vec<u8> {
-    let padded = (EYE * texel).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let padded = (texture.width() * texel).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let (width, height) = (texture.width(), texture.height());
     let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("readback"),
-        size: u64::from(padded * EYE),
+        size: u64::from(padded * height),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
@@ -350,11 +368,11 @@ fn read(gpu: &GpuContext, texture: &wgpu::Texture, texel: u32) -> Vec<u8> {
     let layout = wgpu::TexelCopyBufferLayout {
         offset: 0,
         bytes_per_row: Some(padded),
-        rows_per_image: Some(EYE),
+        rows_per_image: Some(height),
     };
     let extent = wgpu::Extent3d {
-        width: EYE,
-        height: EYE,
+        width,
+        height,
         depth_or_array_layers: 1,
     };
     copy.copy_texture_to_buffer(
@@ -373,8 +391,8 @@ fn read(gpu: &GpuContext, texture: &wgpu::Texture, texel: u32) -> Vec<u8> {
         .poll(wgpu::PollType::wait_indefinitely())
         .expect("poll");
     let bytes = staging.slice(..).get_mapped_range().expect("mapped range");
-    let used = (EYE * texel) as usize;
-    let mut rows = Vec::with_capacity(used * EYE as usize);
+    let used = (width * texel) as usize;
+    let mut rows = Vec::with_capacity(used * height as usize);
     for row in bytes.chunks_exact(padded as usize) {
         rows.extend_from_slice(&row[..used]);
     }
@@ -514,6 +532,53 @@ fn one_composition_draws_the_volumes_for_each_eye_from_that_eyes_view_with_depth
         at(EYE / 2, EYE / 2)
     );
     assert!((at(2, 2) - 1.0).abs() < 1e-6);
+}
+
+#[test]
+fn a_region_of_the_view_draws_what_that_part_of_the_whole_view_shows() {
+    let mut headset = headset();
+    let mut pass = VolumePass::default();
+    let view = eye(0.0);
+    let whole = Eye::new(&headset.gpu);
+    assert!(draw(&mut headset, &mut pass, &view, &whole));
+    // A smaller image of the part of the view that starts 32 columns and 40 rows into the whole
+    // view's image, at the same pixels for a unit of tangent: the quad lies inside it
+    let full = ImageRegion::whole(&view.field_of_view, (EYE, EYE)).expect("a region");
+    let (columns, rows) = (32_u32, 40_u32);
+    let region = ImageRegion {
+        left: full.left + columns as f32 / full.focal_length,
+        top: full.top - rows as f32 / full.focal_length,
+        focal_length: full.focal_length,
+    };
+    let size = (64, 48);
+    let part = Eye::sized(&headset.gpu, size);
+    assert!(draw_through(
+        &mut headset,
+        &mut pass,
+        (&view, &part),
+        |moved| { EyeCamera::of_region(moved, (region, size), (EYE, EYE), FirstRow::Top) }
+    ));
+    let whole_pixels = read(&headset.gpu, &whole.color, 4);
+    let part_pixels = read(&headset.gpu, &part.color, 4);
+    let mut red = 0;
+    for y in 0..size.1 {
+        for x in 0..size.0 {
+            let shown = &part_pixels[((y * size.0 + x) * 4) as usize..][..4];
+            let expected = &whole_pixels[(((y + rows) * EYE + x + columns) * 4) as usize..][..4];
+            assert!(
+                shown
+                    .iter()
+                    .zip(expected)
+                    .all(|(shown, expected)| shown.abs_diff(*expected) <= 2),
+                "pixel ({x}, {y}) of the part is {shown:?}, the whole view's is {expected:?}"
+            );
+            red += usize::from(shown[0] > 200);
+        }
+    }
+    assert!(
+        red > 1000,
+        "the part shows the whole quad: {red} red pixels"
+    );
 }
 
 #[test]

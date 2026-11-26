@@ -604,6 +604,18 @@ impl Space {
         }
     }
 
+    // Lets the content of the movable panel `id` draw its own handle: the handle's sphere shows
+    // only while a ray points at it or presses it.
+    pub(crate) fn draw_own_handle(&self, id: u64) {
+        let mut entries = self.inner.entries.borrow_mut();
+        if let Some(entry) = entries
+            .iter_mut()
+            .find(|entry| entry.slot.id == id && entry.slot.mobility.movable())
+        {
+            entry.slot.mobility = Mobility::MovableByOwnHandle;
+        }
+    }
+
     // Sets the sizes that the user may give the panel `id` and who hears of the resize, or `None`
     // for a panel that has no corner handle. A panel that loses its handle ends a resize in
     // progress.

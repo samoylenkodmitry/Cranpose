@@ -107,6 +107,22 @@ impl ControllerStates {
         }
     }
 
+    // Where the grip of each shown model stands in the room, in meters, outside the composition.
+    #[cfg(headset)]
+    pub(crate) fn shown_grips(&self) -> impl Iterator<Item = [f32; 3]> + '_ {
+        let shown = self.shown.get_non_reactive();
+        self.maps
+            .iter()
+            .zip(shown)
+            .filter(|(_, shown)| *shown)
+            .map(|(map, _)| {
+                let grip = map
+                    .get_non_reactive()
+                    .transform_point(cranpose::space::Vec3::ZERO);
+                [grip.x, -grip.y, -grip.z].map(|mm| mm / crate::eye_camera::UNITS_PER_METER)
+            })
+    }
+
     // How many hands show a model now, outside the composition.
     pub(crate) fn shown_count(&self) -> usize {
         self.shown

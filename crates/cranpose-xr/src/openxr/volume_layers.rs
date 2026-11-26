@@ -22,6 +22,7 @@ use crate::{
     Pose, RenderViewpoint,
     eye_camera::{EyeCamera, FirstRow},
     projected_pass::{EyeTarget, ProjectedLayer, ProjectedPass},
+    projection_crop::{Content, LayerSize, RoomBox, crop},
     scene_hold::SceneHold,
     space::Space,
     volume_pass::{EyeImage, VolumePass},
@@ -46,13 +47,24 @@ struct EyeSwapchains {
     size: (u32, u32),
 }
 
-// What a frame draws into the projection layer: the eyes' views, the size of their pictures in
-// pixels, and the pictures of the layers that it draws in place of their own, which sample `atlas`.
+// A controller's model reaches this far from its grip each way, in meters
+const MODEL_REACH: f32 = 0.15;
+
+// What a frame draws into the projection layer: the eyes' views, the size of the pictures of their
+// whole views in pixels, and the pictures of the layers that it draws in place of their own, which
+// sample `atlas`.
 pub(crate) struct ProjectionFrame<'a> {
     pub(crate) views: [Option<RenderViewpoint>; 2],
     pub(crate) size: (u32, u32),
     pub(crate) layers: &'a [ProjectedLayer],
     pub(crate) atlas: Option<&'a wgpu::Texture>,
+}
+
+// The size of the eyes' images in pixels, the eyes' cameras and the poses they draw from.
+struct EyeViews {
+    images: (u32, u32),
+    cameras: [EyeCamera; 2],
+    poses: [Pose; 2],
 }
 
 // What the frame drew: the eyes' cameras, and the poses they were drawn from.
@@ -83,6 +95,10 @@ pub(crate) struct VolumeLayers {
     failed: bool,
     // The pass that draws the pictures of other layers, from the first frame that has one
     projected: Option<ProjectedPass>,
+    // The size of the eyes' images, which covers the part of each view that the content takes
+    size: LayerSize,
+    // The boxes of the frame's content, kept from frame to frame
+    boxes: Vec<RoomBox>,
 }
 
 impl VolumeLayers {
@@ -100,6 +116,8 @@ impl VolumeLayers {
             logged: None,
             failed: false,
             projected: None,
+            size: LayerSize::default(),
+            boxes: Vec::new(),
         }
     }
 
@@ -188,12 +206,25 @@ impl VolumeLayers {
         let Some(frame_plan) = plan(contents, views.map(|view| view.is_some()), depth) else {
             return Ok(());
         };
-        let Some((cameras, poses)) = eye_cameras(views, size) else {
+        let Some(EyeViews {
+            images,
+            cameras,
+            poses,
+        }) = self.cameras(space, views, (size, layers))
+        else {
             return Ok(());
         };
         self.sample_once(gpu, space);
-        if self.eyes.is_none() {
-            self.eyes = Some(self.make_swapchains(gpu, xr_session, size)?);
+        if self.eyes.as_ref().is_none_or(|eyes| eyes[0].size != images) {
+            log::info!(
+                "cranpose xr: the volumes' layer takes images of {}x{} of the view's {}x{}",
+                images.0,
+                images.1,
+                size.0,
+                size.1
+            );
+            self.eyes = None;
+            self.eyes = Some(self.make_swapchains(gpu, xr_session, images)?);
         }
         self.prepare_projected(gpu, layers, atlas);
         let Self {
@@ -242,6 +273,72 @@ impl VolumeLayers {
             });
         }
         Ok(())
+    }
+
+    // The size of the eyes' images, and the camera and the pose of each eye, for images that cover
+    // what the content takes of each view of `size` pixels, or the whole view where the frame draws
+    // the pictures of `layers`. `None` while the runtime has not located both eyes.
+    fn cameras(
+        &mut self,
+        space: &Space,
+        views: [Option<RenderViewpoint>; 2],
+        (size, layers): ((u32, u32), &[ProjectedLayer]),
+    ) -> Option<EyeViews> {
+        let [Some(left), Some(right)] = views else {
+            return None;
+        };
+        let whole = self.collect_boxes(space, !layers.is_empty());
+        let content = if whole {
+            Content::Whole
+        } else {
+            Content::Boxes(&self.boxes)
+        };
+        let (images, regions) = crop(&mut self.size, [&left, &right], content, size)?;
+        let first_row = if Graphics::TOP_ROW_FIRST {
+            FirstRow::Top
+        } else {
+            FirstRow::Bottom
+        };
+        // The scene lays out in a box of the whole view's size and draws its first rows and columns
+        let scene = space.scene_size().map(|side| side as u32);
+        let cameras = [(left, regions[0]), (right, regions[1])].map(|(eye, region)| {
+            EyeCamera::of_region(&eye, (region, images), (scene[0], scene[1]), first_row)
+        });
+        Some(EyeViews {
+            images,
+            cameras,
+            poses: [left.pose, right.pose],
+        })
+    }
+
+    // Gathers the boxes that hold the content of each shown volume and each controller's model.
+    // Returns true when the layer must cover the whole view: for the pictures of other layers, which
+    // stand anywhere, and for a volume whose content may reach anywhere.
+    fn collect_boxes(&mut self, space: &Space, projected: bool) -> bool {
+        let boxes = &mut self.boxes;
+        boxes.clear();
+        if projected {
+            return true;
+        }
+        let unknown = space.volumes().contents().read(|contents| {
+            for content in contents {
+                if !content.shown.get_non_reactive() {
+                    continue;
+                }
+                let Some(extent) = content.draws.extent else {
+                    return true;
+                };
+                boxes.push(RoomBox::of_volume(&content.pose.get_non_reactive(), extent));
+            }
+            false
+        });
+        if unknown {
+            return true;
+        }
+        for grip in space.volumes().controllers().shown_grips() {
+            boxes.push(RoomBox::cube(grip, MODEL_REACH));
+        }
+        false
     }
 
     // Sets the samples of the scene of the volumes, once: at the first frame that draws.
@@ -354,29 +451,6 @@ impl VolumeLayers {
         };
         Ok([make()?, make()?])
     }
-}
-
-// The cameras of both eyes for pictures of `size` pixels, with the poses that they draw from, or
-// `None` while the runtime has not located both eyes.
-fn eye_cameras(
-    views: [Option<RenderViewpoint>; 2],
-    size: (u32, u32),
-) -> Option<([EyeCamera; 2], [Pose; 2])> {
-    let first_row = if Graphics::TOP_ROW_FIRST {
-        FirstRow::Top
-    } else {
-        FirstRow::Bottom
-    };
-    let [Some(left), Some(right)] = views else {
-        return None;
-    };
-    Some((
-        [
-            EyeCamera::of(&left, size, first_row)?,
-            EyeCamera::of(&right, size, first_row)?,
-        ],
-        [left.pose, right.pose],
-    ))
 }
 
 // What draws into each eye's image: the scene of the volumes and the pictures of other layers.

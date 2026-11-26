@@ -32,9 +32,27 @@ pub(crate) struct VolumeContent {
     // The node of the scene that holds the volume's content, which the scene's composition sets and
     // a ray's pick reads
     pub(crate) node: Rc<Cell<Option<NodeId>>>,
+    // What the content draws, as the scene and the layer of the scene need to know
+    pub(crate) draws: VolumeDraws,
+}
+
+// What a volume's content draws.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct VolumeDraws {
     // Whether the content may leave depth in the scene. The objects of a hologram add light and
     // leave none.
     pub(crate) writes_depth: bool,
+    // The half sizes, in dp, of a box about the volume's center that holds all that the content
+    // draws, or `None` where the content may reach anywhere, as a `SpatialVolume`'s may
+    pub(crate) extent: Option<[f32; 3]>,
+}
+
+impl VolumeDraws {
+    // Content that may leave depth and reach anywhere.
+    pub(crate) const ANY: Self = Self {
+        writes_depth: true,
+        extent: None,
+    };
 }
 
 impl PartialEq for VolumeContent {
@@ -138,7 +156,7 @@ impl Volumes {
     // Whether the content of any volume may leave depth in the scene.
     pub(crate) fn writes_depth(&self) -> bool {
         self.contents
-            .read(|contents| contents.iter().any(|content| content.writes_depth))
+            .read(|contents| contents.iter().any(|content| content.draws.writes_depth))
     }
 
     #[cfg_attr(

@@ -19,7 +19,7 @@ use crate::{
     eye_camera::FirstRow,
     handle::{HANDLE_RADIUS, HandleFocus, HandleKind},
     projected_pass::{Picture, ProjectedLayer},
-    space::PanelSlot,
+    space::{Mobility, PanelSlot},
     vector::{dot, normalize},
 };
 
@@ -114,7 +114,8 @@ impl Handle {
 // The handles at `slot`'s panel: the one that moves it if the panel is movable, then the one that
 // resizes it if the panel is resizable. The handles face the head at `head`. A headset that tracks
 // no head shows them facing the way the panel faces. A handle that a hand in `active` holds or
-// would grab shows larger, and one that a trigger presses larger still.
+// would grab shows larger, and one that a trigger presses larger still. The move handle of a panel
+// that draws its own handle shows only then.
 pub(crate) fn placed(
     slot: &PanelSlot,
     active: [Option<HandleFocus>; 2],
@@ -124,7 +125,7 @@ pub(crate) fn placed(
     HandleKind::ALL
         .into_iter()
         .filter(move |kind| kind.offered_by(&slot))
-        .map(move |kind| {
+        .filter_map(move |kind| {
             let center = kind.center(&slot);
             let pose = head.map_or(
                 Pose {
@@ -145,11 +146,12 @@ pub(crate) fn placed(
                     }
                 })
                 .fold(1.0, f32::max);
-            Handle {
+            let drawn = kind == HandleKind::Move && slot.mobility == Mobility::MovableByOwnHandle;
+            (!drawn || scale > 1.0).then_some(Handle {
                 kind,
                 pose,
                 side: 2.0 * HANDLE_RADIUS * scale,
-            }
+            })
         })
 }
 

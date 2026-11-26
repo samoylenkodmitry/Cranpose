@@ -60,11 +60,21 @@ pub(crate) fn depth_scale(view: &FieldOfView) -> f32 {
     1.0 + turn * edge
 }
 
-impl EyeCamera {
-    // The camera of `eye` for an image of `size` pixels, or `None` while the eye's field of view
-    // is empty or not finite.
-    pub(crate) fn of(eye: &RenderViewpoint, size: (u32, u32), first_row: FirstRow) -> Option<Self> {
-        let view = &eye.field_of_view;
+// The part of an eye's view that an image shows: the tangents of its left and its top edge, and
+// its pixels for a unit of tangent. The image's size gives its right and its bottom edge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ImageRegion {
+    pub(crate) left: f32,
+    pub(crate) top: f32,
+    pub(crate) focal_length: f32,
+}
+
+impl ImageRegion {
+    // The region of an image of `size` pixels that holds the whole of `view`, with the view's
+    // center in the image's middle, or `None` while the view is empty or not finite. The image
+    // reaches past the view on the side where it has pixels to spare, because the camera has one
+    // focal length for both directions.
+    pub(crate) fn whole(view: &FieldOfView, size: (u32, u32)) -> Option<Self> {
         let (left, right) = (view.angle_left.tan(), view.angle_right.tan());
         let (up, down) = (view.angle_up.tan(), view.angle_down.tan());
         let (width, height) = (size.0 as f32, size.1 as f32);
@@ -73,9 +83,57 @@ impl EyeCamera {
         if !(finite && focal_length.is_finite() && focal_length > 0.0) {
             return None;
         }
-        // The view's center, in tangents. The image center sits there.
-        let center = [(left + right) / 2.0, (up + down) / 2.0];
-        let half = [width / 2.0 / focal_length, height / 2.0 / focal_length];
+        Some(Self {
+            left: (left + right) / 2.0 - width / 2.0 / focal_length,
+            top: (up + down) / 2.0 + height / 2.0 / focal_length,
+            focal_length,
+        })
+    }
+
+    // The field of view of an image of `size` pixels.
+    pub(crate) fn field_of_view(&self, size: (u32, u32)) -> FieldOfView {
+        FieldOfView {
+            angle_left: self.left.atan(),
+            angle_right: (self.left + size.0 as f32 / self.focal_length).atan(),
+            angle_up: self.top.atan(),
+            angle_down: (self.top - size.1 as f32 / self.focal_length).atan(),
+        }
+    }
+}
+
+impl EyeCamera {
+    // The camera of `eye` for an image of `size` pixels that shows the eye's whole view, or `None`
+    // while the eye's field of view is empty or not finite. The headset draws through the regions
+    // that `projection_crop.rs` gives, which this is one of.
+    #[cfg(test)]
+    pub(crate) fn of(eye: &RenderViewpoint, size: (u32, u32), first_row: FirstRow) -> Option<Self> {
+        let region = ImageRegion::whole(&eye.field_of_view, size)?;
+        Some(Self::of_region(eye, (region, size), size, first_row))
+    }
+
+    // The camera of `eye` for an image of `image.1` pixels that shows `image.0`, the region of the
+    // eye's view. The scene lays out in a box of `scene` pixels and draws into the image from the
+    // box's top left corner, so the camera puts the region's first row and first column there. A
+    // scene's camera has its image center in the middle of its box: the camera shears x and y by z
+    // so that the center of its box shows the tangents that lie there.
+    pub(crate) fn of_region(
+        eye: &RenderViewpoint,
+        (region, image): (ImageRegion, (u32, u32)),
+        scene: (u32, u32),
+        first_row: FirstRow,
+    ) -> Self {
+        let focal_length = region.focal_length;
+        let field_of_view = region.field_of_view(image);
+        let (half_width, half_height) = (
+            scene.0 as f32 / 2.0 / focal_length,
+            scene.1 as f32 / 2.0 / focal_length,
+        );
+        // The image's first row is its top row, or its bottom row for a GL swapchain
+        let first = match first_row {
+            FirstRow::Top => region.top - half_height,
+            FirstRow::Bottom => field_of_view.angle_down.tan() + half_height,
+        };
+        let center = [region.left + half_width, first];
         let [right_axis, down_axis, forward_axis] = camera_axes(&eye.pose);
         let to_scene = |axis: [f32; 3]| {
             let scene = scene_direction(axis);
@@ -101,17 +159,12 @@ impl EyeCamera {
             focal_length,
         };
         let near = camera.near() / UNITS_PER_METER;
-        Some(Self {
+        Self {
             near,
-            depth_near: near * depth_scale(view),
+            depth_near: near * depth_scale(&eye.field_of_view),
             camera,
-            field_of_view: FieldOfView {
-                angle_left: (center[0] - half[0]).atan(),
-                angle_right: (center[0] + half[0]).atan(),
-                angle_up: (center[1] + half[1]).atan(),
-                angle_down: (center[1] - half[1]).atan(),
-            },
-        })
+            field_of_view,
+        }
     }
 
     // The matrix, by rows, that takes a point of the room in meters to the clip space of an image

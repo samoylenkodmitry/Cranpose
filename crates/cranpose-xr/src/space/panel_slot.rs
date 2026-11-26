@@ -134,4 +134,13 @@ pub(crate) enum TrackedSpace {
 pub(crate) enum Mobility {
     Fixed,
     Movable,
+    // Movable by a handle that the content draws itself, such as a hologram's projector: the
+    // handle's sphere shows only while a ray points at it or presses it
+    MovableByOwnHandle,
+}
+
+impl Mobility {
+    pub(crate) fn movable(self) -> bool {
+        self != Self::Fixed
+    }
 }

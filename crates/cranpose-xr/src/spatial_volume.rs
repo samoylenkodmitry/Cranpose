@@ -19,7 +19,7 @@ use crate::{
     space::{Space, local_space, local_subspace_origin},
     subspace_modifier::DEFAULT_VOLUME_SIZE,
     surface_input::{InputSink, PointerSink},
-    volumes::VolumeContent,
+    volumes::{VolumeContent, VolumeDraws},
 };
 
 // The callback that the content registered for the pointer's events.
@@ -144,19 +144,19 @@ pub fn SpatialVolume(
 ) {
     let size = modifier.size_3d_or(DEFAULT_VOLUME_SIZE);
     match local_space().current() {
-        Some(space) => PlacedVolume(space, modifier, (size, None, true), content),
+        Some(space) => PlacedVolume(space, modifier, (size, None, VolumeDraws::ANY), content),
         None => FlatVolume(size, content),
     }
 }
 
 // A volume that the space places, with a box of `size` dp, `under` a panel of content when one is
-// given: it then stands where that panel stands and takes no ray. `writes_depth` says whether the
-// content may leave depth in the scene.
+// given: it then stands where that panel stands and takes no ray. `draws` says whether the content
+// may leave depth in the scene and how far it reaches.
 #[composable]
 pub(crate) fn PlacedVolume(
     space: Space,
     modifier: SubspaceModifier,
-    (size, under, writes_depth): ([f32; 3], Option<u64>, bool),
+    (size, under, draws): ([f32; 3], Option<u64>, VolumeDraws),
     content: impl FnMut(&SpatialVolumeScope) + 'static,
 ) {
     let panel = remember({
@@ -195,7 +195,7 @@ pub(crate) fn PlacedVolume(
         light,
         compose: Rc::new(RefCell::new(Some(compose))),
         node,
-        writes_depth,
+        draws,
     });
     DisposableEffect(id, move |_| {
         DisposableEffectResult::new(move || space.remove(id))

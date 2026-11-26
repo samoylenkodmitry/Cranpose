@@ -71,6 +71,30 @@ impl Parts {
         }
     }
 
+    // A small crystal of `size` at `middle`: two points along y over four corners about it, each
+    // facet with the edges of a facet.
+    fn point(&mut self, middle: [f32; 3], size: f32) {
+        let at = |dx: f32, dy: f32, dz: f32| {
+            [
+                middle[0] + dx * size,
+                middle[1] + dy * size,
+                middle[2] + dz * size,
+            ]
+        };
+        let (up, down) = (at(0.0, -1.0, 0.0), at(0.0, 1.0, 0.0));
+        let around = [
+            at(0.6, 0.0, 0.0),
+            at(0.0, 0.0, 0.6),
+            at(-0.6, 0.0, 0.0),
+            at(0.0, 0.0, -0.6),
+        ];
+        for side in 0..4 {
+            let (a, b) = (around[side], around[(side + 1) % 4]);
+            self.facet([up, a, b]);
+            self.facet([down, b, a]);
+        }
+    }
+
     fn into_mesh(self) -> Mesh {
         Mesh::new(self.positions, self.uvs, Some(self.normals), self.indices)
             .expect("a hologram's mesh is well formed")
@@ -277,44 +301,55 @@ pub(crate) fn helix(turns: u32, width: f32) -> Mesh {
 
 // `count` small crystals spread through the shell between radii `inner` and `outer` about the y
 // axis, from `y = -0.5` to `0.5`, each of size `size`, beside the two ends of the x axis: one mesh,
-// so they draw at once. The spread comes from a fixed sequence, so every scene shows the same field.
-pub(crate) fn sparks(count: u32, (inner, outer): (f32, f32), size: f32) -> Mesh {
+// so they draw at once. Each lies within `spread` radians of its side, so the field stays near the
+// plane of x and y. The spread comes from a fixed sequence, so every scene shows the same field.
+pub(crate) fn sparks(count: u32, (inner, outer): (f32, f32), spread: f32, size: f32) -> Mesh {
     let mut parts = Parts::default();
     for index in 0..count {
         let at = index as f32;
         // A hash of the index spreads the sparks with no rows or columns. Every other one stands
-        // on the left, and each lies within a quarter turn of its side, so none floats over the
-        // middle.
+        // on the left, so none floats over the middle.
         let side = if index % 2 == 0 {
             TAU / 4.0
         } else {
             -TAU / 4.0
         };
-        let angle = side + (scatter(at, 1.0) - 0.5) * 0.9;
+        let angle = side + (scatter(at, 1.0) - 0.5) * 2.0 * spread;
         let reach = inner + (outer - inner) * scatter(at, 2.0);
         let y = scatter(at, 3.0) - 0.5;
         let (sin, cos) = angle.sin_cos();
-        let middle = [reach * sin, y, -reach * cos];
-        let point = |dx: f32, dy: f32, dz: f32| {
-            [
-                middle[0] + dx * size,
-                middle[1] + dy * size,
-                middle[2] + dz * size,
-            ]
-        };
-        let (up, down) = (point(0.0, -1.0, 0.0), point(0.0, 1.0, 0.0));
-        let around = [
-            point(0.6, 0.0, 0.0),
-            point(0.0, 0.0, 0.6),
-            point(-0.6, 0.0, 0.0),
-            point(0.0, 0.0, -0.6),
-        ];
-        for side in 0..4 {
-            let (a, b) = (around[side], around[(side + 1) % 4]);
-            parts.facet([up, a, b]);
-            parts.facet([down, b, a]);
+        parts.point([reach * sin, y, -reach * cos], size);
+    }
+    parts.into_mesh()
+}
+
+// A wave of `columns` by `rows` points of size up to `size`, from `x = -0.5` to `0.5` and from
+// `z = -0.5` to `0.5`, that rise as a ridge of hills up to `y = -1`. The points shrink toward
+// `x = 0.5`, so the wave fades out to the right. One mesh, so it draws at once.
+pub(crate) fn wave(columns: u32, rows: u32, size: f32) -> Mesh {
+    let mut parts = Parts::default();
+    for column in 0..columns {
+        let along = column as f32 / (columns - 1).max(1) as f32;
+        let x = along - 0.5;
+        // The hills rise from the left end and sink toward the right one
+        let envelope = (along * PI).sin().powf(0.6) * (1.0 - 0.5 * along);
+        for row in 0..rows {
+            let z = row as f32 / (rows - 1).max(1) as f32 - 0.5;
+            let hills =
+                0.55 + 0.3 * (7.0 * x + 2.6 * z + 1.7).sin() + 0.15 * (13.0 * x - 4.0 * z).cos();
+            parts.point([x, -envelope * hills, z], size * (1.0 - 0.65 * along));
         }
     }
+    parts.into_mesh()
+}
+
+// A flat disc of radius one about the y axis, its edge at the texture's `v = 1`.
+pub(crate) fn disc() -> Mesh {
+    let mut parts = Parts::default();
+    parts.grid((48, 2), |u, v| {
+        let (sin, cos) = (u * TAU).sin_cos();
+        ([v * sin, 0.0, -v * cos], [0.0, -1.0, 0.0])
+    });
     parts.into_mesh()
 }
 

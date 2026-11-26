@@ -50,6 +50,8 @@ pub(crate) enum PartShape {
     Emblem,
     // A band of glass behind words, such as a title
     Ribbon,
+    // A wave of glowing points
+    Wave,
 }
 
 impl PartShape {
@@ -57,7 +59,7 @@ impl PartShape {
     pub(crate) fn moves(self) -> bool {
         matches!(
             self,
-            Self::Choice { .. } | Self::Track { .. } | Self::Crystal | Self::Emblem
+            Self::Choice { .. } | Self::Track { .. } | Self::Crystal | Self::Emblem | Self::Wave
         )
     }
 }
