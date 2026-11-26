@@ -2156,6 +2156,7 @@ dependencies = [
  "midly",
  "perf-compare-cranpose",
  "pollster",
+ "portable-atomic",
  "pulldown-cmark",
  "serde",
  "serde_json",

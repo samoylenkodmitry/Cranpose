@@ -56,6 +56,14 @@ pub struct FramePresenter {
 }
 
 impl FramePresenter {
+    /// The latest GPU-converted [`Painter`] shown by this surface, if any.
+    ///
+    /// Cloning a [`Painter`] is a cheap handle clone backed by the same zero-copy GPU texture,
+    /// allowing multi-surface layouts to display a decoded stream without extra GPU copies.
+    pub fn current_painter(&self) -> Option<Painter> {
+        self.shown.value()
+    }
+
     /// Converts `frame` on the GPU and shows it, or only `part` of it. `part` is in pixels from
     /// the picture's top left corner, which is the corner of [`VideoFrame::crop`]. It scales as
     /// the whole picture does: the box shows `part` at the size that `content_scale` gives it.

@@ -519,8 +519,11 @@ _size-ceiling path max what:
 # 1,361,119 bytes: the Explainer tab of #2284, its screens and shaders, and
 # `cranpose/localization`, which #2284 turned on in the web demo, with the
 # program's merges after it. The release owner allowed both shares on
-# 2026-11-17 for the v0.26.0 release.
-web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "16955000" "web demo wasm")
+# 2026-11-17 for the v0.26.0 release. The Video Playground showcase tab and
+# `cranpose/video` (WebCodecs player, zero-copy GPU surface intake, HLS/DASH,
+# 64-video wall, WGSL shaders; offline clips are served statically outside wasm)
+# took the CI wasm-opt 130 module to 17,481,430 bytes (+610,455 bytes).
+web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "17570000" "web demo wasm")
 
 # Fail when a built wasm module needs a WebAssembly feature past Safari 15.
 # WebKit rejects such a module whole, in Safari and in every other iOS browser.

@@ -66,6 +66,13 @@ fi
 if [ -f "$GLSL_FILE" ]; then
     cp "$GLSL_FILE" "$bundle_dir/first_screen_glsl.txt"
 fi
+VIDEO_ASSETS_DIR="$SCRIPT_DIR/../player-demo/assets"
+if [ -d "$VIDEO_ASSETS_DIR" ]; then
+    mkdir -p "$OUTPUT_DIR/assets/video"
+    for clip in "$VIDEO_ASSETS_DIR"/feed_clip_*.mp4; do
+        [ -f "$clip" ] && cp "$clip" "$OUTPUT_DIR/assets/video/"
+    done
+fi
 touch "$OUTPUT_DIR/.nojekyll"
 
 printf '{\n  "version": 1,\n  "module": "%s/desktop_app.js",\n  "wasm": "%s/desktop_app_bg.wasm"\n}\n' \

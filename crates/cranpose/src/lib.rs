@@ -96,7 +96,7 @@ mod cover_pipeline;
 #[cfg(feature = "renderer-wgpu")]
 mod external_frames;
 #[cfg(feature = "renderer-wgpu")]
-pub use external_frames::{ExternalFrames, FrameTexture, FrameWriter};
+pub use external_frames::{ExternalFrames, FrameTexture, FrameWriter, external_frame_gpu_bytes};
 #[cfg(feature = "renderer-wgpu")]
 mod gpu_context;
 #[cfg(feature = "renderer-wgpu")]
@@ -337,7 +337,7 @@ pub use cranpose_services::isSystemInDarkTheme;
 pub use cranpose_services::*;
 pub use cranpose_ui::*;
 #[cfg(feature = "video")]
-pub use player_surface::{PlayerSurface, VideoSurfaceSource};
+pub use player_surface::{PlayerSurface, VideoSurfaceSource, rememberPlayerDecodedFrames};
 #[cfg(feature = "video")]
 pub use player_surface_intake::{
     FramePresenter, PlayerSurfaceIntake, PresentError, video_surface_supported,
