@@ -28,7 +28,7 @@ pub(crate) struct AppShader<const N: usize> {
 // A volume shader's pipelines, one for each [`super::VolumeVariant`].
 pub(crate) type VolumeShader = AppShader<4>;
 // A shaded surface's shader's pipelines, one for each [`super::ShadedVariant`].
-pub(crate) type ShadedShader = AppShader<3>;
+pub(crate) type ShadedShader = AppShader<5>;
 
 impl<const N: usize> AppShader<N> {
     pub(super) fn new(

@@ -106,6 +106,14 @@ Cranpose developers too:
   colors)` on it. Jetpack XR has no 3D controls: its Material components for XR put flat controls
   on a `SpatialPanel`. The controls keep the names and the arguments of Compose's `Button`,
   `Switch` and `Slider` with the `Spatial` prefix. See "3D controls".
+- `SpatialHologram(modifier, visible, colors, stage, content)`: 2D content whose controls float as
+  objects of glowing glass with no panel behind them, with
+  `SpatialChoiceGroup(selected, on_select, count, form, modifier, label)` (each option an object
+  of a `ChoiceForm`: cubes, gems, petals, an arc with a knob or a stepper), `SpatialEmblem` and
+  `SpatialRibbon` on it, and the controls of a tray. `HologramColors` (`CYAN`, `VIOLET_GOLD`) and
+  `HologramStage` (`NONE`, `PAGE`: a projector, ribbons and sparks) pick the look. Jetpack XR has
+  no hologram, no material that glows by the angle to the eye, no glow that hides nothing, no
+  field of sparks that draws as one mesh and no choice of 3D objects. See "Holograms".
 - `SpatialGltfModel(state, modifier, content)`: a glTF 2.0 model in a volume, behind the `gltf`
   feature. `rememberSpatialGltfModelState(source)` loads it. See "glTF models".
 - `SpatialPointSource(modifier, source)` and `SubspaceModifier::point_source(source)`: sound that
@@ -194,6 +202,13 @@ infinity to mishandle.
 Wgpu maps `Depth24PlusStencil8` to one of two Vulkan formats by the driver and offers no query that
 says which, so a Vulkan headset has no depth swapchain and submits none. A runtime that offers no
 depth swapchain format submits none either. The picture still shows.
+
+A frame whose 3D content leaves no depth submits none either. Such a frame draws only surfaces that
+add light, as the objects of a `SpatialHologram` do. It shows no controller's model and no picture
+of another layer. A volume says whether its content may leave depth. A `SpatialVolume` and a
+`SpatialTray` may leave depth. A hologram leaves none. With no depth the frame skips the depth's
+pass and its store. The compositor then tests no layer against the projection layer. The depth comes back in the
+first frame that shows a controller's model or such a volume.
 
 ### Anti-aliasing
 
@@ -339,6 +354,64 @@ A closed menu of trays costs what a flat menu costs. Its ball draws in the proje
 controller's model already needs, and it casts no shadow. The open trays add one layer and 2.6 ms of
 the GPU. The shadow map takes 0.4 ms of that. The open trays had 7 or 8 stale frames in the second
 in which the menu first showed and none after.
+
+### Holograms
+
+A `SpatialHologram` is a tray with another look. The panel carries the words and takes the input
+as a tray's does. The volume under it holds an object for each control. The objects float with
+no base and no panel behind them. `SpatialChoiceGroup` gives each option of a choice an object whose
+form shows its value: cubes that grow, gems of which the chosen one is larger and stands in a beam,
+flowers whose petals grow from a closed bud, an arc with a tick for each option and a crystal knob,
+or a stepper with a crystal between two arrows. `SpatialButton` is a key of glass or a crystal,
+`SpatialSwitch` a capsule whose lit half slides, `SpatialEmblem` a lens with two orbiting rings and
+`SpatialRibbon` a band of glass behind words. The words of an option stand under its object, or
+over the crystal of a stepper.
+
+Every object draws with one WGSL shader through `Material::ShadedGlow`, so the scene builds one
+pipeline for all of them. The shader adds four parts of light in the theme's colour: a rim where
+the surface turns from the eye, a faint fill where it faces the eye, glowing edges of the faces,
+facets or bands that the mesh's texture coordinates mark, and a halo that is brightest where the
+surface faces the eye and fades to zero at its outline. A beam and the projector's cone fade along
+the mesh. Moving lines across the cone make the scan of a projector. Each part ends at exact
+zero, so the space around an object stays black. The pipeline adds the colour to the picture and
+writes no depth. The objects therefore need no order among themselves. The panel's words
+always show over them. No pass over the whole picture draws a bloom: the glow is the objects' own
+light and their halos.
+
+`HologramStage::PAGE` adds a projector under the page, two ribbons and forty sparks. The projector
+is a disc of rings with a cone of light up to the page. Each ribbon winds two turns about an
+upright line beside the page and turns slowly about it. Every other ribbon stands on the left. The sparks
+stand beside the page within a quarter turn of each side, so nothing of the stage stands over a
+control. The forty sparks are one mesh and one draw. Each other object is a draw of its own: the
+renderer has no instancing.
+
+The page shows in 420 ms: it rises out of the projector and grows from 12% of its size. It hides in
+260 ms. A chosen object grows by 22% with a spring and gets a halo. A press sinks an object 6 mm and
+flashes it. A ray that rests on an object makes it brighter. A clock of frames runs only while
+something moves: the stage, a crystal that turns or an animation. A hologram with no stage and no
+such object, such as a single crystal button, asks for no frame while it holds still. A hidden
+hologram composes neither its panel nor its objects. Its clock stops.
+
+Measured on a Quest 3 with a stream of 120 frames a second under an app's page of settings, over 4 s
+for each case. The page has nine rows: an arc of three options, four gems, four flowers, five
+cubes, a stepper, three switches and two keys, with `HologramStage::PAGE`. The flat page is the same
+page on a panel:
+
+| Case | Frame rate | Layers | App GPU | Compositor | CPU and GPU | GPU busy |
+| --- | --- | --- | --- | --- | --- | --- |
+| Flat page | 120 | 5 | 1.02 ms | 0.91 ms | 2.20 ms | 26% |
+| Hologram page | 120 | 6 | 2.58 ms | 1.50 ms | 6.30 ms | 54% |
+| Hologram page, with the depth submitted | 120 | 6 | 2.94 ms | 2.35 ms | 8.16 ms | 68% |
+| Hologram page, depth submitted, one sample a pixel | 120 | 6 | 2.74 ms | 2.35 ms | 7.88 ms | 66% |
+| Flat page, a controller's model shows | 120 | 7 | 2.79 ms | 2.36 ms | 8.05 ms | 66% |
+| Hologram page, a controller's model shows | 120 | 7 | 3.50 ms | 2.37 ms | 9.75 ms | 75% |
+
+The hologram page adds 1.6 ms of the app's GPU and 0.6 ms of the compositor while no controller's
+model shows. Most of that is the projection layer, which the flat page does not need. While a
+model shows, the layer is there for the model already. The page then adds 0.7 ms. A frame with
+holograms alone carries no depth (see "The projection layer and its depth"): the depth took 0.4 ms
+of the app's GPU, 0.9 ms of the compositor and 1.9 ms of the frame's CPU and GPU time. Four samples
+a pixel against one cost 0.2 ms. Each case had at most 3 stale frames in its 4 s.
 
 ### Pointer
 

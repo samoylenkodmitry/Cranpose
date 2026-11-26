@@ -12,7 +12,7 @@ use cranpose_core::{
     CompositionLocal, DisposableEffect, DisposableEffectResult, MutableState, State, mutableStateOf,
 };
 
-use crate::locals::with_locals;
+use crate::{ChoiceForm, locals::with_locals};
 
 // What a part looks like.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -24,7 +24,42 @@ pub(crate) enum PartShape {
     // A rocker that tilts to its end while on and to its start while off
     Rocker,
     // A groove with a knob, and a mark for each of `stops` values
-    Slider { stops: u32 },
+    Slider {
+        stops: u32,
+    },
+    // The option numbered `index` of `count` of a choice group, as an object of `form`, which
+    // shines while chosen
+    Choice {
+        form: ChoiceForm,
+        index: u32,
+        count: u32,
+    },
+    // The track of a choice group of `ChoiceForm::Arc`: a tick at each of its `count` options and
+    // a knob at its value
+    Track {
+        count: u32,
+    },
+    // The crystal that holds a stepper's value, with rings that orbit it
+    Crystal,
+    // A stepper's arrow toward the next option, or toward the one before; it dims while it has
+    // no option to go to
+    Arrow {
+        forward: bool,
+    },
+    // A round emblem with rings that orbit it
+    Emblem,
+    // A band of glass behind words, such as a title
+    Ribbon,
+}
+
+impl PartShape {
+    // Whether a hologram turns or orbits the part with time while it shows.
+    pub(crate) fn moves(self) -> bool {
+        matches!(
+            self,
+            Self::Choice { .. } | Self::Track { .. } | Self::Crystal | Self::Emblem
+        )
+    }
 }
 
 // A control's body.

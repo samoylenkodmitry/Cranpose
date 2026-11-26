@@ -4,7 +4,8 @@
 //! other: first the surfaces that are neither glass nor glow, then those
 //! an app's shader colours, then the volumes, then the spaces the scene's
 //! portals show inside their windows, then glass over a copy of the page
-//! they left, then glow added onto it.
+//! they left, then glow added onto it, then the glow an app's shader
+//! colours.
 
 use std::{rc::Rc, sync::Arc};
 
@@ -60,6 +61,9 @@ enum ScenePhase {
     Glass,
     /// Glow, added onto the page.
     Glow,
+    // Glow an app's shader colours, added onto the page, each shader with
+    // its own pipeline.
+    ShadedGlow,
 }
 
 impl ScenePhase {
@@ -71,7 +75,8 @@ impl ScenePhase {
             (Material::Glass(_), false) => Self::Glass,
             (Material::Glass(_), true) => Self::PortalGlass,
             (Material::Glow, false) => Self::Glow,
-            (Material::Glow, true) => Self::PortalGlow,
+            (Material::Glow | Material::ShadedGlow(_), true) => Self::PortalGlow,
+            (Material::ShadedGlow(_), false) => Self::ShadedGlow,
             (_, true) => Self::Portal,
             (Material::Volume(_), false) => Self::Volume,
             (Material::Shaded(_), false) => Self::Shaded,
@@ -108,7 +113,7 @@ fn takes_shadow(mesh: &MeshChild) -> bool {
     mesh.seen == 0
         && !matches!(
             mesh.surface.material,
-            Material::Emissive | Material::Glow | Material::Volume(_)
+            Material::Emissive | Material::Glow | Material::ShadedGlow(_) | Material::Volume(_)
         )
 }
 
@@ -298,6 +303,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 (volumes, ScenePhase::Volume),
                 portals(PortalPass::Colour { glow: true }),
                 glow,
+                SHADED_GLOW,
             ];
             let drawn = self.encode_steps(
                 (pass, &target, shadows),
@@ -369,6 +375,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 (StepPipeline::Portals(PortalPass::Glass), ScenePhase::Portal),
                 (StepPipeline::Fixed(ScenePipeline::Glass), ScenePhase::Glass),
                 (StepPipeline::Fixed(ScenePipeline::Glow), ScenePhase::Glow),
+                SHADED_GLOW,
             ],
             (draws, windows, Some(&copy)),
         );
@@ -402,8 +409,12 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         let mut count = 0;
         for (index, &(kind, phase)) in steps.iter().enumerate() {
             let swapped = match kind {
-                StepPipeline::Fixed(ScenePipeline::Plain | ScenePipeline::Shadowed)
-                | StepPipeline::Shaded(_) => StepPipeline::Fixed(ScenePipeline::Depth),
+                StepPipeline::Fixed(ScenePipeline::Plain | ScenePipeline::Shadowed) => {
+                    StepPipeline::Fixed(ScenePipeline::Depth)
+                }
+                StepPipeline::Shaded(variant) if !variant.adds() => {
+                    StepPipeline::Fixed(ScenePipeline::Depth)
+                }
                 StepPipeline::Volumes(_) => StepPipeline::Volumes(VolumeVariant::Depth),
                 _ => continue,
             };
@@ -619,7 +630,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             }
         };
         let shaded = match &surface.material {
-            Material::Shaded(shaded) => {
+            Material::Shaded(shaded) | Material::ShadedGlow(shaded) => {
                 let values = shaded_uniforms((&surface.transform, shaded), (eye, space))?;
                 Some(self.recorder.upload_uniform(
                     UploadAllocatorId::SceneShaded,
@@ -634,7 +645,9 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         // The pipelines of an app's shader stay while frames draw with it.
         match &surface.material {
             Material::Volume(volume) => self.renderer.scene_pass.note_volume(&volume.shader),
-            Material::Shaded(shaded) => self.renderer.scene_pass.note_shaded(&shaded.shader),
+            Material::Shaded(shaded) | Material::ShadedGlow(shaded) => {
+                self.renderer.scene_pass.note_shaded(&shaded.shader);
+            }
             _ => {}
         }
         let (buffers, staged) = self
@@ -690,7 +703,9 @@ impl PreparedSurface<'_> {
         renderer: &'r crate::render::GpuRenderer,
         (variant, samples): (ShadedVariant, Multisample),
     ) -> Option<&'r wgpu::RenderPipeline> {
-        let Material::Shaded(shaded) = &self.held.mesh.surface.material else {
+        let (Material::Shaded(shaded) | Material::ShadedGlow(shaded)) =
+            &self.held.mesh.surface.material
+        else {
             return None;
         };
         self.shaded.as_ref()?;
@@ -746,7 +761,13 @@ fn draw_surfaces<'d>(
             (StepPipeline::Shaded(variant), _) => {
                 let own = draw.shaded_pipeline(renderer, (variant, samples));
                 shaded = own.is_some();
-                let lit = || renderer.scene_surface_pipeline(variant.lit(), samples);
+                // A glowing surface draws nothing until its shader builds,
+                // so its first frames show no box of its content's colour
+                let lit = || {
+                    (!variant.adds())
+                        .then(|| renderer.scene_surface_pipeline(variant.lit(), samples))
+                        .flatten()
+                };
                 let Some(pipeline) = own.or_else(lit) else {
                     continue;
                 };
@@ -763,6 +784,12 @@ fn draw_surfaces<'d>(
         render_pass.draw_indexed(0..draw.buffers.index_count, 0, 0..1);
     }
 }
+
+// The step that draws the glow an app's shader colours.
+const SHADED_GLOW: (StepPipeline, ScenePhase) = (
+    StepPipeline::Shaded(ShadedVariant::Glow),
+    ScenePhase::ShadedGlow,
+);
 
 // The step that draws the shaded surfaces, lit by the shadow map when the
 // scene casts shadows.

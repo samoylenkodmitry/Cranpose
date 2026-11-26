@@ -180,8 +180,12 @@ impl VolumeLayers {
         } else if contents > 0 && !held.get_non_reactive() {
             held.set(true);
         }
-        let Some(frame_plan) = plan(contents, views.map(|view| view.is_some()), self.support())
-        else {
+        // A controller's model and the picture of another layer leave depth, and so may a volume
+        let writes = space.volumes().writes_depth()
+            || space.volumes().controllers().shown_count() > 0
+            || !layers.is_empty();
+        let depth = self.support().for_content(writes);
+        let Some(frame_plan) = plan(contents, views.map(|view| view.is_some()), depth) else {
             return Ok(());
         };
         let Some((cameras, poses)) = eye_cameras(views, size) else {

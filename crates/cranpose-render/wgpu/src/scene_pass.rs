@@ -31,9 +31,11 @@ use crate::{
 };
 
 mod app_shader;
+mod variants;
 
 use app_shader::kept_shader;
 pub(crate) use app_shader::{AppShader, ShadedShader, ShaderPipeline, VolumeShader};
+pub(crate) use variants::{ShadedVariant, VolumeVariant};
 
 // The sample counts a scene's pass draws with, each with pipelines of its
 // own.
@@ -555,11 +557,15 @@ impl ScenePass {
                         "scene/shaded",
                         "scene/shaded-shadowed",
                         "scene/shaded-portal",
+                        "scene/shaded-glow",
+                        "scene/shaded-portal-glow",
                     ],
                     [
                         "scene/shaded-x4",
                         "scene/shaded-shadowed-x4",
                         "scene/shaded-portal-x4",
+                        "scene/shaded-glow-x4",
+                        "scene/shaded-portal-glow-x4",
                     ],
                 ],
             ));
@@ -954,7 +960,7 @@ pub(crate) fn surface_uniforms(
         Material::Unlit => (0.0, None),
         // A shaded surface is lit until its shader builds.
         Material::Lit | Material::Shaded(_) => (1.0, None),
-        Material::Emissive | Material::Glow => (2.0, None),
+        Material::Emissive | Material::Glow | Material::ShadedGlow(_) => (2.0, None),
         Material::Glass(glass) => (0.0, Some(*glass)),
         // A volume takes its own uniforms.
         Material::Volume(_) => (0.0, None),
@@ -1251,96 +1257,6 @@ fn app_pipeline_job<const N: usize>(
                 spec.samples,
             ),
         ))
-    }
-}
-
-/// Which of a shaded surface's shader's pipelines a draw takes.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ShadedVariant {
-    /// The surfaces of a scene's own space without shadows.
-    Plain,
-    /// The surfaces of a scene's own space, which read its shadow map.
-    Shadowed,
-    /// The surfaces in a portal's space, inside its window.
-    Portal,
-}
-
-impl ShadedVariant {
-    /// The lit surfaces' pipeline the variant takes the place of, and which
-    /// a surface draws with until its shader builds.
-    pub(crate) fn lit(self) -> ScenePipeline {
-        match self {
-            Self::Plain => ScenePipeline::Plain,
-            Self::Shadowed => ScenePipeline::Shadowed,
-            Self::Portal => ScenePipeline::Portal,
-        }
-    }
-
-    /// The lit pipeline's targets, with the shader's own entry points.
-    fn spec(self, samples: Multisample) -> PipelineSpec {
-        let fragment = match self {
-            Self::Plain => "mesh_shaded_fs",
-            Self::Shadowed => "mesh_shaded_shadowed_fs",
-            Self::Portal => "mesh_shaded_portal_fs",
-        };
-        PipelineSpec {
-            label: "Scene Shaded Surface Pipeline",
-            entry_points: ("mesh_shaded_vs", fragment),
-            ..self.lit().spec(samples)
-        }
-    }
-}
-
-/// Which of a volume shader's pipelines a draw takes.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum VolumeVariant {
-    /// Draws the volumes of the scene's own space.
-    Color,
-    /// Draws only their depth, for the pass glass draws in.
-    Depth,
-    /// Draws volumes in a portal's space, inside its window.
-    Portal,
-    /// Draws only the depth of volumes in a portal's space, for the pass
-    /// glass draws in.
-    PortalDepth,
-}
-
-impl VolumeVariant {
-    fn spec(self, samples: Multisample) -> PipelineSpec {
-        let (label, fragment, color, stencil) = match self {
-            Self::Color => (
-                "Scene Volume Pipeline",
-                "mesh_volume_fs",
-                Some(Blend::Over),
-                Stencil::Ignored,
-            ),
-            Self::Depth => (
-                "Scene Volume Depth Pipeline",
-                "mesh_volume_fs",
-                None,
-                Stencil::Ignored,
-            ),
-            Self::Portal => (
-                "Scene Portal Volume Pipeline",
-                "mesh_volume_portal_fs",
-                Some(Blend::Over),
-                Stencil::Inside,
-            ),
-            Self::PortalDepth => (
-                "Scene Portal Volume Depth Pipeline",
-                "mesh_volume_portal_fs",
-                None,
-                Stencil::Inside,
-            ),
-        };
-        PipelineSpec {
-            label,
-            entry_points: ("mesh_volume_vs", fragment),
-            color,
-            depth: Depth::Tested,
-            stencil,
-            samples,
-        }
     }
 }
 

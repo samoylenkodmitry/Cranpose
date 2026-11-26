@@ -177,6 +177,10 @@ mod headset_properties;
 #[cfg(any(test, headset))]
 mod hit;
 mod hit_info;
+mod hologram;
+mod hologram_material;
+mod hologram_meshes;
+mod hologram_scene;
 mod input_action;
 mod input_event;
 mod input_source;
@@ -275,7 +279,9 @@ mod sound_stage;
 mod space;
 mod spatial_button;
 mod spatial_capabilities;
+mod spatial_choice_group;
 mod spatial_curved_row;
+mod spatial_emblem;
 mod spatial_environment;
 mod spatial_external_surface;
 mod spatial_frame_effect;
@@ -287,6 +293,7 @@ mod spatial_gltf_model_source;
 mod spatial_gltf_model_state;
 #[cfg(feature = "gltf")]
 mod spatial_gltf_model_status;
+mod spatial_hologram;
 mod spatial_move_event;
 #[cfg(any(test, headset))]
 mod spatial_offer;
@@ -295,6 +302,7 @@ mod spatial_point_source;
 #[cfg(any(test, headset))]
 mod spatial_request;
 mod spatial_resize_event;
+mod spatial_ribbon;
 #[cfg(any(test, headset))]
 mod spatial_setup;
 mod spatial_slider;
@@ -404,6 +412,7 @@ pub use hand_state::HandState;
 pub use haptics::{Haptics, Vibration, local_haptics};
 pub use headset_properties::{EyeImageSize, HeadsetProperties, local_headset_properties};
 pub use hit_info::HitInfo;
+pub use hologram::{HologramColors, HologramStage};
 pub use input_action::InputAction;
 pub use input_event::InputEvent;
 pub use input_source::InputSource;
@@ -444,7 +453,9 @@ pub use scripted_hand::{PinchCycle, ScriptedHand, script_hand};
 pub use soft_follow_mode::SoftFollowMode;
 pub use spatial_button::{ButtonShape, SpatialButton};
 pub use spatial_capabilities::{SpatialCapabilities, local_spatial_capabilities};
+pub use spatial_choice_group::{ChoiceForm, SpatialChoiceGroup};
 pub use spatial_curved_row::SpatialCurvedRow;
+pub use spatial_emblem::SpatialEmblem;
 pub use spatial_environment::{SpatialEnvironment, local_spatial_environment};
 pub use spatial_external_surface::{SpatialExternalSurface, SpatialExternalSurfaceScope};
 pub use spatial_frame_effect::SpatialFrameEffect;
@@ -456,10 +467,12 @@ pub use spatial_gltf_model_source::SpatialGltfModelSource;
 pub use spatial_gltf_model_state::{SpatialGltfModelState, rememberSpatialGltfModelState};
 #[cfg(feature = "gltf")]
 pub use spatial_gltf_model_status::SpatialGltfModelStatus;
+pub use spatial_hologram::SpatialHologram;
 pub use spatial_move_event::{SpatialMoveEvent, SpatialMoveEventType};
 pub use spatial_panel::SpatialPanel;
 pub use spatial_point_source::SpatialPointSource;
 pub use spatial_resize_event::{SpatialResizeEvent, SpatialResizeEventType};
+pub use spatial_ribbon::SpatialRibbon;
 pub use spatial_slider::{SliderColors, SpatialSlider};
 pub use spatial_switch::{SpatialSwitch, SwitchColors};
 pub use spatial_tray::SpatialTray;
