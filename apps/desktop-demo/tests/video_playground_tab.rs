@@ -1,6 +1,7 @@
 // Integration tests for the Video Playground showcase tab driven through public
-// entry points: stress scenarios (including the 64-video wall), animated surface
-// effect toggles, per-source license catalog audit, and clean disposal on tab exit.
+// entry points: Big Buck Bunny default source, motion disabled by default, play/pause/seek
+// transport controls, stress scenarios up to the 64-video wall, TikTok-style Reels gallery,
+// per-source license catalog audit (including 8K nature & UVG non-commercial), and clean disposal.
 
 use cranpose_testing::{
     placed_semantics_from_shell,
@@ -47,17 +48,22 @@ fn startup_slug_and_aliases_select_video_playground() {
 }
 
 #[test]
-fn stress_scenarios_effects_and_64_video_wall_render_and_dispose_cleanly() {
+fn defaults_transport_stress_wall_reels_and_catalog_work_cleanly() {
     let mut robot = RobotTestRule::new(1440, 960, TestRenderer::default(), || {
         combined_app_with_initial_tab(Some(DemoTab::VideoPlayground));
     });
     robot.shell_mut().set_semantics_enabled(true);
     pump_shell_until_stable(robot.shell_mut());
 
-    // Default scenario: 4x 4K 60 with all 6 independent telemetry headings visible.
+    // Default state: Big Buck Bunny open by default, motion & 3D off by default, full transport
+    // controls (Play/Pause, -10s, +10s, seek bar), and all 6 independent telemetry headings.
     for expected in [
         "Video Playground",
-        "1.99B px/s",
+        "Big Buck Bunny (1080p 60 FPS)",
+        "Motion: Off",
+        "3D: Off",
+        "-10s",
+        "+10s",
         "Decoder FPS",
         "Compositor FPS",
         "Dropped Frames",
@@ -67,9 +73,21 @@ fn stress_scenarios_effects_and_64_video_wall_render_and_dispose_cleanly() {
     ] {
         assert!(
             shows(&mut robot, expected),
-            "expected telemetry/header text {expected:?}"
+            "expected default Video Playground text {expected:?}"
         );
     }
+    let initial_placed = placed_semantics_from_shell(robot.shell_mut())
+        .expect("semantics tree should exist on Video Playground");
+    assert!(
+        semantics_contains_description(&initial_placed, "Video seek bar"),
+        "interactive seek bar must expose accessible semantics"
+    );
+
+    // Exercise play/pause and seek controls without panicking.
+    click_button(&mut robot, "+10s");
+    click_button(&mut robot, "-10s");
+    click_button(&mut robot, "Speed: 1x");
+    assert!(shows(&mut robot, "Speed: 1.5x"));
 
     // Switch through stress scenarios up to the 64-video wall (3.54B px/s).
     click_button(&mut robot, "1x 4K 120");
@@ -87,7 +105,9 @@ fn stress_scenarios_effects_and_64_video_wall_render_and_dispose_cleanly() {
         "64-video wall must mount tile #64"
     );
 
-    // Exercise animated layouts and GPU surface effects (blur, alpha, WGSL shader).
+    // Exercise animated layouts and GPU surface effects (motion, blur, alpha, WGSL shader).
+    click_button(&mut robot, "Motion: Off");
+    assert!(shows(&mut robot, "Motion: On"));
     click_button(&mut robot, "Layout: Wave");
     click_button(&mut robot, "Blur: Off");
     assert!(shows(&mut robot, "Blur: On"));
@@ -97,21 +117,30 @@ fn stress_scenarios_effects_and_64_video_wall_render_and_dispose_cleanly() {
     assert!(shows(&mut robot, "Shader: Prism"));
     click_button(&mut robot, "Layout: Spotlight");
 
-    // Open curated media catalog and verify license disclosures (including UVG non-commercial).
+    // Enter TikTok-style scrollable vertical Reels gallery and navigate to the next reel.
+    click_button(&mut robot, "Layout: Reels");
+    assert!(shows(&mut robot, "Reel 1 /"));
+    click_button(&mut robot, "Next");
+    assert!(shows(&mut robot, "Reel 2 /"));
+    click_button(&mut robot, "Video Wall");
+
+    // Open curated media catalog and verify direct streams (Sol Levante, Charge, 8K Nature,
+    // Jellyfin ams1) plus license disclosures (including UVG non-commercial).
     click_button(&mut robot, "Open Media Catalog");
-    for license_text in [
-        "Sol Levante",
-        "Nocturne",
-        "Tears of Steel",
-        "Charge",
+    for expected in [
+        "Play Big Buck Bunny (MPEG-DASH ABR)",
+        "Play Charge 4K (Blender Open Movie)",
+        "Play Sol Levante 4K (Netflix Open Content)",
+        "Play Potomac River Rapids — 8K Nature",
+        "Play Earth from the ISS — NASA 8K Ultra HD",
+        "Play Jellyfin 4K HDR10 HEVC (40 Mbps)",
         "Ultra Video Group",
         "CC BY-NC 4.0 (Non-Commercial ONLY)",
-        "Jellyfin 4K HDR10 HEVC",
         "CC BY-SA 4.0",
     ] {
         assert!(
-            shows(&mut robot, license_text),
-            "expected media catalog disclosure {license_text:?}"
+            shows(&mut robot, expected),
+            "expected media catalog entry/disclosure {expected:?}"
         );
     }
 

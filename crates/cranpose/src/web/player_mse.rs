@@ -16,17 +16,16 @@ use std::{
 
 use cranpose_core::delay;
 use cranpose_services::{
-    AbrVariant, DashAdaptationSet, DashManifest, HlsMasterPlaylist, HlsMediaPlaylist, LoadControl,
-    MediaItem, MediaProperties, PlayerError, PlayerSink, TrackEntry, TrackFormat, TrackGroup,
-    TrackSelectionParameters, TrackType, parse_dash_mpd, parse_hls_master, parse_hls_media,
-    select_abr_variant,
+    AbrVariant, DashAdaptationSet, DashManifest, HlsMasterPlaylist, HlsMediaPlaylist,
+    HlsRenditionType, LoadControl, MediaItem, MediaProperties, PlayerError, PlayerSink, TrackEntry,
+    TrackFormat, TrackGroup, TrackSelectionParameters, TrackType, parse_dash_mpd, parse_hls_master,
+    parse_hls_media, select_abr_variant,
 };
 use wasm_bindgen::{JsCast, JsValue, closure::Closure, prelude::wasm_bindgen};
 use web_sys::HtmlVideoElement;
 use web_time::Instant;
 
 use super::{
-    media::buffered_end,
     player::{
         is_generation_alive, record_object_url, set_base_tracks, take_mse_seek,
         track_selection_snapshot,
@@ -35,7 +34,7 @@ use super::{
 };
 use crate::player_control::choose_dash_representation;
 
-const DEFAULT_BANDWIDTH_BPS: u32 = 4_000_000;
+const DEFAULT_BANDWIDTH_BPS: u32 = 12_000_000;
 const BUFFER_POLL_STEP: Duration = Duration::from_millis(200);
 const MIN_LIVE_REFRESH: Duration = Duration::from_secs(1);
 
@@ -177,12 +176,18 @@ async fn drive_mse_stream(
     if !is_generation_alive(id, generation) {
         return Ok(());
     }
-    let video_sb = add_supported_buffer(&media_source, &plan.video.mime)?;
-    let audio_sb = plan
-        .audio
-        .as_ref()
-        .map(|audio| add_supported_buffer(&media_source, &audio.mime))
-        .transpose()?;
+    let video_sb = add_supported_buffer(&media_source, &plan.video.mime, TrackType::Video)?;
+    let audio_sb = match plan.audio.as_ref() {
+        Some(audio) => match add_supported_buffer(&media_source, &audio.mime, TrackType::Audio) {
+            Ok(sb) => Some(sb),
+            Err(err) => {
+                log::debug!("cranpose web MSE: skipping unsupported audio track: {err}");
+                plan.audio = None;
+                None
+            }
+        },
+        None => None,
+    };
     let ctx = MseSessionContext {
         id,
         generation,
@@ -228,9 +233,11 @@ async fn pump_mse_loop(
     let mut video_cursor = BufferCursor::default();
     let mut audio_cursor = BufferCursor::default();
     let mut bandwidth_bps = DEFAULT_BANDWIDTH_BPS;
+    let mut ended = false;
 
     while is_generation_alive(ctx.id, ctx.generation) {
         if let Some(target) = take_mse_seek(ctx.id) {
+            ended = false;
             apply_mse_seek(
                 video_sb,
                 audio_sb,
@@ -240,7 +247,7 @@ async fn pump_mse_loop(
                 target,
             );
         }
-        if buffer_ahead(ctx.video) >= ctx.load_control.max_buffer {
+        if ended || buffer_ahead(ctx.video) >= ctx.load_control.max_buffer {
             delay(BUFFER_POLL_STEP).await;
             continue;
         }
@@ -266,7 +273,8 @@ async fn pump_mse_loop(
             continue;
         }
         finish_media_source(media_source, video_sb, audio_sb);
-        break;
+        ended = true;
+        delay(BUFFER_POLL_STEP).await;
     }
     Ok(())
 }
@@ -386,15 +394,23 @@ async fn append_bytes_and_wait(sb: &JsSourceBuffer, bytes: &[u8]) -> Result<(), 
 fn add_supported_buffer(
     media_source: &JsMediaSource,
     preferred: &str,
+    track_type: TrackType,
 ) -> Result<JsSourceBuffer, PlayerError> {
-    let candidates = [
-        preferred,
-        "video/mp4; codecs=\"avc1.640028, mp4a.40.2\"",
-        "video/mp4; codecs=\"avc1.640028\"",
-        "video/mp4",
-        "video/webm; codecs=\"vp09.00.10.08, opus\"",
-    ];
-    for mime in candidates {
+    let fallbacks: &[&str] = match track_type {
+        TrackType::Audio => &[
+            "audio/mp4; codecs=\"mp4a.40.2\"",
+            "audio/mp4; codecs=\"mp4a.40.5\"",
+            "audio/mp4",
+            "audio/webm; codecs=\"opus\"",
+        ],
+        _ => &[
+            "video/mp4; codecs=\"avc1.640028, mp4a.40.2\"",
+            "video/mp4; codecs=\"avc1.640028\"",
+            "video/mp4",
+            "video/webm; codecs=\"vp09.00.10.08, opus\"",
+        ],
+    };
+    for mime in std::iter::once(preferred).chain(fallbacks.iter().copied()) {
         if !mime.is_empty() && JsMediaSource::is_type_supported(mime) {
             return media_source
                 .add_source_buffer(mime)
@@ -447,21 +463,110 @@ async fn resolve_hls_plan(
             .map_err(PlayerError::Network)?;
         let media = parse_hls_media(&variant.uri, &media_text)
             .map_err(|err| PlayerError::Source(format!("HLS media playlist: {err}")))?;
-        let mime = build_mse_mime(None, variant.codecs.as_deref());
+        ensure_mse_compatible_hls(&media)?;
+        let audio_rendition = find_hls_audio_rendition(&master, variant.audio_group.as_deref());
+        let (video_codecs, audio_codecs) = if audio_rendition.is_some() {
+            split_av_codecs(variant.codecs.as_deref())
+        } else {
+            (variant.codecs.clone(), None)
+        };
+        let audio = match audio_rendition {
+            Some(audio_url) => {
+                let audio_text = fetch_text(audio_url, headers)
+                    .await
+                    .map_err(PlayerError::Network)?;
+                let audio_media = parse_hls_media(audio_url, &audio_text)
+                    .map_err(|err| PlayerError::Source(format!("HLS audio playlist: {err}")))?;
+                let audio_mime = build_mse_mime(
+                    Some("audio/mp4"),
+                    audio_codecs.as_deref().or(Some("mp4a.40.2")),
+                );
+                Some(plan_from_hls_media(
+                    audio_url.to_owned(),
+                    audio_mime,
+                    &audio_media,
+                ))
+            }
+            None => None,
+        };
+        let mime = build_mse_mime(None, video_codecs.as_deref());
         let tracks = build_hls_tracks(&master, selected);
         return Ok(MseOpenPlan {
             video: plan_from_hls_media(variant.uri.clone(), mime, &media),
-            audio: None,
+            audio,
             tracks,
         });
     }
     let media = parse_hls_media(uri, text)
         .map_err(|err| PlayerError::Source(format!("HLS media playlist: {err}")))?;
+    ensure_mse_compatible_hls(&media)?;
     Ok(MseOpenPlan {
         video: plan_from_hls_media(uri.to_owned(), build_mse_mime(None, None), &media),
         audio: None,
         tracks: Vec::new(),
     })
+}
+
+fn ensure_mse_compatible_hls(media: &HlsMediaPlaylist) -> Result<(), PlayerError> {
+    let Some(first) = media.segments.first() else {
+        return Err(PlayerError::Source(
+            "HLS playlist contains no segments".into(),
+        ));
+    };
+    let path = first.uri.split('?').next().unwrap_or(&first.uri);
+    if first.init_uri.is_none() && path.to_ascii_lowercase().ends_with(".ts") {
+        return Err(PlayerError::Unsupported(
+            "HLS MPEG-TS requires native HLS (Safari/desktop/mobile); use fMP4 HLS or MPEG-DASH in this browser".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn find_hls_audio_rendition<'a>(
+    master: &'a HlsMasterPlaylist,
+    group_id: Option<&str>,
+) -> Option<&'a str> {
+    let group_id = group_id?;
+    master
+        .renditions
+        .iter()
+        .find(|r| {
+            r.kind == HlsRenditionType::Audio
+                && r.group_id == group_id
+                && r.is_default
+                && r.uri.is_some()
+        })
+        .or_else(|| {
+            master.renditions.iter().find(|r| {
+                r.kind == HlsRenditionType::Audio && r.group_id == group_id && r.uri.is_some()
+            })
+        })
+        .and_then(|r| r.uri.as_deref())
+}
+
+fn split_av_codecs(codecs: Option<&str>) -> (Option<String>, Option<String>) {
+    let Some(raw) = codecs else {
+        return (None, None);
+    };
+    let mut video = Vec::new();
+    let mut audio = Vec::new();
+    for part in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let lower = part.to_ascii_lowercase();
+        if lower.starts_with("mp4a")
+            || lower.starts_with("opus")
+            || lower.starts_with("ac-3")
+            || lower.starts_with("ec-3")
+            || lower.starts_with("flac")
+            || lower.starts_with("vorbis")
+        {
+            audio.push(part);
+        } else {
+            video.push(part);
+        }
+    }
+    let v = (!video.is_empty()).then(|| video.join(","));
+    let a = (!audio.is_empty()).then(|| audio.join(","));
+    (v, a)
 }
 
 fn plan_from_hls_media(url: String, mime: String, media: &HlsMediaPlaylist) -> MseTrackPlan {
@@ -565,8 +670,21 @@ fn plan_from_dash_set(
     manifest_duration: Option<Duration>,
     selection: &TrackSelectionParameters,
 ) -> Result<(MseTrackPlan, TrackGroup), PlayerError> {
-    let selected = choose_dash_representation(set, DEFAULT_BANDWIDTH_BPS, selection);
+    let supported_flags: Vec<bool> = set
+        .representations
+        .iter()
+        .map(|r| {
+            let mime = build_mse_mime(r.mime_type.as_deref(), r.codecs.as_deref());
+            JsMediaSource::is_type_supported(&mime)
+        })
+        .collect();
+    let selected = choose_supported_dash_representation(set, &supported_flags, selection);
     let rep = &set.representations[selected];
+    if rep.segments.is_empty() {
+        return Err(PlayerError::Source(
+            "DASH representation contains no playable segments".into(),
+        ));
+    }
     let mut cursor = Duration::ZERO;
     let segments: Vec<MseSegment> = rep
         .segments
@@ -610,7 +728,7 @@ fn plan_from_dash_set(
                     language: set.language.clone(),
                     ..TrackFormat::default()
                 },
-                supported: true,
+                supported: supported_flags[idx],
                 selected: idx == selected,
             })
             .collect(),
@@ -627,6 +745,29 @@ fn plan_from_dash_set(
         },
         group,
     ))
+}
+
+fn choose_supported_dash_representation(
+    set: &DashAdaptationSet,
+    supported: &[bool],
+    selection: &TrackSelectionParameters,
+) -> usize {
+    let variants: Vec<AbrVariant> = set
+        .representations
+        .iter()
+        .enumerate()
+        .filter(|(idx, r)| supported[*idx] && !r.segments.is_empty())
+        .map(|(index, r)| AbrVariant {
+            index,
+            bitrate: r.bandwidth,
+            width: r.width,
+            height: r.height,
+        })
+        .collect();
+    if let Some(best) = select_abr_variant(&variants, DEFAULT_BANDWIDTH_BPS, selection) {
+        return best;
+    }
+    choose_dash_representation(set, DEFAULT_BANDWIDTH_BPS, selection)
 }
 
 fn build_hls_tracks(master: &HlsMasterPlaylist, selected: usize) -> Vec<TrackGroup> {
@@ -665,10 +806,21 @@ fn build_mse_mime(mime_type: Option<&str>, codecs: Option<&str>) -> String {
 }
 
 fn buffer_ahead(video: &HtmlVideoElement) -> Duration {
-    let current = super::media::seconds(video.current_time());
-    buffered_end(video)
-        .unwrap_or(Duration::ZERO)
-        .saturating_sub(current)
+    let current = video.current_time();
+    if !current.is_finite() || current < 0.0 {
+        return Duration::ZERO;
+    }
+    let ranges = video.buffered();
+    let len = ranges.length();
+    for idx in 0..len {
+        let (Ok(start), Ok(end)) = (ranges.start(idx), ranges.end(idx)) else {
+            continue;
+        };
+        if current + 0.5 >= start && current <= end + 0.5 {
+            return Duration::from_secs_f64((end - current).max(0.0));
+        }
+    }
+    Duration::ZERO
 }
 
 fn update_bandwidth(estimate: &mut u32, bytes: usize, elapsed: Duration) {

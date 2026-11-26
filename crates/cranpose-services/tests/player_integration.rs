@@ -690,6 +690,60 @@ fn dash_manifest_and_abr_selection_work_end_to_end() {
 }
 
 #[test]
+fn dash_fixed_duration_segment_template_and_printf_tokens_expand() {
+    // Matches the ISO/IEC 23009-1 isoff-live fixed-duration template used by Akamai's
+    // Big Buck Bunny 30fps MPD and DASH-IF MultiRate UHD manifests.
+    let bbb_xml = r#"<MPD type="static" mediaPresentationDuration="PT634.566S">
+      <BaseURL>./</BaseURL>
+      <Period>
+        <AdaptationSet mimeType="video/mp4" contentType="video">
+          <SegmentTemplate duration="120" timescale="30" media="$RepresentationID$/$RepresentationID$_$Number$.m4v" startNumber="1" initialization="$RepresentationID$/$RepresentationID$_0.m4v"/>
+          <Representation id="bbb_30fps_1920x1080_8000k" codecs="avc1.640028" bandwidth="9914554" width="1920" height="1080" frameRate="30"/>
+        </AdaptationSet>
+        <AdaptationSet mimeType="audio/mp4" contentType="audio">
+          <SegmentTemplate duration="192512" timescale="48000" media="$RepresentationID$/$RepresentationID$_$Number%04d$.m4a" startNumber="1" initialization="$RepresentationID$/$RepresentationID$_0.m4a"/>
+          <Representation id="bbb_a64k" codecs="mp4a.40.5" bandwidth="67071"/>
+        </AdaptationSet>
+      </Period>
+    </MPD>"#;
+    let dash = parse_dash_mpd(
+        "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd",
+        bbb_xml,
+    )
+    .expect("fixed-duration DASH MPD should parse");
+    assert_eq!(dash.adaptation_sets.len(), 2);
+
+    let video = &dash.adaptation_sets[0].representations[0];
+    assert_eq!(
+        video.init_uri.as_deref(),
+        Some(
+            "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_0.m4v"
+        )
+    );
+    assert_eq!(video.segments.len(), 159);
+    assert_eq!(
+        video.segments[0].uri,
+        "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_1.m4v"
+    );
+    assert_eq!(
+        video.segments[158].uri,
+        "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_159.m4v"
+    );
+    assert_eq!(video.segments[0].duration, Duration::from_secs(4));
+
+    let audio = &dash.adaptation_sets[1].representations[0];
+    assert_eq!(
+        audio.init_uri.as_deref(),
+        Some("https://dash.akamaized.net/akamai/bbb_30fps/bbb_a64k/bbb_a64k_0.m4a")
+    );
+    assert_eq!(audio.segments.len(), 159);
+    assert_eq!(
+        audio.segments[0].uri,
+        "https://dash.akamaized.net/akamai/bbb_30fps/bbb_a64k/bbb_a64k_0001.m4a"
+    );
+}
+
+#[test]
 fn media_item_builders_carry_headers_clipping_subtitles_and_bytes() {
     let item = MediaItem::new("https://example.com/protected.m3u8")
         .with_mime_type("application/x-mpegURL")

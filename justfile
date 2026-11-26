@@ -523,7 +523,12 @@ _size-ceiling path max what:
 # `cranpose/video` (WebCodecs player, zero-copy GPU surface intake, HLS/DASH,
 # 64-video wall, WGSL shaders; offline clips are served statically outside wasm)
 # took the CI wasm-opt 130 module to 17,481,430 bytes (+610,455 bytes).
-web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "17570000" "web demo wasm")
+# Adding the Video Playground vertical Reels gallery (`VerticalPager` +
+# `PlayerPool`), interactive `Slider` seek bar, player error/speed hooks,
+# fixed-duration DASH / fMP4 HLS audio MSE support, and 8K/4K open catalog
+# brought the CI module to ~17.63 MB (+149 KB after de-monomorphizing chips
+# and sharing video frame intake).
+web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "17720000" "web demo wasm")
 
 # Fail when a built wasm module needs a WebAssembly feature past Safari 15.
 # WebKit rejects such a module whole, in Safari and in every other iOS browser.

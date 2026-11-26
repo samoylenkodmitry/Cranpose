@@ -293,11 +293,15 @@ pub fn parse_dash_mpd(base_url: &str, xml: &str) -> Result<DashManifest, Manifes
         .filter(|n| n.is_element() && n.tag_name().name() == "Period")
     {
         let period_base = resolve_base_url(period, &mpd_base);
+        let period_duration = period
+            .attribute("duration")
+            .and_then(parse_iso8601_duration)
+            .or(duration);
         for set in period
             .children()
             .filter(|n| n.is_element() && n.tag_name().name() == "AdaptationSet")
         {
-            if let Some(parsed) = parse_dash_adaptation_set(&period_base, set) {
+            if let Some(parsed) = parse_dash_adaptation_set(&period_base, set, period_duration) {
                 adaptation_sets.push(parsed);
             }
         }
@@ -421,6 +425,7 @@ fn parse_byte_range(val: &str, default_offset: u64) -> Option<(u64, u64)> {
 fn parse_dash_adaptation_set(
     period_base: &str,
     set: roxmltree::Node<'_, '_>,
+    period_duration: Option<Duration>,
 ) -> Option<DashAdaptationSet> {
     let set_base = resolve_base_url(set, period_base);
     let set_mime = set.attribute("mimeType");
@@ -440,6 +445,7 @@ fn parse_dash_adaptation_set(
             set_mime,
             set_codecs,
             set_template,
+            period_duration,
         ));
     }
     if representations.is_empty() {
@@ -462,23 +468,29 @@ fn parse_dash_representation(
     set_mime: Option<&str>,
     set_codecs: Option<&str>,
     set_template: Option<roxmltree::Node<'_, '_>>,
+    period_duration: Option<Duration>,
 ) -> DashRepresentation {
     let id = rep.attribute("id").unwrap_or("").to_owned();
+    let bandwidth: u32 = rep
+        .attribute("bandwidth")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     let rep_base = resolve_base_url(rep, set_base);
-    let template = rep
+    let rep_template = rep
         .children()
-        .find(|n| n.is_element() && n.tag_name().name() == "SegmentTemplate")
-        .or(set_template);
-    let (init_uri, segments) = match template {
-        Some(tmpl) => expand_segment_template(&rep_base, &id, tmpl),
-        None => parse_segment_list(&rep_base, rep),
+        .find(|n| n.is_element() && n.tag_name().name() == "SegmentTemplate");
+    let (init_uri, segments) = match (rep_template, set_template) {
+        (Some(tmpl), fallback) => {
+            expand_segment_template(&rep_base, &id, bandwidth, tmpl, fallback, period_duration)
+        }
+        (None, Some(tmpl)) => {
+            expand_segment_template(&rep_base, &id, bandwidth, tmpl, None, period_duration)
+        }
+        (None, None) => parse_segment_list(&rep_base, rep),
     };
     DashRepresentation {
         id,
-        bandwidth: rep
-            .attribute("bandwidth")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0),
+        bandwidth,
         width: rep.attribute("width").and_then(|v| v.parse().ok()),
         height: rep.attribute("height").and_then(|v| v.parse().ok()),
         frame_rate: rep.attribute("frameRate").and_then(parse_frame_rate),
@@ -489,35 +501,99 @@ fn parse_dash_representation(
     }
 }
 
+const MAX_DASH_TEMPLATE_SEGMENTS: u64 = 16_384;
+
+fn template_attr<'a>(
+    primary: roxmltree::Node<'a, 'a>,
+    fallback: Option<roxmltree::Node<'a, 'a>>,
+    name: &str,
+) -> Option<&'a str> {
+    primary
+        .attribute(name)
+        .or_else(|| fallback.and_then(|node| node.attribute(name)))
+}
+
+struct DashTemplateContext<'a> {
+    base_url: &'a str,
+    rep_id: &'a str,
+    bandwidth: u32,
+    media_pattern: &'a str,
+    timescale: u64,
+    start_number: u64,
+    period_duration: Option<Duration>,
+}
+
 fn expand_segment_template(
     base_url: &str,
     rep_id: &str,
+    bandwidth: u32,
     tmpl: roxmltree::Node<'_, '_>,
+    fallback: Option<roxmltree::Node<'_, '_>>,
+    period_duration: Option<Duration>,
 ) -> (Option<String>, Vec<DashSegment>) {
-    let timescale: u64 = tmpl
-        .attribute("timescale")
+    let timescale: u64 = template_attr(tmpl, fallback, "timescale")
         .and_then(|v| v.parse().ok())
         .unwrap_or(1)
         .max(1);
-    let start_number: u64 = tmpl
-        .attribute("startNumber")
+    let start_number: u64 = template_attr(tmpl, fallback, "startNumber")
         .and_then(|v| v.parse().ok())
         .unwrap_or(1);
-    let init_uri = tmpl
-        .attribute("initialization")
-        .map(|pattern| resolve_url(base_url, &pattern.replace("$RepresentationID$", rep_id)));
-    let Some(media_pattern) = tmpl.attribute("media") else {
+    let init_uri = template_attr(tmpl, fallback, "initialization").map(|pattern| {
+        let expanded = expand_dash_template(pattern, rep_id, bandwidth, start_number, 0);
+        resolve_url(base_url, &expanded)
+    });
+    let Some(media_pattern) = template_attr(tmpl, fallback, "media") else {
         return (init_uri, Vec::new());
     };
-    let mut segments = Vec::new();
-    let Some(timeline) = tmpl
+    let ctx = DashTemplateContext {
+        base_url,
+        rep_id,
+        bandwidth,
+        media_pattern,
+        timescale,
+        start_number,
+        period_duration,
+    };
+    let timeline = tmpl
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "SegmentTimeline")
-    else {
-        return (init_uri, segments);
+        .or_else(|| {
+            fallback.and_then(|f| {
+                f.children()
+                    .find(|n| n.is_element() && n.tag_name().name() == "SegmentTimeline")
+            })
+        });
+    let segments = if let Some(timeline) = timeline {
+        expand_timeline_segments(&ctx, timeline)
+    } else if let Some(seg_ticks) = template_attr(tmpl, fallback, "duration")
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&d| d > 0)
+    {
+        expand_fixed_duration_segments(&ctx, seg_ticks)
+    } else {
+        Vec::new()
     };
+    (init_uri, segments)
+}
+
+fn duration_to_ticks_ceil(duration: Duration, timescale: u64) -> u64 {
+    let scaled = duration
+        .as_nanos()
+        .saturating_mul(u128::from(timescale))
+        .div_ceil(1_000_000_000);
+    u64::try_from(scaled).unwrap_or(u64::MAX)
+}
+
+fn expand_timeline_segments(
+    ctx: &DashTemplateContext<'_>,
+    timeline: roxmltree::Node<'_, '_>,
+) -> Vec<DashSegment> {
+    let mut segments = Vec::new();
     let mut current_time: u64 = 0;
-    let mut number = start_number;
+    let mut number = ctx.start_number;
+    let period_ticks = ctx
+        .period_duration
+        .map(|dur| duration_to_ticks_ceil(dur, ctx.timescale));
     for s in timeline
         .children()
         .filter(|n| n.is_element() && n.tag_name().name() == "S")
@@ -528,27 +604,116 @@ fn expand_segment_template(
         let Some(d) = s.attribute("d").and_then(|v| v.parse::<u64>().ok()) else {
             continue;
         };
-        let repeat: u64 = s
-            .attribute("r")
-            .and_then(|v| v.parse::<i64>().ok())
-            .filter(|&r| r >= 0)
-            .map_or(0, i64::cast_unsigned);
-        let count = repeat.saturating_add(1).min(4096);
-        let duration = Duration::from_secs_f64(d as f64 / timescale as f64);
+        if d == 0 {
+            continue;
+        }
+        let count = match s.attribute("r").and_then(|v| v.parse::<i64>().ok()) {
+            Some(r) if r >= 0 => r.cast_unsigned().saturating_add(1),
+            Some(_) => {
+                period_ticks.map_or(1, |end| end.saturating_sub(current_time).div_ceil(d).max(1))
+            }
+            None => 1,
+        }
+        .min(MAX_DASH_TEMPLATE_SEGMENTS.saturating_sub(segments.len() as u64));
+        let duration = Duration::from_secs_f64(d as f64 / ctx.timescale as f64);
         for _ in 0..count {
-            let expanded = media_pattern
-                .replace("$RepresentationID$", rep_id)
-                .replace("$Number$", &number.to_string())
-                .replace("$Time$", &current_time.to_string());
+            let expanded = expand_dash_template(
+                ctx.media_pattern,
+                ctx.rep_id,
+                ctx.bandwidth,
+                number,
+                current_time,
+            );
             segments.push(DashSegment {
-                uri: resolve_url(base_url, &expanded),
+                uri: resolve_url(ctx.base_url, &expanded),
                 duration,
             });
             current_time = current_time.saturating_add(d);
             number = number.saturating_add(1);
         }
     }
-    (init_uri, segments)
+    segments
+}
+
+fn expand_fixed_duration_segments(
+    ctx: &DashTemplateContext<'_>,
+    seg_ticks: u64,
+) -> Vec<DashSegment> {
+    let Some(total) = ctx.period_duration.filter(|d| !d.is_zero()) else {
+        return Vec::new();
+    };
+    let seg_secs = seg_ticks as f64 / ctx.timescale as f64;
+    if !seg_secs.is_finite() || seg_secs <= 0.0 {
+        return Vec::new();
+    }
+    let total_ticks = duration_to_ticks_ceil(total, ctx.timescale);
+    let count = total_ticks
+        .div_ceil(seg_ticks)
+        .clamp(1, MAX_DASH_TEMPLATE_SEGMENTS);
+    let seg_dur = Duration::from_secs_f64(seg_secs);
+    let cap = usize::try_from(count).unwrap_or(0);
+    let mut segments = Vec::with_capacity(cap);
+    for idx in 0..count {
+        let number = ctx.start_number.saturating_add(idx);
+        let time = idx.saturating_mul(seg_ticks);
+        let expanded =
+            expand_dash_template(ctx.media_pattern, ctx.rep_id, ctx.bandwidth, number, time);
+        segments.push(DashSegment {
+            uri: resolve_url(ctx.base_url, &expanded),
+            duration: seg_dur,
+        });
+    }
+    segments
+}
+
+fn expand_dash_template(
+    pattern: &str,
+    rep_id: &str,
+    bandwidth: u32,
+    number: u64,
+    time: u64,
+) -> String {
+    let mut out = String::with_capacity(pattern.len() + 16);
+    let mut rest = pattern;
+    while let Some((prefix, after)) = rest.split_once('$') {
+        out.push_str(prefix);
+        let Some((token, tail)) = after.split_once('$') else {
+            out.push('$');
+            out.push_str(after);
+            return out;
+        };
+        if token.is_empty() {
+            out.push('$');
+        } else if token == "RepresentationID" {
+            out.push_str(rep_id);
+        } else if let Some(fmt) = token.strip_prefix("Number") {
+            format_dash_uint(&mut out, number, fmt);
+        } else if let Some(fmt) = token.strip_prefix("Time") {
+            format_dash_uint(&mut out, time, fmt);
+        } else if let Some(fmt) = token.strip_prefix("Bandwidth") {
+            format_dash_uint(&mut out, u64::from(bandwidth), fmt);
+        } else {
+            out.push('$');
+            out.push_str(token);
+            out.push('$');
+        }
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
+}
+
+fn format_dash_uint(out: &mut String, value: u64, fmt: &str) {
+    let width = fmt
+        .strip_prefix('%')
+        .and_then(|s| s.strip_suffix('d'))
+        .and_then(|w| w.trim_start_matches('0').parse::<usize>().ok())
+        .unwrap_or(0);
+    if width > 0 {
+        out.push_str(&format!("{value:0width$}"));
+    } else {
+        out.push_str(&value.to_string());
+    }
 }
 
 fn parse_segment_list(
