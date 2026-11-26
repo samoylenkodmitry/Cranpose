@@ -259,6 +259,10 @@ uses `cranpose/embed` for a Rust UI inside an IDE tool window.
 
 [ESP32-S3 example](https://samoylenkodmitry.github.io/cranpose-esp32/)
 
+## Bare metal OS
+
+[cranos](https://github.com/samoylenkodmitry/cranos)
+
 ## Choose APIs
 
 Start with the `cranpose` crate and its prelude. Add a crate for each feature the
