@@ -24,7 +24,7 @@ impl WhiteTexel {
                 "White Mesh Content",
             );
             // One write of 4 bytes for the process: no frame's upload counts need it
-            let _ = crate::frame_graph::upload_texture(
+            crate::frame_graph::upload_texture(
                 queue,
                 target.texture().as_image_copy(),
                 &[u8::MAX; 4],
