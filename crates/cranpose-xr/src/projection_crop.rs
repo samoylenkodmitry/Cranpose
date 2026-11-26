@@ -16,8 +16,8 @@ use crate::{FieldOfView, Pose, RenderViewpoint, eye_camera::ImageRegion};
 
 // The steps of an image's size: a twelfth of the whole view's width and height
 const STEPS: u32 = 12;
-// The room that a new size leaves beyond what the content needs, as a share of the need
-const HEADROOM: f32 = 1.15;
+// The room that a new size leaves beyond what the content needs: 23/20 of the need
+const HEADROOM: (u32, u32) = (23, 20);
 // A size that keeps less than this share of the whole view's pixels for itself is not worth a crop
 const WORTH: f32 = 0.85;
 // The share of the current pixels below which the need must fall to shrink the images
@@ -75,6 +75,7 @@ impl RoomBox {
 }
 
 // What the projection layer must show of the frame: the boxes of its content, or the whole view.
+#[derive(Clone, Copy)]
 pub(crate) enum Content<'a> {
     Boxes(&'a [RoomBox]),
     Whole,
@@ -146,7 +147,7 @@ impl LayerSize {
         let step = (whole.0.div_ceil(STEPS), whole.1.div_ceil(STEPS));
         let fitted = need.map(|(width, height)| {
             let up = |value: u32, step: u32, limit: u32| {
-                ((value as f32 * HEADROOM).ceil() as u32)
+                (value.saturating_mul(HEADROOM.0).div_ceil(HEADROOM.1))
                     .div_ceil(step)
                     .max(1)
                     .saturating_mul(step)
@@ -178,8 +179,17 @@ impl LayerSize {
 
 // The pixels that `part` takes at `focal_length` pixels for a unit of tangent, with the margin.
 pub(crate) fn pixels_of(part: &Tangents, focal_length: f32) -> (u32, u32) {
-    let pixels = |span: f32| (span * focal_length + 2.0 * MARGIN_PIXELS).ceil().max(1.0) as u32;
+    let pixels = |span: f32| whole_pixels(span * focal_length + 2.0 * MARGIN_PIXELS);
     (pixels(part.right - part.left), pixels(part.up - part.down))
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a span of an eye's view is at least one pixel and far below u32::MAX pixels"
+)]
+fn whole_pixels(span: f32) -> u32 {
+    span.ceil().max(1.0) as u32
 }
 
 // The region of an image of `size` pixels about the middle of `part`, at the focal length of the

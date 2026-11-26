@@ -1,5 +1,5 @@
 // One white texel: the content of every shaded mesh whose node draws nothing, so the mesh's shader
-// colours its whole surface with no pass for the empty content.
+// colors its whole surface with no pass for the empty content.
 
 use std::{cell::OnceCell, rc::Rc};
 
@@ -23,7 +23,9 @@ impl WhiteTexel {
                 1,
                 "White Mesh Content",
             );
-            queue.write_texture(
+            // One write of 4 bytes for the process: no frame's upload counts need it
+            let _ = crate::frame_graph::upload_texture(
+                queue,
                 target.texture().as_image_copy(),
                 &[u8::MAX; 4],
                 wgpu::TexelCopyBufferLayout {
