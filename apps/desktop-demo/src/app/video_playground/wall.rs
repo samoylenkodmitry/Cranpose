@@ -23,6 +23,7 @@ use super::{
     catalog::{build_media_item, ActiveSource, BuiltinClipPack, StressScenario, WallLayout},
     shaders::{self, VideoShaderPreset},
     telemetry::{FrameTransferMode, TelemetryCounters},
+    transport::player_status_message,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,9 +70,9 @@ pub(super) struct SurfaceEffects {
 impl Default for SurfaceEffects {
     fn default() -> Self {
         Self {
-            animate: true,
+            animate: false,
             rounded_clip: true,
-            transform_3d: true,
+            transform_3d: false,
             blur: false,
             alpha_wave: false,
             shader: VideoShaderPreset::None,
@@ -130,8 +131,13 @@ impl DecoderRig {
             player.set_media_item(item);
             player.set_repeat_mode(RepeatMode::One);
             player.set_muted(muted || slot_idx != focused_slot);
-            // Stagger start offsets across built-in tiles so every tile shows distinct motion.
-            let stagger_ms = u64::try_from((slot_idx * 310) % 2400).unwrap_or(0);
+            // Stagger start offsets across multi-tile walls so adjacent tiles show distinct motion,
+            // while single-tile showcase playback always begins cleanly at 0:00.
+            let stagger_ms = if count > 1 {
+                u64::try_from((slot_idx * 310) % 2400).unwrap_or(0)
+            } else {
+                0
+            };
             player.prepare();
             if stagger_ms > 0 {
                 player.seek_to(Duration::from_millis(stagger_ms));
@@ -580,13 +586,18 @@ fn VideoWallTile(
                 );
             });
         let slot_for_tile = slot.clone();
+        let content_scale = if motion.cols == 1 {
+            ContentScale::Fit
+        } else {
+            ContentScale::Crop
+        };
         Box(
             inner_clip,
             BoxSpec::new().content_alignment(Alignment::BOTTOM_START),
             move || {
                 // Isolate per-frame video `Painter` reads to a leaf composable so decoded frames do
                 // not recompose the outer tile box, clickable modifier, or graphics layer.
-                TileVideoSurface(slot_for_tile.clone(), idx, accent, density);
+                TileVideoSurface(slot_for_tile.clone(), idx, accent, density, content_scale);
                 if density == BadgeDensity::Full || focus == TileFocus::Focused {
                     TileOverlayPill(idx, focus, border_color);
                 }
@@ -596,7 +607,13 @@ fn VideoWallTile(
 }
 
 #[composable]
-fn TileVideoSurface(slot: Option<DecoderSlot>, idx: usize, accent: Color, density: BadgeDensity) {
+fn TileVideoSurface(
+    slot: Option<DecoderSlot>,
+    idx: usize,
+    accent: Color,
+    density: BadgeDensity,
+    content_scale: ContentScale,
+) {
     let painter = slot.as_ref().and_then(|s| s.painter.value());
     if let Some(painter) = painter {
         Image(
@@ -604,39 +621,54 @@ fn TileVideoSurface(slot: Option<DecoderSlot>, idx: usize, accent: Color, densit
             None,
             Modifier::empty().fill_max_size(),
             Alignment::CENTER,
-            ContentScale::Crop,
+            content_scale,
             1.0,
             None,
         );
     } else {
-        TileFallbackBackdrop(idx, accent, density);
+        let player = slot.map(|s| s.player);
+        TileFallbackBackdrop(player, idx, accent, density);
     }
 }
 
 #[composable]
-fn TileFallbackBackdrop(idx: usize, accent: Color, density: BadgeDensity) {
+fn TileFallbackBackdrop(player: Option<Player>, idx: usize, accent: Color, density: BadgeDensity) {
+    let fallback_color = Color(
+        (accent.r() + 0.5).min(1.0),
+        (accent.g() + 0.5).min(1.0),
+        (accent.b() + 0.5).min(1.0),
+        0.92,
+    );
+    let (status, text_color) = if !video_surface_supported() {
+        (
+            format!("Tile {} · CPU framebuffer mode", idx + 1),
+            fallback_color,
+        )
+    } else if let Some(active) = player.as_ref() {
+        let (msg, color) = player_status_message(active, &format!("Tile {}", idx + 1));
+        if color == Color::from_rgb_u8(0xF8, 0x71, 0x71) {
+            (msg, color)
+        } else {
+            (msg, fallback_color)
+        }
+    } else {
+        (
+            format!("Tile {} · Initializing decoder...", idx + 1),
+            fallback_color,
+        )
+    };
     Box(
         Modifier::empty().fill_max_size(),
         BoxSpec::new().content_alignment(Alignment::CENTER),
         move || {
             if density == BadgeDensity::Full {
-                let status = if video_surface_supported() {
-                    format!("Tile {} · Buffering GPU frame...", idx + 1)
-                } else {
-                    format!("Tile {} · CPU framebuffer mode", idx + 1)
-                };
                 Text(
-                    status,
-                    Modifier::empty().padding(6.0),
+                    status.clone(),
+                    Modifier::empty().padding(8.0),
                     TextStyle {
                         span_style: SpanStyle {
-                            color: Some(Color(
-                                (accent.r() + 0.5).min(1.0),
-                                (accent.g() + 0.5).min(1.0),
-                                (accent.b() + 0.5).min(1.0),
-                                0.9,
-                            )),
-                            font_size: TextUnit::Sp(11.0),
+                            color: Some(text_color),
+                            font_size: TextUnit::Sp(11.5),
                             font_weight: Some(FontWeight::MEDIUM),
                             ..Default::default()
                         },

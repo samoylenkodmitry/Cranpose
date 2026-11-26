@@ -516,10 +516,24 @@ fn on_duration_change(id: u64) {
 }
 
 fn on_can_play(id: u64) {
-    let sink = with_session(id, |session| session.sink.clone());
-    if let Some(sink) = sink {
+    let info = with_session(id, |session| {
+        let should_play = session.want_play && session.video.paused() && !session.video.ended();
+        let play_promise = if should_play {
+            apply_audio_settings(&session.video, session.volume, session.parameters);
+            session.video.play().ok()
+        } else {
+            None
+        };
+        (session.sink.clone(), play_promise)
+    });
+    if let Some((sink, play_promise)) = info {
         sink.set_loading(false);
         sink.set_playback_state(PlayerState::Ready);
+        if let Some(promise) = play_promise {
+            spawn_local(async move {
+                let _ = JsFuture::from(promise).await;
+            });
+        }
     }
     push_current_video_frame(id);
 }
@@ -587,7 +601,12 @@ fn on_error(id: u64) {
     };
     sink.set_loading(false);
     let detail = if message.is_empty() {
-        format!("HTMLVideoElement media error code {code}")
+        match code {
+            2 => "Network error while loading stream (check connection or CORS)".to_owned(),
+            3 => "Media decode error in browser decoder".to_owned(),
+            4 => "Source unsupported or blocked by CORS/codec in this browser".to_owned(),
+            _ => format!("HTMLVideoElement media error code {code}"),
+        }
     } else {
         format!("HTMLVideoElement error {code}: {message}")
     };
