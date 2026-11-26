@@ -3,7 +3,7 @@
 // animated clipping/blur/3D/alpha/WGSL shaders, independent telemetry HUD, interactive seek
 // controls, curated CORS-verified open-media license catalog, and local 4K/8K file picker.
 
-use std::{sync::Arc, time::Duration};
+use std::{rc::Rc, sync::Arc, time::Duration};
 
 use cranpose::prelude::{delay, Player};
 use cranpose_core::{
@@ -105,7 +105,7 @@ pub(crate) fn VideoPlaygroundTab() {
     // stable root child across decoder rig rebuilds.
     DecoderPumpHost(state.rig.value(), Arc::clone(&counters), transfer);
 
-    let launch_local = move || {
+    let launch_local: Rc<dyn Fn()> = Rc::new(move || {
         open_local.launch(
             cranpose::FilePickerOptions::default()
                 .with_title("Open 4K / 8K / 120fps Video")
@@ -121,7 +121,7 @@ pub(crate) fn VideoPlaygroundTab() {
                     ]),
                 ),
         );
-    };
+    });
 
     PlaygroundScaffold(state, clip_pack, counters, transfer, launch_local);
 }
@@ -254,13 +254,13 @@ fn PlaygroundTelemetryLoop(
     });
 }
 
-#[composable]
+#[composable(no_skip)]
 fn PlaygroundScaffold(
     state: PlaygroundState,
     clip_pack: BuiltinClipPack,
     counters: Arc<TelemetryCounters>,
     transfer: FrameTransferMode,
-    launch_local: impl Fn() + Clone + 'static,
+    launch_local: Rc<dyn Fn()>,
 ) {
     BoxWithConstraints(
         Modifier::empty()
@@ -292,7 +292,7 @@ fn PlaygroundScaffold(
                 catalog_open: state.catalog_open,
                 layout: state.layout,
             };
-            let local_cb = launch_local.clone();
+            let local_cb = Rc::clone(&launch_local);
             let body_pack = clip_pack.clone();
             let body_counters = Arc::clone(&counters);
             Column(
@@ -306,7 +306,7 @@ fn PlaygroundScaffold(
                         state.telemetry.value(),
                         src_title.clone(),
                         hud,
-                        local_cb.clone(),
+                        Rc::clone(&local_cb),
                     );
                     if controls_visible {
                         ScenarioAndEffectsToolbar(
@@ -323,7 +323,7 @@ fn PlaygroundScaffold(
                             state.active_source,
                             state.custom_url,
                             state.catalog_open,
-                            local_cb.clone(),
+                            Rc::clone(&local_cb),
                         );
                     }
                     PlaygroundStageBody(

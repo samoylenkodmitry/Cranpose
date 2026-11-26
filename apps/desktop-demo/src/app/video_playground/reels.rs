@@ -10,7 +10,7 @@ use cranpose::{
         rememberPlayerPool, ContentScale, LoadControl, MediaItem, Player, PlayerPool,
         PlayerPoolConfig, RepeatMode,
     },
-    rememberPlayerDecodedFrames, video_surface_supported, PlayerSurfaceIntake,
+    video_surface_supported,
 };
 use cranpose_core::{
     remember, rememberMutableStateOf, DisposableEffect, DisposableEffectResult, LaunchedEffect,
@@ -25,7 +25,6 @@ use cranpose_ui::{
     VerticalAlignment,
 };
 use cranpose_ui_graphics::{LayerShape, RenderEffect, TileMode};
-use web_time::Instant;
 
 use super::{
     catalog::{build_media_item, entry_by_id, ActiveSource, BuiltinClipPack, REEL_FEED_IDS},
@@ -33,7 +32,7 @@ use super::{
     shaders::{self, VideoShaderPreset},
     telemetry::{FrameTransferMode, TelemetryCounters},
     transport::{format_speed, next_playback_speed, player_status_message, VideoSeekScrubber},
-    wall::SurfaceEffects,
+    wall::{SurfaceEffects, VideoFrameIntake},
 };
 
 const BG_CARD: Color = Color::from_rgb_u8(0x06, 0x09, 0x10);
@@ -343,33 +342,13 @@ fn ReelVideoCanvas(
     let play_pause = rememberPlayPauseButtonState(&player);
     let tap_pp = play_pause.clone();
 
-    if let Some(frames) = rememberPlayerDecodedFrames(&player) {
-        let intake_player = player.clone();
-        let intake_counters = Arc::clone(&counters);
-        PlayerSurfaceIntake(
-            frames,
-            Modifier::empty().size_points(0.0, 0.0),
-            scale_mode.content_scale(),
-            move |queue, presenter| {
-                let Some(frame) = queue.latest_frame() else {
-                    return;
-                };
-                let t0 = Instant::now();
-                let size = frame.display_size();
-                let color = frame.color();
-                match presenter.present(frame, None) {
-                    Ok(()) => {
-                        if let Some(painter) = presenter.current_painter() {
-                            painter_state.set(Some(painter));
-                        }
-                        intake_player.notify_rendered_first_frame();
-                        intake_counters.record_presented_meta(size, color, t0.elapsed(), transfer);
-                    }
-                    Err(_) => intake_counters.record_present_drop(),
-                }
-            },
-        );
-    }
+    VideoFrameIntake(
+        player.clone(),
+        painter_state,
+        scale_mode.content_scale(),
+        counters,
+        transfer,
+    );
 
     let video_modifier = Modifier::empty()
         .fill_max_size()

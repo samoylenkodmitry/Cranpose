@@ -1,6 +1,8 @@
 // Glass telemetry HUD, scenario/layout/effect bars, and verified open-media license catalog
 // drawer for the Video Playground showcase tab.
 
+use std::rc::Rc;
+
 use cranpose_core::{with_key, MutableState};
 use cranpose_foundation::text::TextFieldState;
 use cranpose_ui::{
@@ -87,13 +89,18 @@ enum RowSelection {
     Selected,
 }
 
-#[composable]
+#[track_caller]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub(super) fn ChipButton(
     label: impl Into<String>,
     tone: ChipTone,
     on_click: impl FnMut() + 'static,
 ) {
-    let label = label.into();
+    ChipButtonCore(label.into(), tone, Box::new(on_click));
+}
+
+#[composable(no_skip)]
+fn ChipButtonCore(label: String, tone: ChipTone, mut on_click: Box<dyn FnMut()>) {
     let (bg, text_color) = match tone {
         ChipTone::Active => (BG_CHIP_ACTIVE, Color::WHITE),
         ChipTone::Idle => (BG_CHIP, TEXT_PRIMARY),
@@ -106,7 +113,7 @@ pub(super) fn ChipButton(
             })
             .padding_each(9.0, 5.0, 9.0, 5.0),
         ButtonSpec::default(),
-        on_click,
+        move || on_click(),
         move || {
             Text(
                 label.clone(),
@@ -126,13 +133,13 @@ pub(super) struct HudLayoutConfig {
     pub(super) layout: MutableState<WallLayout>,
 }
 
-#[composable]
+#[composable(no_skip)]
 pub(super) fn TelemetryHudBar(
     scenario: StressScenario,
     snap: TelemetrySnapshot,
     source_title: String,
     hud: HudLayoutConfig,
-    on_open_local_file: impl Fn() + Clone + 'static,
+    on_open_local_file: Rc<dyn Fn()>,
 ) {
     Column(
         Modifier::empty()
@@ -148,20 +155,20 @@ pub(super) fn TelemetryHudBar(
                 snap.clone(),
                 source_title.clone(),
                 hud,
-                on_open_local_file.clone(),
+                Rc::clone(&on_open_local_file),
             );
             TelemetryMetricsStrip(scenario, snap.clone(), hud.density);
         },
     );
 }
 
-#[composable]
+#[composable(no_skip)]
 fn TelemetryHudHeader(
     scenario: StressScenario,
     snap: TelemetrySnapshot,
     source_title: String,
     hud: HudLayoutConfig,
-    on_open_local_file: impl Fn() + Clone + 'static,
+    on_open_local_file: Rc<dyn Fn()>,
 ) {
     let res_str = if snap.sample_size.0 > 0 {
         format!("{}x{}", snap.sample_size.0, snap.sample_size.1)
@@ -202,7 +209,7 @@ fn TelemetryHudHeader(
                     );
                 },
             );
-            let open_local = on_open_local_file.clone();
+            let open_local = Rc::clone(&on_open_local_file);
             FlowRow(
                 Modifier::empty(),
                 FlowSpec::new()
@@ -225,7 +232,7 @@ fn TelemetryHudHeader(
                             });
                         },
                     );
-                    let local_cb = open_local.clone();
+                    let local_cb = Rc::clone(&open_local);
                     ChipButton("Open Local 4K/8K", ChipTone::Idle, move || local_cb());
                     let is_cat = hud.catalog_open.value();
                     ChipButton(
@@ -618,21 +625,22 @@ fn LayoutAndEffectsRow(
     );
 }
 
-#[composable]
+#[track_caller]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 fn EffectToggleChip(name: &'static str, state: ToggleState, on_toggle: impl FnMut() + 'static) {
     let (label, tone) = match state {
         ToggleState::On => ("On", ChipTone::Active),
         ToggleState::Off => ("Off", ChipTone::Idle),
     };
-    ChipButton(format!("{name}: {label}"), tone, on_toggle);
+    ChipButtonCore(format!("{name}: {label}"), tone, Box::new(on_toggle));
 }
 
-#[composable]
+#[composable(no_skip)]
 pub(super) fn OpenMediaCatalogPanel(
     active_source: MutableState<ActiveSource>,
     custom_url_state: TextFieldState,
     catalog_open: MutableState<bool>,
-    on_open_local_file: impl Fn() + Clone + 'static,
+    on_open_local_file: Rc<dyn Fn()>,
 ) {
     let scroll = cranpose_core::remember(|| ScrollState::new(0.0)).with(|s| *s);
     let category = cranpose_core::rememberMutableStateOf(|| CatalogCategory::All);
@@ -681,7 +689,7 @@ pub(super) fn OpenMediaCatalogPanel(
                 active_source,
                 custom_url_state,
                 catalog_open,
-                on_open_local_file.clone(),
+                Rc::clone(&on_open_local_file),
             );
 
             let selected_cat = category.value();
@@ -709,12 +717,12 @@ pub(super) fn OpenMediaCatalogPanel(
     );
 }
 
-#[composable]
+#[composable(no_skip)]
 fn CustomUrlRow(
     active_source: MutableState<ActiveSource>,
     custom_url_state: TextFieldState,
     catalog_open: MutableState<bool>,
-    on_open_local_file: impl Fn() + Clone + 'static,
+    on_open_local_file: Rc<dyn Fn()>,
 ) {
     Row(
         Modifier::empty().fill_max_width(),
@@ -750,7 +758,7 @@ fn CustomUrlRow(
                     catalog_open.set(false);
                 }
             });
-            let local_cb = on_open_local_file.clone();
+            let local_cb = Rc::clone(&on_open_local_file);
             ChipButton("Browse Local Video", ChipTone::Idle, move || local_cb());
         },
     );

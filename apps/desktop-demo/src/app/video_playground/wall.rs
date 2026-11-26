@@ -204,24 +204,23 @@ pub(super) fn DecoderPumpHost(
 }
 
 #[composable]
-fn DecoderSlotPump(
-    slot: DecoderSlot,
+pub(super) fn VideoFrameIntake(
+    player: Player,
+    painter_state: MutableState<Option<Painter>>,
+    scale: ContentScale,
     counters: Arc<TelemetryCounters>,
     transfer: FrameTransferMode,
 ) {
-    let player = slot.player;
-    let shared_painter = slot.painter;
     let Some(frames) = rememberPlayerDecodedFrames(&player) else {
-        if shared_painter.value().is_some() {
-            shared_painter.set(None);
+        if painter_state.value().is_some() {
+            painter_state.set(None);
         }
         return;
     };
-    let counters = Arc::clone(&counters);
     PlayerSurfaceIntake(
         frames,
         Modifier::empty().size_points(0.0, 0.0),
-        ContentScale::Crop,
+        scale,
         move |queue, presenter| {
             let Some(frame) = queue.latest_frame() else {
                 return;
@@ -235,7 +234,7 @@ fn DecoderSlotPump(
             match result {
                 Ok(()) => {
                     if let Some(painter) = presenter.current_painter() {
-                        shared_painter.set(Some(painter));
+                        painter_state.set(Some(painter));
                     }
                     player.notify_rendered_first_frame();
                     counters.record_presented_meta(size, color, elapsed, transfer);
@@ -245,6 +244,21 @@ fn DecoderSlotPump(
                 }
             }
         },
+    );
+}
+
+#[composable]
+fn DecoderSlotPump(
+    slot: DecoderSlot,
+    counters: Arc<TelemetryCounters>,
+    transfer: FrameTransferMode,
+) {
+    VideoFrameIntake(
+        slot.player,
+        slot.painter,
+        ContentScale::Crop,
+        counters,
+        transfer,
     );
 }
 
