@@ -1097,6 +1097,39 @@ fn shaded_glow_adds_its_shader_colour_and_hides_nothing_behind_it() {
     }
 }
 
+// A green glowing wall whose node draws nothing: the glow's shader alone colours it.
+#[composable]
+fn GlowWithoutContentScene() {
+    static SHADER: OnceLock<Arc<str>> = OnceLock::new();
+    let (plane, _) = meshes();
+    Scene(0.0, move || {
+        let material = glow_of(&SHADER, GLOW_WGSL, [0.0, 1.0, 0.0]);
+        Box(
+            surface(
+                &plane,
+                panel((2000.0, 1500.0), Vec3::new(0.0, 0.0, 600.0)),
+                (material, false),
+            ),
+            BoxSpec::default(),
+            || {},
+        );
+    });
+}
+
+#[test]
+fn shaded_glow_on_a_mesh_with_no_content_draws_its_shader_colour() {
+    for samples in [Multisample::Off, Multisample::X4] {
+        let Some(frame) = capture_with(GlowWithoutContentScene, samples) else {
+            return;
+        };
+        let wall = pixel_at(&frame, Vec3::new(-400.0, 300.0, 600.0));
+        assert!(
+            wall[1] > 240 && wall[0] < 10 && wall[2] < 10,
+            "the wall glows green with no content behind its mesh: {wall:?}"
+        );
+    }
+}
+
 #[composable]
 fn BrokenGlowScene() {
     static SHADER: OnceLock<Arc<str>> = OnceLock::new();

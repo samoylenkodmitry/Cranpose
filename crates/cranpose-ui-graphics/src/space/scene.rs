@@ -433,6 +433,10 @@ pub enum Material {
 /// reads `params[index]`. The renderer puts
 /// [`MESH_SHADED_PRELUDE_WGSL`](crate::framework_shaders::MESH_SHADED_PRELUDE_WGSL),
 /// which declares them, before it.
+///
+/// The surface shows where its content is not transparent. A node that
+/// draws nothing gives its mesh content of opaque white, so the shader
+/// colours the whole mesh, and no pass draws the empty content.
 #[derive(Clone, Debug)]
 pub struct Shaded {
     /// The app's WGSL. Keep one `Arc` per shader: the renderer builds a

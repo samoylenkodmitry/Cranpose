@@ -52,6 +52,54 @@ const RIBBON_RADIUS: f32 = 0.1;
 // How far a chosen object grows
 const BLOOM: f32 = 0.22;
 
+// The room that an object takes beyond its control's place, as it blooms, floats or orbits, in dp
+const OBJECT_REACH: f32 = 40.0;
+// The sparks' distance from the page's middle, as a share of the page's width, and the height of
+// their field beyond the page's
+const SPARKS_REACH: (f32, f32) = (0.56, 0.78);
+const SPARKS_RISE: f32 = 140.0;
+
+// The half sizes, in dp, of the box about the page's middle that holds every object of a page of
+// `size` dp with `stage` around it, as the projection layer covers it.
+pub(crate) fn hologram_extent([width, height]: [f32; 2], stage: HologramStage) -> [f32; 3] {
+    let mut extent = [
+        width / 2.0 + OBJECT_REACH,
+        height / 2.0 + OBJECT_REACH,
+        OBJECT_REACH + KNOB_FLOAT,
+    ];
+    let mut reach = |x: f32, y: f32, z: f32| {
+        extent[0] = extent[0].max(x);
+        extent[1] = extent[1].max(y);
+        extent[2] = extent[2].max(z);
+    };
+    if stage.projector {
+        reach(
+            width * 0.22,
+            height / 2.0 + PROJECTOR_DROP + 10.0,
+            width * 0.22,
+        );
+    }
+    if stage.ribbons > 0 {
+        let radius = width * RIBBON_RADIUS;
+        let pairs = (stage.ribbons - 1) / 2;
+        reach(
+            width / 2.0 + radius * 2.4 + 40.0 * pairs as f32,
+            height * 0.35 + 60.0 * pairs as f32,
+            radius,
+        );
+    }
+    if stage.particles > 0 {
+        // The field rocks by 0.12 radians and bobs by 8 dp
+        let outer = SPARKS_REACH.1 * width;
+        reach(
+            outer,
+            (height + SPARKS_RISE) / 2.0 + 30.0,
+            outer * (0.45_f32 + 0.12).sin(),
+        );
+    }
+    extent
+}
+
 // The meshes that every hologram's objects share. Each draws at every size, so the process makes
 // them once.
 struct Meshes {
@@ -833,14 +881,14 @@ fn Stage(scene: Scene, stage: HologramStage) {
     if stage.particles > 0 {
         let count = stage.particles;
         let field = key(count, || {
-            remember(|| Arc::new(sparks(count, (0.56, 0.78), 0.006))).with(Arc::clone)
+            remember(|| Arc::new(sparks(count, SPARKS_REACH, 0.006))).with(Arc::clone)
         });
         Glowing(
             field,
             move || {
                 // The field rocks and bobs a little, so no spark drifts over the controls
                 let time = scene.time();
-                let shape = Mat4::scaling(Vec3::new(width, height + 140.0, width))
+                let shape = Mat4::scaling(Vec3::new(width, height + SPARKS_RISE, width))
                     .then(&Mat4::rotation_y(0.12 * (time * 0.2).sin()));
                 scene.at(Vec3::new(0.0, 20.0 + 8.0 * (time * 0.5).sin(), 0.0), shape)
             },
@@ -912,8 +960,7 @@ fn Glowing(
                 material: glow().material(),
                 casts_shadow: false,
                 solid: false,
-            })
-            .background(Color::WHITE),
+            }),
         BoxSpec::default(),
         || {},
     );

@@ -8,13 +8,14 @@ use cranpose_core::{CompositionLocalProvider, derivedStateOf, remember, remember
 
 use crate::{
     HologramColors, HologramStage, SubspaceModifier,
-    hologram_scene::{HOLOGRAM_HIDE_MILLIS, HOLOGRAM_SHOW_MILLIS, HologramScene},
+    hologram_scene::{HOLOGRAM_HIDE_MILLIS, HOLOGRAM_SHOW_MILLIS, HologramScene, hologram_extent},
     space::{Space, local_space},
     spatial_panel::PlacedPanel,
     spatial_volume::PlacedVolume,
     subspace_modifier::DEFAULT_PANEL_SIZE,
     tray_part::{TrayParts, local_tray},
     tray_scene::{TRAY_LIGHT, TrayScene},
+    volumes::VolumeDraws,
 };
 
 // How long a tray takes to show and to hide, in milliseconds
@@ -23,6 +24,8 @@ const HIDE_MILLIS: u64 = 140;
 // The depth of the tray's box: its parts stand behind the panel's plane, and the box is centered
 // on that plane
 const TRAY_DEPTH: f32 = 100.0;
+// How far a tray's controls reach out of its box as they rise and lift, in dp
+const TRAY_REACH: f32 = 24.0;
 // The radius of a flat tray's corners, as the base's corners in a headset
 const FLAT_CORNER: f32 = 24.0;
 
@@ -83,6 +86,25 @@ impl TrayLook {
         match self {
             Self::Solid(_) => (SHOW_MILLIS, HIDE_MILLIS),
             Self::Hologram(..) => (HOLOGRAM_SHOW_MILLIS, HOLOGRAM_HIDE_MILLIS),
+        }
+    }
+
+    // What the tray's volume draws: a hologram's objects add light and leave no depth. A tray's
+    // controls rise and lift a little out of its box, and a hologram's stage stands around it.
+    fn draws(self, size: [f32; 2]) -> VolumeDraws {
+        match self {
+            Self::Solid(_) => VolumeDraws {
+                writes_depth: true,
+                extent: Some([
+                    size[0] / 2.0 + TRAY_REACH,
+                    size[1] / 2.0 + TRAY_REACH,
+                    TRAY_DEPTH / 2.0 + TRAY_REACH,
+                ]),
+            },
+            Self::Hologram(_, stage) => VolumeDraws {
+                writes_depth: false,
+                extent: Some(hologram_extent(size, stage)),
+            },
         }
     }
 
@@ -163,11 +185,10 @@ fn PlacedTray(
         SubspaceModifier::new()
             .size(size[0], size[1])
             .with_pose(pose),
-        // A hologram's objects add light and leave no depth
         (
             [size[0], size[1], TRAY_DEPTH],
             Some(panel),
-            matches!(look, TrayLook::Solid(_)),
+            look.draws(size),
         ),
         move |scope| match look {
             TrayLook::Solid(base) => {

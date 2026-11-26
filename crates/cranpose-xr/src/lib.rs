@@ -239,6 +239,8 @@ mod pose;
 mod press_threshold;
 #[cfg(any(test, headset))]
 mod projected_pass;
+#[cfg(any(test, headset))]
+mod projection_crop;
 mod ray;
 #[cfg(any(test, headset))]
 mod reach;

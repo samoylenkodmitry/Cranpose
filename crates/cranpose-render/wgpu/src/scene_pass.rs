@@ -30,6 +30,7 @@ mod app_shader;
 mod shadow_map;
 mod uniforms;
 mod variants;
+mod white_texel;
 
 use app_shader::kept_shader;
 pub(crate) use app_shader::{AppShader, ShadedShader, ShaderPipeline, VolumeShader};
@@ -43,6 +44,7 @@ pub(crate) use uniforms::{
     volume_uniforms,
 };
 pub(crate) use variants::{ShadedVariant, VolumeVariant};
+use white_texel::WhiteTexel;
 
 // The sample counts a scene's pass draws with, each with pipelines of its
 // own.
@@ -171,6 +173,8 @@ pub(crate) struct ScenePass {
     pub(crate) shadow_map: Option<ShadowMap>,
     /// The frames since a scene last drew shadows.
     shadow_map_idle: u64,
+    // The content of every shaded mesh whose node draws nothing
+    pub(crate) white: WhiteTexel,
 }
 
 impl Default for ScenePass {
@@ -186,6 +190,7 @@ impl Default for ScenePass {
             shaded: Vec::new(),
             shadow_map: None,
             shadow_map_idle: 0,
+            white: WhiteTexel::default(),
         }
     }
 }

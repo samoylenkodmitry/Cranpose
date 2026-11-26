@@ -14,9 +14,13 @@ use cranpose_ui_graphics::{
     space::{Mat4, Material, Multisample, Vec3},
 };
 
-use super::{DeviceRect, Event, FrameExecutor, LayerPass, SurfaceRender, composites_nothing};
+use super::{
+    CompositeSource, DeviceRect, Event, FrameExecutor, LayerPass, SurfaceRender,
+    composites_nothing, draws_nothing,
+};
 use crate::{
     collect::{ChildLayer, MeshChild, SceneDraw},
+    draw_pass::SourceContent,
     frame_graph::{FrameCommandRecorder, UploadAllocatorId},
     offscreen::OffscreenTarget,
     scene_pass::{
@@ -175,10 +179,24 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         if composites_nothing(child) && (child.alpha == 0.0 || !volume) {
             return Ok(());
         }
-        let shown = DeviceRect::from_logical(owner.scene.rect, pass.scale);
-        let Some(surface) = self.render_child_surface(pass, child, child.z_index, None, shown)?
-        else {
-            return Ok(());
+        // An app's shader colours a mesh whose node draws nothing on its whole surface. The mesh
+        // reads one white texel, so no pass renders the empty content.
+        let shaded = |mesh: &Arc<MeshChild>| {
+            matches!(
+                mesh.surface.material,
+                Material::Shaded(_) | Material::ShadedGlow(_)
+            )
+        };
+        let surface = if draws_nothing(&child.content) && child.mesh.iter().all(shaded) {
+            self.white_surface()
+        } else {
+            let shown = DeviceRect::from_logical(owner.scene.rect, pass.scale);
+            let Some(surface) =
+                self.render_child_surface(pass, child, child.z_index, None, shown)?
+            else {
+                return Ok(());
+            };
+            surface
         };
         for mesh in &child.mesh {
             pass.meshes.push(PendingMesh {
@@ -191,6 +209,31 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             });
         }
         Ok(())
+    }
+
+    // The surface of a shaded mesh with no content: one white texel, which every texture
+    // coordinate of the mesh reads.
+    fn white_surface(&mut self) -> SurfaceRender {
+        let renderer = &*self.renderer;
+        let texture = renderer
+            .scene_pass
+            .white
+            .texture(&renderer.device, &renderer.queue);
+        SurfaceRender {
+            source: CompositeSource {
+                texture,
+                content: SourceContent::Transient,
+            },
+            rect: DeviceRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            scale: 1.0,
+            grid_dest: None,
+            region: None,
+        }
     }
 
     /// Draws the held surfaces before `event`, unless it is another surface

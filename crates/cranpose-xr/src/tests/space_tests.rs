@@ -674,7 +674,7 @@ fn a_volume_that_leaves_leaves_the_scene_too() {
                 light: mutableStateOf(None),
                 compose: Rc::default(),
                 node: Rc::default(),
-                writes_depth: true,
+                draws: crate::volumes::VolumeDraws::ANY,
             });
         }
         assert_eq!(space.volumes().contents().get().len(), 2);
