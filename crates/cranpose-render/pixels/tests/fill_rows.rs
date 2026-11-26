@@ -45,8 +45,8 @@ fn frame() -> PixelRect {
 
 // Fills that reach past the clip box on both sides: a rounded fill whose
 // middle rows start at the box's top and whose lower corners lie inside it,
-// and a rounded gradient off the pixel grid. With `clipped` false the box
-// does not clip them.
+// a rounded gradient off the pixel grid and a rounded radial gradient. With
+// `clipped` false the box does not clip them.
 #[composable]
 fn Clipped(clipped: bool) {
     Box(
@@ -83,6 +83,18 @@ fn Clipped(clipped: bool) {
                             },
                             gradient(),
                             CornerRadii::uniform(3.0),
+                        );
+                        // A brush whose rows differ across, which paints
+                        // the fill pixel by pixel.
+                        scope.draw_round_rect_at(
+                            Rect {
+                                x: -7.0,
+                                y: 25.0,
+                                width: 46.0,
+                                height: 16.0,
+                            },
+                            Brush::radial_gradient(vec![TOP, BOTTOM], Point::new(16.0, 30.0), 20.0),
+                            CornerRadii::uniform(5.0),
                         );
                     }),
                     BoxSpec::default(),
