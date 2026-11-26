@@ -149,7 +149,8 @@ fn PartBody(tray: TrayParts, part: Part, (size, shadows): ([f32; 2], bool)) {
     };
     let glow = move || satin(Finish::Glossy, 0.18 * motion.hover.get());
     match part.shape {
-        PartShape::Key => {
+        // The parts of a hologram's controls stand on a tray as the nearest of its own bodies
+        PartShape::Key | PartShape::Choice { .. } | PartShape::Arrow { .. } => {
             let mesh = rememberSlab(
                 [
                     rect.width - 2.0 * KEY_INSET,
@@ -171,7 +172,7 @@ fn PartBody(tray: TrayParts, part: Part, (size, shadows): ([f32; 2], bool)) {
                 glow,
             );
         }
-        PartShape::Dome => {
+        PartShape::Dome | PartShape::Crystal | PartShape::Emblem => {
             let radius = rect.width.min(rect.height) / 2.0 - KEY_INSET;
             let mesh = remember(|| Arc::new(Mesh::sphere(DOME_SEGMENTS, DOME_SEGMENTS / 2)))
                 .with(Arc::clone);
@@ -192,9 +193,10 @@ fn PartBody(tray: TrayParts, part: Part, (size, shadows): ([f32; 2], bool)) {
             place,
             glow,
         ),
-        PartShape::Slider { stops } => {
+        PartShape::Slider { stops } | PartShape::Track { count: stops } => {
             Slider((rect.width, stops), ([face, lit], shadows), motion, place);
         }
+        PartShape::Ribbon => {}
     }
 }
 
@@ -367,7 +369,17 @@ fn Body(
 // A slab of `size` dp, made again only when its size changes by half a dp or more.
 #[composable]
 fn rememberSlab(size: [f32; 3], corner: f32, edge: f32) -> Arc<Mesh> {
-    let made = remember(|| Rc::new(RefCell::new(None::<([f32; 3], Arc<Mesh>)>))).with(Rc::clone);
+    rememberShape(size, move |size| slab(size, corner, edge))
+}
+
+// A mesh that `make` builds from `size`, made again only when a side of the size changes by half a
+// unit or more.
+#[composable]
+pub(crate) fn rememberShape<const N: usize>(
+    size: [f32; N],
+    make: impl Fn([f32; N]) -> Mesh,
+) -> Arc<Mesh> {
+    let made = remember(|| Rc::new(RefCell::new(None::<([f32; N], Arc<Mesh>)>))).with(Rc::clone);
     let mut made = made.borrow_mut();
     match made.as_ref() {
         Some((known, mesh))
@@ -379,7 +391,7 @@ fn rememberSlab(size: [f32; 3], corner: f32, edge: f32) -> Arc<Mesh> {
             Arc::clone(mesh)
         }
         _ => {
-            let mesh = Arc::new(slab(size, corner, edge));
+            let mesh = Arc::new(make(size));
             *made = Some((size, Arc::clone(&mesh)));
             mesh
         }

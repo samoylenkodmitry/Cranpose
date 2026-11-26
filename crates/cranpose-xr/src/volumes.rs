@@ -32,6 +32,9 @@ pub(crate) struct VolumeContent {
     // The node of the scene that holds the volume's content, which the scene's composition sets and
     // a ray's pick reads
     pub(crate) node: Rc<Cell<Option<NodeId>>>,
+    // Whether the content may leave depth in the scene. The objects of a hologram add light and
+    // leave none.
+    pub(crate) writes_depth: bool,
 }
 
 impl PartialEq for VolumeContent {
@@ -129,6 +132,13 @@ impl Volumes {
                 .find(|content| content.id == id)
                 .and_then(|content| content.node.get())
         })
+    }
+
+    #[cfg(any(test, headset))]
+    // Whether the content of any volume may leave depth in the scene.
+    pub(crate) fn writes_depth(&self) -> bool {
+        self.contents
+            .read(|contents| contents.iter().any(|content| content.writes_depth))
     }
 
     #[cfg_attr(

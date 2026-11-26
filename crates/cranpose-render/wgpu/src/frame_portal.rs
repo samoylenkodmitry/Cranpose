@@ -310,6 +310,13 @@ fn draw_space(
             (Material::Shaded(_), SpaceStep::Opaque(_, Some(variant), _)) => draw
                 .shaded_pipeline(renderer, (variant, samples))
                 .map_or((fixed, false), |pipeline| (pipeline, true)),
+            // A glowing surface draws nothing until its shader builds
+            (Material::ShadedGlow(_), SpaceStep::Glow) => {
+                match draw.shaded_pipeline(renderer, (ShadedVariant::PortalGlow, samples)) {
+                    Some(pipeline) => (pipeline, true),
+                    None => continue,
+                }
+            }
             _ => (fixed, false),
         };
         let Some((x, y, width, height)) = within(draw.scissor, window.scissor) else {

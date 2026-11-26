@@ -97,8 +97,20 @@ fn headset() -> Headset {
     }))
 }
 
-// A headset whose subspace holds what `volume` composes.
+// A headset whose subspace holds what `volume` composes, with a state that advances each frame.
 fn headset_of(volume: VolumeComposer) -> Headset {
+    headset_with(volume, Ticks::EachFrame)
+}
+
+// Whether a headset's composition keeps a state that advances each frame, and so asks for every
+// frame, or asks only for the frames that its content asks for.
+#[derive(Clone, Copy, PartialEq)]
+enum Ticks {
+    EachFrame,
+    None,
+}
+
+fn headset_with(volume: VolumeComposer, ticking: Ticks) -> Headset {
     let gpu = gpu();
     let probes = Probes {
         compositions: Rc::new(Cell::new(0)),
@@ -119,12 +131,15 @@ fn headset_of(volume: VolumeComposer) -> Headset {
             let shown = rememberMutableStateOf(|| true);
             keep.replace(Some((space.clone(), shown)));
             let ticks = rememberMutableStateOf(|| 0_u32);
-            LaunchedEffect((), async move |scope| {
-                loop {
-                    scope.with_frame_nanos(|now| now).await;
-                    ticks.update(|ticks| *ticks += 1);
-                }
-            });
+            // A headset with no ticks asks for no frame of its own
+            if ticking == Ticks::EachFrame {
+                LaunchedEffect((), async move |scope| {
+                    loop {
+                        scope.with_frame_nanos(|now| now).await;
+                        ticks.update(|ticks| *ticks += 1);
+                    }
+                });
+            }
             let (probes, volume, host) = (probes.clone(), Rc::clone(&volume), space.clone());
             CompositionLocalProvider([local_space().provides(Some(space))], move || {
                 let (probes, volume) = (probes.clone(), Rc::clone(&volume));
@@ -284,12 +299,10 @@ fn draw(headset: &mut Headset, pass: &mut VolumePass, view: &RenderViewpoint, ey
     }
 }
 
+// Whether any pixel of `color` holds a colour or covers what lies behind it: a surface that glows
+// adds its colour with no alpha.
 fn shows_something(gpu: &GpuContext, color: &wgpu::Texture) -> bool {
-    read(gpu, color, 4)
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .any(|texel| texel[3] != 0)
+    read(gpu, color, 4).iter().any(|&channel| channel != 0)
 }
 
 // The box of the pixels that the scene drew, as the first and last column and row.

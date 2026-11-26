@@ -24,6 +24,9 @@ const TRAY: [f32; 2] = [400.0, 120.0];
 // The control's place on the tray: left, top, width and height in dp
 const CONTROL: [f32; 4] = [40.0, 30.0, 320.0, 60.0];
 
+#[path = "spatial_hologram_tests.rs"]
+mod hologram;
+
 // What the content of a test reports and the states that the test sets.
 #[derive(Clone, Copy)]
 struct Controls {
@@ -32,6 +35,15 @@ struct Controls {
     checked: MutableState<bool>,
     value: MutableState<f32>,
     finished: MutableState<u32>,
+    selected: MutableState<Option<usize>>,
+}
+
+// What holds a bench's controls: a tray, or a hologram with a stage, on a headset that asks for no
+// frames of its own.
+#[derive(Clone, Copy, PartialEq)]
+enum Holder {
+    Tray,
+    Hologram(crate::HologramStage),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -94,26 +106,50 @@ fn bench(kind: Kind) -> Bench {
 // A headset with a tray of `size` dp, a meter ahead, whose content is `content`, and a pointer
 // over it.
 fn bench_of(size: [f32; 2], content: impl Fn(Controls) + Clone + 'static) -> Bench {
+    bench_in(Holder::Tray, size, content)
+}
+
+// A headset with the controls that `content` composes in `holder`, of `size` dp a meter ahead, and
+// a pointer over it.
+fn bench_in(holder: Holder, size: [f32; 2], content: impl Fn(Controls) + Clone + 'static) -> Bench {
     let kept = Rc::new(RefCell::new(None));
     let keep = Rc::clone(&kept);
-    let headset = headset_of(Rc::new(move |_: &Probes, _| {
-        let controls = remember(|| Controls {
-            visible: mutableStateOf(true),
-            clicks: mutableStateOf(0),
-            checked: mutableStateOf(false),
-            value: mutableStateOf(0.0),
-            finished: mutableStateOf(0),
-        })
-        .with(|controls| *controls);
-        keep.replace(Some(controls));
-        let content = content.clone();
-        SpatialTray(
-            SubspaceModifier::new().size(size[0], size[1]).movable(),
-            controls.visible.get(),
-            Some(Color(0.1, 0.2, 0.5, 1.0)),
-            move || content(controls),
-        );
-    }));
+    let ticks = match holder {
+        Holder::Tray => Ticks::EachFrame,
+        Holder::Hologram(_) => Ticks::None,
+    };
+    let headset = headset_with(
+        Rc::new(move |_: &Probes, _| {
+            let controls = remember(|| Controls {
+                visible: mutableStateOf(true),
+                clicks: mutableStateOf(0),
+                checked: mutableStateOf(false),
+                value: mutableStateOf(0.0),
+                finished: mutableStateOf(0),
+                selected: mutableStateOf(None),
+            })
+            .with(|controls| *controls);
+            keep.replace(Some(controls));
+            let content = content.clone();
+            let modifier = SubspaceModifier::new().size(size[0], size[1]).movable();
+            match holder {
+                Holder::Tray => SpatialTray(
+                    modifier,
+                    controls.visible.get(),
+                    Some(Color(0.1, 0.2, 0.5, 1.0)),
+                    move || content(controls),
+                ),
+                Holder::Hologram(stage) => crate::SpatialHologram(
+                    modifier,
+                    controls.visible.get(),
+                    crate::HologramColors::CYAN,
+                    stage,
+                    move || content(controls),
+                ),
+            }
+        }),
+        ticks,
+    );
     let mut bench = Bench {
         eye: Eye::new(&headset.gpu),
         headset,
@@ -123,10 +159,10 @@ fn bench_of(size: [f32; 2], content: impl Fn(Controls) + Clone + 'static) -> Ben
         frame: 0,
         controls: kept.take().expect("the content composed"),
     };
-    // The tray shows in 180 ms from the first frame, which also builds the scene's pipelines and
-    // may take longer than the show. The last frame comes after the show's end.
+    // The tray shows in 180 ms and a hologram in 420 ms from the first frame, which also builds the
+    // scene's pipelines and may take longer than the show. The last frame comes after the show's end.
     bench.redraw();
-    let shown = Instant::now() + Duration::from_millis(250);
+    let shown = Instant::now() + Duration::from_millis(500);
     while Instant::now() < shown {
         bench.redraw();
     }

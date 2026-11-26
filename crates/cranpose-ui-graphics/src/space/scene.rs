@@ -400,6 +400,15 @@ pub enum Material {
     /// own. Until the shader builds, and if it never does, the surface is
     /// [`Lit`](Self::Lit).
     Shaded(Shaded),
+    /// Coloured by an app's shader as [`Shaded`](Self::Shaded) is, and
+    /// added to what lies behind it as [`Glow`](Self::Glow) is: a rim of
+    /// light that brightens where the surface turns from the eye, a halo
+    /// that fades with the angle to the eye, a beam. The shader's alpha
+    /// changes nothing. Such surfaces hide nothing and leave no depth, so
+    /// they draw the same in any order, and surfaces nearer the eye hide
+    /// them. Until the shader builds, and if it never does, the surface
+    /// draws nothing.
+    ShadedGlow(Shaded),
 }
 
 /// An app's shader that colours a surface: each pixel the mesh covers asks

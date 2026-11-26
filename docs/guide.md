@@ -2029,6 +2029,15 @@ fn shade(surface: ShadedSurface) -> vec4<f32> {
 `shaded_param(i)` reads `params[i]`. The controls in the desktop demo's Room
 tab use a shaded material to mirror the studio lights of the controls tab.
 
+`Material::ShadedGlow(Shaded { shader, params })` colours each point with the
+app's `shade` function as `Material::Shaded` does. It adds that colour to what
+lies behind it as `Material::Glow` does. The alpha that `shade` returns is not
+used. The surface hides nothing and writes no depth, so such surfaces need no
+order among themselves. Surfaces in front of it still hide it. It casts no
+shadow. It draws nothing until its shader builds, and nothing if the shader
+never builds. The objects of a `SpatialHologram` in Cranpose XR draw with one
+such shader.
+
 Scene space uses logical pixels. x points right, y points down and z points
 away from the viewer. `Mesh::plane`, `Mesh::cuboid` and `Mesh::sphere` build
 common shapes. `Mesh::from_obj` reads a Wavefront OBJ file. `Mesh::new` takes
