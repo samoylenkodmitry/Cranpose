@@ -777,6 +777,9 @@ so a read above 5 is followed by another one. A report keeps both states under
 `display` with every ambient read, and each leg the rate and the longest gap of
 its display's link.
 
+The static probe ignores mouse input. The [ambient cursor test](tests/ambient_cursor.swift)
+checks the redraw rate with the pointer resting over the probe on the benchmark Mac.
+
 | App | Stack |
 | --- | --- |
 | `electron` | Electron runs the same web layouts in its packaged Chromium runtime |

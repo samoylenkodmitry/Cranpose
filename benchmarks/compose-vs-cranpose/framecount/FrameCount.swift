@@ -458,6 +458,8 @@ func showBlankWindow(on display: CGDirectDisplayID) -> NSWindow {
     let blank = NSWindow(contentRect: NSRect(origin: origin, size: size), styleMask: [.titled], backing: .buffered,
                          defer: false)
     blank.isReleasedWhenClosed = false
+    // Mouse events can make the window server redraw the probe under a stationary pointer.
+    blank.ignoresMouseEvents = true
     blank.backgroundColor = NSColor(white: 0.93, alpha: 1)
     blank.orderFrontRegardless()
     // The window server shows the window once the run loop has committed it.
