@@ -1,11 +1,42 @@
 use std::sync::{
-    Arc, Mutex, PoisonError, Weak,
+    Arc, Condvar, Mutex, PoisonError, Weak,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
+type InstallWaiter = Arc<(Mutex<Option<Weak<DeviceErrorSentry>>>, Condvar)>;
+
+enum SentrySlot {
+    Installing(InstallWaiter),
+    Ready(Weak<DeviceErrorSentry>),
+}
+
 // The sentry of each device: wgpu keeps one error handler and one loss
 // callback per device, so the renderers of one device share its sentry.
-static SENTRIES: Mutex<Vec<(Weak<wgpu::Device>, Weak<DeviceErrorSentry>)>> = Mutex::new(Vec::new());
+static SENTRIES: Mutex<Vec<(Weak<wgpu::Device>, SentrySlot)>> = Mutex::new(Vec::new());
+
+struct InstallAbortGuard<'a> {
+    device: &'a Arc<wgpu::Device>,
+    waiter: Option<InstallWaiter>,
+}
+
+impl Drop for InstallAbortGuard<'_> {
+    fn drop(&mut self) {
+        let Some(waiter) = self.waiter.take() else {
+            return;
+        };
+        let mut sentries = SENTRIES.lock().unwrap_or_else(PoisonError::into_inner);
+        sentries.retain(|(known, slot)| {
+            !(known.as_ptr() == Arc::as_ptr(self.device)
+                && matches!(slot, SentrySlot::Installing(existing) if Arc::ptr_eq(existing, &waiter)))
+        });
+        drop(sentries);
+        let (lock, cvar) = &*waiter;
+        let mut ready = lock.lock().unwrap_or_else(PoisonError::into_inner);
+        *ready = Some(Weak::new());
+        drop(ready);
+        cvar.notify_all();
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct DeviceErrorSentry {
@@ -26,23 +57,74 @@ impl DeviceErrorSentry {
         device: &Arc<wgpu::Device>,
         on_device_lost: Option<crate::DeviceLostHandler>,
     ) -> Arc<Self> {
-        let mut sentries = SENTRIES.lock().unwrap_or_else(PoisonError::into_inner);
-        sentries.retain(|(device, sentry)| device.strong_count() > 0 && sentry.strong_count() > 0);
-        let known = sentries
-            .iter()
-            .find(|(known, _)| known.as_ptr() == Arc::as_ptr(device))
-            .and_then(|(_, sentry)| sentry.upgrade());
-        let (sentry, register) = if let Some(sentry) = known {
-            (sentry, false)
-        } else {
+        let sentry = loop {
+            let mut sentries = SENTRIES.lock().unwrap_or_else(PoisonError::into_inner);
+            sentries.retain(|(device, slot)| {
+                device.strong_count() > 0
+                    && match slot {
+                        SentrySlot::Installing(_) => true,
+                        SentrySlot::Ready(sentry) => sentry.strong_count() > 0,
+                    }
+            });
+            let existing = sentries
+                .iter()
+                .find(|(known, _)| known.as_ptr() == Arc::as_ptr(device));
+            match existing {
+                Some((_, SentrySlot::Ready(sentry))) => {
+                    if let Some(sentry) = sentry.upgrade() {
+                        drop(sentries);
+                        break sentry;
+                    }
+                }
+                Some((_, SentrySlot::Installing(waiter))) => {
+                    let waiter = Arc::clone(waiter);
+                    drop(sentries);
+                    let (lock, cvar) = &*waiter;
+                    let mut ready = lock.lock().unwrap_or_else(PoisonError::into_inner);
+                    while ready.is_none() {
+                        ready = cvar.wait(ready).unwrap_or_else(PoisonError::into_inner);
+                    }
+                    let installed = ready.as_ref().and_then(Weak::upgrade);
+                    drop(ready);
+                    if let Some(sentry) = installed {
+                        break sentry;
+                    }
+                    continue;
+                }
+                None => {}
+            }
+            let waiter: InstallWaiter = Arc::new((Mutex::new(None), Condvar::new()));
+            sentries.retain(|(known, _)| known.as_ptr() != Arc::as_ptr(device));
+            sentries.push((
+                Arc::downgrade(device),
+                SentrySlot::Installing(Arc::clone(&waiter)),
+            ));
+            drop(sentries);
+
+            let mut abort_guard = InstallAbortGuard {
+                device,
+                waiter: Some(Arc::clone(&waiter)),
+            };
             let sentry = Arc::new(Self::default());
-            sentries.push((Arc::downgrade(device), Arc::downgrade(&sentry)));
-            (sentry, true)
-        };
-        drop(sentries);
-        if register {
             sentry.install_callbacks(device);
-        }
+            abort_guard.waiter = None;
+
+            let mut sentries = SENTRIES.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some((_, slot)) = sentries.iter_mut().find(|(known, slot)| {
+                known.as_ptr() == Arc::as_ptr(device)
+                    && matches!(slot, SentrySlot::Installing(existing) if Arc::ptr_eq(existing, &waiter))
+            }) {
+                *slot = SentrySlot::Ready(Arc::downgrade(&sentry));
+            }
+            drop(sentries);
+
+            let (lock, cvar) = &*waiter;
+            let mut ready = lock.lock().unwrap_or_else(PoisonError::into_inner);
+            *ready = Some(Arc::downgrade(&sentry));
+            drop(ready);
+            cvar.notify_all();
+            break sentry;
+        };
         if let Some(on_device_lost) = on_device_lost {
             let mut handlers = sentry
                 .on_device_lost

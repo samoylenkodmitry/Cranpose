@@ -21,7 +21,7 @@ pub enum SavedStateError {
 
 struct Entry<T> {
     state: MutableStateFlow<T>,
-    _registration: Arc<OnceLock<Option<DurableSaveRegistration>>>,
+    _registration: Option<DurableSaveRegistration>,
 }
 
 struct Namespace {
@@ -197,39 +197,31 @@ impl SavedStateHandle {
             return Ok((state, false));
         }
         let value = initial();
-        let (state, registration_slot) = {
-            let mut entries = self
-                .namespace
-                .entries
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            if let Some(entry) = entries.get(key) {
-                if let Some(entry) = entry.downcast_ref::<Entry<T>>() {
-                    return Ok((entry.state.clone(), false));
-                }
-                drop(entries);
-                return Err(SavedStateError::TypeMismatch(self.stored_key(key)));
+        let mut entries = self
+            .namespace
+            .entries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(entry) = entries.get(key) {
+            if let Some(entry) = entry.downcast_ref::<Entry<T>>() {
+                return Ok((entry.state.clone(), false));
             }
-            let state = MutableStateFlow::new(value);
-            let registration = Arc::new(OnceLock::new());
-            entries.insert(
-                key.to_owned(),
-                Box::new(Entry {
-                    state: state.clone(),
-                    _registration: Arc::clone(&registration),
-                }),
-            );
-            (state, registration)
-        };
+            drop(entries);
+            return Err(SavedStateError::TypeMismatch(self.stored_key(key)));
+        }
+        let state = MutableStateFlow::new(value);
         let registration = self.namespace.store.as_ref().map(|store| {
             let saved = state.clone();
             register_preference_save(Arc::clone(store), self.stored_key(key), move || {
                 saved.value().to_string()
             })
         });
-        assert!(
-            registration_slot.set(registration).is_ok(),
-            "only the winning entry registers a durable save"
+        entries.insert(
+            key.to_owned(),
+            Box::new(Entry {
+                state: state.clone(),
+                _registration: registration,
+            }),
         );
         Ok((state, true))
     }

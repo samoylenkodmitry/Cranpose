@@ -1,5 +1,5 @@
 use std::{
-    sync::{Arc, Barrier, Mutex, OnceLock, PoisonError},
+    sync::{Arc, Barrier, Mutex, PoisonError},
     time::Duration,
 };
 
@@ -108,26 +108,14 @@ fn namespace_and_key_separators_cannot_alias_another_saved_value() {
     assert_eq!(SavedStateHandle::new("a%2Fb").get::<u32>("c"), Ok(Some(3)));
 }
 
-#[derive(Default)]
-struct ReentrantPreferences {
+struct InterceptPreferences<F> {
     inner: MemoryPreferences,
-    handle: OnceLock<SavedStateHandle>,
-    nested_value: Mutex<Option<u32>>,
+    on_get: F,
 }
 
-impl PreferencesStore for ReentrantPreferences {
+impl<F: Fn(&str) + Send + Sync> PreferencesStore for InterceptPreferences<F> {
     fn get(&self, key: &str) -> Option<String> {
-        if key.ends_with("/primary")
-            && let Some(handle) = self.handle.get()
-        {
-            let nested = handle
-                .get::<u32>("secondary")
-                .expect("reentrant read succeeds without deadlocking");
-            *self
-                .nested_value
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = nested;
-        }
+        (self.on_get)(key);
         self.inner.get(key)
     }
 
@@ -151,7 +139,27 @@ impl PreferencesStore for ReentrantPreferences {
 #[test]
 fn preferences_store_reading_saved_state_during_restore_does_not_deadlock() {
     let _guard = serial();
-    let store = Arc::new(ReentrantPreferences::default());
+    let handle_slot: Arc<Mutex<Option<SavedStateHandle>>> = Arc::default();
+    let nested_value: Arc<Mutex<Option<u32>>> = Arc::default();
+    let hook_handle = Arc::clone(&handle_slot);
+    let hook_nested = Arc::clone(&nested_value);
+    let store = Arc::new(InterceptPreferences {
+        inner: MemoryPreferences::new(),
+        on_get: move |key: &str| {
+            let handle = hook_handle
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            if key.ends_with("/primary")
+                && let Some(handle) = handle
+            {
+                let nested = handle
+                    .get::<u32>("secondary")
+                    .expect("reentrant read succeeds without deadlocking");
+                *hook_nested.lock().unwrap_or_else(PoisonError::into_inner) = nested;
+            }
+        },
+    });
     store
         .inner
         .set("reentrant/primary", "41")
@@ -160,27 +168,24 @@ fn preferences_store_reading_saved_state_during_restore_does_not_deadlock() {
         .inner
         .set("reentrant/secondary", "7")
         .expect("seed secondary");
-    set_platform_preferences(Arc::<ReentrantPreferences>::clone(&store));
+    set_platform_preferences(Arc::clone(&store) as Arc<dyn PreferencesStore>);
 
     let handle = SavedStateHandle::new("reentrant");
-    store
-        .handle
-        .set(handle.clone())
-        .ok()
-        .expect("install handle");
+    *handle_slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(handle.clone());
 
     let flow = handle
         .get_mutable_state_flow("primary", 0_u32)
         .expect("restore primary");
     assert_eq!(flow.value(), 41, "primary restores stored value");
     assert_eq!(
-        *store
-            .nested_value
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner),
+        *nested_value.lock().unwrap_or_else(PoisonError::into_inner),
         Some(7),
         "reentrant PreferencesStore::get read secondary without deadlocking"
     );
+    handle_slot
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
 }
 
 #[test]
@@ -234,5 +239,70 @@ fn competing_saved_state_initializers_persist_only_the_winning_value() {
         store.get("race/counter").as_deref(),
         Some("99"),
         "losing initializer must not overwrite the winning flow's persisted value"
+    );
+}
+
+#[test]
+fn updating_saved_state_during_concurrent_initialization_persists_the_update() {
+    let _guard = serial();
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let blocked_once = std::sync::atomic::AtomicBool::new(false);
+    let hook_entered = Arc::clone(&entered);
+    let hook_release = Arc::clone(&release);
+    let store = Arc::new(InterceptPreferences {
+        inner: MemoryPreferences::new(),
+        on_get: move |key: &str| {
+            if key == "init_update/counter"
+                && !blocked_once.swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                hook_entered.wait();
+                hook_release.wait();
+            }
+        },
+    });
+    set_platform_preferences(Arc::clone(&store) as Arc<dyn PreferencesStore>);
+
+    let handle = SavedStateHandle::new("init_update");
+    let flow = std::thread::scope(|scope| {
+        let init_handle = handle.clone();
+        let initializer = scope.spawn(move || {
+            init_handle
+                .get_mutable_state_flow("counter", 10_u32)
+                .expect("initializer obtains flow")
+        });
+
+        // Wait until the initializer is inside PreferencesStore::get, then
+        // create/update the same key and run a durable save before releasing it.
+        entered.wait();
+        handle.set("counter", &77_u32).expect("concurrent update");
+        assert_eq!(
+            run_durable_saves(Duration::from_secs(5)),
+            DurableSaveOutcome::Completed,
+            "durable save completes immediately after concurrent update"
+        );
+        assert_eq!(
+            store.inner.get("init_update/counter").as_deref(),
+            Some("77"),
+            "durable save must include the update made while another thread initializes"
+        );
+        release.wait();
+        initializer.join().expect("initializer thread")
+    });
+
+    assert_eq!(
+        flow.value(),
+        77_u32,
+        "initializer joins the existing flow holding the concurrent update"
+    );
+    assert_eq!(
+        run_durable_saves(Duration::from_secs(5)),
+        DurableSaveOutcome::Completed,
+        "subsequent durable save still succeeds"
+    );
+    assert_eq!(
+        store.inner.get("init_update/counter").as_deref(),
+        Some("77"),
+        "persisted value stays intact after the initializer finishes"
     );
 }

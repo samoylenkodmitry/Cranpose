@@ -65,10 +65,10 @@ struct HistorySync<R: Clone + 'static> {
     landing: Cell<Option<usize>>,
 }
 
-enum HistoryAction<R> {
-    Push(usize, Option<R>),
+enum HistoryAction {
+    Push(usize),
     Go(isize),
-    Replace(usize, Option<R>),
+    Replace(usize),
 }
 
 impl<R: Clone + PartialEq + 'static> HistorySync<R> {
@@ -94,33 +94,42 @@ impl<R: Clone + PartialEq + 'static> HistorySync<R> {
         if !self.started.get() {
             return;
         }
-        let previous = self.synced.replace(routes);
         let action = {
-            let synced = self.synced.borrow();
-            if *synced == previous || self.adopt.replace(false) {
+            let previous = self.synced.borrow();
+            if routes == *previous {
                 return;
             }
-            let (before, after) = (previous.len(), synced.len());
-            if after == before + 1 && synced.starts_with(&previous) {
-                Some(HistoryAction::Push(after, synced.last().cloned()))
-            } else if after > 0 && after < before && previous.starts_with(&synced) {
-                self.landing.set(Some(after));
-                Some(HistoryAction::Go(after as isize - before as isize))
-            } else if after > 0 {
-                Some(HistoryAction::Replace(after, synced.last().cloned()))
-            } else {
+            if self.adopt.replace(false) {
                 None
+            } else {
+                let (before, after) = (previous.len(), routes.len());
+                if after == before + 1 && routes.starts_with(&previous) {
+                    Some(HistoryAction::Push(after))
+                } else if after > 0 && after < before && previous.starts_with(&routes) {
+                    self.landing.set(Some(after));
+                    Some(HistoryAction::Go(after as isize - before as isize))
+                } else if after > 0 {
+                    Some(HistoryAction::Replace(after))
+                } else {
+                    None
+                }
             }
         };
+        let fragment = match action {
+            Some(HistoryAction::Push(_) | HistoryAction::Replace(_)) => {
+                Some(self.fragment_of(routes.last()))
+            }
+            Some(HistoryAction::Go(_)) | None => None,
+        };
+        *self.synced.borrow_mut() = routes;
         match action {
-            Some(HistoryAction::Push(depth, last)) => {
-                let fragment = self.fragment_of(last.as_ref());
-                self.history.push(depth, &fragment);
+            Some(HistoryAction::Push(depth)) => {
+                self.history.push(depth, fragment.as_deref().unwrap_or(""));
             }
             Some(HistoryAction::Go(delta)) => self.history.go(delta),
-            Some(HistoryAction::Replace(depth, last)) => {
-                let fragment = self.fragment_of(last.as_ref());
-                self.history.replace(depth, &fragment);
+            Some(HistoryAction::Replace(depth)) => {
+                self.history
+                    .replace(depth, fragment.as_deref().unwrap_or(""));
             }
             None => {}
         }

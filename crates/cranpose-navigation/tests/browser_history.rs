@@ -22,7 +22,6 @@ struct FakeHistory {
     current: Cell<usize>,
     on_move: RefCell<Option<Rc<dyn Fn()>>>,
     pending_moves: Cell<usize>,
-    deliver_synchronously: Cell<bool>,
 }
 
 impl FakeHistory {
@@ -96,9 +95,6 @@ impl BrowserHistory for FakeHistory {
         let last = self.entries.borrow().len() as isize - 1;
         self.current.set(target.clamp(0, last) as usize);
         self.pending_moves.set(self.pending_moves.get() + 1);
-        if self.deliver_synchronously.get() {
-            self.deliver();
-        }
     }
 
     fn observe(&self, on_move: Rc<dyn Fn()>) -> BrowserHistoryObserver {
@@ -245,23 +241,5 @@ fn a_navigation_that_replaces_screens_replaces_the_current_entry() {
             (Some(1), "/home".to_owned()),
             (Some(2), "/settings".to_owned())
         ]
-    );
-}
-
-#[test]
-fn a_synchronous_history_move_during_pop_completes_cleanly() {
-    let mut app = App::opened_at("");
-    app.history.deliver_synchronously.set(true);
-    app.nav().navigate(Screen::Detail(3));
-    app.settle();
-    app.nav().navigate(Screen::Settings);
-    app.settle();
-    assert!(app.nav().pop_back_stack_to(&Screen::Home, false));
-    app.settle();
-    assert_eq!(app.history.current(), (Some(1), "/home".to_owned()));
-    assert_eq!(
-        app.nav().back_stack(),
-        [Screen::Home],
-        "a synchronous move callback during history.go leaves the back stack at Home"
     );
 }

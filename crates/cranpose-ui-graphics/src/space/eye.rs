@@ -142,27 +142,32 @@ pub struct WorldSink(Arc<Mutex<WorldSinkInner>>);
 #[derive(Debug, Default)]
 struct WorldSinkInner {
     current: Arc<EyeWorld>,
-    spare: Option<EyeWorld>,
+    spare: Option<Arc<EyeWorld>>,
 }
 
 impl WorldSink {
     /// Builds the world again with `build`, in owned storage outside the lock
     /// so `build` may read [`Self::current`] without deadlocking.
     pub fn rebuild(&self, build: impl FnOnce(&mut EyeWorld)) {
-        let mut world = self
+        let mut next = self
             .0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .spare
             .take()
             .unwrap_or_default();
-        world.clear();
-        build(&mut world);
-        let mut inner = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        let previous = std::mem::replace(&mut inner.current, Arc::new(world));
-        if let Ok(reusable) = Arc::try_unwrap(previous) {
-            inner.spare = Some(reusable);
+        if Arc::get_mut(&mut next).is_none() {
+            next = Arc::new(EyeWorld::default());
         }
+        let world = Arc::get_mut(&mut next).expect("replacement world is uniquely owned");
+        world.clear();
+        build(world);
+        let discarded = {
+            let mut inner = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+            let previous = std::mem::replace(&mut inner.current, next);
+            inner.spare.replace(previous)
+        };
+        drop(discarded);
     }
 
     /// The world the renderer left last.

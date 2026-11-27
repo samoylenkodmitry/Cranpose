@@ -828,3 +828,44 @@ fn concurrent_renderers_sharing_one_device_both_receive_device_loss() {
         "second renderer must also receive device loss on the shared device"
     );
 }
+
+#[test]
+fn concurrent_renderer_using_device_during_initialization_hits_installed_error_handler() {
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let (_lock, mut first, target) =
+        threaded_parts(format).expect("concurrent device sentry test requires a GPU adapter");
+    let start = Barrier::new(2);
+    let target_for_second = target.clone();
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(|| {
+            let mut second = WgpuRenderer::new(&[support::TEST_FONT]);
+            start.wait();
+            second.init_gpu_compiling_inline_for_tests(target_for_second.clone());
+            // Immediately trigger an uncaptured validation error on the shared
+            // device. Without waiting for callback installation to finish,
+            // wgpu's default handler would panic here.
+            drop(
+                target_for_second
+                    .device
+                    .create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("sentry-init-validation-probe-second"),
+                        size: u64::MAX - 3,
+                        usage: wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    }),
+            );
+            drop(second);
+        });
+        start.wait();
+        first.init_gpu_compiling_inline_for_tests(target.clone());
+        drop(target.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("sentry-init-validation-probe-first"),
+            size: u64::MAX - 3,
+            usage: wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+        worker.join().expect("second renderer thread");
+    });
+    drop(target.device.poll(wgpu::PollType::wait_indefinitely()));
+    drop(first);
+}
