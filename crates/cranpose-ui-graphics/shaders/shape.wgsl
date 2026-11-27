@@ -558,6 +558,10 @@ const RECORD_ARC_BANDED: u32 = 1048576u;
 const RECORD_BAND_CLASS_SHIFT: u32 = 21u;
 const RECORD_BAND_CLASS_MASK: u32 = 7u;
 const RECORD_VERTEX_GRADIENT: u32 = 16777216u;
+// A fill a later opaque interior of its pass partly hides: it draws as the
+// strip of four quads between its rect and the hidden part, whose device
+// edges `arc_geometry` holds (`run_store::occlusion_cut`).
+const RECORD_FRAMED: u32 = 33554432u;
 
 const BRUSH_LINEAR: u32 = 1u;
 const BRUSH_RADIAL: u32 = 2u;
@@ -1013,6 +1017,21 @@ fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
         let last = min(local, segments * 2u + 1u);
         position = band_position(record, geometry.trig, last >> 1u, last & 1u, segments);
         past = local >= segments * 2u + 2u;
+    } else if ((record.flags & RECORD_FRAMED) != 0u) {
+        // Boundary b of the strip sits at corner b & 3, clockwise from the
+        // top left: vertex 2b on the hidden part, 2b + 1 on the rect. The
+        // fragment stage shades the rect as ever, so every pixel the strip
+        // covers takes the colour the whole quad gave it.
+        let outer = vec4<f32>(geometry.rect.xy, geometry.rect.xy + geometry.rect.zw);
+        let hole = clamp(record.arc_geometry, outer.xyxy, outer.zwzw);
+        let last = min(local, 9u);
+        let corner = (last >> 1u) & 3u;
+        let edges = select(hole, outer, (last & 1u) == 1u);
+        position = vec2<f32>(
+            select(edges.x, edges.z, (corner == 1u) | (corner == 2u)),
+            select(edges.y, edges.w, corner >= 2u),
+        );
+        past = local >= 10u;
     } else {
         past = local >= 4u;
         let uv = vec2<f32>(f32(local >> 1u), f32(local & 1u));

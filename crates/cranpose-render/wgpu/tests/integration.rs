@@ -74,6 +74,7 @@ mod mesh_surface_pixels;
 mod nested_composite_order;
 mod nested_rotated_relayout;
 mod never_wait;
+mod occlusion_cut;
 mod opaque_interiors;
 mod opaque_prefix_cache;
 mod page_background;

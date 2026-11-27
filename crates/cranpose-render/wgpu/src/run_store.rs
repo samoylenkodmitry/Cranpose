@@ -39,6 +39,7 @@ const INITIAL_PLACEMENTS: usize = 64;
 
 mod arena_staging;
 mod arena_tables;
+mod occlusion_cut;
 mod placement_data;
 #[cfg(test)]
 #[path = "../tests/unit/uniform_placement_chunks.rs"]
@@ -690,7 +691,7 @@ impl RunDrawCall {
         records: std::ops::Range<u32>,
         occluders: bool,
     ) -> bool {
-        if self.band_class != band_class || self.records.end != records.start {
+        if !occlusion_cut::joins(self.band_class, band_class) || self.records.end != records.start {
             return false;
         }
         let joined = self.key.joined();
@@ -1423,15 +1424,9 @@ impl RunStore {
             self.arena.chunks.len(),
             "only the open chunk cuts"
         );
-        for draw in &self.arena.staging.draws {
-            let class = draw.band_class;
-            self.strip_indices[class as usize].ensure(
-                device,
-                self.upload,
-                band_class_segments(class),
-            );
-        }
-        out.append(&mut self.arena.staging.draws);
+        let start = out.len();
+        self.arena.staging.take_draws(out);
+        self.ensure_strip_indices(device, &out[start..]);
     }
 
     /// Places the open chunk's tables in the frame's arena, moves the draws
