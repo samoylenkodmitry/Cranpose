@@ -94,10 +94,7 @@ impl AnimateScroll for LazyListState {
 
 // Springs `state` to `value`, which lies within its range.
 pub(crate) fn animate_scroll_state_to(state: ScrollState, value: f32) {
-    let Some(current) = state.try_value() else {
-        return;
-    };
-    animate(state, value - current, Some(value));
+    animate(state, value - state.value_non_reactive(), Some(value));
 }
 
 /// How far item `index` starts past where `scroll_to_item(index, 0)` puts

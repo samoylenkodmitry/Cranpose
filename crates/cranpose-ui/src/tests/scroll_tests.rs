@@ -67,9 +67,9 @@ fn scroll_invalidation_callback_ids_restart_per_instance() {
         let first = ScrollState::new(0.0);
         let second = ScrollState::new(0.0);
 
-        assert_eq!(first.add_invalidate_callback(Box::new(|| {})), 1);
-        assert_eq!(first.add_invalidate_callback(Box::new(|| {})), 2);
-        assert_eq!(second.add_invalidate_callback(Box::new(|| {})), 1);
+        assert_eq!(first.add_invalidate_callback(Box::new(|| {})), Some(1));
+        assert_eq!(first.add_invalidate_callback(Box::new(|| {})), Some(2));
+        assert_eq!(second.add_invalidate_callback(Box::new(|| {})), Some(1));
     });
 }
 

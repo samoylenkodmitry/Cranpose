@@ -136,14 +136,11 @@ impl MutableInteractionSource {
 
     /// The next id this source hands an interaction.
     fn next_id(&self) -> u64 {
-        self.inner
-            .try_with(|inner| {
-                let mut next_id = inner.next_id.borrow_mut();
-                let id = *next_id;
-                *next_id = id.saturating_add(1);
-                id
-            })
-            .unwrap_or(0)
+        let inner = self.inner();
+        let mut next_id = inner.next_id.borrow_mut();
+        let id = *next_id;
+        *next_id = id.saturating_add(1);
+        id
     }
 
     /// Reports a press at `press_position` in the node's local coordinates, in logical pixels, and

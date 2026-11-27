@@ -135,15 +135,17 @@ impl WearScalingListState {
     /// grow works until the anchored item scrolls off, after which the ramp is
     /// computed from an item nobody can see.
     pub fn scroll_by(&self, delta: f32) -> f32 {
-        if !delta.is_finite() || !self.anchor.is_alive() {
+        if !delta.is_finite() {
             return 0.0;
         }
+        let Some(anchor) = self.anchor.try_value_subscribed() else {
+            return 0.0;
+        };
         let Some(inner) = self.inner.try_get() else {
             return 0.0;
         };
         inner.scroll_animation.borrow_mut().take();
         let info = *inner.layout.borrow();
-        let anchor = self.anchor.get();
         let available_before = info.scrolled();
         let available_after = (info.travel() - available_before).max(0.0);
         let applied = delta.clamp(-available_before, available_after);

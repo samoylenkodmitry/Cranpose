@@ -191,7 +191,7 @@ impl ScrollState {
     /// content now: Compose's `isScrollInProgress`. A composable that reads it
     /// recomposes when a scroll starts and when it ends.
     pub fn is_scroll_in_progress(&self) -> bool {
-        self.in_progress.is_alive() && self.in_progress.get()
+        self.in_progress.get()
     }
 
     pub(crate) fn set_scroll_in_progress(&self, active: bool) {
@@ -206,7 +206,11 @@ impl ScrollState {
             return;
         };
         let moving = inner.gesture_scrolling.get() || inner.running_scroll.borrow().is_running();
-        if self.in_progress.is_alive() && self.in_progress.get_non_reactive() != moving {
+        if self
+            .in_progress
+            .try_get_non_reactive()
+            .is_some_and(|current| current != moving)
+        {
             self.in_progress.set(moving);
         }
     }
@@ -240,6 +244,14 @@ impl ScrollState {
         self.value.try_value()
     }
 
+    pub(crate) fn try_value_non_reactive(&self) -> Option<f32> {
+        self.value.try_get_non_reactive()
+    }
+
+    pub(crate) fn try_value_subscribed(&self) -> Option<f32> {
+        self.value.try_value_subscribed()
+    }
+
     /// Gets the maximum scroll value.
     pub fn max_value(&self) -> f32 {
         self.inner
@@ -250,7 +262,7 @@ impl ScrollState {
     /// Scrolls by the given delta, clamping to valid range [0, max_value].
     /// Returns the actual amount scrolled.
     pub fn dispatch_raw_delta(&self, delta: f32) -> f32 {
-        let Some(current) = self.value.try_value() else {
+        let Some(current) = self.value.try_get_non_reactive() else {
             return 0.0;
         };
         let Some(inner) = self.inner.try_get() else {
@@ -272,9 +284,7 @@ impl ScrollState {
     /// The main-axis extent of the scroll viewport, as the last measure pass
     /// resolved it.
     pub fn viewport_extent(&self) -> f32 {
-        self.inner
-            .try_with(|inner| *inner.viewport_extent.borrow())
-            .unwrap_or(0.0)
+        *self.inner().viewport_extent.borrow()
     }
 
     /// The whole scrollable content along the main axis.
@@ -298,16 +308,21 @@ impl ScrollState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn set_max_value(&self, max: f32) {
-        if let Some(inner) = self.inner.try_get() {
-            *inner.max_value.borrow_mut() = max;
-        }
+        *self.inner().max_value.borrow_mut() = max;
     }
 
+    #[cfg(test)]
     pub(crate) fn set_viewport_extent(&self, extent: f32) {
-        if let Some(inner) = self.inner.try_get() {
-            *inner.viewport_extent.borrow_mut() = extent;
-        }
+        *self.inner().viewport_extent.borrow_mut() = extent;
+    }
+
+    fn set_layout_metrics(&self, max: f32, viewport_extent: f32) {
+        self.inner.try_with(|inner| {
+            *inner.max_value.borrow_mut() = max;
+            *inner.viewport_extent.borrow_mut() = viewport_extent;
+        });
     }
 
     /// Scrolls to the given position immediately. It stops a running fling,
@@ -370,16 +385,14 @@ impl ScrollState {
         stopped
     }
 
-    pub(crate) fn add_invalidate_callback(&self, callback: Box<dyn Fn()>) -> u64 {
-        let Some(inner) = self.inner.try_get() else {
-            return 0;
-        };
+    pub(crate) fn add_invalidate_callback(&self, callback: Box<dyn Fn()>) -> Option<u64> {
+        let inner = self.inner.try_get()?;
         let callback = app_owned_invalidation_callback(callback);
         let id = inner.invalidate_callbacks.add(Rc::clone(&callback));
         if inner.pending_invalidation.replace(false) {
             callback();
         }
-        id
+        Some(id)
     }
 
     pub(crate) fn remove_invalidate_callback(&self, id: u64) {
@@ -737,10 +750,10 @@ impl ModifierNode for ScrollNode {
         self.node_id = node_id;
 
         if let Some(node_id) = node_id {
-            let callback_id = self.state.add_invalidate_callback(Box::new(move || {
-                crate::schedule_layout_repass(node_id);
-            }));
-            self.invalidation_callback_id = Some(callback_id);
+            self.invalidation_callback_id =
+                self.state.add_invalidate_callback(Box::new(move || {
+                    crate::schedule_layout_repass(node_id);
+                }));
             let callback_id = self.overscroll.add_invalidate_callback(Box::new(move || {
                 crate::schedule_layout_repass(node_id);
             }));
@@ -809,20 +822,20 @@ impl LayoutModifierNode for ScrollNode {
         if (self.axis.is_vertical() && constraints.max_height.is_finite())
             || (!self.axis.is_vertical() && constraints.max_width.is_finite())
         {
-            self.state.set_max_value(max_scroll);
-            self.state.set_viewport_extent(if self.axis.is_vertical() {
+            let viewport_extent = if self.axis.is_vertical() {
                 height
             } else {
                 width
-            });
-            self.overscroll.set_dimension(if self.axis.is_vertical() {
-                height
-            } else {
-                width
-            });
+            };
+            self.state.set_layout_metrics(max_scroll, viewport_extent);
+            self.overscroll.set_dimension(viewport_extent);
         }
 
-        let scroll = self.state.try_value().unwrap_or(0.0).clamp(0.0, max_scroll);
+        let scroll = self
+            .state
+            .try_value_non_reactive()
+            .unwrap_or(0.0)
+            .clamp(0.0, max_scroll);
 
         let abs_scroll = if self.reverse_scrolling {
             scroll - max_scroll

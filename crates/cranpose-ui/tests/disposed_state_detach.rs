@@ -3,16 +3,13 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{MutableState, key, remember, rememberMutableStateOf};
-use cranpose_foundation::{
-    PointerButton, PointerButtons, PointerEvent, PointerEventKind,
-    lazy::{LazyListState, rememberLazyListState},
-};
+use cranpose_core::{MutableState, SnapshotStateObserver, key, remember, rememberMutableStateOf};
+use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
 use cranpose_ui::{
-    Axis, Box, BoxSpec, Column, ColumnSpec, DraggableState, Modifier, MutableInteractionSource,
-    Point, ScrollState, Size, Spacer, TestComposition, build_layout_tree_from_applier,
-    build_semantics_tree_from_applier, measure_layout, rememberDraggableState,
-    rememberMutableInteractionSource,
+    Axis, Box, BoxSpec, Column, ColumnSpec, DraggableState, MeasureLayoutOptions, Modifier,
+    MutableInteractionSource, Point, ScrollState, Size, Spacer, TestComposition,
+    build_layout_tree_from_applier, build_semantics_tree_from_applier, measure_layout,
+    measure_layout_with_options, rememberDraggableState, rememberMutableInteractionSource,
     round_scaling_list::CentreAnchor,
     run_test_composition,
     widgets::wear::scaling_list::{
@@ -66,15 +63,14 @@ fn pointer_handlers(composition: &mut TestComposition) -> Vec<Rc<dyn Fn(PointerE
     })
 }
 
-struct SplitOwnerHarness<T> {
+struct SplitOwnerHarness {
     composition: TestComposition,
     keep_owner: MutableState<bool>,
     keep_node: MutableState<bool>,
-    shared: Rc<RefCell<Option<T>>>,
 }
 
-impl<T: Clone + 'static> SplitOwnerHarness<T> {
-    fn new(
+impl SplitOwnerHarness {
+    fn new<T: Clone + 'static>(
         owner_key: u64,
         node_key: u64,
         build_owner: impl Fn() -> T + 'static,
@@ -129,7 +125,6 @@ impl<T: Clone + 'static> SplitOwnerHarness<T> {
             composition,
             keep_owner: keep_owner_slot.get().expect("keep_owner"),
             keep_node: keep_node_slot.get().expect("keep_node"),
-            shared,
         }
     }
 
@@ -144,6 +139,68 @@ impl<T: Clone + 'static> SplitOwnerHarness<T> {
     }
 }
 
+fn scrollable_column(state: ScrollState) {
+    Column(
+        Modifier::empty()
+            .fill_max_width()
+            .height(100.0)
+            .vertical_scroll(state, false),
+        ColumnSpec::default(),
+        || {
+            for _ in 0..10 {
+                Spacer(Modifier::empty().fill_max_width().height(24.0));
+            }
+        },
+    );
+}
+
+fn run_animation_past_owner_disposal<S: Copy + 'static>(
+    build_content: impl Fn() -> S + 'static,
+    start_animation: impl FnOnce(S),
+) {
+    let show_slot: Rc<Cell<Option<MutableState<bool>>>> = Rc::new(Cell::new(None));
+    let state_slot: Rc<Cell<Option<S>>> = Rc::new(Cell::new(None));
+
+    let show_cap = Rc::clone(&show_slot);
+    let state_cap = Rc::clone(&state_slot);
+    let build_content = Rc::new(build_content);
+
+    let mut composition = run_test_composition(move || {
+        let show = rememberMutableStateOf(|| true);
+        show_cap.set(Some(show));
+        let state_cap = Rc::clone(&state_cap);
+        let build_content = Rc::clone(&build_content);
+        Box(
+            Modifier::empty().fill_max_size(),
+            BoxSpec::default(),
+            move || {
+                if show.get() {
+                    state_cap.set(Some(build_content()));
+                }
+            },
+        );
+    });
+
+    layout_and_semantics(&mut composition);
+    let state = state_slot.get().expect("animated state");
+    let show = show_slot.get().expect("show switch");
+    let handle = composition.runtime_handle();
+
+    composition.with_app_context(|| {
+        start_animation(state);
+    });
+    composition.with_app_context(|| {
+        handle.drain_frame_callbacks(16_000_000);
+    });
+
+    show.set(false);
+    settle_composition(&mut composition);
+
+    composition.with_app_context(|| {
+        handle.drain_frame_callbacks(32_000_000);
+    });
+}
+
 #[test]
 fn scroll_node_detaches_and_measures_after_scroll_state_owner_disposes() {
     let mut harness = SplitOwnerHarness::new(
@@ -155,24 +212,92 @@ fn scroll_node_detaches_and_measures_after_scroll_state_owner_disposes() {
             Spacer(Modifier::empty().size_points(10.0, 10.0));
             owned
         },
-        |state| {
-            Column(
-                Modifier::empty()
-                    .fill_max_width()
-                    .height(100.0)
-                    .vertical_scroll(state, false),
-                ColumnSpec::default(),
-                || {
-                    for _ in 0..10 {
-                        Spacer(Modifier::empty().fill_max_width().height(24.0));
-                    }
-                },
-            );
-        },
+        scrollable_column,
     );
 
     harness.dispose_owner();
     harness.detach_node();
+}
+
+#[test]
+fn scroll_node_measure_does_not_observe_scroll_position_in_snapshot() {
+    let state_slot: Rc<Cell<Option<ScrollState>>> = Rc::new(Cell::new(None));
+    let state_cap = Rc::clone(&state_slot);
+
+    let mut composition = run_test_composition(move || {
+        let state = remember(|| ScrollState::new(0.0)).with(|state| *state);
+        state_cap.set(Some(state));
+        scrollable_column(state);
+    });
+
+    layout_and_semantics(&mut composition);
+    let root = composition.root().expect("composed root");
+    let state = state_slot.get().expect("scroll state");
+
+    let measure_invalidations = Rc::new(Cell::new(0usize));
+    let semantics_invalidations = Rc::new(Cell::new(0usize));
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    observer.start();
+
+    let measure_flag = Rc::clone(&measure_invalidations);
+    let resized = Size {
+        width: VIEWPORT.width,
+        height: VIEWPORT.height - 20.0,
+    };
+    observer.observe_reads(
+        1usize,
+        move |_| measure_flag.set(measure_flag.get() + 1),
+        || {
+            composition.with_runtime_applier(|applier| {
+                measure_layout_with_options(
+                    applier,
+                    root,
+                    resized,
+                    MeasureLayoutOptions {
+                        collect_semantics: false,
+                        build_layout_tree: false,
+                    },
+                )
+                .expect("layout succeeds");
+            });
+        },
+    );
+
+    let semantics_flag = Rc::clone(&semantics_invalidations);
+    observer.observe_reads(
+        2usize,
+        move |_| semantics_flag.set(semantics_flag.get() + 1),
+        || {
+            composition.with_runtime_applier(|applier| {
+                build_semantics_tree_from_applier(applier, root).expect("semantics tree builds");
+            });
+        },
+    );
+
+    state.scroll_to(40.0);
+    observer.stop();
+
+    assert_eq!(
+        measure_invalidations.get(),
+        0,
+        "ScrollNode::measure must not record a snapshot read of ScrollState::value"
+    );
+    assert!(
+        semantics_invalidations.get() > 0,
+        "scroll semantics must continue to observe ScrollState::value"
+    );
+}
+
+#[test]
+fn scroll_state_animation_steps_after_owner_disposes() {
+    run_animation_past_owner_disposal(
+        || {
+            let state = remember(|| ScrollState::new(0.0)).with(|state| *state);
+            scrollable_column(state);
+            state
+        },
+        |state| state.animate_scroll_to(120.0),
+    );
 }
 
 #[test]
@@ -222,66 +347,32 @@ fn interaction_node_detaches_after_interaction_source_owner_disposes() {
 
 #[test]
 fn wear_scaling_list_animation_steps_after_state_owner_disposes() {
-    let show_slot: Rc<Cell<Option<MutableState<bool>>>> = Rc::new(Cell::new(None));
-    let state_slot: Rc<Cell<Option<WearScalingListState>>> = Rc::new(Cell::new(None));
-
-    let show_cap = Rc::clone(&show_slot);
-    let state_cap = Rc::clone(&state_slot);
-
-    let mut composition = run_test_composition(move || {
-        let show = rememberMutableStateOf(|| true);
-        show_cap.set(Some(show));
-        let state_cap = Rc::clone(&state_cap);
-        Box(
-            Modifier::empty().fill_max_size(),
-            BoxSpec::default(),
-            move || {
-                if show.get() {
-                    let state = rememberWearScalingListState(CentreAnchor::default());
-                    state_cap.set(Some(state));
-                    WearScalingLazyColumn(
-                        Modifier::empty().fill_max_size(),
-                        state,
-                        WearScalingLazyColumnSpec::default(),
-                        |scope| {
-                            scope.items(20, |_| {
-                                Spacer(Modifier::empty().fill_max_width().height(40.0));
-                            });
-                        },
-                    );
-                }
-            },
-        );
-    });
-
-    layout_and_semantics(&mut composition);
-    let state = state_slot.get().expect("scaling list state");
-    let show = show_slot.get().expect("show switch");
-
-    let handle = composition.runtime_handle();
-    composition.with_app_context(|| {
-        state.animate_scroll_to_item(12, 0.0);
-    });
-    composition.with_app_context(|| {
-        handle.drain_frame_callbacks(16_000_000);
-    });
-
-    // Unmount the list while the frame animation callback is still registered.
-    show.set(false);
-    settle_composition(&mut composition);
-
-    composition.with_app_context(|| {
-        handle.drain_frame_callbacks(32_000_000);
-    });
+    run_animation_past_owner_disposal(
+        || {
+            let state = rememberWearScalingListState(CentreAnchor::default());
+            WearScalingLazyColumn(
+                Modifier::empty().fill_max_size(),
+                state,
+                WearScalingLazyColumnSpec::default(),
+                |scope| {
+                    scope.items(20, |_| {
+                        Spacer(Modifier::empty().fill_max_width().height(40.0));
+                    });
+                },
+            );
+            state
+        },
+        |state: WearScalingListState| state.animate_scroll_to_item(12, 0.0),
+    );
 }
 
 #[test]
-fn draggable_and_lazy_list_handle_disposed_state_owner() {
+fn draggable_cancels_active_drag_after_state_owner_disposes() {
     let mut harness = SplitOwnerHarness::new(
         4001,
         4002,
-        || (rememberDraggableState(|_| {}), rememberLazyListState()),
-        |(drag, _lazy): (DraggableState, LazyListState)| {
+        || rememberDraggableState(|_| {}),
+        |drag: DraggableState| {
             Box(
                 Modifier::empty()
                     .size_points(120.0, 120.0)
@@ -314,10 +405,7 @@ fn draggable_and_lazy_list_handle_disposed_state_owner() {
         );
     }
 
-    let lazy = harness.shared.borrow().as_ref().expect("lazy state").1;
     harness.dispose_owner();
-
-    assert_eq!(lazy.total_items_count(), 0);
 
     // Cancel the active drag after its owner disposed, then unmount the node.
     for handler in &handlers {

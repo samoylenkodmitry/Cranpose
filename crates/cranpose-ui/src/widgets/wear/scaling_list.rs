@@ -708,7 +708,7 @@ impl WearScalingMeasureOutputs {
             can_scroll_forward: travel - scrolled > SCROLL_EPSILON,
             can_scroll_backward: scrolled > SCROLL_EPSILON,
         };
-        if self.summary.is_alive() && self.summary.get_non_reactive() != summary {
+        if self.summary.get_non_reactive() != summary {
             self.summary.set(summary);
         }
     }

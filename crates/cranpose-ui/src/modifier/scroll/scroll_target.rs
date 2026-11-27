@@ -186,7 +186,7 @@ impl ScrollTarget for ScrollState {
     fn invalidate(&self) {}
 
     fn current_offset(&self) -> f32 {
-        self.try_value().unwrap_or(0.0)
+        self.try_value_non_reactive().unwrap_or(0.0)
     }
 
     fn can_scroll(&self) -> bool {
@@ -194,9 +194,7 @@ impl ScrollTarget for ScrollState {
     }
 
     fn can_consume(&self, gesture_delta: f32) -> bool {
-        let Some(value) = self.try_value() else {
-            return false;
-        };
+        let value = self.value_non_reactive();
         let raw = -gesture_delta;
         if raw > 0.0 {
             value < self.max_value()
