@@ -92,6 +92,20 @@ class IndexEntryTest(unittest.TestCase):
         starts = publish.index_entry(nightly, 'runs/x.json')['scenarios']['gauntlet']['starts']
         self.assertEqual((starts['first']['confirmed'], starts['second']['confirmed']), ([], ['fps']))
 
+    def test_an_entry_marks_subjects_whose_legs_of_a_start_all_stayed_disturbed(self):
+        measured = run()
+        measured['scenarios'][0]['legs'] = [
+            {'subject': 'cranpose', 'start': 'first', 'disturbed': True},
+            {'subject': 'cranpose', 'start': 'first', 'disturbed': True},
+            {'subject': 'cranpose-release', 'start': 'first', 'disturbed': True},
+            {'subject': 'cranpose-release', 'start': 'first', 'disturbed': False},
+            {'subject': 'cranpose', 'start': 'second', 'disturbed': False},
+            {'subject': 'cranpose-release', 'start': 'second', 'disturbed': False},
+        ]
+        starts = publish.index_entry(measured, 'runs/x.json')['scenarios']['gauntlet']['starts']
+        self.assertEqual(starts['first']['disturbed'], ['cranpose'])
+        self.assertEqual(starts['second']['disturbed'], [])
+
 
 # The scratch repositories take nothing from the machine's git: not a hook's
 # repository a test run inherits, nor global signing or hooks.

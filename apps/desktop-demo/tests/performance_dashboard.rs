@@ -1121,3 +1121,114 @@ fn methodology_links_open_the_markdown_doc_and_harness_sources() {
         ]
     );
 }
+
+fn disturbed_dashboard() -> RobotTestRule<TestRenderer> {
+    let index = serde_json::json!({"runs": [{
+        "file": "runs/disturbed.json",
+        "kind": "frameworks",
+        "started_at": "2026-11-27T02:54:00+00:00",
+        "device": "Apple M3 Pro",
+        "protocol": {"run_s": 10, "starts": ["first", "second"]},
+        "subjects": [
+            {"name": "cranpose", "label": "Cranpose"},
+            {"name": "egui", "label": "egui 0.36.2"},
+            {"name": "iced", "label": "iced 0.14.0"},
+            {"name": "compose", "label": "Compose Multiplatform 1.12.1"},
+            {"name": "avalonia", "label": "Avalonia 12.1.3"}
+        ],
+        "scenarios": {"gauntlet": {
+            "legs": 8,
+            "app_bytes": {
+                "cranpose": 4_194_304,
+                "egui": 5_242_880,
+                "iced": 6_291_456,
+                "compose": 7_340_032,
+                "avalonia": 8_388_608
+            },
+            "starts": {
+                "first": {
+                    "summary": {
+                        "cranpose": {"fps": 59.0},
+                        "egui": {"fps": 45.0},
+                        "iced": {"fps": 30.0},
+                        "compose": {"fps": 20.0},
+                        "avalonia": {}
+                    },
+                    "disturbed": ["cranpose"]
+                },
+                "second": {
+                    "summary": {
+                        "cranpose": {"fps": 56.0},
+                        "egui": {"fps": 46.0},
+                        "iced": {"fps": 31.0},
+                        "compose": {"fps": 21.0},
+                        "avalonia": {"fps": 18.0}
+                    }
+                }
+            }
+        }}
+    }]});
+    let steady = |first: f64, interval: f64| -> Vec<f64> {
+        (0..)
+            .map(|frame| first + f64::from(frame) * interval)
+            .take_while(|time| *time < 3000.0)
+            .collect()
+    };
+    let frames = serde_json::json!({"scenarios": [{"scenario": "gauntlet", "legs": [
+        {"subject": "cranpose", "start": "first", "frame_ms": steady(500.0, 20.0), "disturbed": true},
+        {"subject": "egui", "start": "first", "frame_ms": steady(500.0, 22.0)},
+        {"subject": "iced", "start": "first", "frame_ms": steady(500.0, 40.0), "disturbed": true},
+        {"subject": "iced", "start": "first", "frame_ms": steady(500.0, 33.3)},
+        {"subject": "compose", "start": "first", "frame_ms": steady(500.0, 50.0)},
+        {"subject": "avalonia", "start": "first", "frame_ms": steady(500.0, 60.0), "disturbed": true},
+        {"subject": "avalonia", "start": "first", "frame_ms": steady(500.0, 62.0), "disturbed": true}
+    ]}]});
+    let source = FrameSource::Files(Rc::new(BTreeMap::from([(
+        "runs/disturbed.json".to_string(),
+        frames.to_string(),
+    )])));
+    dashboard_of(&index.to_string(), source)
+}
+
+#[test]
+fn a_disturbed_subject_shows_its_mark_and_stays_out_of_the_ranking() {
+    let mut robot = disturbed_dashboard();
+    let shown = robot.get_all_text();
+    let card = "Frameworks · Apple M3 Pro · 2026-11-27";
+
+    let egui_at = after(&shown, card, "egui 0.36.2");
+    let iced_at = after(&shown, card, "iced 0.14.0");
+    let compose_at = after(&shown, card, "Compose Multiplatform 1.12.1");
+    let cranpose_at = after(&shown, card, "Cranpose");
+    let avalonia_at = after(&shown, card, "Avalonia 12.1.3");
+
+    assert!(
+        egui_at < iced_at && iced_at < compose_at,
+        "undisturbed subjects rank best first (including iced with one clean retry): {shown:?}"
+    );
+    assert!(
+        compose_at < cranpose_at && compose_at < avalonia_at,
+        "both disturbed subjects stay out of the ranking after undisturbed subjects: {shown:?}"
+    );
+    assert_eq!(
+        count(&shown, "disturbed"),
+        2,
+        "both index-marked cranpose and frames-marked avalonia show disturbed: {shown:?}"
+    );
+    assert!(
+        !shows(&shown, "59.0"),
+        "a disturbed subject's fps must not appear as a ranked bar: {shown:?}"
+    );
+    assert!(
+        !shows(&shown, "no frames"),
+        "a disturbed subject must show disturbed instead of no frames: {shown:?}"
+    );
+
+    // App size is unaffected by host CPU noise during a run.
+    choose(&mut robot, "App size MiB", 0);
+    let sizes = robot.get_all_text();
+    assert!(
+        shows(&sizes, "4.00"),
+        "cranpose app size still renders when its legs were disturbed: {sizes:?}"
+    );
+}

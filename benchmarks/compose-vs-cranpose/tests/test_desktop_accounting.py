@@ -1,6 +1,8 @@
 import importlib.util
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
@@ -68,7 +70,8 @@ class DesktopRoundsTest(unittest.TestCase):
     `FrameCount`'s rates, with the apps' state cleared by a stand-in that
     notes each clearing."""
 
-    def rounds(self, rates, rounds=1, browser=None, app='fyne', idle=0.5, apps=None, screens=(('gauntlet', 16),)):
+    def rounds(self, rates, rounds=1, browser=None, app='fyne', idle=0.5, apps=None, screens=(('gauntlet', 16),),
+               max_idle=desktop.MAX_IDLE_OTHERS, max_idle_wait=desktop.MAX_IDLE_WAIT_S, host_lock=False):
         """A rate is a leg, or a (rate, cores other processes spent) pair; a
         `RuntimeError` is an attempt that failed. Each round measures the
         app's first start, then its second. With several `screens` the whole
@@ -78,6 +81,7 @@ class DesktopRoundsTest(unittest.TestCase):
         self.cleared = []
         self.programs = []
         self.warmed = []
+        self.idle_calls = 0
 
         def warm_chrome(args, server, stage):
             self.warmed.append(len(measured))
@@ -89,6 +93,14 @@ class DesktopRoundsTest(unittest.TestCase):
         def wait_for_checks(stage):
             self.programs.append('wait')
             return 2.5
+
+        def read_idle(span_s=desktop.IDLE_SPAN_S):
+            self.idle_calls += 1
+            if callable(idle):
+                return idle(span_s)
+            if isinstance(idle, (list, tuple)):
+                return idle[min(self.idle_calls - 1, len(idle) - 1)]
+            return idle
 
         def measure(name, args, work, page, stage, label, earlier, profile, program=None):
             measured.append(label)
@@ -107,14 +119,15 @@ class DesktopRoundsTest(unittest.TestCase):
         def clear(profile):
             self.cleared.append((len(measured), profile.name))
 
-        args = SimpleNamespace(parity=False, output=Path('results'), rounds=rounds, max_others=1.5, main=None,
-                               release=None, tier=16, run=3.0, browser=browser, screens=list(screens))
+        args = SimpleNamespace(parity=False, output=Path('results'), rounds=rounds, max_others=1.5,
+                               max_idle=max_idle, max_idle_wait=max_idle_wait, host_lock=host_lock,
+                               main=None, release=None, tier=16, run=3.0, browser=browser, screens=list(screens))
         with patch.object(desktop, 'measure', measure), patch.object(desktop, 'clear_app_state', clear), \
                 patch.object(desktop, 'app_bytes', return_value=2048), \
                 patch.object(desktop, 'fresh_install', install), \
                 patch.object(desktop, 'wait_for_program_checks', wait_for_checks), \
                 patch.object(desktop, 'warm_chrome', warm_chrome), \
-                patch.object(desktop, 'idle_others', return_value=idle), \
+                patch.object(desktop, 'idle_others', read_idle), \
                 patch.object(desktop.subprocess, 'run', return_value=SimpleNamespace(stdout='Apple M3 Pro')):
             report = desktop.run(args, apps or [app], 'page', Path('stage'))
         return measured, report['scenarios'][0] if browser is None and len(screens) == 1 else report
@@ -225,13 +238,126 @@ class DesktopRoundsTest(unittest.TestCase):
                          [(10.0, True), (24.3, False), (30.0, False)])
         self.assertEqual(scenario['starts']['first']['summary']['fyne']['fps'], 24.3)
 
-    def test_a_machine_busy_while_idle_disturbs_only_the_legs_that_add_more_than_the_limit_to_it(self):
-        # macm3 on 2026-10-11 idled at about a core: 2.2 cores of others then
-        # are 1.2 above it, within the 1.5 a leg may add.
-        measured, scenario = self.rounds([(24.3, 2.2), (10.0, 3.0), 30.0], idle=1.0)
-        self.assertEqual([(leg['fps'], leg['disturbed'], leg['idle_other_cores']) for leg in scenario['legs']],
-                         [(24.3, False, 1.0), (10.0, True, 1.0), (30.0, False, 1.0)])
+    def test_a_machine_within_the_idle_ceiling_disturbs_only_the_legs_that_add_more_than_the_limit(self):
+        # Within the 0.9 idle ceiling: at 0.8 idle cores, 2.2 cores of others
+        # are 1.4 above it (within 1.5), and 3.0 cores are 2.2 above it.
+        measured, scenario = self.rounds([(24.3, 2.2), (10.0, 3.0), 30.0], idle=0.8)
+        self.assertEqual(
+            [(leg['fps'], leg['disturbed'], leg['idle_other_cores'], leg['idle_waited_s']) for leg in scenario['legs']],
+            [(24.3, False, 0.8, 0.0), (10.0, True, 0.8, 0.0), (30.0, False, 0.8, 0.0)],
+        )
         self.assertEqual(scenario['starts']['first']['summary']['fyne']['fps'], 24.3)
+
+    def test_a_busy_idle_reading_waits_for_a_quiet_host_and_records_the_wait(self):
+        clock = [100.0]
+        readings = iter([1.93, 1.24, 0.44])
+
+        def fake_idle(span_s=desktop.IDLE_SPAN_S):
+            clock[0] += span_s
+            return next(readings)
+
+        with patch.object(desktop.time, 'monotonic', side_effect=lambda: clock[0]):
+            _, scenario = self.rounds([(56.2, 0.60), (56.4, 0.55)], idle=fake_idle)
+        self.assertEqual(self.idle_calls, 3)
+        self.assertEqual(
+            [(leg['fps'], leg['disturbed'], leg['idle_other_cores'], leg['idle_waited_s']) for leg in scenario['legs']],
+            [(56.2, False, 0.44, 10.0), (56.4, False, 0.44, 10.0)],
+        )
+        self.assertEqual(scenario['starts']['first']['summary']['fyne']['fps'], 56.2)
+
+    def test_a_host_that_stays_busy_never_raises_the_disturbance_bar(self):
+        # 2026-11-27 browser gauntlet: idle stayed at 1.93 cores while second
+        # start ran at 49.1 fps with other_cores 2.42. A busy baseline must
+        # never add to --max-others (1.5).
+        clock = [100.0]
+
+        def busy_idle(span_s=desktop.IDLE_SPAN_S):
+            clock[0] += span_s
+            return 1.93
+
+        with patch.object(desktop.time, 'monotonic', side_effect=lambda: clock[0]):
+            measured, scenario = self.rounds(
+                [(54.1, 1.13), (49.1, 2.42), (49.5, 2.42), (49.3, 2.42)],
+                idle=busy_idle,
+                max_idle_wait=15.0,
+            )
+        self.assertEqual(measured, ['fyne-1-first-1', 'fyne-1-second-1', 'fyne-1-second-2', 'fyne-1-second-3'])
+        self.assertEqual(
+            [(leg['start'], leg['disturbed'], leg['idle_other_cores'], leg['idle_waited_s']) for leg in scenario['legs']],
+            [
+                ('first', False, 1.93, 15.0),
+                ('second', True, 1.93, 15.0),
+                ('second', True, 1.93, 15.0),
+                ('second', True, 1.93, 15.0),
+            ],
+        )
+        self.assertEqual(scenario['starts']['first']['summary']['fyne']['fps'], 54.1)
+        self.assertEqual(scenario['starts']['second']['summary']['fyne'], {})
+
+    def test_the_exclusive_host_lock_blocks_ci_during_a_subject_and_releases_between_subjects(self):
+        wrapper = BENCHMARK.parents[1] / 'scripts/ci/with_host_lock.sh'
+        with tempfile.TemporaryDirectory(prefix='cranpose-desktop-lock-') as folder:
+            root = Path(folder)
+            entered = root / 'shared-entered'
+            env = {k: v for k, v in os.environ.items() if k != 'CRANPOSE_HOST_LOCK_HELD'}
+            env.update(
+                CRANPOSE_USE_SCCACHE='0',
+                CRANPOSE_HOST_LOCK_FILE=str(root / 'capacity.lock'),
+                CRANPOSE_HOST_LOCK_TURNSTILE_FILE=str(root / 'turnstile.lock'),
+                CRANPOSE_HOST_LOCK_MAX_WAIT_SECS='10',
+            )
+            child_holder = []
+            seen_by_subject = {}
+
+            def measure(name, args, work, page, stage, label, earlier, profile, program=None):
+                if name == 'egui' and not child_holder:
+                    child = subprocess.Popen(
+                        [
+                            str(wrapper), '--shared', sys.executable, '-c',
+                            'from pathlib import Path; import sys; Path(sys.argv[1]).touch()',
+                            str(entered),
+                        ],
+                        env=env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                    )
+                    child_holder.append(child)
+                    # Wait until the shared wrapper is actually queued on the lock.
+                    while True:
+                        line = child.stdout.readline()
+                        self.assertTrue(line, 'shared wrapper exited before queueing on the lock')
+                        if 'waiting for' in line:
+                            break
+                    seen_by_subject['during_egui'] = entered.exists()
+                elif name == 'fyne' and 'during_fyne' not in seen_by_subject:
+                    seen_by_subject['during_fyne'] = entered.exists()
+                return {'fps': 30.0, 'frames': 90, 'run_s': 3.0, 'first_frame_s': 0.4,
+                        'frame_ms': [400.0, 416.7, 433.3], 'fps_by_second': [15.0, 30.0, 30.0],
+                        'interval_p50_ms': 16.7, 'interval_p99_ms': 20.0, 'cpu_cores': 1.0,
+                        'server_cores': 0.2, 'other_cores': 0.4, 'cpu_ms_per_frame': 40.0}
+
+            args = SimpleNamespace(parity=False, output=root / 'results', rounds=1, max_others=1.5,
+                                   max_idle=desktop.MAX_IDLE_OTHERS, max_idle_wait=15.0, host_lock=True,
+                                   main=None, release=None, tier=16, run=3.0, browser=None,
+                                   screens=[('gauntlet', 16)])
+            try:
+                with patch.dict(os.environ, env, clear=True), \
+                        patch.object(desktop, 'measure', measure), \
+                        patch.object(desktop, 'clear_app_state', lambda _: None), \
+                        patch.object(desktop, 'app_bytes', return_value=2048), \
+                        patch.object(desktop, 'fresh_install', lambda name, stage, label: name), \
+                        patch.object(desktop, 'wait_for_program_checks', lambda stage: 0.0), \
+                        patch.object(desktop, 'idle_others', return_value=0.4), \
+                        patch.object(desktop, 'HOST_LOCK_YIELD_S', 0.5), \
+                        patch.object(desktop.subprocess, 'run', return_value=SimpleNamespace(stdout='Apple M3 Pro')):
+                    desktop.run(args, ['egui', 'fyne'], 'page', root / 'stage')
+            finally:
+                for child in child_holder:
+                    output, _ = child.communicate(timeout=5)
+                    self.assertEqual(child.returncode, 0, output)
+            self.assertFalse(seen_by_subject['during_egui'], 'shared CI overlapped egui')
+            self.assertTrue(seen_by_subject['during_fyne'], 'shared CI did not pass between egui and fyne')
 
     def test_every_frame_time_from_the_launch_is_kept_in_the_run(self):
         _, scenario = self.rounds([24.0, 26.0])
