@@ -3,7 +3,7 @@ use std::rc::Rc;
 use smallvec::SmallVec;
 
 use super::BatchMember;
-use crate::{gpu_stats::FrameStats, idle_pool::IdlePool, offscreen::OffscreenTarget};
+use crate::{gpu_stats::FrameStats, offscreen::OffscreenTarget};
 
 const ATLAS_SIZE_STEP: u32 = 16;
 
@@ -36,29 +36,78 @@ impl Atlas {
     }
 }
 
-// The most atlas textures kept between frames.
-const MAX_KEPT_ATLASES: usize = 4;
-
 // The side of the members' square, in shelf widths, past which a shelf
 // width is chosen again: members that would pack more than four times taller
 // than wide.
 const SHELF_WIDTH_REACH: u32 = 2;
 
-// The textures of the atlases the layer surfaces a frame draws again go
-// into. A render pass clears and stores its whole attachment, so an atlas
-// takes a texture of its own padded size: one texture sized to the busiest
-// recent frame drew the gauntlet's tier 10 frames at the Mate 20 X's size
-// into 2.37 times their members' pixels. The textures of the sizes recent
-// frames used stay, so frames whose members come and go take no new ones.
-// The GL memory of a process stays at its peak, so the kept textures hold
-// at most `kept_weight` of the largest of them. A size no frame used for
-// `crate::idle_pool::IDLE_FRAMES` leaves. Members pack into one width while
-// it holds them, so frames that differ in members differ in height.
+// The frames in a row whose need must fit one padding step under an atlas
+// texture before the texture shrinks to the largest of those needs. A
+// shorter window grew the texture again at the next busy frame: the
+// gauntlet's 1,500 frames at tier 10 made 9 textures with 120 frames and 5
+// with 480.
+const SHRINK_FRAMES: u32 = 480;
+
+// The textures the layer surfaces a frame draws again go into, one for the
+// first atlas of a frame and one more for each further atlas. A render pass
+// clears and stores its whole attachment, so a texture follows its atlases'
+// need, rounded up to a padding step: one sized to the busiest recent frame
+// with a step to spare drew the gauntlet's tier 10 frames at the Mate 20 X's
+// size into 2.37 times their members' pixels. A texture grows on the side a
+// need passes it, and shrinks once the need has fitted one step under it for
+// `SHRINK_FRAMES` frames. The GL memory of a process stays at its peak, so a
+// texture it replaces is let go before the new one is made. Members pack
+// into one width while it holds them, so frames that differ in members
+// differ in height.
 pub(crate) struct SurfaceAtlases {
     format: wgpu::TextureFormat,
     shelf_width: u32,
-    idle: IdlePool<Rc<OffscreenTarget>>,
-    in_use: SmallVec<[Rc<OffscreenTarget>; MAX_KEPT_ATLASES]>,
+    slots: SmallVec<[AtlasSlot; 2]>,
+    next_slot: usize,
+    frame: u64,
+}
+
+#[derive(Default)]
+struct AtlasSlot {
+    texture: Option<Rc<OffscreenTarget>>,
+    // The frames in a row whose need fitted one step under the texture, and
+    // the largest of those needs.
+    under: u32,
+    under_need: (u32, u32),
+    last_frame: u64,
+}
+
+impl AtlasSlot {
+    // The size the texture takes for a frame that needs `need`.
+    fn settle(&mut self, need: (u32, u32)) -> (u32, u32) {
+        let Some(kept) = self
+            .texture
+            .as_ref()
+            .map(|texture| (texture.width, texture.height))
+        else {
+            self.under = 0;
+            return need;
+        };
+        if need.0 > kept.0 || need.1 > kept.1 {
+            self.under = 0;
+            return (kept.0.max(need.0), kept.1.max(need.1));
+        }
+        if need.0 > step_below(kept.0) && need.1 > step_below(kept.1) {
+            self.under = 0;
+            return kept;
+        }
+        self.under_need = if self.under == 0 {
+            need
+        } else {
+            (self.under_need.0.max(need.0), self.under_need.1.max(need.1))
+        };
+        self.under += 1;
+        if self.under < SHRINK_FRAMES {
+            return kept;
+        }
+        self.under = 0;
+        self.under_need
+    }
 }
 
 impl SurfaceAtlases {
@@ -66,8 +115,9 @@ impl SurfaceAtlases {
         Self {
             format,
             shelf_width: 0,
-            idle: IdlePool::default(),
-            in_use: SmallVec::new(),
+            slots: SmallVec::new(),
+            next_slot: 0,
+            frame: 0,
         }
     }
 
@@ -87,11 +137,10 @@ impl SurfaceAtlases {
         self.shelf_width
     }
 
-    // A texture for `atlas` of its padded size, no side past `limit`: a kept
-    // one of that size, else the smallest kept one that holds it when the
-    // kept textures leave no room for one more, else a new one. An atlas of
-    // more than one shelf takes the whole shelf width, so a member one pixel
-    // narrower that fits one more into a shelf changes no size.
+    // The texture `atlas` draws into, no side past `limit`. Its need is its
+    // padded size; an atlas of more than one shelf needs the whole shelf
+    // width, so a member one pixel narrower that fits one more into a shelf
+    // changes no size.
     pub(super) fn acquire(
         &mut self,
         device: &wgpu::Device,
@@ -103,81 +152,60 @@ impl SurfaceAtlases {
         if atlas.shelves.len() > 1 {
             width = width.max(self.shelf_width);
         }
-        let kept = self
-            .idle
-            .take(|kept| (kept.width, kept.height) == (width, height))
-            .or_else(|| self.take_holder((width, height)));
-        let is_new = kept.is_none();
-        let texture = kept.unwrap_or_else(|| {
-            Rc::new(OffscreenTarget::new_labeled(
-                device,
-                self.format,
-                width,
-                height,
-                "Layer Surface Atlas",
-            ))
-        });
-        stats.record_offscreen_acquire(texture.width, texture.height, self.format, is_new);
-        self.in_use.push(Rc::clone(&texture));
+        if self.slots.len() <= self.next_slot {
+            self.slots.push(AtlasSlot::default());
+        }
+        let slot = &mut self.slots[self.next_slot];
+        self.next_slot += 1;
+        slot.last_frame = self.frame;
+        let (width, height) = slot.settle((width, height));
+        if let Some(texture) = slot
+            .texture
+            .as_ref()
+            .filter(|texture| (texture.width, texture.height) == (width, height))
+        {
+            stats.record_offscreen_acquire(width, height, self.format, false);
+            return Rc::clone(texture);
+        }
+        slot.texture = None;
+        let texture = Rc::new(OffscreenTarget::new_labeled(
+            device,
+            self.format,
+            width,
+            height,
+            "Layer Surface Atlas",
+        ));
+        stats.record_offscreen_acquire(width, height, self.format, true);
+        slot.texture = Some(Rc::clone(&texture));
         texture
     }
 
-    fn take_holder(&mut self, (width, height): (u32, u32)) -> Option<Rc<OffscreenTarget>> {
-        let areas = || {
-            self.idle
-                .iter()
-                .chain(&self.in_use)
-                .map(|texture| texture_area(texture))
-        };
-        let held: u64 = areas().sum();
-        let largest = areas().max().unwrap_or(0);
-        let own = u64::from(width) * u64::from(height);
-        let room = self.idle.len() + self.in_use.len() < MAX_KEPT_ATLASES
-            && held + own <= kept_weight(largest.max(own));
-        if room {
-            return None;
-        }
-        let holder = self
-            .idle
-            .iter()
-            .filter(|kept| kept.width >= width && kept.height >= height)
-            .map(|kept| (kept.width, kept.height))
-            .min_by_key(|&size| u64::from(size.0) * u64::from(size.1))?;
-        self.idle.take(|kept| (kept.width, kept.height) == holder)
-    }
-
-    // Takes back the textures this frame drew into, once its commands are
-    // submitted, keeping the most recently used within the count and the
-    // weight; a texture something else still holds stays with it.
+    // Ends a frame, letting go the texture of a slot no frame used for
+    // `crate::idle_pool::IDLE_FRAMES`.
     pub(crate) fn end_frame(&mut self) {
-        let largest = self
-            .idle
-            .iter()
-            .chain(&self.in_use)
-            .map(|texture| texture_area(texture))
-            .max()
-            .unwrap_or(0);
-        for texture in self.in_use.drain(..) {
-            if Rc::strong_count(&texture) == 1 {
-                self.idle
-                    .put(texture, MAX_KEPT_ATLASES, kept_weight(largest), |kept| {
-                        texture_area(kept)
-                    });
+        self.frame += 1;
+        self.next_slot = 0;
+        let oldest_kept = self.frame.saturating_sub(crate::idle_pool::IDLE_FRAMES);
+        for slot in &mut self.slots {
+            if slot.last_frame < oldest_kept {
+                *slot = AtlasSlot::default();
             }
         }
-        self.idle.end_frame();
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.idle.len()
+        self.textures().count()
     }
 
     pub(crate) fn bytes(&self) -> u64 {
         let bytes_per_pixel = crate::frame_graph::texture_format_bytes_per_pixel(self.format);
-        self.idle
-            .iter()
-            .map(|texture| texture_area(texture) * bytes_per_pixel)
+        self.textures()
+            .map(|texture| u64::from(texture.width) * u64::from(texture.height) * bytes_per_pixel)
             .sum()
+    }
+
+    fn textures(&self) -> impl Iterator<Item = &OffscreenTarget> {
+        self.slots.iter().filter_map(|slot| slot.texture.as_deref())
     }
 }
 
@@ -190,18 +218,17 @@ pub(super) fn square_width(group: &[BatchMember], limit: u32) -> u32 {
     u32::try_from(area.isqrt()).unwrap_or(limit)
 }
 
-fn texture_area(texture: &OffscreenTarget) -> u64 {
-    u64::from(texture.width) * u64::from(texture.height)
+// The padded dimension one padding step under `value`, a padded dimension.
+fn step_below(value: u32) -> u32 {
+    value.saturating_sub(padding_step(value))
 }
 
-// The pixels the kept atlas textures hold together at most, when the
-// largest of them holds `largest`: one and a half times as many.
-fn kept_weight(largest: u64) -> u64 {
-    largest + largest / 2
+fn padding_step(value: u32) -> u32 {
+    (value.max(ATLAS_SIZE_STEP).next_power_of_two() / 8).max(ATLAS_SIZE_STEP)
 }
 
 pub(super) fn padded_dimension(value: u32, limit: u32) -> u32 {
-    let step = (value.max(ATLAS_SIZE_STEP).next_power_of_two() / 8).max(ATLAS_SIZE_STEP);
+    let step = padding_step(value);
     value.max(1).div_ceil(step).saturating_mul(step).min(limit)
 }
 
