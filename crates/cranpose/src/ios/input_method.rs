@@ -219,6 +219,12 @@ impl KeyboardView {
         let scale = self.contentScaleFactor();
         let bounds = self.bounds();
         let pixels = |points: f64| (points * scale).round().max(0.0) as u32;
+        // UIKit lays the view out at the whole screen before the board's
+        // height constraint takes hold; a frame drawn then lays out and
+        // draws the board at the screen's size, only to draw it again.
+        if bounds.size.height >= main_screen(self.mtm()).bounds().size.height {
+            return;
+        }
         let size = (pixels(bounds.size.width), pixels(bounds.size.height));
         let Ok(layer) = self.layer().downcast::<CAMetalLayer>() else {
             log::error!("the keyboard's view has no CAMetalLayer");
