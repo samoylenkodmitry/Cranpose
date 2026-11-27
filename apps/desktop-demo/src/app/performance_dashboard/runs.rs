@@ -131,6 +131,18 @@ impl PerfRunFrames {
             .tier()
     }
 
+    pub(super) fn is_disturbed(&self, scenario: &str, start: &str, subject: &str) -> bool {
+        let Some(entry) = self.scenarios.iter().find(|case| case.scenario == scenario) else {
+            return false;
+        };
+        let mut legs = entry
+            .legs
+            .iter()
+            .filter(|leg| leg.subject == subject && leg.start == start)
+            .peekable();
+        legs.peek().is_some() && legs.all(|leg| leg.disturbed)
+    }
+
     pub fn parse(json: &str) -> Result<Self, String> {
         serde_json::from_str(json)
             .map_err(|error| format!("The run's frames did not parse: {error}"))
@@ -168,10 +180,11 @@ impl PerfScenario {
         }
         self.app_bytes.is_empty()
             || self.app_bytes.contains_key(name)
-            || self
-                .starts
-                .values()
-                .any(|start| start.summary.contains_key(name) || start.failures.contains_key(name))
+            || self.starts.values().any(|start| {
+                start.summary.contains_key(name)
+                    || start.failures.contains_key(name)
+                    || start.disturbed.iter().any(|subject| subject == name)
+            })
     }
 }
 
@@ -186,6 +199,9 @@ pub struct PerfStart {
     /// Why a subject has no legs of the start: its first failure there.
     #[serde(default)]
     pub failures: BTreeMap<String, String>,
+    // Subjects whose legs of the start all stayed disturbed.
+    #[serde(default)]
+    pub disturbed: Vec<String>,
     /// The metrics a second run judged worse again.
     #[serde(default)]
     pub confirmed: Vec<String>,
@@ -230,6 +246,29 @@ impl PerfRun {
 
     pub(super) fn start(&self, scenario: &str, start: &str) -> Option<&PerfStart> {
         self.scenarios.get(scenario)?.starts.get(start)
+    }
+
+    pub(super) fn is_disturbed(&self, scenario: &str, start: &str, subject: &str) -> bool {
+        self.start(scenario, start)
+            .is_some_and(|entry| entry.disturbed.iter().any(|name| name == subject))
+    }
+
+    pub(super) fn undisturbed_median(
+        &self,
+        scenario: &str,
+        start: &str,
+        subject: usize,
+        metric: &str,
+    ) -> Option<f64> {
+        if metric != "app_mib"
+            && self
+                .subjects
+                .get(subject)
+                .is_some_and(|entry| self.is_disturbed(scenario, start, &entry.name))
+        {
+            return None;
+        }
+        self.median(scenario, start, subject, metric)
     }
 
     pub(super) fn median(

@@ -26,6 +26,7 @@ pub(super) struct LaunchLine {
     pub(super) emphasized: bool,
     /// Why the subject has no legs, when a launch failed.
     pub(super) failure: Option<String>,
+    pub(super) disturbed: bool,
 }
 
 /// Colours for the subjects' lines, in turn; Cranpose's take the accent.
@@ -47,10 +48,12 @@ const LINE_COLORS: [(u8, u8, u8); 10] = [
 pub(super) fn launch_lines(
     palette: Palette,
     run: &PerfRun,
-    scenario: &str,
-    start: &str,
+    frames: &FramesState,
+    selection: &Selection,
     subjects: &[(usize, PerfSubject)],
 ) -> Vec<LaunchLine> {
+    let scenario = selection.scenario.as_str();
+    let start = selection.start;
     let mut others = 0;
     subjects
         .iter()
@@ -64,6 +67,12 @@ pub(super) fn launch_lines(
                     Color::from_rgb_u8(red, green, blue)
                 }
             };
+            let disturbed = run.is_disturbed(scenario, start, &subject.name)
+                || matches!(
+                    frames,
+                    FramesState::Loaded(detail)
+                        if detail.is_disturbed(scenario, start, &subject.name)
+                );
             LaunchLine {
                 subject: *index,
                 name: subject.name.clone(),
@@ -73,6 +82,7 @@ pub(super) fn launch_lines(
                 failure: run
                     .start(scenario, start)
                     .and_then(|entry| entry.failures.get(&subject.name).cloned()),
+                disturbed,
             }
         })
         .collect()
@@ -233,7 +243,9 @@ pub(super) fn LaunchChart(
     if curves.is_empty() {
         Note(
             palette.muted,
-            if curve == Curve::Frames {
+            if curve == Curve::Frames && lines.iter().any(|line| line.disturbed) {
+                "Every launch of this start was disturbed."
+            } else if curve == Curve::Frames {
                 "No launch of this start kept its frames."
             } else {
                 "No launch of this start kept samples of it: runs before the sampler have none."

@@ -145,7 +145,7 @@ class DisplayRunTest(unittest.TestCase):
         ran = []
         with tempfile.TemporaryDirectory() as folder:
             output = Path(folder) / 'out'
-            arguments = ['desktop.py', '--output', str(output), '--apps', 'fyne', '--tier', '16']
+            arguments = ['desktop.py', '--no-host-lock', '--output', str(output), '--apps', 'fyne', '--tier', '16']
             report = {'kind': 'frameworks', 'scenarios': [{'starts': {}}]}
             with patch.object(sys, 'argv', arguments), patch.object(desktop, 'current_framecount'), \
                     patch.object(desktop, 'serve_page', return_value='page'), \

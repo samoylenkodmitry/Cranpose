@@ -26,14 +26,35 @@ pub(super) fn NightlyTable(palette: Palette, run: Rc<PerfRun>, start: &'static s
     for scenario in run.scenarios.keys() {
         let entry = run.start(scenario, start).cloned().unwrap_or_default();
         let verdict = |metric: &str| palette.verdict(entry.verdicts.get(metric));
-        let pair = |metric: &str| TableCell {
-            text: figure(run.median(scenario, start, 1, metric)),
-            under: Some(figure(run.median(scenario, start, 0, metric))),
-            color: verdict(metric),
+        let disturbed = |subject: usize| {
+            run.subjects
+                .get(subject)
+                .is_some_and(|entry| run.is_disturbed(scenario, start, &entry.name))
+        };
+        let pair = |metric: &str| {
+            let main_disturbed = metric != "app_mib" && disturbed(1);
+            let release_disturbed = metric != "app_mib" && disturbed(0);
+            TableCell {
+                text: if main_disturbed {
+                    "disturbed".to_string()
+                } else {
+                    figure(run.median(scenario, start, 1, metric))
+                },
+                under: Some(if release_disturbed {
+                    "disturbed".to_string()
+                } else {
+                    figure(run.median(scenario, start, 0, metric))
+                }),
+                color: if main_disturbed {
+                    palette.open
+                } else {
+                    verdict(metric)
+                },
+            }
         };
         let change = match (
-            run.median(scenario, start, 0, "fps"),
-            run.median(scenario, start, 1, "fps"),
+            run.undisturbed_median(scenario, start, 0, "fps"),
+            run.undisturbed_median(scenario, start, 1, "fps"),
         ) {
             (Some(before), Some(after)) if before > 0.0 => {
                 format!("{:+.1}%", (after - before) / before * 100.0)
