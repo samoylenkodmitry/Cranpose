@@ -1,3 +1,10 @@
+use std::rc::Rc;
+
+use smallvec::SmallVec;
+
+use super::BatchMember;
+use crate::{gpu_stats::FrameStats, idle_pool::IdlePool, offscreen::OffscreenTarget};
+
 const ATLAS_SIZE_STEP: u32 = 16;
 
 #[derive(Clone, Copy)]
@@ -29,95 +36,168 @@ impl Atlas {
     }
 }
 
-/// How many times the area the busiest recent frame packed into its atlas
-/// the atlas may hold before it shrinks to that need.
-pub(super) const SURFACE_ATLAS_SLACK: u64 = 4;
+// The most atlas textures kept between frames.
+const MAX_KEPT_ATLASES: usize = 4;
 
-/// The size of the one atlas the layer surfaces a frame draws again go
-/// into. Members pack into its width; it grows to fit a frame that needs
-/// more and shrinks once the busiest frame of the last
-/// [`crate::idle_pool::IDLE_FRAMES`] needs less than a
-/// [`SURFACE_ATLAS_SLACK`]th of it. Sized to each frame's members instead,
-/// the gauntlet's 5 and 10 cards a frame at tier 8 took four sizes in turn,
-/// and the WebGL page held a texture and a depth buffer for each: 20 MiB
-/// for 0.5 MP of surfaces.
-///
-/// A new size takes one padding step more in height where the GPU memory a
-/// process holds stays at its peak, so the next busier frame fits: its
-/// members pack into the atlas's width and add shelves below. A step on
-/// each side drew the Mate 20 X gauntlet's tier 12 frames, which need at
-/// most 1280 by 1352 pixels, into a 1536-pixel square. Metal takes a
-/// dropped texture's memory back, so there a new size is the size asked
-/// for.
-pub(crate) struct SurfaceAtlasSizes {
-    current: Option<(u32, u32)>,
-    need_width: crate::idle_pool::RecentPeak,
-    need_height: crate::idle_pool::RecentPeak,
-    step_ahead: bool,
+// The side of the members' square, in shelf widths, past which a shelf
+// width is chosen again: members that would pack more than four times taller
+// than wide.
+const SHELF_WIDTH_REACH: u32 = 2;
+
+// The textures of the atlases the layer surfaces a frame draws again go
+// into. A render pass clears and stores its whole attachment, so an atlas
+// takes a texture of its own padded size: one texture sized to the busiest
+// recent frame drew the gauntlet's tier 10 frames at the Mate 20 X's size
+// into 2.37 times their members' pixels. The textures of the sizes recent
+// frames used stay, so frames whose members come and go take no new ones.
+// The GL memory of a process stays at its peak, so the kept textures hold
+// at most `kept_weight` of the largest of them. A size no frame used for
+// `crate::idle_pool::IDLE_FRAMES` leaves. Members pack into one width while
+// it holds them, so frames that differ in members differ in height.
+pub(crate) struct SurfaceAtlases {
+    format: wgpu::TextureFormat,
+    shelf_width: u32,
+    idle: IdlePool<Rc<OffscreenTarget>>,
+    in_use: SmallVec<[Rc<OffscreenTarget>; MAX_KEPT_ATLASES]>,
 }
 
-impl SurfaceAtlasSizes {
-    pub(crate) fn for_backend(backend: wgpu::Backend) -> Self {
+impl SurfaceAtlases {
+    pub(crate) fn new(format: wgpu::TextureFormat) -> Self {
         Self {
-            current: None,
-            need_width: crate::idle_pool::RecentPeak::default(),
-            need_height: crate::idle_pool::RecentPeak::default(),
-            step_ahead: backend != wgpu::Backend::Metal,
+            format,
+            shelf_width: 0,
+            idle: IdlePool::default(),
+            in_use: SmallVec::new(),
         }
     }
 
-    /// The width members pack into: the atlas's own once it holds the
-    /// widest of them, else about the square root of their `area`.
-    pub(super) fn shelf_width(&self, area: u64, widest: u32, limit: u32) -> u32 {
-        match self.current {
-            Some((width, _)) if width >= widest => width,
-            _ => u32::try_from(area.isqrt()).unwrap_or(limit),
+    // The width the members of `group` pack into: the width earlier frames
+    // packed into, chosen again once a member is wider or the side of the
+    // members' square passes `SHELF_WIDTH_REACH` times it.
+    pub(super) fn shelf_width(&mut self, group: &[BatchMember], limit: u32) -> u32 {
+        let square = square_width(group, limit);
+        let widest = group
+            .iter()
+            .map(|member| member.plan.width)
+            .max()
+            .unwrap_or(0);
+        if self.shelf_width < widest || square > SHELF_WIDTH_REACH * self.shelf_width {
+            self.shelf_width = padded_dimension(square.max(widest), limit);
         }
+        self.shelf_width
     }
 
-    /// The size the atlas whose members pack into `size`, a padded size,
-    /// takes this frame; no side passes `limit`.
-    pub(super) fn settle(&mut self, size: (u32, u32), limit: u32) -> (u32, u32) {
-        let area = |(width, height): (u32, u32)| u64::from(width) * u64::from(height);
-        self.need_width.reach(u64::from(size.0));
-        self.need_height.reach(u64::from(size.1));
-        let need = (
-            u32::try_from(self.need_width.value()).unwrap_or(limit),
-            u32::try_from(self.need_height.value()).unwrap_or(limit),
-        );
-        let settled = match self.current {
-            Some(current) if current.0 >= size.0 && current.1 >= size.1 => {
-                if area(current) > area(self.grown(need, limit)).saturating_mul(SURFACE_ATLAS_SLACK)
-                {
-                    self.grown(need, limit)
-                } else {
-                    current
-                }
-            }
-            Some(current) => {
-                let grown = self.grown(size, limit);
-                (current.0.max(grown.0), current.1.max(grown.1))
-            }
-            None => self.grown(size, limit),
+    // A texture for `atlas` of its padded size, no side past `limit`: a kept
+    // one of that size, else the smallest kept one that holds it when the
+    // kept textures leave no room for one more, else a new one. An atlas of
+    // more than one shelf takes the whole shelf width, so a member one pixel
+    // narrower that fits one more into a shelf changes no size.
+    pub(super) fn acquire(
+        &mut self,
+        device: &wgpu::Device,
+        atlas: &Atlas,
+        limit: u32,
+        stats: &FrameStats,
+    ) -> Rc<OffscreenTarget> {
+        let (mut width, height) = atlas.padded_size(limit);
+        if atlas.shelves.len() > 1 {
+            width = width.max(self.shelf_width);
+        }
+        let kept = self
+            .idle
+            .take(|kept| (kept.width, kept.height) == (width, height))
+            .or_else(|| self.take_holder((width, height)));
+        let is_new = kept.is_none();
+        let texture = kept.unwrap_or_else(|| {
+            Rc::new(OffscreenTarget::new_labeled(
+                device,
+                self.format,
+                width,
+                height,
+                "Layer Surface Atlas",
+            ))
+        });
+        stats.record_offscreen_acquire(texture.width, texture.height, self.format, is_new);
+        self.in_use.push(Rc::clone(&texture));
+        texture
+    }
+
+    fn take_holder(&mut self, (width, height): (u32, u32)) -> Option<Rc<OffscreenTarget>> {
+        let areas = || {
+            self.idle
+                .iter()
+                .chain(&self.in_use)
+                .map(|texture| texture_area(texture))
         };
-        self.current = Some(settled);
-        settled
-    }
-
-    fn grown(&self, size: (u32, u32), limit: u32) -> (u32, u32) {
-        if self.step_ahead {
-            (size.0, padded_dimension(size.1.saturating_add(1), limit))
-        } else {
-            size
+        let held: u64 = areas().sum();
+        let largest = areas().max().unwrap_or(0);
+        let own = u64::from(width) * u64::from(height);
+        let room = self.idle.len() + self.in_use.len() < MAX_KEPT_ATLASES
+            && held + own <= kept_weight(largest.max(own));
+        if room {
+            return None;
         }
+        let holder = self
+            .idle
+            .iter()
+            .filter(|kept| kept.width >= width && kept.height >= height)
+            .map(|kept| (kept.width, kept.height))
+            .min_by_key(|&size| u64::from(size.0) * u64::from(size.1))?;
+        self.idle.take(|kept| (kept.width, kept.height) == holder)
     }
 
-    /// Ends a frame, letting the recent need follow the frames since the
-    /// busiest one once that is [`crate::idle_pool::IDLE_FRAMES`] old.
+    // Takes back the textures this frame drew into, once its commands are
+    // submitted, keeping the most recently used within the count and the
+    // weight; a texture something else still holds stays with it.
     pub(crate) fn end_frame(&mut self) {
-        self.need_width.end_frame();
-        self.need_height.end_frame();
+        let largest = self
+            .idle
+            .iter()
+            .chain(&self.in_use)
+            .map(|texture| texture_area(texture))
+            .max()
+            .unwrap_or(0);
+        for texture in self.in_use.drain(..) {
+            if Rc::strong_count(&texture) == 1 {
+                self.idle
+                    .put(texture, MAX_KEPT_ATLASES, kept_weight(largest), |kept| {
+                        texture_area(kept)
+                    });
+            }
+        }
+        self.idle.end_frame();
     }
+
+    pub(crate) fn len(&self) -> usize {
+        self.idle.len()
+    }
+
+    pub(crate) fn bytes(&self) -> u64 {
+        let bytes_per_pixel = crate::frame_graph::texture_format_bytes_per_pixel(self.format);
+        self.idle
+            .iter()
+            .map(|texture| texture_area(texture) * bytes_per_pixel)
+            .sum()
+    }
+}
+
+// The side of the square the members of `group` would fill.
+pub(super) fn square_width(group: &[BatchMember], limit: u32) -> u32 {
+    let area: u64 = group
+        .iter()
+        .map(|member| u64::from(member.plan.width) * u64::from(member.plan.height))
+        .sum();
+    u32::try_from(area.isqrt()).unwrap_or(limit)
+}
+
+fn texture_area(texture: &OffscreenTarget) -> u64 {
+    u64::from(texture.width) * u64::from(texture.height)
+}
+
+// The pixels the kept atlas textures hold together at most, when the
+// largest of them holds `largest`: one and a half times as many.
+fn kept_weight(largest: u64) -> u64 {
+    largest + largest / 2
 }
 
 pub(super) fn padded_dimension(value: u32, limit: u32) -> u32 {
