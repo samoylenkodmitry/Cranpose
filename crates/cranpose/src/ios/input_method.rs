@@ -469,3 +469,36 @@ pub(crate) fn switch_to_next_keyboard() {
         controller.advanceToNextInputMode();
     }
 }
+
+pub(crate) fn text_before_cursor(max: usize) -> Option<String> {
+    let controller = current_controller()?;
+    let text = controller
+        .textDocumentProxy()
+        .documentContextBeforeInput()?
+        .to_string();
+    let skip = text.chars().count().saturating_sub(max);
+    Some(text.chars().skip(skip).collect())
+}
+
+// The proxy deletes one character before the cursor at a time; the
+// characters after it are deleted from past their end.
+pub(crate) fn delete_surrounding_text(before: usize, after: usize) {
+    with_proxy(|proxy| {
+        if after > 0 {
+            proxy.adjustTextPositionByCharacterOffset(isize::try_from(after).unwrap_or(isize::MAX));
+        }
+        for _ in 0..before + after {
+            proxy.deleteBackward();
+        }
+    });
+}
+
+pub(crate) fn move_cursor(offset: i32) {
+    with_proxy(|proxy| proxy.adjustTextPositionByCharacterOffset(offset as isize));
+}
+
+pub(crate) fn hide() {
+    if let Some(controller) = current_controller() {
+        controller.dismissKeyboard();
+    }
+}

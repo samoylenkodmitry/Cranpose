@@ -10,7 +10,7 @@
 use cranpose_ui::{EdgeInsets, Size};
 use jni::{
     EnvUnowned, Outcome, jni_sig, jni_str,
-    objects::{JClass, JObject, JValue},
+    objects::{JClass, JObject, JString, JValue},
     sys::{jboolean, jfloat, jint, jlong},
 };
 use ndk::native_window::NativeWindow;
@@ -117,15 +117,73 @@ pub(crate) fn switch_to_next_keyboard() {
     });
 }
 
-fn call_service(
-    run: impl for<'local> FnOnce(&mut jni::Env<'local>, JClass<'local>) -> jni::errors::Result<()>,
-) {
+pub(crate) fn text_before_cursor(max: usize) -> Option<String> {
+    let max = jint::try_from(max).unwrap_or(jint::MAX);
+    call_service(|env, class| {
+        let value = env
+            .call_static_method(
+                class,
+                jni_str!("textBeforeCursor"),
+                jni_sig!("(I)Ljava/lang/String;"),
+                &[JValue::Int(max)],
+            )
+            .and_then(jni::JValueOwned::l)?;
+        if value.is_null() {
+            return Ok(None);
+        }
+        JString::cast_local(env, value)?
+            .try_to_string(env)
+            .map(Some)
+    })
+    .flatten()
+}
+
+pub(crate) fn delete_surrounding_text(before: usize, after: usize) {
+    let before = jint::try_from(before).unwrap_or(jint::MAX);
+    let after = jint::try_from(after).unwrap_or(jint::MAX);
+    call_service(|env, class| {
+        env.call_static_method(
+            class,
+            jni_str!("deleteSurroundingText"),
+            jni_sig!("(II)V"),
+            &[JValue::Int(before), JValue::Int(after)],
+        )
+        .map(|_| ())
+    });
+}
+
+pub(crate) fn move_cursor(offset: i32) {
+    call_service(|env, class| {
+        env.call_static_method(
+            class,
+            jni_str!("moveCursor"),
+            jni_sig!("(I)V"),
+            &[JValue::Int(offset)],
+        )
+        .map(|_| ())
+    });
+}
+
+pub(crate) fn hide() {
+    call_service(|env, class| {
+        env.call_static_method(class, jni_str!("hide"), jni_sig!("()V"), &[])
+            .map(|_| ())
+    });
+}
+
+fn call_service<T>(
+    run: impl for<'local> FnOnce(&mut jni::Env<'local>, JClass<'local>) -> jni::errors::Result<T>,
+) -> Option<T> {
     let Some(context) = super::process::context() else {
         log::warn!("the keyboard has no application context");
-        return;
+        return None;
     };
-    if let Err(error) = context.call_class(SERVICE_CLASS, |env, _context, class| run(env, class)) {
-        log::warn!("the keyboard's service did not answer: {error}");
+    match context.call_class(SERVICE_CLASS, |env, _context, class| run(env, class)) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            log::warn!("the keyboard's service did not answer: {error}");
+            None
+        }
     }
 }
 

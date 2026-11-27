@@ -107,6 +107,28 @@ impl InputConnection {
     pub fn switch_to_next_keyboard(self) {
         platform::switch_to_next_keyboard();
     }
+
+    /// The text before the cursor, its last `max` characters at most, or
+    /// `None` when the field shows the keyboard none.
+    pub fn text_before_cursor(self, max: usize) -> Option<String> {
+        platform::text_before_cursor(max)
+    }
+
+    /// Deletes `before` characters before the cursor and `after` characters
+    /// after it.
+    pub fn delete_surrounding_text(self, before: usize, after: usize) {
+        platform::delete_surrounding_text(before, after);
+    }
+
+    /// Moves the cursor by `offset` characters: back when negative.
+    pub fn move_cursor(self, offset: i32) {
+        platform::move_cursor(offset);
+    }
+
+    /// Hides the keyboard, as Compose's `SoftwareKeyboardController.hide`.
+    pub fn hide(self) {
+        platform::hide();
+    }
 }
 
 /// The keyboard's connection while the composition runs as the system
@@ -138,14 +160,16 @@ pub(crate) fn provide(connection: InputConnection, content: impl FnOnce()) {
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod platform {
     pub(super) use crate::android::input_method::{
-        commit_text, delete_backward, perform_ime_action, switch_to_next_keyboard,
+        commit_text, delete_backward, delete_surrounding_text, hide, move_cursor,
+        perform_ime_action, switch_to_next_keyboard, text_before_cursor,
     };
 }
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod platform {
     pub(super) use crate::ios::input_method::{
-        commit_text, delete_backward, perform_ime_action, switch_to_next_keyboard,
+        commit_text, delete_backward, delete_surrounding_text, hide, move_cursor,
+        perform_ime_action, switch_to_next_keyboard, text_before_cursor,
     };
 }
 
@@ -163,4 +187,10 @@ mod platform {
     pub(super) fn delete_backward() {}
     pub(super) fn perform_ime_action() {}
     pub(super) fn switch_to_next_keyboard() {}
+    pub(super) fn text_before_cursor(_max: usize) -> Option<String> {
+        None
+    }
+    pub(super) fn delete_surrounding_text(_before: usize, _after: usize) {}
+    pub(super) fn move_cursor(_offset: i32) {}
+    pub(super) fn hide() {}
 }

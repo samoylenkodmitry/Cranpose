@@ -327,6 +327,44 @@ public class CranposeInputMethodService extends InputMethodService
         }
     }
 
+    /** The text before the cursor, at most {@code max} UTF-16 units of it, or null. */
+    static String textBeforeCursor(int max) {
+        InputConnection connection = connection();
+        if (connection == null) {
+            return null;
+        }
+        CharSequence text = connection.getTextBeforeCursor(max, 0);
+        return text == null ? null : text.toString();
+    }
+
+    /** Deletes {@code before} code points before the cursor and {@code after} after it. */
+    static void deleteSurroundingText(int before, int after) {
+        InputConnection connection = connection();
+        if (connection != null) {
+            connection.deleteSurroundingTextInCodePoints(before, after);
+        }
+    }
+
+    /** Moves the cursor {@code offset} characters, back when negative. */
+    static void moveCursor(int offset) {
+        CranposeInputMethodService service = current;
+        if (service == null) {
+            return;
+        }
+        int key = offset < 0 ? KeyEvent.KEYCODE_DPAD_LEFT : KeyEvent.KEYCODE_DPAD_RIGHT;
+        for (int step = 0; step < Math.abs(offset); step++) {
+            service.sendDownUpKeyEvents(key);
+        }
+    }
+
+    /** Hides the keyboard. */
+    static void hide() {
+        CranposeInputMethodService service = current;
+        if (service != null) {
+            service.requestHideSelf(0);
+        }
+    }
+
     private static InputConnection connection() {
         CranposeInputMethodService service = current;
         return service == null ? null : service.getCurrentInputConnection();
