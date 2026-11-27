@@ -214,6 +214,45 @@ fn a_ray_press_on_a_gem_clicks_it_and_the_app_reads_the_hover_from_its_source() 
     );
 }
 
+// The box of the bench's one volume, which the projection layer covers.
+fn volume_extent(bench: &Bench) -> Option<[f32; 3]> {
+    bench
+        .headset
+        .space
+        .volumes()
+        .contents()
+        .with(|contents| contents.first().and_then(|content| content.draws.extent))
+}
+
+#[test]
+fn a_page_of_gems_alone_takes_a_box_little_larger_than_itself_once_it_stands() {
+    use crate::hologram_stage::{PageObjects, hologram_extent};
+    // The bench's hologram is movable: its box holds the handle under it
+    let away = [TRAY[0] - 10.0, MIDDLE[1]];
+    let mut gem = gem_bench(true);
+    gem.hold(away, 0.0, 600);
+    assert_eq!(
+        volume_extent(&gem),
+        Some(hologram_extent(
+            TRAY,
+            (HologramStage::NONE, true),
+            PageObjects::StillGems
+        )),
+        "a gem turns within its place"
+    );
+    let mut group = group_bench(ChoiceForm::Gems, 3, HologramStage::NONE);
+    group.hold(away, 0.0, 600);
+    assert_eq!(
+        volume_extent(&group),
+        Some(hologram_extent(
+            TRAY,
+            (HologramStage::NONE, true),
+            PageObjects::Any
+        )),
+        "a chosen option grows beyond its place"
+    );
+}
+
 #[test]
 fn a_disabled_gem_takes_no_hover_and_no_press() {
     let mut bench = gem_bench(false);

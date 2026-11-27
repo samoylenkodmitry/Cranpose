@@ -368,8 +368,11 @@ or a stepper with a crystal between two arrows. `SpatialButton` is a key of glas
 `SpatialRibbon` a band of glass behind words. `SpatialGem` is an octahedron of the app's color with a
 halo that turns slowly and takes a press. Its `GemGlow::Pulse` makes the glow swell and fade once
 each 1.6 s. The app reads the gem's hover and press from the interaction source that it passes, so
-it can pick the gem's color by them. The words of an option stand under its object, or
-over the crystal of a stepper.
+it can pick the gem's color by them. A page of gems alone gives the projection layer a box little
+larger than the page once the page stands at its place: a gem turns within its place, so a small gem
+on a hand needs a small part of the view. Other objects bloom, float or orbit up to 40 dp beyond
+their places, and a page rises out of its projector, so their box takes that room. The words of an
+option stand under its object, or over the crystal of a stepper.
 
 Every object draws with one WGSL shader through `Material::ShadedGlow`, so the scene builds one
 pipeline for all of them. The shader adds four parts of light in the theme's colour: a rim where
