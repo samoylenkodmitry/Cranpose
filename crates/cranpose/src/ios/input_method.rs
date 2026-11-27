@@ -404,14 +404,20 @@ impl KeyboardController {
             .documentContextBeforeInput()
             .map_or_else(String::new, |text| text.to_string());
         let editor = editor_info(traits, &before);
-        let document = proxy.documentIdentifier();
-        let started = with_own_session(self, |session| {
-            let same = session
-                .document
-                .as_ref()
-                .is_some_and(|current| current.isEqual(Some(&document)));
-            session.document = Some(document);
-            !same
+        // The proxy names no document while its field is still coming up:
+        // the field stays the one the board last saw, or a new one when it
+        // saw none.
+        let document: Option<Retained<NSUUID>> = unsafe { msg_send![&*proxy, documentIdentifier] };
+        let started = with_own_session(self, |session| match document {
+            Some(document) => {
+                let same = session
+                    .document
+                    .as_ref()
+                    .is_some_and(|current| current.isEqual(Some(&document)));
+                session.document = Some(document);
+                !same
+            }
+            None => session.document.is_none(),
         });
         with_keyboard(|keyboard| match started {
             Some(true) => keyboard.start_input(editor),
