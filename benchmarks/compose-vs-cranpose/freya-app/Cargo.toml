@@ -1,0 +1,19 @@
+[package]
+name = "perf-compare-freya"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+freya = { version = "0.5.4", features = ["engine"] }
+gif = "0.14.2"
+perf-data = { version = "0.1.0", path = "../perf-data" }
+
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

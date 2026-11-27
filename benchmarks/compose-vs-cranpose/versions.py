@@ -54,6 +54,10 @@ SOURCES = {
     'bui': 'benchmarks/compose-vs-cranpose/bui-app/src/main.rs',
     'ferro': 'benchmarks/compose-vs-cranpose/ferro-app/src/main.rs',
     'zgui': 'benchmarks/compose-vs-cranpose/zgui-app/src/gauntlet.rs',
+    'electron': 'benchmarks/compose-vs-cranpose/web-app/src/gauntlet.ts',
+    'freya': 'benchmarks/compose-vs-cranpose/freya-app/src/gauntlet.rs',
+    'vizia': 'benchmarks/compose-vs-cranpose/vizia-app/src/main.rs',
+    'makepad': 'benchmarks/compose-vs-cranpose/makepad-app/src/main.rs',
     'floem': 'benchmarks/compose-vs-cranpose/floem-app/src/gauntlet.rs',
     'fyne': 'benchmarks/compose-vs-cranpose/fyne-app/main.go',
     'nativescript': 'benchmarks/compose-vs-cranpose/nativescript-app/app/app.ts',
@@ -69,7 +73,7 @@ PLATFORM_APPS = {
     'android': ['compose', 'views', 'flutter', 'rn', 'nativescript', 'lynx', 'maui', 'avalonia', 'egui',
                 'slint', 'web'],
     'desktop': ['compose', 'egui', 'slint', 'iced', 'gpui', 'avalonia', 'swiftui', 'appkit', 'flutter', 'web',
-                'tauri', 'dioxus', 'xilem', 'rune', 'bui', 'ferro', 'zgui', 'floem', 'fyne'],
+                'tauri', 'dioxus', 'xilem', 'rune', 'bui', 'ferro', 'zgui', 'floem', 'fyne', 'freya', 'vizia', 'makepad', 'electron'],
     'browser': BROWSER_APPS[1:],
 }
 
@@ -78,7 +82,7 @@ NAMES = {
     'flutter': 'Flutter', 'rn': 'React Native', 'maui': '.NET MAUI', 'avalonia': 'Avalonia',
     'egui': 'egui', 'slint': 'Slint', 'iced': 'iced', 'gpui': 'GPUI', 'swiftui': 'SwiftUI', 'appkit': 'AppKit',
     'web': 'Web', 'tauri': 'Tauri', 'dioxus': 'Dioxus', 'xilem': 'Xilem', 'rune': 'Rune', 'bui': 'BUI', 'ferro': 'FerroUI',
-    'zgui': 'zgui', 'floem': 'Floem',
+    'zgui': 'zgui', 'floem': 'Floem', 'freya': 'Freya', 'vizia': 'Vizia', 'makepad': 'Makepad', 'electron': 'Electron',
     'fyne': 'Fyne', 'nativescript': 'NativeScript', 'lynx': 'Lynx',
 }
 
@@ -254,6 +258,14 @@ PINS = {
                   cargo_update('dioxus-app')),
     'xilem': Pin(['xilem-app/Cargo.toml'], r'xilem = \{ version = "([^"]+)"', lambda: crates_io('xilem'),
                  cargo_update('xilem-app')),
+    'electron': Pin(['electron-app/package.json'], r'"electron": "([^"]+)"', lambda: npm('electron'),
+                    npm_lock('electron-app')),
+    'freya': Pin(['freya-app/Cargo.toml'], r'freya = \{ version = "([^"]+)"', lambda: crates_io('freya'),
+                 cargo_update('freya-app')),
+    'vizia': Pin(['vizia-app/Cargo.toml'], r'vizia = "([^"]+)"', lambda: crates_io('vizia'),
+                 cargo_update('vizia-app')),
+    'makepad': Pin(['makepad-app/Cargo.toml'], r'makepad-widgets = "([^"]+)"', lambda: crates_io('makepad-widgets'),
+                 cargo_update('makepad-app')),
     'floem': Pin(['floem-app/Cargo.toml'], r'floem = \{ version = "([^"]+)"', lambda: crates_io('floem'),
                  cargo_update('floem-app')),
     'bui': Pin(['bui-app/Cargo.toml'], r'blenderui = "([^"]+)"', lambda: crates_io('blenderui'),
@@ -276,6 +288,9 @@ RUST_CRATES = {
     'egui': ('egui-app', 'eframe'), 'slint': ('slint-app', 'slint'), 'iced': ('iced-app', 'iced'),
     'gpui': ('gpui-app', 'gpui-pre'), 'tauri': ('tauri-app', 'tauri'), 'dioxus': ('dioxus-app', 'dioxus'),
     'xilem': ('xilem-app', 'xilem'), 'bui': ('bui-app', 'blenderui'), 'ferro': ('ferro-app', 'ferroui-view'),
+    'freya': ('freya-app', 'freya'),
+    'vizia': ('vizia-app', 'vizia'),
+    'makepad': ('makepad-app', 'makepad-widgets'),
     'floem': ('floem-app', 'floem'),
 }
 # Apps that draw in the system's WKWebView on the desktop.

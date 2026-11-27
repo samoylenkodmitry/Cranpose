@@ -4,7 +4,8 @@
 //! other: first the surfaces that are neither glass nor glow, then those
 //! an app's shader colours, then the volumes, then the spaces the scene's
 //! portals show inside their windows, then glass over a copy of the page
-//! they left, then glow added onto it.
+//! they left, then glow added onto it, then the glow an app's shader
+//! colours.
 
 use std::{rc::Rc, sync::Arc};
 
@@ -13,9 +14,13 @@ use cranpose_ui_graphics::{
     space::{Mat4, Material, Multisample, Vec3},
 };
 
-use super::{DeviceRect, Event, FrameExecutor, LayerPass, SurfaceRender, composites_nothing};
+use super::{
+    CompositeSource, DeviceRect, Event, FrameExecutor, LayerPass, StandInPixels, SurfaceRender,
+    composites_nothing, draws_nothing,
+};
 use crate::{
     collect::{ChildLayer, MeshChild, SceneDraw},
+    draw_pass::SourceContent,
     frame_graph::{FrameCommandRecorder, UploadAllocatorId},
     offscreen::OffscreenTarget,
     scene_pass::{
@@ -60,6 +65,9 @@ enum ScenePhase {
     Glass,
     /// Glow, added onto the page.
     Glow,
+    // Glow an app's shader colours, added onto the page, each shader with
+    // its own pipeline.
+    ShadedGlow,
 }
 
 impl ScenePhase {
@@ -71,7 +79,8 @@ impl ScenePhase {
             (Material::Glass(_), false) => Self::Glass,
             (Material::Glass(_), true) => Self::PortalGlass,
             (Material::Glow, false) => Self::Glow,
-            (Material::Glow, true) => Self::PortalGlow,
+            (Material::Glow | Material::ShadedGlow(_), true) => Self::PortalGlow,
+            (Material::ShadedGlow(_), false) => Self::ShadedGlow,
             (_, true) => Self::Portal,
             (Material::Volume(_), false) => Self::Volume,
             (Material::Shaded(_), false) => Self::Shaded,
@@ -108,7 +117,7 @@ fn takes_shadow(mesh: &MeshChild) -> bool {
     mesh.seen == 0
         && !matches!(
             mesh.surface.material,
-            Material::Emissive | Material::Glow | Material::Volume(_)
+            Material::Emissive | Material::Glow | Material::ShadedGlow(_) | Material::Volume(_)
         )
 }
 
@@ -170,10 +179,24 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         if composites_nothing(child) && (child.alpha == 0.0 || !volume) {
             return Ok(());
         }
-        let shown = DeviceRect::from_logical(owner.scene.rect, pass.scale);
-        let Some(surface) = self.render_child_surface(pass, child, child.z_index, None, shown)?
-        else {
-            return Ok(());
+        // An app's shader colours a mesh whose node draws nothing on its whole surface. The mesh
+        // reads one white texel, so no pass renders the empty content.
+        let shaded = |mesh: &Arc<MeshChild>| {
+            matches!(
+                mesh.surface.material,
+                Material::Shaded(_) | Material::ShadedGlow(_)
+            )
+        };
+        let surface = if draws_nothing(&child.content) && child.mesh.iter().all(shaded) {
+            self.white_surface()
+        } else {
+            let shown = DeviceRect::from_logical(owner.scene.rect, pass.scale);
+            let Some(surface) =
+                self.render_child_surface(pass, child, child.z_index, None, shown)?
+            else {
+                return Ok(());
+            };
+            surface
         };
         for mesh in &child.mesh {
             pass.meshes.push(PendingMesh {
@@ -186,6 +209,32 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             });
         }
         Ok(())
+    }
+
+    // The surface of a shaded mesh with no content: one white texel, which every texture
+    // coordinate of the mesh reads.
+    fn white_surface(&mut self) -> SurfaceRender {
+        let renderer = &*self.renderer;
+        let texture = renderer
+            .scene_pass
+            .white
+            .texture(&renderer.device, &renderer.queue);
+        SurfaceRender {
+            source: CompositeSource {
+                texture,
+                content: SourceContent::Transient,
+            },
+            rect: DeviceRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            scale: 1.0,
+            grid_dest: None,
+            region: None,
+            pixels: StandInPixels::Final,
+        }
     }
 
     /// Draws the held surfaces before `event`, unless it is another surface
@@ -298,6 +347,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 (volumes, ScenePhase::Volume),
                 portals(PortalPass::Colour { glow: true }),
                 glow,
+                SHADED_GLOW,
             ];
             let drawn = self.encode_steps(
                 (pass, &target, shadows),
@@ -369,6 +419,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 (StepPipeline::Portals(PortalPass::Glass), ScenePhase::Portal),
                 (StepPipeline::Fixed(ScenePipeline::Glass), ScenePhase::Glass),
                 (StepPipeline::Fixed(ScenePipeline::Glow), ScenePhase::Glow),
+                SHADED_GLOW,
             ],
             (draws, windows, Some(&copy)),
         );
@@ -402,8 +453,12 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         let mut count = 0;
         for (index, &(kind, phase)) in steps.iter().enumerate() {
             let swapped = match kind {
-                StepPipeline::Fixed(ScenePipeline::Plain | ScenePipeline::Shadowed)
-                | StepPipeline::Shaded(_) => StepPipeline::Fixed(ScenePipeline::Depth),
+                StepPipeline::Fixed(ScenePipeline::Plain | ScenePipeline::Shadowed) => {
+                    StepPipeline::Fixed(ScenePipeline::Depth)
+                }
+                StepPipeline::Shaded(variant) if !variant.adds() => {
+                    StepPipeline::Fixed(ScenePipeline::Depth)
+                }
                 StepPipeline::Volumes(_) => StepPipeline::Volumes(VolumeVariant::Depth),
                 _ => continue,
             };
@@ -619,7 +674,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             }
         };
         let shaded = match &surface.material {
-            Material::Shaded(shaded) => {
+            Material::Shaded(shaded) | Material::ShadedGlow(shaded) => {
                 let values = shaded_uniforms((&surface.transform, shaded), (eye, space))?;
                 Some(self.recorder.upload_uniform(
                     UploadAllocatorId::SceneShaded,
@@ -634,7 +689,9 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         // The pipelines of an app's shader stay while frames draw with it.
         match &surface.material {
             Material::Volume(volume) => self.renderer.scene_pass.note_volume(&volume.shader),
-            Material::Shaded(shaded) => self.renderer.scene_pass.note_shaded(&shaded.shader),
+            Material::Shaded(shaded) | Material::ShadedGlow(shaded) => {
+                self.renderer.scene_pass.note_shaded(&shaded.shader);
+            }
             _ => {}
         }
         let (buffers, staged) = self
@@ -690,7 +747,9 @@ impl PreparedSurface<'_> {
         renderer: &'r crate::render::GpuRenderer,
         (variant, samples): (ShadedVariant, Multisample),
     ) -> Option<&'r wgpu::RenderPipeline> {
-        let Material::Shaded(shaded) = &self.held.mesh.surface.material else {
+        let (Material::Shaded(shaded) | Material::ShadedGlow(shaded)) =
+            &self.held.mesh.surface.material
+        else {
             return None;
         };
         self.shaded.as_ref()?;
@@ -746,7 +805,13 @@ fn draw_surfaces<'d>(
             (StepPipeline::Shaded(variant), _) => {
                 let own = draw.shaded_pipeline(renderer, (variant, samples));
                 shaded = own.is_some();
-                let lit = || renderer.scene_surface_pipeline(variant.lit(), samples);
+                // A glowing surface draws nothing until its shader builds,
+                // so its first frames show no box of its content's colour
+                let lit = || {
+                    (!variant.adds())
+                        .then(|| renderer.scene_surface_pipeline(variant.lit(), samples))
+                        .flatten()
+                };
                 let Some(pipeline) = own.or_else(lit) else {
                     continue;
                 };
@@ -763,6 +828,12 @@ fn draw_surfaces<'d>(
         render_pass.draw_indexed(0..draw.buffers.index_count, 0, 0..1);
     }
 }
+
+// The step that draws the glow an app's shader colours.
+const SHADED_GLOW: (StepPipeline, ScenePhase) = (
+    StepPipeline::Shaded(ShadedVariant::Glow),
+    ScenePhase::ShadedGlow,
+);
 
 // The step that draws the shaded surfaces, lit by the shadow map when the
 // scene casts shadows.

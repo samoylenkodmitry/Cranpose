@@ -55,6 +55,8 @@ Cranpose developers too:
   pose, as Jetpack XR's `TrackedDimensions.All` does. `TrackedDimensions::TranslationAndYaw` tracks
   its place and its yaw, so the panels stand upright. `FollowTarget::Controller(Hand, FollowMode)`
   follows a controller's grip pose, turned as its aim pose is. Jetpack XR has no controller target.
+  `FollowTarget::Hand(Hand, HandJointType, FollowMode)` follows a joint of a tracked hand, such as
+  the palm. Jetpack XR has no hand target either.
   `FollowTarget::Anchor(Anchor, FollowMode)` holds the panels to an anchor, as Jetpack XR's
   `FollowTarget.anchor` does. `FollowMode::soft(dimensions)` holds the panels still until the
   target moves past `SoftFollowMode`'s start thresholds for its start delay, then glides after the
@@ -97,6 +99,22 @@ Cranpose developers too:
 
 - `SpatialVolume(modifier, content)`: 3D content in a box, drawn by Cranpose's own scene. See "3D
   content".
+- `SpatialTray(modifier, visible, base, content)`: 2D content on a panel over a tray of 3D
+  geometry, with `SpatialButton(on_click, modifier, enabled, shape, color, content)`,
+  `SpatialSwitch(checked, on_checked_change, modifier, enabled, colors)` and
+  `SpatialSlider(value, on_value_change, modifier, enabled, steps, on_value_change_finished,
+  colors)` on it. Jetpack XR has no 3D controls: its Material components for XR put flat controls
+  on a `SpatialPanel`. The controls keep the names and the arguments of Compose's `Button`,
+  `Switch` and `Slider` with the `Spatial` prefix. See "3D controls".
+- `SpatialHologram(modifier, visible, colors, stage, content)`: 2D content whose controls float as
+  objects of glowing glass with no panel behind them, with
+  `SpatialChoiceGroup(selected, on_select, count, form, modifier, label)` (each option an object
+  of a `ChoiceForm`: cubes, gems, petals, an arc with a knob or a stepper), `SpatialEmblem`,
+  `SpatialRibbon` and `SpatialGem(on_click, modifier, enabled, color, glow, interaction_source)` on
+  it, and the controls of a tray. `HologramColors` (`CYAN`, `VIOLET_GOLD`) and
+  `HologramStage` (`NONE`, `PAGE`: a projector, ribbons and sparks) pick the look. Jetpack XR has
+  no hologram, no material that glows by the angle to the eye, no glow that hides nothing, no
+  field of sparks that draws as one mesh and no choice of 3D objects. See "Holograms".
 - `SpatialGltfModel(state, modifier, content)`: a glTF 2.0 model in a volume, behind the `gltf`
   feature. `rememberSpatialGltfModelState(source)` loads it. See "glTF models".
 - `SpatialPointSource(modifier, source)` and `SubspaceModifier::point_source(source)`: sound that
@@ -186,6 +204,13 @@ Wgpu maps `Depth24PlusStencil8` to one of two Vulkan formats by the driver and o
 says which, so a Vulkan headset has no depth swapchain and submits none. A runtime that offers no
 depth swapchain format submits none either. The picture still shows.
 
+A frame whose 3D content leaves no depth submits none either. Such a frame draws only surfaces that
+add light, as the objects of a `SpatialHologram` do. It shows no controller's model and no picture
+of another layer. A volume says whether its content may leave depth. A `SpatialVolume` and a
+`SpatialTray` may leave depth. A hologram leaves none. With no depth the frame skips the depth's
+pass and its store. The compositor then tests no layer against the projection layer. The depth comes back in the
+first frame that shows a controller's model or such a volume.
+
 ### Anti-aliasing
 
 The scene takes four samples in each pixel (`Multisample::X4`) where the device takes four in the
@@ -246,6 +271,20 @@ depth that the projection layer wrote. A panel behind a 3D object shows behind i
 front of the object shows in front of it. Panels still draw over each other in the order of their
 distance, and a panel's rounded corners still blend.
 
+The depth that the projection layer carries is `1 - near / z`, with `z` along each eye's axis, as
+OpenXR says. A Quest 3's compositor tests a panel as if it measured the panel's depth along the
+middle of the eye's vertical field of view, 5.5 degrees below the axis (an angle of 44 degrees up and
+55 down). A panel below the axis then tests farther than it stands, by about a tenth of its distance
+below the axis. On a Quest 3, 45 cm ahead, a key 6 mm behind a panel hid it from 11 cm below the
+axis down, and a key 24 mm behind it from 24 cm. A depth measured along the turned axis showed nearly
+all of them, and views pitched to that middle changed nothing: the compositor turns from whatever
+view the layer names. So the layer's depth names a near plane farther than the camera's, and the
+compositor reads every depth that much farther: one plus the turn in radians times the tangent of
+the field's farther vertical edge, 14% on a Quest 3 (`eye_camera::depth_scale`). That share covers
+the error over the whole field of view, so a panel 0.7 mm in front of a mesh shows anywhere in it. A
+mesh still covers a panel where it stands 14% nearer. A field of view as high as it is low names
+the camera's own plane.
+
 The compositor's depth buffer starts at the far plane. The depth that a projection layer carries in
 its views does not reach the buffer. A layer writes its depth only when it chains the test struct
 with `depthMask` set. The projection layer chains one with `ALWAYS` as the compare operation and the
@@ -266,6 +305,120 @@ crosses the gap between two panels can hide a controller's model and show it aga
 On a Quest 3 a scene made again held one frame for about 36 ms: 15 ms for the four swapchains of
 1680 by 1760 and 15 ms for the new renderer's first draw. The swapchains hold about 143 MB during
 the hold. After it no swapchain exists.
+
+### 3D controls
+
+A `SpatialTray` is two things at one pose: a panel of 2D content and, under it, a volume whose
+box is centered on the panel's plane. The panel carries the words and takes the input. It draws no
+background, and its layer shows the words at the compositor's full resolution. The volume carries
+the meshes: the base and a body for each control. The meshes stand behind the panel's plane, from
+0.7 mm for a key under a resting ray to 10 mm for the base, so the words lie on the parts. The
+volume takes no ray and follows the panel when the user carries it or its subspace follows a
+target.
+
+Each control on the tray lays out on the panel as a Compose control does and reports its rectangle
+in the panel. The tray's scene puts the control's body there. `SpatialButton` is a key cap or a
+ball that sinks 5 mm under a press and rises at the release. `SpatialSwitch` is a rocker that flips
+and lights its end. `SpatialSlider` is a knob in a groove with a mark at each step. A ray that rests
+on a control lifts it 0.8 mm and makes it glow. The bodies read their animations while the scene
+draws, so a press or a hover draws the scene again and composes nothing.
+
+The tray shows in 180 ms: it rises 30 mm from behind its place and grows from 85% of its size. It
+hides in 140 ms. Once it has hidden, it composes neither the panel nor the meshes, so a hidden tray
+costs no layer and no draw. The light of a tray takes four taps of the shadow map. A light with a
+size and 32 to 48 taps for a penumbra took 5.2 ms of the GPU for an open tray of a menu on a
+Quest 3, against 3.0 ms with four taps.
+
+The panel of a tray takes the compositor's depth test as any panel does. Its words stand 0.7 to 10
+mm in front of the tray's meshes, which the margin of the layer's depth leaves in front anywhere in
+the view. A controller's model or another tray that stands in front of the words covers them.
+
+Controls on no base, such as a single ball, cast no shadow, and their light has none: the scene's
+light is that of the first volume whose light casts shadows, so the frame draws a shadow map only
+while a tray with a base shows. A ball takes 24 segments around.
+
+Measured on a Quest 3 with a stream of 120 frames a second under a hand menu of an app, over 3 s
+for each case. The app shows a flat ball while no controller model shows, and the 3D ball once a
+model shows:
+
+| Case | Frame rate | Layers | App GPU | Compositor | GPU busy |
+| --- | --- | --- | --- | --- | --- |
+| Flat panels, menu closed | 120 | 3 | 1.02 ms | 0.91 ms | 27% |
+| Trays, menu closed | 120 | 3 | 1.00 ms | 0.90 ms | 31% |
+| Flat panels, menu closed, a panel and a controller model show | 120 | 8 | 2.84 ms | 2.51 ms | 68% |
+| Trays, menu closed, a panel and a controller model show | 120 | 8 | 2.84 ms | 2.50 ms | 69% |
+| Flat panels, menu open | 120 | 4 | 1.01 ms | 1.06 ms | 29% |
+| Trays, menu open | 120 | 5 | 3.58 ms | 2.35 ms | 70% |
+| Trays, menu open, with no shadow map | 120 | 5 | 3.19 ms | 2.52 ms | 73% |
+
+A closed menu of trays costs what a flat menu costs. Its ball draws in the projection layer that the
+controller's model already needs, and it casts no shadow. The open trays add one layer and 2.6 ms of
+the GPU. The shadow map takes 0.4 ms of that. The open trays had 7 or 8 stale frames in the second
+in which the menu first showed and none after.
+
+### Holograms
+
+A `SpatialHologram` is a tray with another look. The panel carries the words and takes the input
+as a tray's does. The volume under it holds an object for each control. The objects float with
+no base and no panel behind them. `SpatialChoiceGroup` gives each option of a choice an object whose
+form shows its value: cubes that grow, gems of which the chosen one is larger and stands in a beam,
+flowers whose petals grow from a closed bud, an arc with a tick for each option and a crystal knob,
+or a stepper with a crystal between two arrows. `SpatialButton` is a key of glass or a crystal,
+`SpatialSwitch` a capsule whose lit half slides, `SpatialEmblem` a lens with two orbiting rings and
+`SpatialRibbon` a band of glass behind words. `SpatialGem` is an octahedron of the app's color with a
+halo that turns slowly and takes a press. Its `GemGlow::Pulse` makes the glow swell and fade once
+each 1.6 s. The app reads the gem's hover and press from the interaction source that it passes, so
+it can pick the gem's color by them. A page of gems alone gives the projection layer a box little
+larger than the page once the page stands at its place: a gem turns within its place, so a small gem
+on a hand needs a small part of the view. Other objects bloom, float or orbit up to 40 dp beyond
+their places, and a page rises out of its projector, so their box takes that room. The words of an
+option stand under its object, or over the crystal of a stepper.
+
+Every object draws with one WGSL shader through `Material::ShadedGlow`, so the scene builds one
+pipeline for all of them. The shader adds four parts of light in the theme's colour: a rim where
+the surface turns from the eye, a faint fill where it faces the eye, glowing edges of the faces,
+facets or bands that the mesh's texture coordinates mark, and a halo that is brightest where the
+surface faces the eye and fades to zero at its outline. A beam and the projector's cone fade along
+the mesh. Moving lines across the cone make the scan of a projector. Each part ends at exact
+zero, so the space around an object stays black. The pipeline adds the colour to the picture and
+writes no depth. The objects therefore need no order among themselves. The panel's words
+always show over them. No pass over the whole picture draws a bloom: the glow is the objects' own
+light and their halos.
+
+`HologramStage::PAGE` adds a projector under the page, two ribbons and forty sparks. The projector
+is a disc of rings with a cone of light up to the page. Each ribbon winds two turns about an
+upright line beside the page and turns slowly about it. Every other ribbon stands on the left. The sparks
+stand beside the page within a quarter turn of each side, so nothing of the stage stands over a
+control. The forty sparks are one mesh and one draw. Each other object is a draw of its own: the
+renderer has no instancing.
+
+The page shows in 420 ms: it rises out of the projector and grows from 12% of its size. It hides in
+260 ms. A chosen object grows by 22% with a spring and gets a halo. A press sinks an object 6 mm and
+flashes it. A ray that rests on an object makes it brighter. A clock of frames runs only while
+something moves: the stage, a crystal that turns or an animation. A hologram with no stage and no
+such object, such as a single crystal button, asks for no frame while it holds still. A hidden
+hologram composes neither its panel nor its objects. Its clock stops.
+
+Measured on a Quest 3 with a stream of 120 frames a second under an app's page of settings, over 4 s
+for each case. The page has nine rows: an arc of three options, four gems, four flowers, five
+cubes, a stepper, three switches and two keys, with `HologramStage::PAGE`. The flat page is the same
+page on a panel:
+
+| Case | Frame rate | Layers | App GPU | Compositor | CPU and GPU | GPU busy |
+| --- | --- | --- | --- | --- | --- | --- |
+| Flat page | 120 | 5 | 1.02 ms | 0.91 ms | 2.20 ms | 26% |
+| Hologram page | 120 | 6 | 2.58 ms | 1.50 ms | 6.30 ms | 54% |
+| Hologram page, with the depth submitted | 120 | 6 | 2.94 ms | 2.35 ms | 8.16 ms | 68% |
+| Hologram page, depth submitted, one sample a pixel | 120 | 6 | 2.74 ms | 2.35 ms | 7.88 ms | 66% |
+| Flat page, a controller's model shows | 120 | 7 | 2.79 ms | 2.36 ms | 8.05 ms | 66% |
+| Hologram page, a controller's model shows | 120 | 7 | 3.50 ms | 2.37 ms | 9.75 ms | 75% |
+
+The hologram page adds 1.6 ms of the app's GPU and 0.6 ms of the compositor while no controller's
+model shows. Most of that is the projection layer, which the flat page does not need. While a
+model shows, the layer is there for the model already. The page then adds 0.7 ms. A frame with
+holograms alone carries no depth (see "The projection layer and its depth"): the depth took 0.4 ms
+of the app's GPU, 0.9 ms of the compositor and 1.9 ms of the frame's CPU and GPU time. Four samples
+a pixel against one cost 0.2 ms. Each case had at most 3 stale frames in its 4 s.
 
 ### Pointer
 
@@ -1321,6 +1474,74 @@ fingers close is untested. The feature is off by default, and the backend has no
 
 The selection rules and the pointer's behavior with hand states are covered by
 `src/tests/pointer_aim_tests.rs`, `src/tests/pointer_tests.rs` and `src/tests/scripted_hand_tests.rs`.
+
+### Direct touch
+
+A tracked hand presses a panel with the tip of its index finger as well, with no pinch. Android XR
+gives its panels the same direct touch, and its Interaction Framework calls it "Hand Poke". Jetpack
+XR has no API for it: the system gives the touch to every panel. Cranpose gives it to every panel of
+an app that declared `Use::hand_tracking()`, and `PointerSettings::set_direct_touch(false)` turns it
+off.
+
+**The input.** `pointer_aim` adds the hand's `IndexTip` joint to the hand's `Aim` while the joint
+is valid and tracked. A joint that the runtime only estimates touches nothing. The tip comes with the
+aim, so the focus gate that drops the aims of an app with no input focus drops the tip too, and a
+side whose controller points has no tip. `ScriptedHand::touching` and its steps write the joint for a
+check where no hand can be tracked.
+
+**Where the finger stands.** `PanelSlot::face_place` takes a point of the room into the panel's
+frame with one turn: its place across the face in dp and its height above the face in meters. A
+curved panel measures the height from its cylinder and the place along its arc. A volume has no face
+for a finger. Its box has depth and its meshes take the ray, so a volume takes no touch. The height
+of the skin is the joint's height less the joint's radius.
+
+**The rules.** `DirectTouch` (`direct_touch.rs`) holds the tip of the frame before and the panel that
+the tip presses. In each frame one pass over the panels that the hand reaches finds:
+
+- the panel that the tip hovers over: the nearest face whose edges hold the tip, with the skin at
+  most 6 cm in front of it;
+- the panel that the tip entered: a face that the tip crossed from the front since the frame before,
+  within the face's edges. The tip must have stood at most 10 cm in front in the frame before, so a
+  jump of the tracking presses nothing. Of two faces crossed in one step, the first one crossed takes
+  the press;
+- whether the tip has pushed through a panel: it stands within the panel's edges and up to 30 cm
+  behind its face.
+
+A tip that pushed through a panel hovers over nothing, and a crossing behind such a panel presses
+nothing. A finger that pushes through a panel therefore presses nothing behind it. A tip that the
+cameras first see behind a face has no frame before, so it enters nothing. The press holds its panel
+until the skin comes back 5 mm out of the face or the tip leaves the face's edges. The 5 mm keep the
+jitter of a tracked tip from ending a press and starting another.
+
+**The pointer.** The touch drives the hand's `Pointer` with the same gestures as the ray. A tip
+near a panel moves the pointer there, so the composition sees the hover of that hand's pointer id.
+The entry presses the primary button at the crossing and ticks. The press holds its point until the
+tip slides 12 dp along the face, so a click goes through the jitter of the tip, and a slide drags or
+scrolls. The exit releases, and a press that held its point clicks and ticks again. While the tip is
+near a panel the ray's pull presses nothing, the beam hides and no handle lights. A press keeps the
+input that began it: a ray's press or carry keeps the tip from touching, and a touch keeps the pinch
+from pressing. A pinch that closed while the tip was near counts as held from before, so it presses
+only after it opened again. A touch grabs no handle. A hand has no motor, so the tick vibrates
+nothing: the cursor's dot and the `Indication` of the pressed node show the press. The dot shows the
+place that the tip hovers over before it touches.
+
+**The cost.** A hand with a tracked tip turns the tip into the frame of each panel that it reaches
+and compares the place with the face's edges: one turn of a point and a few comparisons for each
+panel in each frame. A crossing takes the frame before's tip into the same frame as well, only for a
+panel whose face the tip stands at or behind. Hidden panels are out of reach and cost nothing. The
+pass allocates nothing.
+
+**Tests.** `src/tests/direct_touch_tests.rs` plays scripted hands through `pointer_aim`, the
+pointers, a real composition's shell and the surfaces, as the frame loop does: a hover before the
+touch and a click with no pinch, the ray and the pinch of the same hand held back while the tip is
+near and working again after, a push through one panel to the panel behind it, a tip first seen
+between two panels, the other hand's ray pressing another panel at the same time, a click at the
+touched point of a surface, a slide that scrolls a list, a tip lost during a press, the touch turned
+off and a touch on a curved panel. `src/tests/spatial_hologram_tests.rs` touches a gem of a
+`SpatialChoiceGroup` and a `SpatialGem` on a hologram that the scene draws on the machine's GPU.
+
+What a real hand's tip does at a panel is unmeasured: the 6 cm, the 5 mm and the 12 dp come from the
+size of a finger and the jitter of hand tracking, not from presses of real fingers.
 
 ### The demo
 

@@ -44,6 +44,18 @@ pub(crate) struct DepthSupport {
     pub(crate) tests: bool,
 }
 
+impl DepthSupport {
+    // What a frame can do with the depth of its projection layer, whose content `leaves_depth` or
+    // not. A layer whose content leaves none, such as holograms alone, carries no depth. The frame
+    // then skips the depth's pass and its store. The compositor tests no layer against it.
+    pub(crate) fn for_content(self, leaves_depth: bool) -> Self {
+        Self {
+            submits: self.submits && leaves_depth,
+            ..self
+        }
+    }
+}
+
 // What a frame does for its 3D content.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct VolumePlan {

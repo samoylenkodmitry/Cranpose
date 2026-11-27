@@ -26,6 +26,7 @@ pub(super) struct LaunchLine {
     pub(super) emphasized: bool,
     /// Why the subject has no legs, when a launch failed.
     pub(super) failure: Option<String>,
+    pub(super) disturbed: bool,
 }
 
 /// Colours for the subjects' lines, in turn; Cranpose's take the accent.
@@ -47,10 +48,12 @@ const LINE_COLORS: [(u8, u8, u8); 10] = [
 pub(super) fn launch_lines(
     palette: Palette,
     run: &PerfRun,
-    scenario: &str,
-    start: &str,
+    frames: &FramesState,
+    selection: &Selection,
     subjects: &[(usize, PerfSubject)],
 ) -> Vec<LaunchLine> {
+    let scenario = selection.scenario.as_str();
+    let start = selection.start;
     let mut others = 0;
     subjects
         .iter()
@@ -64,6 +67,12 @@ pub(super) fn launch_lines(
                     Color::from_rgb_u8(red, green, blue)
                 }
             };
+            let disturbed = run.is_disturbed(scenario, start, &subject.name)
+                || matches!(
+                    frames,
+                    FramesState::Loaded(detail)
+                        if detail.is_disturbed(scenario, start, &subject.name)
+                );
             LaunchLine {
                 subject: *index,
                 name: subject.name.clone(),
@@ -73,6 +82,7 @@ pub(super) fn launch_lines(
                 failure: run
                     .start(scenario, start)
                     .and_then(|entry| entry.failures.get(&subject.name).cloned()),
+                disturbed,
             }
         })
         .collect()
@@ -135,9 +145,12 @@ fn leg_trace(leg: &PerfFramesLeg, curve: Curve, run_ms: f64) -> Option<Vec<f64>>
         Curve::Frames if !leg.frame_ms.is_empty() => {
             Some(launch_fps(&leg.frame_ms, run_ms, CHART_STEP_MS))
         }
+        Curve::Frames => {
+            Some(leg.samples.every("fps", run_ms, CHART_STEP_MS)).filter(|trace| !trace.is_empty())
+        }
         Curve::Samples(key) => Some(leg.samples.every(key, run_ms, CHART_STEP_MS))
             .filter(|trace| trace.iter().any(|value| value.is_finite())),
-        Curve::Frames | Curve::None(_) => None,
+        Curve::None(_) => None,
     }
 }
 
@@ -230,7 +243,9 @@ pub(super) fn LaunchChart(
     if curves.is_empty() {
         Note(
             palette.muted,
-            if curve == Curve::Frames {
+            if curve == Curve::Frames && lines.iter().any(|line| line.disturbed) {
+                "Every launch of this start was disturbed."
+            } else if curve == Curve::Frames {
                 "No launch of this start kept its frames."
             } else {
                 "No launch of this start kept samples of it: runs before the sampler have none."

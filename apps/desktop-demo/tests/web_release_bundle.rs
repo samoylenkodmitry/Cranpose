@@ -188,6 +188,16 @@ fn the_packaged_site_serves_every_icon_its_page_links() {
             "the site must serve the icon `{icon}` its page links"
         );
     }
+    for clip in [
+        "assets/video/feed_clip_1.mp4",
+        "assets/video/feed_clip_2.mp4",
+        "assets/video/feed_clip_3.mp4",
+    ] {
+        assert!(
+            output.join(clip).is_file(),
+            "the site must serve the built-in offline video clip `{clip}`"
+        );
+    }
 }
 
 #[test]

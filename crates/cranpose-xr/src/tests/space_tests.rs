@@ -640,9 +640,21 @@ fn a_volume_follows_the_depth_and_the_size_that_its_modifier_gives() {
             );
             space.panels()[0]
         };
-        assert_eq!(place(300.0).kind, PanelKind::Volume { depth: 300.0 });
+        assert_eq!(
+            place(300.0).kind,
+            PanelKind::Volume {
+                depth: 300.0,
+                under: None
+            }
+        );
         let thinner = place(100.0);
-        assert_eq!(thinner.kind, PanelKind::Volume { depth: 100.0 });
+        assert_eq!(
+            thinner.kind,
+            PanelKind::Volume {
+                depth: 100.0,
+                under: None
+            }
+        );
         assert_eq!(thinner.size(), [300.0, 200.0]);
         // The face that the handles stand at lies half the depth toward the viewer
         assert!((thinner.face().position[2] - 0.05).abs() < 1e-6);
@@ -658,9 +670,11 @@ fn a_volume_that_leaves_leaves_the_scene_too() {
             space.publish_volume(VolumeContent {
                 id: panel.id,
                 pose: panel.volume_pose,
+                shown: panel.volume_shown,
                 light: mutableStateOf(None),
                 compose: Rc::default(),
                 node: Rc::default(),
+                draws: crate::volumes::VolumeDraws::ANY,
             });
         }
         assert_eq!(space.volumes().contents().get().len(), 2);

@@ -76,9 +76,14 @@ class IndexEntryTest(unittest.TestCase):
 
     def test_an_entry_leaves_out_of_a_screen_the_subject_that_does_not_draw_it(self):
         measured = run()
+        measured['scenarios'][0]['app_bytes'] = {'cranpose': 3000000}
+        measured['scenarios'][0]['unimplemented'] = ['cranpose-release']
         for start in measured['scenarios'][0]['starts'].values():
             del start['summary']['cranpose-release']
-        starts = publish.index_entry(measured, 'runs/x.json')['scenarios']['gauntlet']['starts']
+        screen = publish.index_entry(measured, 'runs/x.json')['scenarios']['gauntlet']
+        self.assertEqual(screen['app_bytes'], {'cranpose': 3000000})
+        self.assertEqual(screen['unimplemented'], ['cranpose-release'])
+        starts = screen['starts']
         self.assertEqual(sorted(starts['second']['summary']), ['cranpose'],
                          'a release that knows no such screen has no medians there')
 
@@ -86,6 +91,20 @@ class IndexEntryTest(unittest.TestCase):
         nightly = {**run(), 'confirmed_regressions': {'gauntlet': {'second': ['fps']}}}
         starts = publish.index_entry(nightly, 'runs/x.json')['scenarios']['gauntlet']['starts']
         self.assertEqual((starts['first']['confirmed'], starts['second']['confirmed']), ([], ['fps']))
+
+    def test_an_entry_marks_subjects_whose_legs_of_a_start_all_stayed_disturbed(self):
+        measured = run()
+        measured['scenarios'][0]['legs'] = [
+            {'subject': 'cranpose', 'start': 'first', 'disturbed': True},
+            {'subject': 'cranpose', 'start': 'first', 'disturbed': True},
+            {'subject': 'cranpose-release', 'start': 'first', 'disturbed': True},
+            {'subject': 'cranpose-release', 'start': 'first', 'disturbed': False},
+            {'subject': 'cranpose', 'start': 'second', 'disturbed': False},
+            {'subject': 'cranpose-release', 'start': 'second', 'disturbed': False},
+        ]
+        starts = publish.index_entry(measured, 'runs/x.json')['scenarios']['gauntlet']['starts']
+        self.assertEqual(starts['first']['disturbed'], ['cranpose'])
+        self.assertEqual(starts['second']['disturbed'], [])
 
 
 # The scratch repositories take nothing from the machine's git: not a hook's

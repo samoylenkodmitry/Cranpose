@@ -16,7 +16,7 @@ use super::{
     focus::{faded, Focus},
     launch_chart::LaunchLine,
     motion::{fade, settle, GONE},
-    text_style, Dot, Palette, PerfRun, PerfSubject, Selection, SOURCE_URL,
+    text_style, Dot, Metric, Palette, PerfRun, PerfSubject, Selection, SOURCE_URL,
 };
 
 // A row holds two lines of its name, which a narrow card wraps.
@@ -36,19 +36,14 @@ pub(super) fn SubjectBars(
     selection: Selection,
     lines: Vec<LaunchLine>,
 ) {
-    let Selection {
-        scenario,
-        start,
-        metric,
-    } = selection;
     let commit = run.main.clone().unwrap_or_else(|| "main".to_string());
     let values: Vec<Option<f64>> = subjects
         .iter()
-        .map(|(index, _)| run.median(&scenario, start, *index, metric.key()))
+        .map(|(index, _)| ranked_value(&run, &selection, &lines, *index))
         .collect();
-    let full = metric.full_scale(&values);
+    let full = selection.metric.full_scale(&values);
     let mut order: Vec<usize> = (0..subjects.len()).collect();
-    order.sort_by(|&a, &b| metric.best_first(values[a], values[b]));
+    order.sort_by(|&a, &b| selection.metric.best_first(values[a], values[b]));
     let rows = order.len() as f32;
     // The rows stand at places of their own, so that each moves to its new
     // place when the metric changes their order.
@@ -56,44 +51,97 @@ pub(super) fn SubjectBars(
         Modifier::empty().fill_max_width().height(rows * ROW_HEIGHT),
         BoxSpec::default(),
         move || {
+            let ctx = BarContext {
+                palette,
+                run: &run,
+                selection: &selection,
+                commit: &commit,
+                full,
+            };
             for (position, subject_at) in order.iter().copied().enumerate() {
                 let (index, subject) = &subjects[subject_at];
                 let line = lines.iter().find(|line| line.subject == *index);
-                // A subject with legs but without this metric gets a dash;
-                // one with no legs says why.
-                let measured = run.median(&scenario, start, *index, "fps").is_some();
-                let (share, value) = match values[subject_at] {
-                    Some(value) => (
-                        Some(if full > 0.0 {
-                            (value / full) as f32
-                        } else {
-                            0.0
-                        }),
-                        metric.format(value),
-                    ),
-                    None if measured => (None, "–".to_string()),
-                    None => (
-                        None,
-                        line.and_then(|line| line.failure.clone())
-                            .unwrap_or_else(|| "no frames".to_string()),
-                    ),
-                };
-                let row = SubjectRow {
-                    subject: *index,
-                    label: subject.label.clone(),
-                    url: subject
-                        .source
-                        .as_ref()
-                        .map(|source| format!("{SOURCE_URL}/{commit}/{source}")),
-                    color: line.map_or(palette.baseline, |line| line.color),
-                    emphasized: line.is_some_and(|line| line.emphasized),
-                    share,
-                    value,
-                };
+                let row = build_subject_row(&ctx, (*index, subject), line, values[subject_at]);
                 key(*index, || SubjectBar(palette, focus, row, position));
             }
         },
     );
+}
+
+struct BarContext<'a> {
+    palette: Palette,
+    run: &'a PerfRun,
+    selection: &'a Selection,
+    commit: &'a str,
+    full: f64,
+}
+
+fn ranked_value(
+    run: &PerfRun,
+    selection: &Selection,
+    lines: &[LaunchLine],
+    subject: usize,
+) -> Option<f64> {
+    let disturbed = lines
+        .iter()
+        .find(|line| line.subject == subject)
+        .is_some_and(|line| line.disturbed);
+    if disturbed && selection.metric != Metric::AppSize {
+        None
+    } else {
+        run.median(
+            &selection.scenario,
+            selection.start,
+            subject,
+            selection.metric.key(),
+        )
+    }
+}
+
+fn build_subject_row(
+    ctx: &BarContext<'_>,
+    (index, subject): (usize, &PerfSubject),
+    line: Option<&LaunchLine>,
+    metric_value: Option<f64>,
+) -> SubjectRow {
+    let disturbed = line.is_some_and(|line| line.disturbed);
+    // A subject with legs but without this metric gets a dash;
+    // one that stayed disturbed shows its mark; one with no legs says why.
+    let measured = !disturbed
+        && ctx
+            .run
+            .median(&ctx.selection.scenario, ctx.selection.start, index, "fps")
+            .is_some();
+    let (share, value) = match metric_value {
+        Some(value) => (
+            Some(if ctx.full > 0.0 {
+                (value / ctx.full) as f32
+            } else {
+                0.0
+            }),
+            ctx.selection.metric.format(value),
+        ),
+        None if disturbed => (None, "disturbed".to_string()),
+        None if measured => (None, "–".to_string()),
+        None => (
+            None,
+            line.and_then(|line| line.failure.clone())
+                .unwrap_or_else(|| "no frames".to_string()),
+        ),
+    };
+    SubjectRow {
+        subject: index,
+        label: subject.label.clone(),
+        url: subject
+            .source
+            .as_ref()
+            .map(|source| format!("{SOURCE_URL}/{}/{source}", ctx.commit)),
+        color: line.map_or(ctx.palette.baseline, |line| line.color),
+        emphasized: line.is_some_and(|line| line.emphasized),
+        disturbed,
+        share,
+        value,
+    }
 }
 
 // What a subject's row shows: its bar fills `share` of the full length, and a
@@ -105,6 +153,7 @@ struct SubjectRow {
     url: Option<String>,
     color: Color,
     emphasized: bool,
+    disturbed: bool,
     share: Option<f32>,
     value: String,
 }
@@ -202,10 +251,15 @@ fn RowBar(palette: Palette, focus: Focus, row: SubjectRow, look: BarLook, picked
         BoxSpec::new().content_alignment(Alignment::CENTER_START),
         move || {
             if row.share.is_none() {
+                let note_color = if row.disturbed {
+                    palette.open
+                } else {
+                    palette.muted
+                };
                 TextWithOptions(
                     row.value.clone(),
                     Modifier::empty().fill_max_width().padding_horizontal(4.0),
-                    text_style(11.0, faded(palette.muted, look.weight), None),
+                    text_style(11.0, faded(note_color, look.weight), None),
                     TextOptions {
                         overflow: TextOverflow::Ellipsis,
                         max_lines: Some(1),

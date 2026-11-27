@@ -1,15 +1,10 @@
 name: perf nightly
 
-# Each night main's Cranpose against the latest release, and both against the
-# other frameworks at their latest releases, on the Huawei Mate 20 X and on a
-# Mac desktop (benchmarks/compose-vs-cranpose README, "Every night"). macm3
-# moves every framework's pin to its latest stable release, builds every
-# framework's apps, measures the desktop ones and opens a pull request with
-# the pins that moved; the Mac the phone is attached to builds Cranpose's and
-# measures them all on the phone. The frameworks that target the browser run
-# there too, in Chrome on the Mac desktop and in Chrome on the phone. Results
-# go to the perf-data branch the desktop demo's Performance tab reads; a
-# regression found twice in a row opens a perf-regression issue.
+# The Mate 20 X and Mi TV Stick measure the same signed framework APKs.
+# macm3 builds the other frameworks and measures their desktop and browser
+# apps. The Mate also measures Chrome and compares Cranpose main with the
+# latest release. Both ESP32 boards measure their own firmware on samarch-1.
+# The Performance tab reads the published results from the perf-data branch.
 
 on:
   # GitHub's schedule did not fire this workflow on its first nights, so a
@@ -76,8 +71,8 @@ jobs:
           fi
           bash scripts/ci/nightly_should_run.sh "${args[@]}" >> "$GITHUB_OUTPUT"
 
-  desktop:
-    name: frameworks on a Mac desktop (macm3)
+  build:
+    name: build Android and browser apps (macm3)
     needs: decide
     if: needs.decide.outputs.run == 'true'
     # macm3's runners carry `recent-repo`; the Mac the phone is attached to
@@ -89,13 +84,12 @@ jobs:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     outputs:
       measured: ${{ steps.published.outputs.measured }}
-      apks: ${{ steps.apks.outputs.handed }}
-      browser: ${{ steps.pages.outputs.handed }}
+      apks: ${{ steps.apks.outcome }}
+      browser: ${{ steps.pages.outcome }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
-          # The release tags, to build the newest one main contains.
+          # Use the same triggering revision as the board jobs, with its release tags.
           fetch-depth: 0
 
       - name: Configure machine-local SDK and cache paths
@@ -104,15 +98,18 @@ jobs:
           RUNNER_OS: ${{ runner.os }}
         run: scripts/ci/android_env.sh
 
-      - name: Skip a main this Mac already measured
+      - name: Skip a main already measured on the desktop and both Android devices
         id: published
         # A night asked to move the commit pins measures again.
         if: ${{ !inputs.git_pins }}
         run: |
           chip="$(sysctl -n machdep.cpu.brand_string)"
           chrome="$(defaults read '/Applications/Google Chrome.app/Contents/Info' CFBundleShortVersionString | cut -d. -f1)"
-          if python3 scripts/perf/publish.py --published frameworks "$chip" "$(git rev-parse HEAD)" \
-              && python3 scripts/perf/publish.py --published browser "$chip · Chrome $chrome" "$(git rev-parse HEAD)"; then
+          revision=$(git rev-parse HEAD)
+          if python3 scripts/perf/publish.py --published frameworks "$chip" "$revision" \
+              && python3 scripts/perf/publish.py --published browser "$chip · Chrome $chrome" "$revision" \
+              && python3 scripts/perf/publish.py --published frameworks "EVR-AL00" "$revision" \
+              && python3 scripts/perf/publish.py --published frameworks "MiTV-AYFR0" "$revision"; then
             echo "measured=yes" >> "$GITHUB_OUTPUT"
           fi
 
@@ -120,11 +117,9 @@ jobs:
         if: steps.published.outputs.measured != 'yes'
         run: |
           scripts/ci/install_toolchains.sh
-          scripts/ci/rustup_locked.sh target add aarch64-linux-android
+          scripts/ci/rustup_locked.sh target add aarch64-linux-android armv7-linux-androideabi
           command -v just >/dev/null || cargo install just --locked
           command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
-          # The CPU and GPU clocks each desktop leg records.
-          command -v macmon >/dev/null || brew install macmon
           # Fyne's apps build with Go.
           command -v go >/dev/null || brew install go
 
@@ -134,19 +129,18 @@ jobs:
           GIT_PINS: ${{ inputs.git_pins && '--git-pins' || '' }}
         run: python3 benchmarks/compose-vs-cranpose/versions.py bump $GIT_PINS --record "$RUNNER_TEMP/bumps.json"
 
-      - name: Build every framework's apps
+      - name: Build the Android and browser apps
         if: steps.published.outputs.measured != 'yes'
         run: |
           # The build caches sit beside the runner's other caches; a moved
           # pin that does not build is put back.
           export PERF_BUILD_CACHE="$(dirname "$SCCACHE_DIR")/gauntlet"
           export PERF_BUMPS="$RUNNER_TEMP/bumps.json"
-          benchmarks/compose-vs-cranpose/build_apps.sh desktop
           benchmarks/compose-vs-cranpose/build_apps.sh android "$RUNNER_TEMP/gauntlet-apks"
           benchmarks/compose-vs-cranpose/build_apps.sh browser "$RUNNER_TEMP/gauntlet-browser"
-          benchmarks/compose-vs-cranpose/build_apps.sh release "$(git describe --tags --abbrev=0 --match 'v*')"
 
-      - name: Hand the Android apps to the phone's job
+      - name: Hand the Android apps to the device job
+        id: apks
         if: steps.published.outputs.measured != 'yes'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -154,8 +148,10 @@ jobs:
           # The builds and `versions.json`, the version each was built with.
           path: ${{ runner.temp }}/gauntlet-apks/
           retention-days: 2
+          if-no-files-found: error
 
-      - name: Hand the browser builds to the phone's job
+      - name: Hand the browser builds to both measurement jobs
+        id: pages
         if: steps.published.outputs.measured != 'yes'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -163,21 +159,66 @@ jobs:
           # Each app's page and `versions.json`, the version each was built with.
           path: ${{ runner.temp }}/gauntlet-browser/
           retention-days: 2
+          if-no-files-found: error
 
-      # The phone measures the apps whatever becomes of the desktop run.
-      - name: Note the handover
-        id: apks
+      - name: Save the dependency versions used for the builds
         if: steps.published.outputs.measured != 'yes'
-        run: echo "handed=yes" >> "$GITHUB_OUTPUT"
+        run: |
+          mkdir -p "$RUNNER_TEMP/gauntlet-pins"
+          cp "$RUNNER_TEMP/bumps.json" "$RUNNER_TEMP/gauntlet-pins/"
+          git diff --binary HEAD -- benchmarks/compose-vs-cranpose > "$RUNNER_TEMP/gauntlet-pins/versions.patch"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.published.outputs.measured != 'yes'
+        with:
+          name: gauntlet-pins
+          path: ${{ runner.temp }}/gauntlet-pins/
+          retention-days: 2
+          if-no-files-found: error
 
-      - name: Note the browser handover
-        id: pages
-        if: steps.published.outputs.measured != 'yes'
-        run: echo "handed=yes" >> "$GITHUB_OUTPUT"
+  desktop:
+    name: frameworks on a Mac desktop (macm3)
+    needs: build
+    if: needs.build.outputs.measured != 'yes'
+    runs-on: [self-hosted, macOS, ARM64, recent-repo]
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Use the same triggering revision as the board jobs, with its release tags.
+          fetch-depth: 0
+
+      - name: Configure machine-local SDK and cache paths
+        env:
+          RUNNER_NAME: ${{ runner.name }}
+          RUNNER_OS: ${{ runner.os }}
+        run: scripts/ci/android_env.sh
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gauntlet-pins
+          path: ${{ runner.temp }}/gauntlet-pins
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gauntlet-browser
+          path: ${{ runner.temp }}/gauntlet-browser
+      - name: Build the desktop apps with the same pins
+        run: |
+          export PERF_BUILD_CACHE="$(dirname "$SCCACHE_DIR")/gauntlet"
+          export PERF_BUMPS="$RUNNER_TEMP/gauntlet-pins/bumps.json"
+          if [[ -s "$RUNNER_TEMP/gauntlet-pins/versions.patch" ]]; then
+            git apply "$RUNNER_TEMP/gauntlet-pins/versions.patch"
+          fi
+          command -v macmon >/dev/null || brew install macmon
+          benchmarks/compose-vs-cranpose/build_apps.sh desktop
+          benchmarks/compose-vs-cranpose/build_apps.sh release "$(git describe --tags --abbrev=0 --match 'v*')"
 
       - name: Measure the desktop apps
-        if: steps.published.outputs.measured != 'yes'
-        # Outside the job's shared lock: a measurement empties the machine.
+        # Outside the job's shared lock: desktop.py takes the exclusive host
+        # lock around each subject and releases it between subjects so 20-minute
+        # CI jobs pass between measurements (#2417).
         # desktop.py also asks the display for its state and for how often
         # the window server composites it with nothing but a quiet window on
         # it; a display that is asleep or not at 60 Hz, or that something
@@ -185,38 +226,34 @@ jobs:
         # before it measures, or after it ran, and nothing is published.
         shell: bash --noprofile --norc -eo pipefail {0}
         run: |
-          scripts/ci/with_host_lock.sh --exclusive python3 benchmarks/compose-vs-cranpose/desktop.py \
+          python3 benchmarks/compose-vs-cranpose/desktop.py --host-lock \
             --output "$RUNNER_TEMP/desktop" --scenario gauntlet:16 --scenario wall:20 --scenario patchwork:17 --main "$(git rev-parse HEAD)" \
             --release "$(git describe --tags --abbrev=0 --match 'v*')"
 
       - name: Publish the desktop run
-        if: steps.published.outputs.measured != 'yes'
         env:
           GH_TOKEN: ${{ github.token }}
         run: just perf-publish "$RUNNER_TEMP/desktop/report.json"
 
       - name: Measure the browser apps in Chrome
-        if: steps.published.outputs.measured != 'yes'
         shell: bash --noprofile --norc -eo pipefail {0}
         run: |
-          scripts/ci/with_host_lock.sh --exclusive python3 benchmarks/compose-vs-cranpose/desktop.py \
+          python3 benchmarks/compose-vs-cranpose/desktop.py --host-lock \
             --output "$RUNNER_TEMP/desktop-browser" --browser "$RUNNER_TEMP/gauntlet-browser" \
             --scenario gauntlet:16 --scenario wall:20 --main "$(git rev-parse HEAD)"
 
       - name: Publish the browser run
-        if: steps.published.outputs.measured != 'yes'
         env:
           GH_TOKEN: ${{ github.token }}
         run: just perf-publish "$RUNNER_TEMP/desktop-browser/report.json"
 
       - name: Propose the pins that moved
-        if: steps.published.outputs.measured != 'yes'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/perf/propose_versions.py --record "$RUNNER_TEMP/bumps.json"
+        run: python3 scripts/perf/propose_versions.py --record "$RUNNER_TEMP/gauntlet-pins/bumps.json"
 
       - name: Keep the run
-        if: ${{ !cancelled() && steps.published.outputs.measured != 'yes' }}
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: perf-nightly-desktop
@@ -226,10 +263,52 @@ jobs:
             ${{ runner.temp }}/desktop*/**/*.log
           retention-days: 30
 
+  esp32:
+    name: firmware on ${{ matrix.board }}
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
+    runs-on: [self-hosted, Linux, samarch1]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      # The builds share the host's ESP-IDF installation.
+      max-parallel: 1
+      matrix:
+        board: [es3c35p, e32r35t]
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Configure the board toolchain
+        run: |
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          scripts/esp32/setup.sh --boards-only
+      - name: Measure both boots of each firmware
+        shell: bash --noprofile --norc -eo pipefail {0}
+        env:
+          BOARD: ${{ matrix.board }}
+        run: just perf-esp32 "$BOARD" "$RUNNER_TEMP/esp32-$GITHUB_RUN_ID-$BOARD"
+      - name: Publish the board results
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOARD: ${{ matrix.board }}
+        run: just perf-publish "$RUNNER_TEMP/esp32-$GITHUB_RUN_ID-$BOARD/report.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !cancelled() }}
+        with:
+          name: perf-${{ matrix.board }}
+          path: |
+            ${{ runner.temp }}/esp32-${{ github.run_id }}-${{ matrix.board }}/*.log
+            ${{ runner.temp }}/esp32-${{ github.run_id }}-${{ matrix.board }}/*.build
+            ${{ runner.temp }}/esp32-${{ github.run_id }}-${{ matrix.board }}/*.json
+          retention-days: 30
+
   android:
-    name: release against main, and the frameworks (Mate 20 X)
-    needs: [decide, desktop]
-    # The release against main runs whatever became of the desktop job.
+    name: release against main on Mate 20 X and frameworks on both Android devices
+    needs: [decide, build]
+    # The release against main runs even if framework builds fail.
     if: ${{ !cancelled() && needs.decide.outputs.run == 'true' }}
     # The Mac the Mate 20 X is attached to; its runner takes jobs while the
     # Mac sits idle on power.
@@ -244,8 +323,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
-          # The release tags, to find the newest one main contains.
+          # The APKs and firmware must describe the same revision even if main advances.
           fetch-depth: 0
 
       - name: Name the run's folder
@@ -260,47 +338,57 @@ jobs:
       - name: Provision toolchains
         run: |
           scripts/ci/install_toolchains.sh
-          scripts/ci/rustup_locked.sh target add aarch64-linux-android
+          scripts/ci/rustup_locked.sh target add aarch64-linux-android armv7-linux-androideabi
           command -v just >/dev/null || cargo install just --locked
           command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
 
-      - name: Build both apps and compare them
-        run: just perf-nightly "$PERF_SERIAL" "$PERF_OUTPUT"
+      - name: Fetch the other frameworks' apps
+        if: ${{ !cancelled() && needs.build.outputs.apks == 'success' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gauntlet-apks
+          path: ${{ env.PERF_OUTPUT }}/apks
+
+      - name: Add Cranpose to the APKs for both devices
+        id: framework_apks
+        if: ${{ !cancelled() && needs.build.outputs.apks == 'success' }}
+        run: just perf-framework-apks "$PERF_OUTPUT/apks"
+
+      - name: Compare the release and main on the phone
+        id: compare
+        if: ${{ !cancelled() }}
+        env:
+          PREPARED_APKS: ${{ steps.framework_apks.outcome == 'success' && format('{0}/apks', env.PERF_OUTPUT) || '' }}
+        run: just perf-nightly "$PERF_SERIAL" "$PERF_OUTPUT" "$PREPARED_APKS"
 
       - name: Publish the run
+        if: ${{ !cancelled() && steps.compare.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: just perf-publish "$PERF_OUTPUT/run.json"
 
       - name: Report confirmed regressions
+        if: ${{ !cancelled() && steps.compare.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: just perf-report "$PERF_OUTPUT/run.json"
 
-      - name: Fetch the other frameworks' apps
-        if: ${{ !cancelled() && needs.desktop.outputs.apks == 'yes' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: gauntlet-apks
-          path: ${{ runner.temp }}/gauntlet-apks
-
-      - name: Compare the frameworks on the phone
-        if: ${{ !cancelled() && needs.desktop.outputs.apks == 'yes' }}
+      - name: Measure the shared APKs on Mate and Mi TV Stick
+        if: ${{ !cancelled() && steps.framework_apks.outcome == 'success' }}
         env:
+          MI_TV_ENDPOINT: ${{ vars.MI_TV_ENDPOINT }}
           GH_TOKEN: ${{ github.token }}
-        run: |
-          just perf-frameworks "$PERF_SERIAL" "$PERF_OUTPUT/frameworks" "$RUNNER_TEMP/gauntlet-apks"
-          just perf-publish "$PERF_OUTPUT/frameworks/frameworks.json"
+        run: just perf-android-devices "$PERF_OUTPUT" "$PERF_SERIAL"
 
       - name: Fetch the browser builds
-        if: ${{ !cancelled() && needs.desktop.outputs.browser == 'yes' }}
+        if: ${{ !cancelled() && needs.build.outputs.browser == 'success' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: gauntlet-browser
           path: ${{ runner.temp }}/gauntlet-browser
 
       - name: Compare the browser apps in Chrome on the phone
-        if: ${{ !cancelled() && needs.desktop.outputs.browser == 'yes' }}
+        if: ${{ !cancelled() && needs.build.outputs.browser == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -312,5 +400,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: perf-nightly
-          path: ${{ env.PERF_OUTPUT }}/**/*.json
+          path: |
+            ${{ env.PERF_OUTPUT }}/**/*.json
+            ${{ env.PERF_OUTPUT }}/**/capture.log
           retention-days: 30

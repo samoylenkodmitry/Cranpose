@@ -5,7 +5,7 @@ use crate::{
     Ray,
     carry::handle_center,
     resize::corner_center,
-    space::{Mobility, PanelSlot},
+    space::PanelSlot,
     vector::{dot, sub},
 };
 
@@ -18,6 +18,15 @@ pub(crate) const HANDLE_RADIUS: f32 = 0.02;
 // How far from the handle a ray still grabs it, in meters. The margin stays under the gap, so
 // the grab does not reach the panel's edge. A press on that edge still presses.
 const HANDLE_MARGIN: f32 = 0.015;
+
+// A handle that a hand points at or presses: which panel's, which of its handles, and whether the
+// trigger is down on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HandleFocus {
+    pub(crate) panel: u64,
+    pub(crate) kind: HandleKind,
+    pub(crate) pressed: bool,
+}
 
 // What a handle does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,7 +43,7 @@ impl HandleKind {
     // Whether `slot`'s panel has a handle of this kind.
     pub(crate) fn offered_by(self, slot: &PanelSlot) -> bool {
         match self {
-            Self::Move => slot.mobility == Mobility::Movable,
+            Self::Move => slot.mobility.movable(),
             Self::Resize => slot.resize_limits().is_some(),
         }
     }

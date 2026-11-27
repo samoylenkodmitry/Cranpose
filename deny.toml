@@ -7,9 +7,7 @@ all-features = true
 
 [advisories]
 unmaintained = "workspace"
-ignore = [
-    { id = "RUSTSEC-2026-0192", reason = "ttf-parser reads the font tables of every text path; no maintained replacement reads them yet" },
-]
+ignore = []
 
 [licenses]
 allow = [

@@ -59,4 +59,4 @@ pub fn FollowingSubspace(follow: FollowTarget, content: impl FnMut() + 'static) 
 
 #[cfg(test)]
 #[path = "tests/following_subspace_tests.rs"]
-mod tests;
+pub(crate) mod tests;

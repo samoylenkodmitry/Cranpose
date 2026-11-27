@@ -411,6 +411,18 @@ impl FrameDamages {
     /// whole window when the target holds none, one of another setting, one
     /// that may show a stand-in anywhere after a landing, or no known damage.
     pub(crate) fn since(&self, held: Option<Held>, frame: &FrameWindow<'_>) -> Since {
+        self.since_over(held, frame, &Damage::Full)
+    }
+
+    // `since` for a target that knows what changed since the frame it holds,
+    // `folded` packet by packet: it takes that when the packets back to its
+    // frame are no longer kept.
+    pub(crate) fn since_over(
+        &self,
+        held: Option<Held>,
+        frame: &FrameWindow<'_>,
+        folded: &Damage,
+    ) -> Since {
         let changed = |damage| Since {
             damage,
             baseline: false,
@@ -446,18 +458,23 @@ impl FrameDamages {
             return changed(Damage::Full);
         }
         let mut union = DamageRects::default();
-        match self.union_back(frame.packet.frame_id, held.frame, &mut union) {
-            Ok(()) => {
-                union.add_all(&redrawn);
-                Since {
-                    stand_ins: kept,
-                    ..changed(Damage::Part(union))
-                }
+        match (
+            self.union_back(frame.packet.frame_id, held.frame, &mut union),
+            folded,
+        ) {
+            (Ok(()), _) => {}
+            (Err(NoPart::Unknown), Damage::Part(rects)) => union = *rects,
+            (Err(no_part), _) => {
+                return Since {
+                    baseline: no_part == NoPart::Baseline,
+                    ..changed(Damage::Full)
+                };
             }
-            Err(no_part) => Since {
-                baseline: no_part == NoPart::Baseline,
-                ..changed(Damage::Full)
-            },
+        }
+        union.add_all(&redrawn);
+        Since {
+            stand_ins: kept,
+            ..changed(Damage::Part(union))
         }
     }
 

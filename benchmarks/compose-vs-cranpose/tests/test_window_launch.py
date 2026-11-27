@@ -127,6 +127,12 @@ class WindowStartTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'expected one buffer layer'):
             measure.window_start(STARTED + 'NO_LAYER\n', measure.AppTarget('cranpose'))
 
+    def test_the_system_splash_at_the_deadline_has_a_process_without_an_app_frame(self):
+        output = STARTED.replace('Status: ok', 'Status: timeout') + 'SPLASH_ONLY\nPIDS 5562\n'
+        _, pids, layer = measure.window_start(output, measure.AppTarget('maui'))
+        self.assertEqual(pids, [5562])
+        self.assertIsNone(layer)
+
     def test_an_app_with_two_layers_fails_and_a_page_measures_the_first(self):
         found = 'PIDS 1250 1302\nLAYER com.android.chrome/ChromeChildSurface#1\nLAYER com.android.chrome/ChromeChildSurface#2\n'
         with self.assertRaisesRegex(ValueError, 'expected one buffer layer'):

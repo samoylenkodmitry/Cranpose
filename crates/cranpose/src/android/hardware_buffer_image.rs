@@ -12,6 +12,7 @@
 use std::{ffi::c_void, sync::Arc};
 
 use ash::vk;
+use cranpose_services::VideoColorInfo;
 use ndk_sys::AHardwareBuffer_Desc;
 
 use super::{
@@ -42,7 +43,7 @@ pub(super) struct HardwareBufferImage {
 
 impl BufferProperties {
     // The properties of `buffer`, an `AHardwareBuffer*` that a decoder wrote a picture into.
-    pub(super) fn of(raw: &RawDevice, buffer: *mut c_void) -> Option<Self> {
+    pub(super) fn of(raw: &RawDevice, buffer: *mut c_void, color: VideoColorInfo) -> Option<Self> {
         let size = buffer_size(buffer)?;
         let mut format = vk::AndroidHardwareBufferFormatPropertiesANDROID::default();
         let mut properties =
@@ -61,7 +62,7 @@ impl BufferProperties {
             size,
             allocation_size,
             memory_type_bits,
-            format: YcbcrFormat::of(&format),
+            format: YcbcrFormat::of(&format, color),
         })
     }
 }

@@ -188,7 +188,7 @@ fn cards_side_by_side_in_an_atlas_batch_together_and_draw_as_they_do_alone() {
     };
     let (all_stats, all) = relabeled_frame(renderer, [true; CARDS]);
     assert!(
-        support::pipelines_settled(&all_stats),
+        all_stats.pipelines_settled(),
         "the measured frame drew with stand-in pipelines: {all_stats:?}"
     );
     assert_eq!(all_stats.isolated_layer_renders, CARDS as u32);

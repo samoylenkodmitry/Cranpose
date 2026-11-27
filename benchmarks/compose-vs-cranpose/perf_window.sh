@@ -81,6 +81,17 @@ while :; do
   [ -n "$PIDS" ] || PIDS=$(app_pids)
   [ -n "$LAYERS" ] || LAYERS=$(app_layers)
   if [ -n "$PIDS" ] && [ -n "$LAYERS" ]; then break; fi
+  # Android still shows the system splash when the app has drawn no buffer by
+  # the full run's deadline. Keep the live process's CPU and its zero frames.
+  if [ "$SLOW_FPS" = 0 ] && [ -n "$PIDS" ] && ! before "$END"; then
+    case "$started" in
+      *"Status: timeout"*)
+        if dumpsys SurfaceFlinger --list | grep -Fq "Splash Screen $PKG#"; then
+          echo SPLASH_ONLY
+          break
+        fi ;;
+    esac
+  fi
   if ! before "$found_by"; then
     if [ -z "$PIDS" ]; then echo NO_PROCESS; else echo NO_LAYER; fi
     exit 0
@@ -88,7 +99,7 @@ while :; do
   sleep 0.1
 done
 echo "PIDS $PIDS"
-echo "$LAYERS" | sed 's/^/LAYER /'
+if [ -n "$LAYERS" ]; then echo "$LAYERS" | sed 's/^/LAYER /'; fi
 LAYER=$(echo "$LAYERS" | head -n 1)
 # The Mali GPU clock where the kernel exposes it (kHz on the Pixel 9 Pro);
 # the Kirin 980 reports its clocks on the F line instead.
@@ -117,6 +128,7 @@ thermal() {
 }
 
 latency() {
+  [ -n "$LAYER" ] || return 0
   echo "LAT_BEGIN $(cat /proc/uptime)"
   dumpsys SurfaceFlinger --latency "$LAYER"
   echo "LAT_END"
@@ -129,7 +141,7 @@ latency() {
   # column decides.
   newest=0
   total=0
-  while [ ! -e "$STOP" ]; do
+  while [ -n "$LAYER" ] && [ ! -e "$STOP" ]; do
     latency > "$POLL"
     cat "$POLL"
     counted=$(awk -v newest="$newest" -v total="$total" '

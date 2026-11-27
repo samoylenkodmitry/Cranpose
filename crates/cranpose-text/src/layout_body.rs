@@ -138,13 +138,6 @@ impl LayoutBody {
         self.shaped = 0;
     }
 
-    // Gives back the room each part has past its length.
-    pub(crate) fn shrink_to_fit(&mut self) {
-        self.faces.shrink_to_fit();
-        self.runs.shrink_to_fit();
-        self.lines.shrink_to_fit();
-    }
-
     // Gives back the room of the faces, lines and runs past four times their
     // length, as a long text left to a short one in the layout they take
     // turns in: a text with half the lines of the last keeps the room their

@@ -2,9 +2,9 @@ use cranpose::PointerButton;
 
 use super::*;
 use crate::{
-    PointerMapping,
     carry::handle_center,
     pointer_aim::pointer_aim,
+    pointer_settings::PointerChoice,
     pointers::Pointers,
     space::{Mobility, PanelKind, PanelSlot, Ride, Shape},
     surface_input::Gesture as Shown,
@@ -174,7 +174,7 @@ fn two_scripted_controllers_press_scroll_and_carry_through_the_pointer() {
             aims,
             time,
             (&[PANEL], &Meshes::default()),
-            (PointerMapping::default(), true),
+            PointerChoice::default(),
         );
         gestures.extend(pointers.atlas().iter().map(|event| event.gesture));
         moves.extend(pointers.moves().iter().map(|step| step.pose.position[0]));

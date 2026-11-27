@@ -72,9 +72,12 @@ gltf = [
 
 [dependencies]
 base64 = { version = "0.23.1", optional = true }
-basisu = { version = "0.1.0", optional = true }
+# Cranpose's basisu fork (forks/README.md), which upgrades ruzstd to 0.9.1.
+# Its library is still `basisu`.
+basisu = { package = "cranpose-basisu", version = "0.1.0", optional = true }
 # `video`: a flat stream draws through `PlayerSurfaceIntake`.
 cranpose = { workspace = true, features = ["video"] }
+cranpose-animation = { workspace = true }
 # The keyboard that a headset draws sends key events to the app's shell, and runs with any renderer.
 cranpose-app-shell = { workspace = true }
 cranpose-core = { workspace = true }

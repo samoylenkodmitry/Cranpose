@@ -492,6 +492,7 @@ impl MediaPlayer for IosMediaPlayer {
             session: true,
             probing: true,
             equalizer: false,
+            video: false,
         }
     }
 

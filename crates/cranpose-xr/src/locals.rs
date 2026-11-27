@@ -11,6 +11,7 @@ use crate::{
     frame_effects::FrameEffects,
     space::{Origin, SUBSPACE_ORIGIN, Space},
     spatial_curved_row::Curve,
+    tray_part::TrayParts,
 };
 
 pub(crate) struct Locals {
@@ -28,6 +29,7 @@ pub(crate) struct Locals {
     pub(crate) entitlement_check: CompositionLocal<Option<EntitlementCheck>>,
     pub(crate) anchors: CompositionLocal<Option<Anchors>>,
     pub(crate) planes: CompositionLocal<Option<Planes>>,
+    pub(crate) tray: CompositionLocal<Option<TrayParts>>,
 }
 
 thread_local! {
@@ -46,6 +48,7 @@ thread_local! {
         entitlement_check: compositionLocalOf(|| None),
         anchors: compositionLocalOf(|| None),
         planes: compositionLocalOf(|| None),
+        tray: compositionLocalOf(|| None),
     };
 }
 

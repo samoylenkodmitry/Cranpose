@@ -37,7 +37,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from measure import (APPS, HEAVY, REMOTE_WINDOW, HERE, STARTS, AppTarget, Device, device_lock, figure,
+from measure import (APPS, load_extras, REMOTE_WINDOW, HERE, STARTS, AppTarget, Device, device_lock, figure,
                      measure_run, memory_mb)
 from timelines import slow_rule
 
@@ -108,14 +108,24 @@ def leg_record(run, subject, order, start):
         'temperature_after': run['temperature_after'],
         # The run at each of the sampler's intervals.
         'samples': run['samples'],
+        **page_fields(run.get('page')),
     }
 
 
+def page_fields(page):
+    """A page's leg: what the page said of itself, and whether it was
+    disturbed. Only a hidden page disturbs a leg; a page that stalls while
+    shown is measured as it drew."""
+    return {'page': page, 'disturbed': page['hidden']} if page else {}
+
+
 def summarize(legs, subjects, metrics, start):
-    """Per subject: the median of every metric over its legs of `start`."""
+    """Per subject: the median of every metric over its undisturbed legs of
+    `start`; a disturbed leg stays in the run, marked."""
+    undisturbed = [leg for leg in legs if not leg.get('disturbed')]
     return {
         subject: {metric: statistics.median(values) for metric in metrics
-                  if (values := metric_values(legs, subject, metric, start))}
+                  if (values := metric_values(undisturbed, subject, metric, start))}
         for subject in subjects
     }
 
@@ -146,7 +156,7 @@ def compare_scenario(device, scenario, subjects, args):
             break
     return {
         'scenario': scenario,
-        'extras': (HEAVY.get(scenario, '') + ' ' + args.extra).strip(),
+        'extras': load_extras(scenario, args),
         'legs': legs,
         'starts': {
             start: {
@@ -199,8 +209,10 @@ def compare_builds(args):
                      'deciding': {metric: rule[0] for metric, rule in DECIDING.items()}},
         'scenarios': [],
     }
+    sizes = {app: size for app in subjects if (size := device.apk_bytes(app)) is not None}
     for scenario in scenarios:
-        run['scenarios'].append(compare_scenario(device, scenario, subjects, args))
+        measured = compare_scenario(device, scenario, subjects, args)
+        run['scenarios'].append({**measured, 'app_bytes': sizes})
         (args.output / 'ab.json').write_text(json.dumps(run, indent=1))
     run['duration_s'] = round(time.monotonic() - args.started)
     (args.output / 'ab.json').write_text(json.dumps(run, indent=1))

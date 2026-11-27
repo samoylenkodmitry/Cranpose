@@ -30,6 +30,14 @@ pub struct DecoderCapabilities {
     /// The highest bit rate in bits a second that the decoder takes, or `None` when the platform
     /// does not say.
     pub max_bitrate: Option<u32>,
+    /// Whether the decoder supports [`DecodeOrder::Presentation`](super::DecodeOrder::Presentation)
+    /// B-frame reordering on this platform.
+    pub b_frame_reordering: bool,
+    /// Whether the decoder can output 10-bit HDR pictures (such as P010), or `None` when the
+    /// platform does not report bit-depth support ahead of time.
+    pub hdr_10bit: Option<bool>,
+    /// Whether decoded pictures stay in GPU memory without a CPU pixel copy on this platform.
+    pub zero_copy_gpu: bool,
 }
 
 impl DecoderCapabilities {
@@ -66,12 +74,19 @@ pub fn set_platform_decoder_capabilities(source: Option<Arc<dyn DecoderCapabilit
     }
 }
 
-// The source that a platform backend installed, or VideoToolbox's on Apple platforms, whose
-// decoder is part of this crate.
+// The source that a platform backend installed, or the built-in probe on platforms whose decoder
+// lives in this crate (Apple VideoToolbox, Windows Media Foundation, and Linux VA-API/FFmpeg).
 fn source() -> Option<Arc<dyn DecoderCapabilitySource>> {
     let installed = PLATFORM.get();
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     let installed = installed.or_else(|| Some(Arc::new(super::video_toolbox_capabilities::Limits)));
+    #[cfg(target_os = "windows")]
+    let installed =
+        installed.or_else(|| Some(Arc::new(super::media_foundation_capabilities::Limits)));
+    #[cfg(target_os = "linux")]
+    let installed = installed.or_else(|| Some(Arc::new(super::vaapi_capabilities::Limits)));
+    #[cfg(all(feature = "video-web", target_arch = "wasm32", target_os = "unknown"))]
+    let installed = installed.or_else(|| Some(Arc::new(super::web_codecs_capabilities::Limits)));
     installed
 }
 

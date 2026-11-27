@@ -4892,8 +4892,8 @@ pub(crate) fn scene_bounds(layer: &LayerScene, scale: f32) -> Option<Rect> {
 
 #[path = "frame_atlas.rs"]
 mod surface_atlas;
-pub(crate) use surface_atlas::SurfaceAtlasSizes;
-use surface_atlas::{AtlasPacker, AtlasPlacement};
+pub(crate) use surface_atlas::SurfaceAtlases;
+use surface_atlas::{AtlasPacker, AtlasPlacement, square_width};
 
 #[path = "frame_composites.rs"]
 mod composites;

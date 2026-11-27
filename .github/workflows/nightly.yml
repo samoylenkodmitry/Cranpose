@@ -277,6 +277,42 @@ jobs:
       - name: Check the benchmark app
         run: just bench-app-check
 
+  # The 20-zone Compose Desktop vs Cranpose layout atlas (1.0x and 1.75x) plus
+  # the behavioral no-panic stress suite, ratcheted against
+  # benchmarks/layout-parity/divergences.toml.
+  layout-parity:
+    name: layout and behavioral parity vs Compose (macOS)
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Provision toolchain
+        id: provision
+        run: |
+          scripts/ci/provision_toolchain.sh
+          java -version
+      - name: Run layout and behavioral parity suite
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just layout-parity target/layout-parity
+      - name: Publish parity summary
+        if: always()
+        run: test -f target/layout-parity/summary.md && cat target/layout-parity/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+      - name: Upload layout parity report and screenshots
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: layout-parity
+          path: target/layout-parity
+          if-no-files-found: ignore
+      - name: sccache stats
+        if: always()
+        run: '"$RUSTC_WRAPPER" --show-stats || true'
+
   # The steady-frame ledger (#2247): allocator calls and copied bytes a
   # steady frame of every bench layout against their budgets. valgrind's DHAT
   # counts the copies; the runners with these labels are samarch-1's, which
@@ -288,7 +324,7 @@ jobs:
     needs: decide
     if: needs.decide.outputs.run == 'true'
     runs-on: [self-hosted, Linux, cranpose-heavy]
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
@@ -298,6 +334,8 @@ jobs:
         run: scripts/ci/provision_toolchain.sh
       - name: Measure the steady frames against their budgets
         run: just steady-ledger
+      - name: Video player steady-frame allocations and 100-swipe feed memory gate
+        run: just test-player-memory
 
   # Each feature of the framework crates built alone (cargo-hack, about 12
   # minutes), and the generic functions that copy most IR into the desktop

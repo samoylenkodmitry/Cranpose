@@ -24,6 +24,7 @@ use super::*;
 use crate::{
     FollowMode, FollowTarget, MovePolicy, PointSourceParams, SpatialMoveEventType, SpatialPanel,
     SpatialPointSource, SpatialVolume, SubspaceModifier, TrackedDimensions,
+    follow_origin::Poses,
     sound_sources::SoundPlace,
     space::{Origin, PanelMove, local_space},
 };
@@ -352,7 +353,15 @@ fn a_following_subspace_carries_its_sound_with_the_head() {
             turned_left(90.0),
         ];
         for head in walk {
-            space.track(Some(head), [None, None], Duration::ZERO, None);
+            space.track(
+                &Poses {
+                    head: Some(head),
+                    controllers: [None, None],
+                    ..Poses::default()
+                },
+                Duration::ZERO,
+                None,
+            );
             stage.update(Some(head), &space);
             let played = player.played()[0];
             assert_eq!(

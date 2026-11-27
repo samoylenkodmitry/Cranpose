@@ -5,6 +5,7 @@ use std::{sync::OnceLock, time::Duration};
 use crate::{
     Button, Controller, Hand, InteractionProfile, Pose, Squeeze, Thumbstick, TrackedPose, Trigger,
     XrFrame, carry::handle_center_at, press_threshold::PRESS, scripted_hand::aim_pose,
+    vector::lerp,
 };
 
 /// What the buttons of a [`ScriptedController`] do during one step. Every field rests at its
@@ -177,10 +178,6 @@ impl ScriptedController {
             Controller::default()
         }
     }
-}
-
-fn lerp(from: [f32; 3], to: [f32; 3], share: f32) -> [f32; 3] {
-    [0, 1, 2].map(|axis| from[axis] + (to[axis] - from[axis]) * share)
 }
 
 // The controller that stands at `position` and points at `at`, with `buttons`.

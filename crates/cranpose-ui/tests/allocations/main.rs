@@ -11,7 +11,7 @@ use cranpose_ui::{
     Constraints, Layout, LazyColumn, LazyColumnSpec, MeasureLayoutOptions, MeasureResult,
     MemoryHeadroom, Modifier, TestComposition, Text, TextLayoutOptions, TextStyle, measure_layout,
     measure_layout_with_options, prepare_text_layout, run_test_composition, set_memory_headroom,
-    text::AnnotatedString,
+    text::{AnnotatedString, SpanStyle},
     widgets::{
         box_widget::{Box, BoxSpec},
         column::{Column, ColumnSpec},
@@ -692,6 +692,47 @@ fn a_rest_gives_back_a_long_paragraph_glyph_room() {
     });
 }
 
+// A new paragraph of three styled parts that wraps over a few lines takes
+// room for its runs once: its layout grows and shrinks none of its own
+// storage. The caches the layouts go into grow now and then.
+fn a_new_wrapped_paragraph_layout_keeps_its_first_room() {
+    let style = TextStyle::default();
+    let red = SpanStyle {
+        color: Some(Color::RED),
+        ..SpanStyle::default()
+    };
+    let context = cranpose_ui::AppContext::new();
+    context.enter(|| {
+        let reallocations_of = |index: usize| {
+            let text = AnnotatedString::builder()
+                .append(&format!("Card {index:03} heads "))
+                .push_style(red.clone())
+                .append("a title that wraps over a few lines")
+                .pop()
+                .append(" and a tail")
+                .to_annotated_string();
+            context.start_text_frame();
+            let region = Region::new(GLOBAL);
+            drop(prepare_text_layout(
+                &text,
+                &style,
+                TextLayoutOptions::default(),
+                Some(90.0),
+            ));
+            region.change().reallocations
+        };
+        for index in 0..PASSES {
+            reallocations_of(index);
+        }
+        let reallocations: usize = (PASSES..2 * PASSES).map(reallocations_of).sum();
+        println!("reallocations of {PASSES} new wrapped paragraphs' layouts: {reallocations}");
+        assert!(
+            reallocations < PASSES,
+            "{reallocations} reallocations: a new wrapped paragraph's layout grew its storage"
+        );
+    });
+}
+
 // Allocations of composing a column of `count` rows of two boxes each,
 // with `headroom` memory left.
 fn rows_of_boxes_allocations(count: usize, headroom: MemoryHeadroom) -> usize {
@@ -1106,6 +1147,7 @@ fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     an_animation_frame_allocates_only_its_recomposition();
     remeasuring_a_long_paragraph_keeps_its_glyph_storage();
     a_rest_gives_back_a_long_paragraph_glyph_room();
+    a_new_wrapped_paragraph_layout_keeps_its_first_room();
     composing_a_row_of_boxes_allocates_within_its_budget();
     composing_a_wide_column_again_allocates_what_a_narrow_one_does();
     a_frame_that_swaps_nodes_for_new_ones_allocates_nothing_for_them();

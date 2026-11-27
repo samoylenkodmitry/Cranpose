@@ -89,6 +89,21 @@ dotnet_ready() {
     dotnet workload list | grep -q wasm-tools || dotnet workload install wasm-tools
 }
 
+# All three builds in a nightly use the same installed SDKs on macm3.
+prepare_sdks() {
+    local stamp="$cache/prepared-sdks" run="${GITHUB_RUN_ID:-}/${GITHUB_RUN_ATTEMPT:-}"
+    if [[ -n ${GITHUB_RUN_ID:-} && -x "$cache/flutter/bin/flutter" && -x "$DOTNET_ROOT/dotnet" &&
+          -f $stamp && $(cat "$stamp") == "$run" ]]; then
+        return
+    fi
+    flutter_ready
+    dotnet_ready
+    if [[ -n ${GITHUB_RUN_ID:-} ]]; then
+        printf '%s\n' "$run" > "$stamp.tmp.$$"
+        mv "$stamp.tmp.$$" "$stamp"
+    fi
+}
+
 # Each Rust app builds into its own target in the cache; the checkout links it
 # in, so the binaries sit where desktop.py and rust-android look.
 rust_target() {
@@ -220,22 +235,28 @@ bundled() {
 </dict>
 </plist>
 PLIST
+    if [[ $app == makepad ]]; then
+        python3 "$here/$app-app/resources.py" "$bundle/Contents/Resources/makepad"
+    fi
     codesign --force --sign - "$bundle"
 }
 
 case $mode in
 desktop)
-    flutter_ready
-    dotnet_ready
+    prepare_sdks
     tools=$(toolchains)
     # Cranpose's app reads the whole workspace, which moves every night.
     step cranpose
     rust_target cranpose-app
     cargo_app cranpose-app
-    for app in egui slint iced gpui tauri dioxus xilem rune bui ferro zgui floem; do
+    for app in egui slint iced gpui tauri dioxus xilem rune bui ferro zgui floem freya vizia makepad; do
         rust_target "$app-app"
         # perf-data holds the pictures of the patchwork's chat.
         reads=("$app-app" perf-data chat-assets)
+        case "$app" in
+            freya) reads+=(wall-canvas fonts) ;;
+            vizia|makepad) reads+=(wall-canvas native-canvas fonts) ;;
+        esac
         # Dioxus draws with the web page's CSS.
         if [[ $app == dioxus ]]; then
             reads+=(web-app/www/style.css)
@@ -246,7 +267,7 @@ desktop)
     # Rune and BUI open no window when a process outside the login session
     # starts their programs, as the nightly's runner does: Launch Services
     # starts a bundle, so desktop.py opens each from one.
-    for app in rune bui; do
+    for app in rune bui makepad; do
         bundled "$app"
     done
     build avalonia avalonia-app/bin/Release/net10.0/osx-arm64/publish avalonia-app shared-cs -- \
@@ -260,6 +281,8 @@ desktop)
     build compose compose-desktop-app/build/compose/binaries/main/app/PerfCompose.app \
         compose-desktop-app shared-compose shared-kotlin -- \
         attempt compose-desktop bash -c "cd '$here/compose-desktop-app' && ./gradlew --no-daemon -q createDistributable"
+    build electron electron-app/build/PerfElectron-darwin-arm64/PerfElectron.app electron-app -- \
+        attempt electron bash -c "cd '$here/electron-app' && npm ci --ignore-scripts --no-audit --no-fund && npx --no-install electron-packager . PerfElectron --platform=darwin --arch=arm64 --out=build --overwrite --app-bundle-id=dev.perfcompare.electron"
     build web web-app/www/js web-app shared-ts -- \
         attempt web bash -c "cd '$here/web-app' && npm ci --no-audit --no-fund && npx tsc -p tsconfig.json"
     python3 "$here/versions.py" write "$here/desktop-versions.json" --platform desktop
@@ -274,9 +297,8 @@ desktop)
 android)
     out=${2:?usage: build_apps.sh android DIR}
     mkdir -p "$out"
-    flutter_ready
-    dotnet_ready
-    tools=$(toolchains)
+    prepare_sdks
+    tools="$(toolchains)-$(git hash-object "$here/build_apps.sh")"
     build compose-android compose-app/app/build/outputs/apk/release/app-release.apk \
         compose-app shared-compose shared-kotlin -- \
         attempt compose bash -c "cd '$here/compose-app' && ./gradlew --no-daemon -q :app:assembleRelease"
@@ -285,7 +307,7 @@ android)
         attempt views bash -c "cd '$here/views-app' && ./gradlew --no-daemon -q :app:assembleRelease"
     cp "$here/views-app/app/build/outputs/apk/release/app-release.apk" "$out/views.apk"
     build flutter-android flutter-app/build/app/outputs/flutter-apk/app-release.apk flutter-app -- \
-        bash -c "cd '$here/flutter-app' && flutter build apk --release --target-platform android-arm64"
+        bash -c "cd '$here/flutter-app' && flutter build apk --release --target-platform android-arm,android-arm64"
     cp "$here/flutter-app/build/app/outputs/flutter-apk/app-release.apk" "$out/flutter.apk"
     build rn rn-app/android/app/build/outputs/apk/release/app-release.apk rn-app shared-ts -- \
         attempt rn bash -c "cd '$here/rn-app' && npm ci --no-audit --no-fund && cd android && ./gradlew --no-daemon -q :app:assembleRelease"
@@ -294,19 +316,19 @@ android)
     # Android debug key, which Gradle signs the React Native build with.
     build nativescript nativescript-app/platforms/android/app/build/outputs/apk/release/app-release.apk \
         nativescript-app shared-ts -- \
-        attempt nativescript bash -c "cd '$here/nativescript-app' && npm ci --no-audit --no-fund && npx ns build android --release --gradleArgs=-Pabis=arm64-v8a --key-store-path '$HOME/.android/debug.keystore' --key-store-password android --key-store-alias androiddebugkey --key-store-alias-password android"
+        attempt nativescript bash -c "cd '$here/nativescript-app' && npm ci --no-audit --no-fund && npx ns build android --release --gradleArgs=-Pabis=armeabi-v7a,arm64-v8a --key-store-path '$HOME/.android/debug.keystore' --key-store-password android --key-store-alias androiddebugkey --key-store-alias-password android"
     cp "$here/nativescript-app/platforms/android/app/build/outputs/apk/release/app-release.apk" "$out/nativescript.apk"
     build lynx lynx-app/app/build/outputs/apk/release/app-release.apk lynx-app shared-ts -- \
         attempt lynx bash -c "cd '$here/lynx-app/page' && npm ci --no-audit --no-fund && npm run build && cd .. && ./gradlew --no-daemon -q :app:assembleRelease"
     cp "$here/lynx-app/app/build/outputs/apk/release/app-release.apk" "$out/lynx.apk"
-    build maui maui-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.maui-Signed.apk \
+    build maui maui-app/bin/Release/net10.0-android/publish/dev.perfcompare.maui-Signed.apk \
         maui-app shared-cs -- \
         bash -c "cd '$here/maui-app' && dotnet publish -c Release -f net10.0-android -p:AndroidSdkDirectory='$ANDROID_HOME'"
-    cp "$here/maui-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.maui-Signed.apk" "$out/maui.apk"
-    build avalonia-android avalonia-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.avalonia-Signed.apk \
+    cp "$here/maui-app/bin/Release/net10.0-android/publish/dev.perfcompare.maui-Signed.apk" "$out/maui.apk"
+    build avalonia-android avalonia-app/bin/Release/net10.0-android/publish/dev.perfcompare.avalonia-Signed.apk \
         avalonia-app shared-cs -- \
         attempt avalonia bash -c "cd '$here/avalonia-app' && dotnet publish -c Release -f net10.0-android -p:AndroidSdkDirectory='$ANDROID_HOME'"
-    cp "$here/avalonia-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.avalonia-Signed.apk" "$out/avalonia.apk"
+    cp "$here/avalonia-app/bin/Release/net10.0-android/publish/dev.perfcompare.avalonia-Signed.apk" "$out/avalonia.apk"
     for app in egui slint; do
         rust_target "$app-app"
         build "$app-android" "$app-app/build/outputs/apk/release/$app-release.apk" "$app-app" perf-data rust-android -- \
@@ -324,8 +346,7 @@ browser)
     out=${2:?usage: build_apps.sh browser DIR}
     dist=$here/browser-dist
     mkdir -p "$out" "$dist"
-    flutter_ready
-    dotnet_ready
+    prepare_sdks
     tools=$(toolchains)
     # Cranpose's app reads the whole workspace, which moves every night.
     step cranpose-web

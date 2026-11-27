@@ -1,8 +1,14 @@
 //! The Performance tab reads the run index the nightly publishes and shows
 //! the latest night, the trend, and the framework comparison on each device.
 
-use std::{collections::BTreeMap, rc::Rc};
+use std::{
+    collections::BTreeMap,
+    rc::Rc,
+    sync::{Arc, Mutex},
+};
 
+use cranpose_core::CompositionLocalProvider;
+use cranpose_services::{local_uri_handler, UriHandler, UriHandlerError, UriHandlerRef};
 use cranpose_testing::{
     robot::{create_headless_robot_test, RobotTestRule, TestRenderer},
     ComposeTestRule,
@@ -97,7 +103,7 @@ fn frames() -> FrameSource {
             .take_while(|time| *time < 3000.0)
             .collect()
     };
-    let run = serde_json::json!({"scenarios": [{"scenario": "gauntlet", "legs": [
+    let run = serde_json::json!({"scenarios": [{"scenario": "gauntlet", "extras": "--ei tier 3", "legs": [
         {"subject": "egui", "start": "first", "frame_ms": steady(900.0, 1000.0 / 60.0),
          "samples": {"t_ms": [500, 1000, 2000, 3000], "ram_mb": [110, 120, 130, 150]}},
         {"subject": "egui", "start": "second", "frame_ms": steady(600.0, 1000.0 / 60.0)},
@@ -179,6 +185,7 @@ fn after(labels: &[String], marker: &str, text: &str) -> usize {
 #[test]
 fn the_latest_night_lists_each_scenario_of_the_start_chosen_with_both_builds() {
     let labels = labels();
+    assert!(shows(&labels, "Tier 3"));
     assert!(
         shows(
             &labels,
@@ -530,6 +537,49 @@ fn choose(robot: &mut RobotTestRule<TestRenderer>, name: &str, nth: usize) {
         .unwrap_or_else(|| panic!("no chip {nth} named {name}: {chips:?}"));
     assert!(robot.click_at(chip.x + chip.width / 2.0, chip.y + chip.height / 2.0));
     robot.wait_for_motion();
+}
+
+#[test]
+fn a_board_card_shows_the_firmware_size_for_its_selected_layout() {
+    let index = r#"{"runs":[{"kind":"esp32","device":"E32R35T","started_at":"2026-11-25",
+        "protocol":{"starts":["first","second"]},"subjects":[{"name":"lvgl","label":"LVGL"},
+        {"name":"slint","label":"Slint"}],"scenarios":{
+        "demo":{"legs":2,"app_bytes":{"lvgl":524288}},
+        "dashboard":{"legs":4,"app_bytes":{"lvgl":786432,"slint":1048576}}}}]}"#;
+    let mut robot = dashboard_of(index, FrameSource::Files(Rc::default()));
+    choose(&mut robot, "App size MiB", 0);
+    choose(&mut robot, "demo", 0);
+    let texts = robot.get_all_text();
+    assert!(shows(&texts, "0.50"), "{texts:?}");
+    assert!(
+        shows(&texts, "This run recorded no measurement for Slint"),
+        "{texts:?}"
+    );
+    choose(&mut robot, "dashboard", 0);
+    let texts = robot.get_all_text();
+    assert!(shows(&texts, "0.75") && shows(&texts, "1.00"), "{texts:?}");
+}
+
+#[test]
+fn a_framework_card_explains_an_unimplemented_layout() {
+    let index = r#"{"runs":[{"kind":"frameworks","device":"Apple M3 Pro","started_at":"2026-11-25",
+        "protocol":{"starts":["first","second"]},"subjects":[{"name":"compose","label":"Compose"},
+        {"name":"freya","label":"Freya"}],"scenarios":{"patchwork":{"legs":2,
+        "unimplemented":["freya"],"app_bytes":{"compose":1024}}}}]}"#;
+    let earlier = index
+        .replace("\"unimplemented\":[\"freya\"],", "")
+        .replace("\"protocol\":{", "\"protocol\":{\"max_other_cores\":0.5,");
+    for report in [index, earlier.as_str()] {
+        let mut robot = dashboard_of(report, FrameSource::Files(Rc::default()));
+        let texts = robot.get_all_text();
+        assert!(
+            shows(
+                &texts,
+                "The Freya benchmark app did not implement Patchwork in this run"
+            ),
+            "{texts:?}"
+        );
+    }
 }
 
 #[test]
@@ -956,4 +1006,229 @@ fn picked_bars_set_the_scale_of_the_chart_by_themselves() {
         assert!(texts.iter().any(|text| text == grid), "{grid}: {texts:?}");
     }
     assert!(!texts.iter().any(|text| text == "600"), "{texts:?}");
+}
+
+struct RecordingUriHandler(Arc<Mutex<Vec<String>>>);
+
+impl UriHandler for RecordingUriHandler {
+    fn open_uri(&self, uri: &str) -> Result<(), UriHandlerError> {
+        self.0.lock().expect("lock").push(uri.to_string());
+        Ok(())
+    }
+}
+
+#[test]
+fn the_performance_links_open_the_benchmark_tabs() {
+    use desktop_app::app::{combined_app_with_initial_tab, DemoTab, TEST_ACTIVE_TAB_STATE};
+    for (tab, label) in [
+        (DemoTab::Gauntlet, "Open Gauntlet"),
+        (DemoTab::StillWall, "Open Still Wall"),
+        (DemoTab::Patchwork, "Open Patchwork"),
+    ] {
+        // The compact header keeps the tab picker closed. Only the links in
+        // the Performance tab can open the requested benchmark here.
+        let mut robot = create_headless_robot_test(540, 900, || {
+            combined_app_with_initial_tab(Some(DemoTab::Performance));
+        });
+        let link = rect_of(&mut robot, label);
+        assert!(robot.click_at(link.x + link.width / 2.0, link.y + link.height / 2.0));
+        robot.wait_for_idle();
+        assert_eq!(
+            TEST_ACTIVE_TAB_STATE.with(|state| state.borrow().map(|tab| tab.get())),
+            Some(tab)
+        );
+        assert!(robot.get_all_text().iter().any(|label| label == "Tier"));
+    }
+}
+
+#[test]
+fn the_methodology_card_explains_external_measurement_and_toggles_details() {
+    let mut robot = dashboard();
+    let texts = robot.get_all_text();
+    assert!(
+        texts
+            .iter()
+            .any(|text| text == "How benchmarks are measured"),
+        "{texts:?}"
+    );
+    assert!(
+        texts.iter().any(
+            |text| text.contains("FrameCount.app") && text.contains("SurfaceFlinger --latency")
+        ),
+        "{texts:?}"
+    );
+    assert!(
+        texts.iter().any(|text| text == "Full methodology"),
+        "{texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|text| text == "FrameCount.swift"),
+        "details stay collapsed until opened: {texts:?}"
+    );
+
+    click_on(&mut robot, "More details");
+    let expanded = robot.get_all_text();
+    assert!(
+        expanded.iter().any(|text| text == "Hide details"),
+        "{expanded:?}"
+    );
+    for link in [
+        "desktop.py",
+        "FrameCount.swift",
+        "perf_window.sh",
+        "Benchmark README",
+    ] {
+        assert!(
+            expanded.iter().any(|text| text == link),
+            "missing {link}: {expanded:?}"
+        );
+    }
+
+    click_on(&mut robot, "Hide details");
+    let collapsed = robot.get_all_text();
+    assert!(
+        !collapsed.iter().any(|text| text == "FrameCount.swift"),
+        "{collapsed:?}"
+    );
+}
+
+#[test]
+fn methodology_links_open_the_markdown_doc_and_harness_sources() {
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let handler: UriHandlerRef = Rc::new(RecordingUriHandler(Arc::clone(&opened)));
+    let index = Rc::new(PerfIndex::parse(INDEX).expect("the fixture parses"));
+    let source = frames();
+    let mut robot = create_headless_robot_test(1100, 4000, move || {
+        CompositionLocalProvider(vec![local_uri_handler().provides(Rc::clone(&handler))], {
+            let index = Rc::clone(&index);
+            let source = source.clone();
+            move || PerformanceDashboard(Rc::clone(&index), None, source.clone())
+        });
+    });
+
+    click_on(&mut robot, "ESP32 benchmark layouts");
+    click_on(&mut robot, "Full methodology");
+    click_on(&mut robot, "More details");
+    click_on(&mut robot, "FrameCount.swift");
+
+    let uris = opened.lock().expect("lock").clone();
+    assert_eq!(
+        uris,
+        vec![
+            "https://samoylenkodmitry.github.io/cranpose-esp32/benchmarks/",
+            "https://github.com/samoylenkodmitry/Cranpose/blob/main/docs/performance_methodology.md",
+            "https://github.com/samoylenkodmitry/Cranpose/blob/main/benchmarks/compose-vs-cranpose/framecount/FrameCount.swift",
+        ]
+    );
+}
+
+fn disturbed_dashboard() -> RobotTestRule<TestRenderer> {
+    let index = serde_json::json!({"runs": [{
+        "file": "runs/disturbed.json",
+        "kind": "frameworks",
+        "started_at": "2026-11-27T02:54:00+00:00",
+        "device": "Apple M3 Pro",
+        "protocol": {"run_s": 10, "starts": ["first", "second"]},
+        "subjects": [
+            {"name": "cranpose", "label": "Cranpose"},
+            {"name": "egui", "label": "egui 0.36.2"},
+            {"name": "iced", "label": "iced 0.14.0"},
+            {"name": "compose", "label": "Compose Multiplatform 1.12.1"},
+            {"name": "avalonia", "label": "Avalonia 12.1.3"}
+        ],
+        "scenarios": {"gauntlet": {
+            "legs": 8,
+            "app_bytes": {
+                "cranpose": 4_194_304,
+                "egui": 5_242_880,
+                "iced": 6_291_456,
+                "compose": 7_340_032,
+                "avalonia": 8_388_608
+            },
+            "starts": {
+                "first": {
+                    "summary": {
+                        "cranpose": {"fps": 59.0},
+                        "egui": {"fps": 45.0},
+                        "iced": {"fps": 30.0},
+                        "compose": {"fps": 20.0},
+                        "avalonia": {}
+                    },
+                    "disturbed": ["cranpose"]
+                },
+                "second": {
+                    "summary": {
+                        "cranpose": {"fps": 56.0},
+                        "egui": {"fps": 46.0},
+                        "iced": {"fps": 31.0},
+                        "compose": {"fps": 21.0},
+                        "avalonia": {"fps": 18.0}
+                    }
+                }
+            }
+        }}
+    }]});
+    let steady = |first: f64, interval: f64| -> Vec<f64> {
+        (0..)
+            .map(|frame| first + f64::from(frame) * interval)
+            .take_while(|time| *time < 3000.0)
+            .collect()
+    };
+    let frames = serde_json::json!({"scenarios": [{"scenario": "gauntlet", "legs": [
+        {"subject": "cranpose", "start": "first", "frame_ms": steady(500.0, 20.0), "disturbed": true},
+        {"subject": "egui", "start": "first", "frame_ms": steady(500.0, 22.0)},
+        {"subject": "iced", "start": "first", "frame_ms": steady(500.0, 40.0), "disturbed": true},
+        {"subject": "iced", "start": "first", "frame_ms": steady(500.0, 33.3)},
+        {"subject": "compose", "start": "first", "frame_ms": steady(500.0, 50.0)},
+        {"subject": "avalonia", "start": "first", "frame_ms": steady(500.0, 60.0), "disturbed": true},
+        {"subject": "avalonia", "start": "first", "frame_ms": steady(500.0, 62.0), "disturbed": true}
+    ]}]});
+    let source = FrameSource::Files(Rc::new(BTreeMap::from([(
+        "runs/disturbed.json".to_string(),
+        frames.to_string(),
+    )])));
+    dashboard_of(&index.to_string(), source)
+}
+
+#[test]
+fn a_disturbed_subject_shows_its_mark_and_stays_out_of_the_ranking() {
+    let mut robot = disturbed_dashboard();
+    let shown = robot.get_all_text();
+    let card = "Frameworks · Apple M3 Pro · 2026-11-27";
+
+    let egui_at = after(&shown, card, "egui 0.36.2");
+    let iced_at = after(&shown, card, "iced 0.14.0");
+    let compose_at = after(&shown, card, "Compose Multiplatform 1.12.1");
+    let cranpose_at = after(&shown, card, "Cranpose");
+    let avalonia_at = after(&shown, card, "Avalonia 12.1.3");
+
+    assert!(
+        egui_at < iced_at && iced_at < compose_at,
+        "undisturbed subjects rank best first (including iced with one clean retry): {shown:?}"
+    );
+    assert!(
+        compose_at < cranpose_at && compose_at < avalonia_at,
+        "both disturbed subjects stay out of the ranking after undisturbed subjects: {shown:?}"
+    );
+    assert_eq!(
+        count(&shown, "disturbed"),
+        2,
+        "both index-marked cranpose and frames-marked avalonia show disturbed: {shown:?}"
+    );
+    assert!(
+        !shows(&shown, "59.0"),
+        "a disturbed subject's fps must not appear as a ranked bar: {shown:?}"
+    );
+    assert!(
+        !shows(&shown, "no frames"),
+        "a disturbed subject must show disturbed instead of no frames: {shown:?}"
+    );
+
+    // App size is unaffected by host CPU noise during a run.
+    choose(&mut robot, "App size MiB", 0);
+    let sizes = robot.get_all_text();
+    assert!(
+        shows(&sizes, "4.00"),
+        "cranpose app size still renders when its legs were disturbed: {sizes:?}"
+    );
 }

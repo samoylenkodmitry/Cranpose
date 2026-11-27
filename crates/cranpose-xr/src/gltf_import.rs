@@ -93,8 +93,10 @@ pub(crate) fn parse(bytes: &[u8], base: Option<&Path>) -> Result<GltfModel, Gltf
         clips,
         parts,
         bounds: ([0.0; 3], [0.0; 3]),
+        ray_start: None,
     };
     model.bounds = bounds_at_rest(&model)?;
+    model.ray_start = ray_start_at_rest(&model);
     Ok(model)
 }
 
@@ -486,6 +488,26 @@ fn bounds_at_rest(model: &GltfModel) -> Result<([f32; 3], [f32; 3]), GltfError> 
         return Err(GltfError::Empty);
     }
     Ok((low.to_array(), high.to_array()))
+}
+
+// The name of the node where a controller's ray starts, which Meta's runtime models carry at the
+// tip of the controller.
+const RAY_START: &str = "laser_begin";
+
+// Where the model's node `RAY_START` stands at rest, in the model's space, or `None` for a model
+// that has no such node.
+fn ray_start_at_rest(model: &GltfModel) -> Option<[f32; 3]> {
+    let node = model.names.iter().position(|name| {
+        name.as_deref()
+            .is_some_and(|name| name.ends_with(RAY_START))
+    })?;
+    let (mut locals, mut worlds) = (Vec::new(), Vec::new());
+    model.world_transforms([], &mut locals, &mut worlds);
+    Some(
+        worlds[node]
+            .transform_point(Vec3::new(0.0, 0.0, 0.0))
+            .to_array(),
+    )
 }
 
 #[cfg(test)]

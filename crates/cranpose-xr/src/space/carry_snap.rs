@@ -20,7 +20,7 @@ pub(super) fn snapped(space: &Space, entry: &Entry, step: &PanelMove) -> Pose {
     };
     let [width, height] = entry.slot.size().map(|dp| dp * METERS_PER_DP);
     let depth = match entry.slot.kind {
-        PanelKind::Volume { depth } => depth * METERS_PER_DP,
+        PanelKind::Volume { depth, .. } => depth * METERS_PER_DP,
         PanelKind::Content | PanelKind::Surface(_) => 0.0,
     };
     space

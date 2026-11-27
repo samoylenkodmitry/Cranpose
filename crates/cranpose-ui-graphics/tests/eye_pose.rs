@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use cranpose_ui_graphics::{
     Rect, Size,
-    space::{EyePose, EyeWorld, Mat4, Mesh, PITCH_LIMIT, Vec3},
+    space::{EyePose, EyeWorld, Mat4, Mesh, PITCH_LIMIT, Vec3, WorldSink},
 };
 
 fn close(a: Vec3, b: Vec3) -> bool {
@@ -158,5 +158,49 @@ fn an_eye_behind_a_doorway_walks_back_out_through_it() {
         (walked.position.z + 100.0).abs() < 0.5,
         "{:?}",
         walked.position
+    );
+}
+
+#[test]
+fn rebuilding_a_world_sink_allows_reading_current_from_the_callback() {
+    let sink = WorldSink::default();
+    let door = Mat4::from_axes(
+        Vec3::new(200.0, 0.0, 0.0),
+        Vec3::new(0.0, 200.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(-100.0, -100.0, 100.0),
+    );
+    let start = EyePose::standing(Vec3::ZERO, 0.0, 0.0);
+
+    sink.rebuild(|world| {
+        let outer = world.add_space(Arc::from([]), Mat4::IDENTITY);
+        let inner = world.add_space(Arc::from([7]), Mat4::IDENTITY);
+        world.add_doorway((outer, inner), door);
+    });
+
+    // Unique-owner rebuild must not hold the sink mutex while calling `build`.
+    let mut seen_during_rebuild = None;
+    sink.rebuild(|world| {
+        let previous = sink.current();
+        seen_during_rebuild = Some(previous.walk(&start, Vec3::new(0.0, 0.0, 200.0), 10.0));
+        let outer = world.add_space(Arc::from([]), Mat4::IDENTITY);
+        let inner = world.add_space(Arc::from([9]), Mat4::IDENTITY);
+        world.add_doorway((outer, inner), door);
+    });
+
+    assert_eq!(
+        &*seen_during_rebuild
+            .expect("rebuild callback read current")
+            .doorways,
+        &[7],
+        "current during rebuild sees the previous published world without deadlocking"
+    );
+    let updated = sink
+        .current()
+        .walk(&start, Vec3::new(0.0, 0.0, 200.0), 10.0);
+    assert_eq!(
+        &*updated.doorways,
+        &[9],
+        "current after rebuild sees the newly built world"
     );
 }

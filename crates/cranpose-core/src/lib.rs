@@ -46,6 +46,7 @@ mod computed_state;
 pub mod concurrency;
 mod debug_trace;
 mod disposable_effect;
+mod timer;
 pub use diagnostics::{DIAGNOSTICS, Diagnostic, Diagnostics};
 #[cfg(test)]
 pub(crate) use disposable_effect::DisposableEffectState;
@@ -295,7 +296,8 @@ impl std::fmt::Display for NodeId {
 pub(crate) type ScopeId = usize;
 pub(crate) type FrameCallbackId = u64;
 pub use composer_context::{
-    __current_composer, note_nested_slots_host, with_composer as with_current_composer,
+    __current_composer, note_nested_slots_host, try_with_composer,
+    with_composer as with_current_composer,
 };
 pub(crate) use state::MutableStateInner;
 pub use state::{

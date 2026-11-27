@@ -126,8 +126,7 @@ impl TextLayouter {
         layout.refill((input.min_width, input.max_width), |body| {
             body.faces = faces;
             let width = self.fill(input, resolver, shaped, body);
-            // A layout kept holds each part in storage of its own length.
-            body.shrink_to_fit();
+            body.give_back_room();
             (width, self.shaper.take_ink_reach())
         });
         layout
@@ -604,9 +603,11 @@ impl TextLayouter {
     ) {
         let mut top = LineDepth::default();
         let last = self.lines.len() - 1;
-        // Most lines are one run.
         layout.lines.reserve_exact(self.lines.len());
-        layout.runs.reserve_exact(self.lines.len());
+        // A run for each item of a line and one for the space it ends in.
+        let end = self.lines[last].text.end;
+        let items = self.items.partition_point(|item| item.text.start < end);
+        layout.runs.reserve_exact(items + 2 * last);
         for index in 0..=last {
             let range = self.lines[index].text.clone();
             let indent = indent(input, range.start);

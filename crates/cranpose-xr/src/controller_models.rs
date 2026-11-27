@@ -37,16 +37,26 @@ impl Default for Settings {
 #[derive(Clone, Copy, PartialEq)]
 pub struct ControllerModels {
     settings: MutableState<Settings>,
+    // Which hands show a model now, left then right
+    shown: MutableState<[bool; 2]>,
 }
 
 impl ControllerModels {
-    // The handle over `settings`, which the scene's states share.
+    // The handle over `settings` and `shown`, which the scene's states share.
     #[cfg_attr(
         not(any(test, headset)),
         expect(dead_code, reason = "the headset backend calls it")
     )]
-    pub(crate) fn over(settings: MutableState<Settings>) -> Self {
-        Self { settings }
+    pub(crate) fn over(settings: MutableState<Settings>, shown: MutableState<[bool; 2]>) -> Self {
+        Self { settings, shown }
+    }
+
+    /// Whether the headset draws `hand`'s model now: the app left it on and the runtime tracks a
+    /// controller in the hand. While any hand shows its model, the headset draws a 3D scene in each
+    /// frame, so other 3D content joins that scene at the cost of its own meshes. A composable that
+    /// calls it composes again when that changes.
+    pub fn is_shown(&self, hand: Hand) -> bool {
+        self.shown.get()[hand.index()]
     }
 
     /// The model of `hand`'s controller, which the app turns on or off.

@@ -383,10 +383,22 @@ impl GpuRenderer {
         Some(FrameDamagePlan::new(since, keeper, held).whole())
     }
 
+    // Keeps what `packet`, of a window of `viewport`, changes, for the
+    // targets that hold an earlier frame.
+    pub(super) fn note_damage(&mut self, packet: &FramePacket, viewport: (u32, u32)) {
+        self.frame_damages.note(packet.frame_id, &packet.damage);
+        self.swapchain.fold(
+            packet.frame_id,
+            &packet.damage,
+            viewport,
+            &self.frame_damages,
+        );
+    }
+
     // Whether `packet` draws what the surface shows, so it takes no image and
     // no present; the frame then closes as drawn for the renderer's warm-up.
     pub(crate) fn shows(&mut self, packet: &FramePacket, viewport: (u32, u32)) -> bool {
-        self.frame_damages.note(packet.frame_id, &packet.damage);
+        self.note_damage(packet, viewport);
         let frame = self.frame_window(packet, viewport);
         let shown = self.swapchain.shows(&frame, &self.frame_damages);
         if shown {

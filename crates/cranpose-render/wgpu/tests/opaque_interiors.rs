@@ -16,7 +16,7 @@ use cranpose_ui_graphics::{
     StrokeJoin, TileMode,
 };
 
-use crate::{shared_test_support, support};
+use crate::{shared_test_support, support, support::round_rect_fill as fill};
 
 const FRAME: u32 = 200;
 const NO_INTERIORS_FIRST: &str = "CRANPOSE_NO_INTERIORS_FIRST";
@@ -28,18 +28,6 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
         width,
         height,
     }
-}
-
-fn fill(area: Rect, color: Color, radius: f32, clip: Option<Rect>) -> RenderNode {
-    support::draw_node(
-        DrawPrimitive::RoundRect {
-            rect: area,
-            brush: Brush::solid(color),
-            radii: CornerRadii::uniform(radius),
-            stroke: None,
-        },
-        clip,
-    )
 }
 
 fn layer(alpha: f32, children: Vec<RenderNode>) -> RenderNode {
@@ -143,7 +131,7 @@ fn capture_both_ways(graph: impl Fn() -> LayerNode) -> Option<(Capture, Capture)
             pixels: frame.pixels,
             interior_draws: stats.shape_interior_draws,
             depth_passes: stats.depth_passes,
-            settled: support::pipelines_settled(&stats),
+            settled: stats.pipelines_settled(),
         }
     };
     let first = capture(&mut renderer);
@@ -189,7 +177,7 @@ fn capture_levels(renderer: &mut support::LockedRenderer) -> Capture {
         pixels: frame.pixels,
         interior_draws: stats.shape_interior_draws,
         depth_passes: stats.depth_passes,
-        settled: support::pipelines_settled(&stats),
+        settled: stats.pipelines_settled(),
     }
 }
 
@@ -362,7 +350,7 @@ fn layer_between_opaque_fills(degrees: f32) -> LayerNode {
         ),
         RenderNode::Layer(Box::new(shared_test_support::layer_node(
             frame,
-            turned_about_centre(frame, degrees),
+            support::turned_about_centre(frame, degrees),
             GraphicsLayer {
                 alpha: 0.5,
                 ..GraphicsLayer::default()
@@ -498,25 +486,6 @@ fn opaque_circles_lay_their_inset_squares_down_and_draw_the_same_pixels() {
     assert_same_pixels(&with.pixels, &without.pixels);
 }
 
-/// A transform turning `area` by `degrees` about its centre.
-fn turned_about_centre(area: Rect, degrees: f32) -> ProjectiveTransform {
-    let (sin, cos) = degrees.to_radians().sin_cos();
-    let (cx, cy) = (area.x + area.width / 2.0, area.y + area.height / 2.0);
-    let turn = |x: f32, y: f32| {
-        let (dx, dy) = (x - cx, y - cy);
-        [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos]
-    };
-    ProjectiveTransform::from_rect_to_quad(
-        area,
-        [
-            turn(area.x, area.y),
-            turn(area.x + area.width, area.y),
-            turn(area.x, area.y + area.height),
-            turn(area.x + area.width, area.y + area.height),
-        ],
-    )
-}
-
 /// Levels nested like replies in a thread, each turned a little against the
 /// one around it, so every level draws in place under a transform.
 fn turned_levels(level: usize) -> RenderNode {
@@ -544,7 +513,7 @@ fn turned_levels(level: usize) -> RenderNode {
     let degrees = if level.is_multiple_of(2) { 2.5 } else { -1.5 };
     RenderNode::Layer(Box::new(shared_test_support::layer_node(
         frame,
-        turned_about_centre(frame, degrees),
+        support::turned_about_centre(frame, degrees),
         GraphicsLayer::default(),
         children,
     )))
@@ -596,7 +565,7 @@ fn alternating_cells(turned: bool) -> LayerNode {
             }
             RenderNode::Layer(Box::new(shared_test_support::layer_node(
                 rect(0.0, 0.0, FRAME as f32, FRAME as f32),
-                turned_about_centre(area, 3.0),
+                support::turned_about_centre(area, 3.0),
                 GraphicsLayer::default(),
                 vec![cell],
             )))

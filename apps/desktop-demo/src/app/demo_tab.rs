@@ -43,6 +43,7 @@ pub enum DemoTab {
     Tv,
     Music,
     Explainer,
+    VideoPlayground,
 }
 
 pub const DEFAULT_INITIAL_TAB: DemoTab = DemoTab::Guide;
@@ -79,7 +80,7 @@ pub struct DemoTabInfo {
     pub startup_aliases: &'static [&'static str],
 }
 
-pub const DEMO_TAB_INFO: [DemoTabInfo; 40] = [
+pub const DEMO_TAB_INFO: [DemoTabInfo; 41] = [
     DemoTabInfo {
         tab: DemoTab::Guide,
         label: "Cranpose Guide",
@@ -360,6 +361,13 @@ pub const DEMO_TAB_INFO: [DemoTabInfo; 40] = [
         source_path: "apps/desktop-demo/src/app/explainer/tab.rs",
         startup_aliases: &["silk", "htmlincanvas"],
     },
+    DemoTabInfo {
+        tab: DemoTab::VideoPlayground,
+        label: "Video",
+        slug: "video",
+        source_path: "apps/desktop-demo/src/app/video_playground/tab.rs",
+        startup_aliases: &["videoplayground", "videowall", "player"],
+    },
 ];
 
 impl DemoTab {
@@ -427,7 +435,7 @@ pub fn startup_tab_from_args(args: impl IntoIterator<Item = String>) -> DemoTab 
         .unwrap_or(DEFAULT_INITIAL_TAB)
 }
 
-pub const DEMO_TABS: [DemoTab; 40] = [
+pub const DEMO_TABS: [DemoTab; 41] = [
     DemoTab::Guide,
     DemoTab::Performance,
     DemoTab::Liquid,
@@ -440,6 +448,7 @@ pub const DEMO_TABS: [DemoTab; 40] = [
     DemoTab::StillWall,
     DemoTab::Patchwork,
     DemoTab::Counter,
+    DemoTab::VideoPlayground,
     DemoTab::Explainer,
     DemoTab::CompositionLocal,
     DemoTab::Async,

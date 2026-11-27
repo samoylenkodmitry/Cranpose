@@ -379,10 +379,13 @@ fn frames_carry_only_what_changed() {
         "an unchanged surface sends nothing"
     );
 
+    // The pointer leaves the square after the click, so the square shows its own color and no
+    // hover over it
     for event in [
         SurfaceEvent::PointerMove { x: 15.0, y: 15.0 },
         SurfaceEvent::PointerDown { x: 15.0, y: 15.0 },
         SurfaceEvent::PointerUp { x: 15.0, y: 15.0 },
+        SurfaceEvent::PointerMove { x: 50.0, y: 40.0 },
     ] {
         host.handle(surface(PRIMARY_SURFACE, event));
     }

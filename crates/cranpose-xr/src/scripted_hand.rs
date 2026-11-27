@@ -3,16 +3,20 @@
 use std::{sync::OnceLock, time::Duration};
 
 use crate::{
-    Hand, HandAim, HandState, Pinch, Pose, TrackingState, XrFrame,
+    Hand, HandAim, HandJoint, HandJointType, HandState, Pinch, Pose, TrackingState, XrFrame,
     key_layout::{self, KeyKind, PlacedKey},
     keyboard_state::KeyboardState,
     pose::turn_of_axes,
     space::field_dock::{below, point_on},
-    vector::{cross, dot, normalize, sub},
+    vector::{cross, dot, lerp, normalize, sub},
 };
 
 // A pinch above this counts as made, as the runtime's own flag does.
 const PINCHING: f32 = 0.8;
+// The radius of a scripted palm joint, in meters: about an adult's palm
+const PALM_RADIUS: f32 = 0.04;
+// The radius of a scripted index fingertip, in meters: about an adult's finger at its tip
+const FINGERTIP_RADIUS: f32 = 0.007;
 
 /// How the index finger of a [`ScriptedHand`] pinches over time, in a cycle that repeats. The
 /// strength is 0 while the hand rests, rises to 1 while the fingers close, stays at 1 while they
@@ -91,6 +95,9 @@ fn share(part: Duration, whole: Duration) -> f32 {
 /// while the fingers are open, and starts again after the last. The script begins at the first
 /// frame that plays it.
 ///
+/// A script made with [`touching`](Self::touching) moves the tip of the index finger in steps and
+/// never pinches, so the hand presses the panels by direct touch alone.
+///
 /// It needs `Use::hand_tracking()` in the app's build, as a real hand does, and the crate's
 /// `scripted-hand` feature. Jetpack XR has no such API.
 #[derive(Clone, Debug, PartialEq)]
@@ -99,11 +106,70 @@ pub struct ScriptedHand {
     // The aim pose of each cycle, in turn
     aims: Vec<Pose>,
     cycle: PinchCycle,
+    // The palm's pose, when the script holds the hand open with its palm there
+    palm: Option<Pose>,
+    // The path of the index fingertip, when the script moves it
+    fingertip: Option<FingertipPath>,
     // The time of the first frame that played the script, on the clock of the frames
     started: OnceLock<Duration>,
 }
 
 impl ScriptedHand {
+    /// The script with the hand's palm joint at `palm`, valid and tracked, as an open hand holds it.
+    /// Content that follows the palm ([`FollowTarget::Hand`](crate::FollowTarget::Hand)) then
+    /// stands there. The pose has the OpenXR axes of a hand joint: -z toward the finger tips and +y
+    /// out of the back of the hand. The other joints stay at rest.
+    #[must_use]
+    pub fn with_palm(mut self, palm: Pose) -> Self {
+        self.palm = Some(palm);
+        self
+    }
+
+    /// The hand `hand` with its aim pose at `from` in meters, pointing at the place `at`, and the
+    /// tip of its index finger at `fingertip`, valid and tracked. Its fingers never pinch: the hand
+    /// presses where its fingertip goes into a panel's face, by the direct touch of
+    /// [`PointerSettings::direct_touch`](crate::PointerSettings::direct_touch). The steps of
+    /// [`moving_fingertip_to`](Self::moving_fingertip_to) and
+    /// [`holding_fingertip`](Self::holding_fingertip) move the fingertip, and it holds the end of
+    /// the last step. The fingertip's joint turns as the aim pose does.
+    pub fn touching(hand: Hand, from: [f32; 3], at: [f32; 3], fingertip: [f32; 3]) -> Self {
+        let open = PinchCycle {
+            rest: Duration::ZERO,
+            closing: Duration::ZERO,
+            held: Duration::ZERO,
+            opening: Duration::ZERO,
+        };
+        Self {
+            fingertip: Some(FingertipPath::at(fingertip)),
+            ..Self::pointing(hand, from, at, open)
+        }
+    }
+
+    /// The script with a step that lasts `duration`, in which the tip of the index finger moves in
+    /// a straight line to `fingertip`, in meters. A script that had no fingertip gets one that
+    /// starts at `fingertip`.
+    #[must_use]
+    pub fn moving_fingertip_to(mut self, duration: Duration, fingertip: [f32; 3]) -> Self {
+        self.fingertip
+            .get_or_insert_with(|| FingertipPath::at(fingertip))
+            .steps
+            .push(FingertipStep {
+                duration,
+                to: fingertip,
+            });
+        self
+    }
+
+    /// The script with a step that lasts `duration` in which the tip of the index finger stays
+    /// where it is. A script with no fingertip stays as it is.
+    #[must_use]
+    pub fn holding_fingertip(self, duration: Duration) -> Self {
+        let Some(end) = self.fingertip.as_ref().map(FingertipPath::end) else {
+            return self;
+        };
+        self.moving_fingertip_to(duration, end)
+    }
+
     /// The hand `hand` with its aim pose at `from` in meters, pointing at the place `at`.
     pub fn pointing(hand: Hand, from: [f32; 3], at: [f32; 3], cycle: PinchCycle) -> Self {
         Self::visiting(hand, from, [at], cycle)
@@ -145,6 +211,8 @@ impl ScriptedHand {
             hand,
             aims: places.into_iter().map(|at| aim_pose(from, at)).collect(),
             cycle,
+            palm: None,
+            fingertip: None,
             started: OnceLock::new(),
         }
     }
@@ -155,8 +223,29 @@ impl ScriptedHand {
         let (cycles, _) = self.cycle.position(time);
         let index = usize::try_from(cycles).map_or(0, |cycles| cycles % self.aims.len());
         let aim = self.aims[index];
+        let mut joints = [HandJoint::default(); HandJointType::COUNT];
+        if let Some(pose) = self.palm {
+            joints[HandJointType::Palm.index()] = HandJoint {
+                pose,
+                radius: PALM_RADIUS,
+                valid: true,
+                tracked: true,
+            };
+        }
+        if let Some(path) = &self.fingertip {
+            joints[HandJointType::IndexTip.index()] = HandJoint {
+                pose: Pose {
+                    position: path.at_time(time),
+                    orientation: aim.orientation,
+                },
+                radius: FINGERTIP_RADIUS,
+                valid: true,
+                tracked: true,
+            };
+        }
         HandState {
             tracking_state: TrackingState::Tracking,
+            joints,
             aim: Some(HandAim {
                 pose: aim,
                 index: Pinch {
@@ -165,8 +254,55 @@ impl ScriptedHand {
                 },
                 ..HandAim::default()
             }),
-            ..HandState::default()
         }
+    }
+}
+
+// Where a scripted fingertip starts and the steps that move it, in meters.
+#[derive(Clone, Debug, PartialEq)]
+struct FingertipPath {
+    start: [f32; 3],
+    steps: Vec<FingertipStep>,
+}
+
+// One step of a scripted fingertip: how long it lasts and where the fingertip ends.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct FingertipStep {
+    duration: Duration,
+    to: [f32; 3],
+}
+
+impl FingertipPath {
+    fn at(start: [f32; 3]) -> Self {
+        Self {
+            start,
+            steps: Vec::new(),
+        }
+    }
+
+    // Where the fingertip stands after the last step.
+    fn end(&self) -> [f32; 3] {
+        self.steps.last().map_or(self.start, |step| step.to)
+    }
+
+    // Where the fingertip stands at `time` after the script's start. After the last step it holds
+    // that step's end.
+    fn at_time(&self, time: Duration) -> [f32; 3] {
+        let mut from = self.start;
+        let mut passed = Duration::ZERO;
+        for step in &self.steps {
+            let into = time.saturating_sub(passed);
+            if into < step.duration {
+                return lerp(
+                    from,
+                    step.to,
+                    into.as_secs_f32() / step.duration.as_secs_f32(),
+                );
+            }
+            from = step.to;
+            passed += step.duration;
+        }
+        from
     }
 }
 

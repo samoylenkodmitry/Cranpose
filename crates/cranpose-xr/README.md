@@ -27,6 +27,22 @@ pixels once at the display's resolution, so its text stays sharp. A dp is a mill
 room. Each controller points at the panels, and its trigger presses. Both controllers work at once.
 Outside a headset the panels draw flat, side by side.
 
+A press never becomes a move by accident:
+- A pull of the trigger turns the controller. A press therefore takes what the ray pointed at just
+  before the pull, a handle or a place on a panel, so a pull on a button just above a handle presses
+  the button.
+- A press holds its point while the hand shakes, and a click goes through. A press that the ray turns
+  off its control ends there: the control stops showing it pressed, and the release clicks nothing.
+- A pull on a handle moves nothing. The panel moves only once the hand moves it more than 24 dp, as
+  Compose's touch slop holds a drag back. It then takes the whole move since the pull.
+- The controller plays `PointerSettings::press_vibration` when a press takes, when a click ends and
+  when a handle's panel starts and stops moving. A press that turned into a drag ends with no tick.
+- Each press logs how far its ray turned and how far its point moved on the panel, so a device run
+  measures the drift of real presses.
+
+Every Cranpose `clickable` shows its `Indication` while a ray rests on it and while one presses it,
+as it does for a mouse.
+
 A runtime takes a limited number of layers in a frame: a Quest 3 takes 16. When a frame needs
 more, the projection layer of the 3D content draws some pictures in place of their own layers, so
 every panel still shows. The handles go there first, then the panels of the lowest rank, whose text
@@ -37,7 +53,8 @@ limit costs nothing more.
 `docs/xr_architecture.md` ("The layer limit") has the details.
 
 A panel or a surface with `SubspaceModifier::movable()` has a handle under it: a sphere that shows
-from any side. A controller grabs it from any side and carries the panel.
+from any side. A controller grabs it from any side and carries the panel. The sphere grows by a third
+while a ray points at it, and to 1.6 times its size while a trigger presses it.
 `movable_with(MovePolicy::system(...))` calls back with a `SpatialMoveEvent` for the grab
 (`Start`), each change of the pose (`Moving`) and the release (`End`). The event's pose is in
 meters, relative to the subspace's origin. An app that saves it places the panel there at its next
@@ -120,6 +137,13 @@ the user. While the runtime does not track the controller, the subspace's panels
 take no hits. A controller's own ray ignores the panels that ride on it. The other hand's ray
 presses them and carries them by their handle. A carry sets the panel's offset from the
 controller, and the panel follows the hand at that offset after it.
+
+`FollowTarget::Hand(hand, joint, mode)` follows a joint of a hand that the cameras track, such as
+`HandJointType::Palm` for a ball on the palm. Jetpack XR has no hand target: its ARCore `Hand` gives
+the joints' poses. The origin has the joint's pose with OpenXR's axes of a hand joint: -z toward the
+finger tips and +y out of the back of the hand. While the hand is not tracked or the joint has no
+valid pose, the panels do not show and take no hits. The hand's own pointer ignores them, so the
+other hand's pinch or fingertip presses them. The app needs `Use::hand_tracking()`.
 
 With `FollowMode::Tight(TrackedDimensions::All)` a panel holds its place against the controller as
 the hand tilts and rolls. The headset hands the panel's layers to the compositor in the space of
@@ -343,6 +367,12 @@ The hand shows a plain model that Cranpose builds in code in three cases: the ru
 plain model has a handle, a head, a thumbstick, two buttons, a trigger and a tip that marks the
 front. It has no texture and no asset file. It uses the axes of the runtime's models around the
 grip pose: x to the right, y up and z toward the user.
+
+The ray of a controller whose loaded model has a node named `laser_begin` starts at that node, as
+Meta's runtime models mark the tip of the controller. The ray keeps the line and the direction of
+the runtime's aim pose, so it meets the panels where it did. Only its visible start moves: on a
+Quest 3 the aim pose lies 63.7 mm from that node. The start stays while the model hides, so it does
+not jump when the model shows.
 
 The runtime's model moves its parts with the controller's inputs: the trigger, the grip, the two face
 buttons, the menu button and the thumbstick. A Meta Quest's file is one mesh with a skin, and each
@@ -718,6 +748,30 @@ as they take a controller, because the pointer of each hand serves both.
   press ends with a release. The new input presses after its trigger went up.
 - A hand holds no motor, so a vibration that the app asks for on that side is dropped.
 
+A tracked hand also presses by direct touch, with no pinch. The tip of its index finger hovers over
+a panel when it comes within 6 cm in front of the panel's face, and presses the face where it touches
+it. Every Cranpose `clickable` shows its hover and press for the touch as for a ray: the buttons and
+switches of flat panels, the objects of a `SpatialHologram` and a `SpatialTray`, a `SpatialGem`, the
+panels that follow the other hand, and a `SpatialExternalSurface`, which gets the touch as a press of
+the primary button at the touched point. The cursor's dot shows where the finger will touch and turns blue while it
+presses.
+
+- The press holds its point while the finger shakes, drags once the finger slides 12 dp along the
+  face, and ends when the finger comes back 5 mm out of the face or leaves its edges.
+- Only a finger that comes to a face from the front presses. A finger that pushes through a panel
+  presses nothing behind it, and a finger that the cameras first see behind a face presses nothing.
+- While the finger is near a panel, that hand's beam hides, its handles do not light, and its pinch
+  presses nothing. A pinch that closed then counts as held from before. The ray and the pinch work
+  again once the finger is away.
+- One input holds a press until it ends: a ray's press or carry keeps the finger from touching, and a
+  touch keeps the pinch from pressing. The other hand keeps its own pointer.
+- A curved panel takes the touch on its curve. A volume takes no touch: its meshes take the ray. A
+  controller presses only with its ray.
+- The finger touches only while the cameras see its tip. A tip that the runtime only estimates
+  touches nothing.
+- `PointerSettings::set_direct_touch(false)` turns the touch off. Android XR gives every panel its
+  direct touch, and Jetpack XR has no such setting.
+
 `XrFrame::pointer(Hand)` gives the app the `InputSource` that points for a side, `Controller` or
 `Hands`, or `None`. `InputSource` is Jetpack XR's `InputEvent.Source`. Jetpack XR tags each input event
 with its source. Cranpose tags the frame instead, and the pointer's events reach the composition as
@@ -727,7 +781,11 @@ A build that turns on the `scripted-hand` feature can play a hand in place of th
 check where no hand can be tracked, such as an emulator. `script_hand(ScriptedHand::pointing(hand,
 from, at, PinchCycle::default()))` installs a hand whose aim pose points at a place in the room and
 whose index finger pinches in a cycle. The frame holds it as a tracked hand, so the pointer treats
-it as the cameras' hand. A script for each hand plays at once. The feature is off by default.
+it as the cameras' hand. `with_palm(pose)` also holds its palm joint at a pose, for content that
+follows the palm. `ScriptedHand::touching(hand, from, at, fingertip)` holds the tip of the index
+finger at a place and never pinches, and `moving_fingertip_to(duration, place)` and
+`holding_fingertip(duration)` move the tip in steps, for a check of the direct touch. A script for
+each hand plays at once. The feature is off by default.
 
 ## One pointer for each hand
 

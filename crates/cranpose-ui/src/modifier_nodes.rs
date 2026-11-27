@@ -14,7 +14,7 @@ use cranpose_ui_graphics::{ColorFilter, DrawScope, PointerIcon};
 
 mod alignment;
 mod background;
-mod clickable;
+pub(crate) mod clickable;
 mod clip;
 mod fill;
 mod intrinsic_size;

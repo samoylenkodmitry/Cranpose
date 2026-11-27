@@ -263,10 +263,14 @@ pub(crate) fn install_activity(app: android_activity::AndroidApp) {
         log::error!("cranpose: the activity started before its process");
         return;
     };
+    #[cfg(any(feature = "media-backend", feature = "video"))]
+    super::media_session::set_activity(app.clone());
     set_host_controller(Arc::new(AndroidHost {
         activity: Some(app),
         ..process.clone()
     }));
+    #[cfg(feature = "video")]
+    crate::install_player();
 }
 
 #[unsafe(no_mangle)]

@@ -17,7 +17,7 @@ use cranpose_core::{CompositionLocalProvider, LaunchedEffect, rememberMutableSta
 use super::*;
 use crate::{
     FieldOfView, Pose, RenderViewpoint, SpatialVolume, Subspace, SubspaceModifier,
-    eye_camera::{EyeCamera, FirstRow},
+    eye_camera::{EyeCamera, FirstRow, ImageRegion},
     space::{Space, local_space},
     volume_pass::{EyeImage, VolumePass},
 };
@@ -44,6 +44,9 @@ mod controllers;
 
 #[path = "projected_pass_tests.rs"]
 mod projected;
+
+#[path = "spatial_tray_tests.rs"]
+mod tray;
 
 // What the host of a test holds: the GPU, the guest view that runs the content, the space and the
 // counts of what composed.
@@ -94,8 +97,20 @@ fn headset() -> Headset {
     }))
 }
 
-// A headset whose subspace holds what `volume` composes.
+// A headset whose subspace holds what `volume` composes, with a state that advances each frame.
 fn headset_of(volume: VolumeComposer) -> Headset {
+    headset_with(volume, Ticks::EachFrame)
+}
+
+// Whether a headset's composition keeps a state that advances each frame, and so asks for every
+// frame, or asks only for the frames that its content asks for.
+#[derive(Clone, Copy, PartialEq)]
+enum Ticks {
+    EachFrame,
+    None,
+}
+
+fn headset_with(volume: VolumeComposer, ticking: Ticks) -> Headset {
     let gpu = gpu();
     let probes = Probes {
         compositions: Rc::new(Cell::new(0)),
@@ -116,12 +131,15 @@ fn headset_of(volume: VolumeComposer) -> Headset {
             let shown = rememberMutableStateOf(|| true);
             keep.replace(Some((space.clone(), shown)));
             let ticks = rememberMutableStateOf(|| 0_u32);
-            LaunchedEffect((), async move |scope| {
-                loop {
-                    scope.with_frame_nanos(|now| now).await;
-                    ticks.update(|ticks| *ticks += 1);
-                }
-            });
+            // A headset with no ticks asks for no frame of its own
+            if ticking == Ticks::EachFrame {
+                LaunchedEffect((), async move |scope| {
+                    loop {
+                        scope.with_frame_nanos(|now| now).await;
+                        ticks.update(|ticks| *ticks += 1);
+                    }
+                });
+            }
             let (probes, volume, host) = (probes.clone(), Rc::clone(&volume), space.clone());
             CompositionLocalProvider([local_space().provides(Some(space))], move || {
                 let (probes, volume) = (probes.clone(), Rc::clone(&volume));
@@ -215,12 +233,16 @@ struct Eye {
 
 impl Eye {
     fn new(gpu: &GpuContext) -> Self {
+        Self::sized(gpu, (EYE, EYE))
+    }
+
+    fn sized(gpu: &GpuContext, (width, height): (u32, u32)) -> Self {
         let texture = |format, usage| {
             gpu.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("eye"),
                 size: wgpu::Extent3d {
-                    width: EYE,
-                    height: EYE,
+                    width,
+                    height,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -256,37 +278,64 @@ impl Eye {
     }
 }
 
-// Draws the scene for `view` into `eye`, again until pipelines that were still compiling have
-// landed and something shows. Returns whether the pass found a scene.
+// Draws the scene for `view` into `eye`, again until a frame drawn from `view` itself took its own
+// pipeline for every draw. Returns whether the pass found a scene.
 fn draw(headset: &mut Headset, pass: &mut VolumePass, view: &RenderViewpoint, eye: &Eye) -> bool {
+    draw_through(headset, pass, (view, eye), |moved| {
+        EyeCamera::of(moved, (EYE, EYE), FirstRow::Top).expect("a camera")
+    })
+}
+
+// Draws the scene for `view` into `eye` through the camera that `camera` makes of the view, as
+// `draw` does.
+fn draw_through(
+    headset: &mut Headset,
+    pass: &mut VolumePass,
+    (view, eye): (&RenderViewpoint, &Eye),
+    camera: impl Fn(&RenderViewpoint) -> EyeCamera,
+) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let mut attempt = 0.0_f32;
+    let mut attempt = 0_u32;
     loop {
-        // A head is never still, and a frame that changes nothing draws nothing: each attempt
-        // moves the eye by a hair
-        attempt += 1.0;
+        // A head is never still, and a frame that changes nothing draws nothing into a new image:
+        // the odd frames move the eye by a hair, and an even one draws from `view` after a moved
+        // one, whatever frame the last call ended on.
+        attempt = attempt.wrapping_add(1);
+        let at_view = attempt & 1 == 0;
         let mut moved = *view;
-        moved.pose.position[1] += attempt * 1e-5;
-        let camera = EyeCamera::of(&moved, (EYE, EYE), FirstRow::Top).expect("a camera");
+        moved.pose.position[1] += if at_view { 0.0 } else { 1e-5 };
+        let camera = camera(&moved);
         let drew = pass
             .draw(&mut headset.guest, &headset.space, &camera, &eye.image())
             .expect("a frame");
-        if !drew
-            || shows_something(&headset.gpu, &eye.color)
-            || std::time::Instant::now() > deadline
-        {
+        if !drew || (at_view && pipelines_settled(&mut headset.guest, pass)) {
             return drew;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the scene's pipelines never landed"
+        );
         std::thread::yield_now();
     }
 }
 
+// Whether the last frame of the scene's window took its own pipeline for every draw, as its
+// renderer counts it.
+fn pipelines_settled(guest: &mut GuestView, pass: &VolumePass) -> bool {
+    pass.root()
+        .and_then(|root| {
+            guest
+                .shell()
+                .surface(cranpose_app_shell::RootId::Window(root))
+        })
+        .and_then(|mut surface| surface.renderer().last_frame_stats())
+        .is_some_and(|stats| stats.pipelines_settled())
+}
+
+// Whether any pixel of `color` holds a colour or covers what lies behind it: a surface that glows
+// adds its colour with no alpha.
 fn shows_something(gpu: &GpuContext, color: &wgpu::Texture) -> bool {
-    read(gpu, color, 4)
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .any(|texel| texel[3] != 0)
+    read(gpu, color, 4).iter().any(|&channel| channel != 0)
 }
 
 // The box of the pixels that the scene drew, as the first and last column and row.
@@ -321,10 +370,11 @@ fn first_red_column(gpu: &GpuContext, color: &wgpu::Texture) -> Option<u32> {
 
 // The bytes of `texture` row by row, `texel` bytes to the pixel, without the padding of a row.
 fn read(gpu: &GpuContext, texture: &wgpu::Texture, texel: u32) -> Vec<u8> {
-    let padded = (EYE * texel).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let padded = (texture.width() * texel).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let (width, height) = (texture.width(), texture.height());
     let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("readback"),
-        size: u64::from(padded * EYE),
+        size: u64::from(padded * height),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
@@ -334,11 +384,11 @@ fn read(gpu: &GpuContext, texture: &wgpu::Texture, texel: u32) -> Vec<u8> {
     let layout = wgpu::TexelCopyBufferLayout {
         offset: 0,
         bytes_per_row: Some(padded),
-        rows_per_image: Some(EYE),
+        rows_per_image: Some(height),
     };
     let extent = wgpu::Extent3d {
-        width: EYE,
-        height: EYE,
+        width,
+        height,
         depth_or_array_layers: 1,
     };
     copy.copy_texture_to_buffer(
@@ -357,8 +407,8 @@ fn read(gpu: &GpuContext, texture: &wgpu::Texture, texel: u32) -> Vec<u8> {
         .poll(wgpu::PollType::wait_indefinitely())
         .expect("poll");
     let bytes = staging.slice(..).get_mapped_range().expect("mapped range");
-    let used = (EYE * texel) as usize;
-    let mut rows = Vec::with_capacity(used * EYE as usize);
+    let used = (width * texel) as usize;
+    let mut rows = Vec::with_capacity(used * height as usize);
     for row in bytes.chunks_exact(padded as usize) {
         rows.extend_from_slice(&row[..used]);
     }
@@ -498,6 +548,53 @@ fn one_composition_draws_the_volumes_for_each_eye_from_that_eyes_view_with_depth
         at(EYE / 2, EYE / 2)
     );
     assert!((at(2, 2) - 1.0).abs() < 1e-6);
+}
+
+#[test]
+fn a_region_of_the_view_draws_what_that_part_of_the_whole_view_shows() {
+    let mut headset = headset();
+    let mut pass = VolumePass::default();
+    let view = eye(0.0);
+    let whole = Eye::new(&headset.gpu);
+    assert!(draw(&mut headset, &mut pass, &view, &whole));
+    // A smaller image of the part of the view that starts 32 columns and 40 rows into the whole
+    // view's image, at the same pixels for a unit of tangent: the quad lies inside it
+    let full = ImageRegion::whole(&view.field_of_view, (EYE, EYE)).expect("a region");
+    let (columns, rows) = (32_u32, 40_u32);
+    let region = ImageRegion {
+        left: full.left + columns as f32 / full.focal_length,
+        top: full.top - rows as f32 / full.focal_length,
+        focal_length: full.focal_length,
+    };
+    let size = (64, 48);
+    let part = Eye::sized(&headset.gpu, size);
+    assert!(draw_through(
+        &mut headset,
+        &mut pass,
+        (&view, &part),
+        |moved| { EyeCamera::of_region(moved, (region, size), (EYE, EYE), FirstRow::Top) }
+    ));
+    let whole_pixels = read(&headset.gpu, &whole.color, 4);
+    let part_pixels = read(&headset.gpu, &part.color, 4);
+    let mut red = 0;
+    for y in 0..size.1 {
+        for x in 0..size.0 {
+            let shown = &part_pixels[((y * size.0 + x) * 4) as usize..][..4];
+            let expected = &whole_pixels[(((y + rows) * EYE + x + columns) * 4) as usize..][..4];
+            assert!(
+                shown
+                    .iter()
+                    .zip(expected)
+                    .all(|(shown, expected)| shown.abs_diff(*expected) <= 2),
+                "pixel ({x}, {y}) of the part is {shown:?}, the whole view's is {expected:?}"
+            );
+            red += usize::from(shown[0] > 200);
+        }
+    }
+    assert!(
+        red > 1000,
+        "the part shows the whole quad: {red} red pixels"
+    );
 }
 
 #[test]

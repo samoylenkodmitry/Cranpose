@@ -2,8 +2,9 @@ use cranpose::PointerButton;
 
 use super::*;
 use crate::{
-    Controller, PointerMapping, Ray,
+    Controller, Ray,
     pointer_aim::pointer_aim,
+    pointer_settings::PointerChoice,
     pointers::Pointers,
     space::{Mobility, PanelKind, PanelSlot, Ride, Shape},
     surface_input::Gesture,
@@ -171,7 +172,7 @@ fn a_scripted_pinch_moves_to_the_place_presses_once_and_releases_once() {
             [None, aim],
             time,
             (&[PANEL], &PickMeshes::default()),
-            (PointerMapping::default(), true),
+            PointerChoice::default(),
         );
         gestures.extend(pointer.atlas().iter().map(|event| (frame, event.gesture)));
     }
@@ -200,4 +201,60 @@ fn a_scripted_pinch_moves_to_the_place_presses_once_and_releases_once() {
     // The strength passes 0.6 at 2120 ms and falls below 0.4 at 2920 ms
     assert_eq!(presses, [213], "{gestures:?}");
     assert_eq!(releases, [293], "{gestures:?}");
+}
+
+#[test]
+fn a_script_with_a_palm_holds_that_joint_valid_and_tracked_and_the_others_at_rest() {
+    let palm = Pose::at([0.1, -0.3, -0.35]);
+    let open = script().with_palm(palm);
+    let mut frame = XrFrame::default();
+    play(&open, &mut frame);
+    let joint = frame.right_hand.joint(HandJointType::Palm);
+    assert!(joint.valid && joint.tracked && joint.radius > 0.0);
+    assert_eq!(joint.pose, palm);
+    assert!(!frame.right_hand.joint(HandJointType::Wrist).valid);
+    // A script without a palm leaves every joint at rest
+    let mut plain = XrFrame::default();
+    play(&script(), &mut plain);
+    assert!(!plain.right_hand.joint(HandJointType::Palm).valid);
+}
+
+#[test]
+fn a_touching_script_moves_its_fingertip_in_steps_and_never_pinches() {
+    let (start, inside) = ([0.0, 0.0, -0.4], [0.0, 0.0, -0.5]);
+    let touching = ScriptedHand::touching(Hand::Right, [0.1, -0.2, -0.2], [0.0, 0.0, -1.0], start)
+        .holding_fingertip(millis(100))
+        .moving_fingertip_to(millis(200), inside)
+        .holding_fingertip(millis(100));
+    let tip_at = |at: u64| {
+        let hand = touching.state_at(millis(at));
+        let tip = *hand.joint(HandJointType::IndexTip);
+        assert!(tip.valid && tip.tracked && tip.radius > 0.0, "{tip:?}");
+        assert_eq!(
+            hand.aim.expect("a touching hand has an aim").index.strength,
+            0.0
+        );
+        tip.pose.position
+    };
+    assert_eq!(tip_at(50), start);
+    let halfway = tip_at(200);
+    assert!((halfway[2] + 0.45).abs() < 1e-4, "{halfway:?}");
+    assert_eq!(tip_at(350), inside);
+    assert_eq!(tip_at(5000), inside, "it holds the end of the last step");
+    // A pointing script has no fingertip until a step gives it one
+    assert!(
+        !script()
+            .state_at(Duration::ZERO)
+            .joint(HandJointType::IndexTip)
+            .valid
+    );
+    let pointing = script().moving_fingertip_to(millis(100), inside);
+    assert_eq!(
+        pointing
+            .state_at(Duration::ZERO)
+            .joint(HandJointType::IndexTip)
+            .pose
+            .position,
+        inside
+    );
 }

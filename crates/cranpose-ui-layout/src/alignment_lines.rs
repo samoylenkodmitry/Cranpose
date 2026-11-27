@@ -46,7 +46,11 @@ impl AlignmentLines {
     }
 
     /// Replaces inherited lines with the lines explicitly provided by a layout.
+    #[inline]
     pub fn with_overrides(self, explicit: Self) -> Self {
+        if explicit.first.is_nan() && explicit.last.is_nan() {
+            return self;
+        }
         Self::new(
             explicit.first_baseline().or_else(|| self.first_baseline()),
             explicit.last_baseline().or_else(|| self.last_baseline()),

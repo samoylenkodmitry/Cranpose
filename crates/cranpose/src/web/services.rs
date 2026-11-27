@@ -21,6 +21,8 @@ pub(crate) fn register() {
     set_platform_haptics(Arc::new(WebHaptics));
     set_platform_device_info(Rc::new(WebDeviceInfo));
     super::media::install();
+    #[cfg(feature = "video")]
+    crate::install_player();
     super::power::register();
     super::device_motion::register();
     register_network_monitor();

@@ -64,7 +64,7 @@ pub(crate) trait Pixel: GlyphPixel {
     fn paint(color: [f32; 4], blend_mode: BlendMode) -> Self::Paint;
 
     // `paint` over the pixel, its alpha scaled by `coverage`.
-    fn blend_paint(&mut self, paint: Self::Paint, coverage: f32, diagnostics: &RenderDiagnostics);
+    fn blend_paint(&mut self, paint: &Self::Paint, coverage: f32, diagnostics: &RenderDiagnostics);
 
     // `paint` over every pixel of `pixels`, which it covers whole. `table`
     // keeps what the paint left over the bytes it met before, for a format
@@ -103,7 +103,7 @@ impl Pixel for [u8; 4] {
 
     fn blend_paint(
         &mut self,
-        (mut color, blend_mode): Self::Paint,
+        &(mut color, blend_mode): &Self::Paint,
         coverage: f32,
         diagnostics: &RenderDiagnostics,
     ) {
@@ -177,11 +177,11 @@ fn paint_565(color: [f32; 4], blend_mode: BlendMode) -> Paint565 {
 
 fn blend_paint_565<P: Rgb565 + GlyphPixel>(
     pixel: &mut P,
-    paint: Paint565,
+    paint: &Paint565,
     coverage: f32,
     diagnostics: &RenderDiagnostics,
 ) {
-    match paint {
+    match *paint {
         Paint565::Over {
             bytes: [red, green, blue],
             alpha,
@@ -256,7 +256,7 @@ impl<P: Pixel565> Pixel for P {
         paint_565(color, blend_mode)
     }
 
-    fn blend_paint(&mut self, paint: Self::Paint, coverage: f32, diagnostics: &RenderDiagnostics) {
+    fn blend_paint(&mut self, paint: &Self::Paint, coverage: f32, diagnostics: &RenderDiagnostics) {
         blend_paint_565(self, paint, coverage, diagnostics);
     }
 
@@ -274,7 +274,7 @@ impl<P: Pixel565> Pixel for P {
         } = paint
         else {
             for pixel in pixels {
-                blend_paint_565(pixel, paint, 1.0, diagnostics);
+                blend_paint_565(pixel, &paint, 1.0, diagnostics);
             }
             return;
         };

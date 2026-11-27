@@ -118,24 +118,65 @@ fn drawn(store: &SceneStore, item: Item) -> Vec<Drawn> {
     drawn
 }
 
-#[test]
-fn staying_shapes_draw_as_recorded_while_packets_hold_their_chunks() {
-    let mut store = SceneStore::new();
+// The items that stay of a chunk the others of their frame left, each with
+// what it draws, and the chunk as a frame packet in flight holds it, with
+// its fingerprint and shape count then.
+type Staying = (Vec<(Item, Vec<Drawn>)>, Arc<ShapeRecorder>, (u64, usize));
+
+fn staying_items(store: &mut SceneStore) -> Staying {
     let (mut staying, mut going) = (Vec::new(), Vec::new());
     for index in 0..ITEMS {
         let item = store.add_shapes(u64::from(index), |recorder| record(index, recorder));
         if index.is_multiple_of(STAYS_EVERY) {
-            staying.push((item, drawn(&store, item)));
+            staying.push((item, drawn(store, item)));
         } else {
             going.push(item);
         }
     }
-    // A frame packet in flight holds the chunk the items share.
     let lease = Arc::clone(store.shapes(staying[0].0).recorder());
     let leased = (lease.fingerprint(), lease.tables().shapes.len());
     for item in going {
         store.remove_item(item);
     }
+    (staying, lease, leased)
+}
+
+// The updates a store begins after a chunk goes sparse before its staying
+// items move out of it.
+const UPDATES_BEFORE_A_MOVE: u32 = 3;
+
+#[test]
+fn staying_shapes_draw_as_recorded_after_they_move_out_of_a_held_chunk() {
+    let mut store = SceneStore::new();
+    // The packet holds the chunk, so the next item records into another.
+    let (staying, lease, leased) = staying_items(&mut store);
+    store.add_shapes(u64::from(ITEMS), |recorder| solid(ITEMS, recorder));
+    for _ in 0..UPDATES_BEFORE_A_MOVE {
+        store.begin_update();
+        store.finish_update();
+    }
+    for (item, recorded) in &staying {
+        assert!(
+            !Arc::ptr_eq(store.shapes(*item).recorder(), &lease),
+            "a staying item leaves the chunk the others of its frame left"
+        );
+        assert_eq!(
+            &drawn(&store, *item),
+            recorded,
+            "a staying item draws what it recorded after it moves"
+        );
+    }
+    assert_eq!(
+        (lease.fingerprint(), lease.tables().shapes.len()),
+        leased,
+        "the packet reads the chunk as it held it"
+    );
+}
+
+#[test]
+fn staying_shapes_draw_as_recorded_while_packets_hold_their_chunks() {
+    let mut store = SceneStore::new();
+    let (staying, lease, leased) = staying_items(&mut store);
     // Chunks of items that all go but one, which packets in flight hold:
     // none takes shapes again while a packet holds it.
     let mut packets = Vec::new();

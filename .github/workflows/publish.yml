@@ -43,6 +43,9 @@ jobs:
   publish_forks:
     name: Publish the wgpu forks
     runs-on: [self-hosted, macOS, ARM64, recent-repo]
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     env:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
     steps:
@@ -69,7 +72,8 @@ jobs:
             wgpu/wgpu-core-deps-windows-linux-android \
             wgpu/wgpu-core \
             wgpu/wgpu \
-            opus-pure/opus-pure; do
+            opus-pure/opus-pure \
+            basisu/basisu; do
             manifest="forks/${fork}/Cargo.toml"
             crate="cranpose-${fork#*/}"
             version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$manifest" | head -n 1)"
@@ -87,6 +91,9 @@ jobs:
     name: Sync versions with tag
     runs-on: [self-hosted, macOS, ARM64, recent-repo]
     needs: publish_forks
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     permissions:
       contents: write
     outputs:
@@ -187,6 +194,9 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, recent-repo]
     needs: sync_versions
     if: needs.sync_versions.outputs.should_publish == 'true'
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     env:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
       TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -263,6 +273,9 @@ jobs:
     name: Point isolated demo at the release
     runs-on: [self-hosted, macOS, ARM64, recent-repo]
     needs: publish
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     permissions:
       contents: write
     env:

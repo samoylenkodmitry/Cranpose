@@ -8,6 +8,7 @@ use cranpose_ui_graphics::whole;
 /// `roundToInt` sends an exact half **up**, not away from zero. Rust's
 /// `f32::round` disagrees on exactly the negative halves, which is the case a
 /// scroll offset reaches.
+#[inline]
 pub fn round_to_px(value: f32, density: f32) -> f32 {
     if density <= 0.0 || !density.is_finite() {
         return value;
@@ -16,6 +17,7 @@ pub fn round_to_px(value: f32, density: f32) -> f32 {
 }
 
 /// [`round_to_px`] at a density known to be finite and positive.
+#[inline]
 pub fn round_to_grid(value: f32, density: f32) -> f32 {
     // An infinite or NaN length comes out as it went in, with no test of
     // its own. At density 1 the scale and the division change no bit; a chip with no

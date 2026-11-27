@@ -12,9 +12,9 @@ use cranpose_core::{
     rememberMutableStateOf,
 };
 use cranpose_ui::{
-    Box, BoxSpec, Color, Column, ColumnSpec, FocusRequester, IntrinsicSize, Key, KeyEvent,
-    KeyEventType, Modifier, Point, Rect, RoundedCornerShape, Row, RowSpec, Text, TextStyle,
-    UnhandledKeyEvents, VerticalAlignment, composable, rememberMutableInteractionSource,
+    Box, BoxSpec, Color, Column, ColumnSpec, FocusRequester, Indication, IntrinsicSize, Key,
+    KeyEvent, KeyEventType, Modifier, Point, Rect, RoundedCornerShape, Row, RowSpec, Text,
+    TextStyle, UnhandledKeyEvents, VerticalAlignment, composable, rememberMutableInteractionSource,
     text::SpanStyle, widgets::PopupDismissable,
 };
 
@@ -247,7 +247,7 @@ fn Title(index: usize, title: String, open: OpenPath, rect: Option<Rc<Cell<Rect>
             } else {
                 Color::TRANSPARENT
             })
-            .clickable(move |_| {
+            .clickable_with_indication(Indication::NONE, move |_| {
                 open.set(if is_open { Vec::new() } else { vec![index] });
             })
             .padding_symmetric(10.0, 5.0),
@@ -423,7 +423,7 @@ fn EntryRow(
             } else {
                 Color::TRANSPARENT
             })
-            .clickable(clicked)
+            .clickable_with_indication(Indication::NONE, clicked)
             .padding_symmetric(12.0, 5.0),
         RowSpec::default().vertical_alignment(VerticalAlignment::CenterVertically),
         move || {

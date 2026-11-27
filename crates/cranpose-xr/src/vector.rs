@@ -32,3 +32,8 @@ pub(crate) fn normalize(a: [f32; 3]) -> [f32; 3] {
 pub(crate) fn perpendicular(a: [f32; 3], direction: [f32; 3]) -> [f32; 3] {
     sub(a, scale(direction, dot(a, direction)))
 }
+
+// The point `share` of the way from `from` to `to`.
+pub(crate) fn lerp(from: [f32; 3], to: [f32; 3], share: f32) -> [f32; 3] {
+    add(from, scale(sub(to, from), share))
+}

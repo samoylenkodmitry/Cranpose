@@ -247,7 +247,7 @@ fn a_layer_that_pauses_scaling_keeps_the_same_picture() {
     let (_, moving) = animated.frame(held);
     let (stats, still) = animated.frame(held);
     assert!(
-        support::pipelines_settled(&stats),
+        stats.pipelines_settled(),
         "the still frame drew with stand-in pipelines: {stats:?}"
     );
     assert_eq!(
@@ -267,12 +267,12 @@ fn scale_animation_pixels_do_not_depend_on_repeated_input_frames() {
     for frame in 1..SCALE_PERIOD_FRAMES {
         let (stats, actual) = animated.frame(frame_seconds(frame));
         assert!(
-            support::pipelines_settled(&stats),
+            stats.pipelines_settled(),
             "frame {frame} drew with stand-in pipelines: {stats:?}"
         );
         let (fresh_stats, expected) = animated.frame(frame_seconds(frame));
         assert!(
-            support::pipelines_settled(&fresh_stats),
+            fresh_stats.pipelines_settled(),
             "the reference frame {frame} drew with stand-in pipelines: {fresh_stats:?}"
         );
         support::assert_same_bytes(
@@ -296,7 +296,7 @@ fn layer_property_animation_matches_forced_content_rerecord_at_the_same_time() {
         let seconds = frame_seconds(frame);
         let (animated_stats, animated) = harness.frame(seconds);
         assert!(
-            support::pipelines_settled(&animated_stats),
+            animated_stats.pipelines_settled(),
             "animated frame {frame} used a stand-in pipeline: {animated_stats:?}"
         );
 

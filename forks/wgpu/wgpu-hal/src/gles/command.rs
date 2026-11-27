@@ -1,5 +1,4 @@
 use alloc::boxed::Box;
-use alloc::string::String;
 use alloc::sync::Arc;
 use core::{mem, ops::Range};
 
@@ -83,9 +82,7 @@ impl super::CommandBuffer {
     }
 
     fn add_marker(&mut self, marker: &str) -> Range<u32> {
-        let start = self.data_bytes.len() as u32;
-        self.data_bytes.extend(marker.as_bytes());
-        start..self.data_bytes.len() as u32
+        super::debug_text::add_marker(&mut self.data_bytes, marker)
     }
 
     fn add_immediates_data(&mut self, data: &[u32]) -> Range<u32> {
@@ -268,7 +265,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
 
     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
         self.state = State::default();
-        self.cmd_buffer.label = label.map(String::from);
+        self.cmd_buffer.label = label.map(super::debug_text::label);
         Ok(())
     }
     unsafe fn discard_encoding(&mut self) {

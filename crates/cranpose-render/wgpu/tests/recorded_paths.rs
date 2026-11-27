@@ -1,6 +1,7 @@
 // Paths an app draws in a draw scope, drawn from the recording the scene
 // keeps. A stroke whose first lines join a banded ring's run of records
-// until that run cuts them off covers the pixels its lines say. The walk
+// until that run cuts them off covers the pixels its lines say, and its
+// lines pin no more of the ring's quads than the run's bound. The walk
 // that slices a band between two series that cross fills it as the sweep
 // over all its edges does.
 
@@ -18,16 +19,28 @@ const FRAME: u32 = 96;
 // target's rounding and the GPU's float arithmetic.
 const TOLERANCE: u8 = 2;
 
-// A zigzag of 60 segments below the ring.
-fn zigzag() -> Vec<Point> {
-    (0..=60)
+// A zigzag below the ring: `segments` lines, each `step` to the right of
+// the one before.
+fn zigzag(segments: usize, step: f32) -> Vec<Point> {
+    (0..=segments)
         .map(|index| {
             Point::new(
-                6.0 + index as f32 * 1.4,
+                6.0 + index as f32 * step,
                 if index % 2 == 0 { 72.0 } else { 88.0 },
             )
         })
         .collect()
+}
+
+// 60 lines across the frame.
+fn short_zigzag() -> Vec<Point> {
+    zigzag(60, 1.4)
+}
+
+// 400 lines, enough to pin past the run's bound if every one joined the
+// ring's segment.
+fn long_zigzag() -> Vec<Point> {
+    zigzag(400, 0.2)
 }
 
 const ZIGZAG_STROKE: Stroke = Stroke::new(2.0);
@@ -49,37 +62,93 @@ fn DrawPage(draw: fn(&mut dyn DrawScope)) {
     });
 }
 
-// A full ring wide and thin enough to draw as a banded strip, then the
-// zigzag stroked in the same draw: the stroke's first lines join the run
-// the ring opened, which cuts them off once their pinned quads pass its
-// bound.
+// A full ring wide and thin enough to draw as a banded strip.
+fn draw_ring(scope: &mut dyn DrawScope) {
+    scope.draw_arc(
+        Brush::solid(Color::WHITE),
+        Point::new(48.0, 34.0),
+        28.0,
+        0.0,
+        std::f32::consts::TAU,
+        Stroke::new(2.0),
+    );
+}
+
+fn stroke(scope: &mut dyn DrawScope, points: &[Point]) {
+    let mut path = Path::new();
+    path.move_to(points[0]);
+    for &point in &points[1..] {
+        path.line_to(point);
+    }
+    scope.draw_path(
+        &path,
+        Brush::solid(Color::WHITE),
+        DrawStyle::Stroke(ZIGZAG_STROKE),
+    );
+}
+
+// The ring, then the zigzag stroked in the same draw: the stroke's first
+// lines join the run the ring opened, which cuts them off once their pinned
+// quads pass its bound.
 #[composable]
 fn RingThenZigzag() {
     DrawPage(|scope| {
-        scope.draw_arc(
-            Brush::solid(Color::WHITE),
-            Point::new(48.0, 34.0),
-            28.0,
-            0.0,
-            std::f32::consts::TAU,
-            Stroke::new(2.0),
-        );
-        let mut path = Path::new();
-        let points = zigzag();
-        path.move_to(points[0]);
-        for &point in &points[1..] {
-            path.line_to(point);
-        }
-        scope.draw_path(
-            &path,
-            Brush::solid(Color::WHITE),
-            DrawStyle::Stroke(ZIGZAG_STROKE),
-        );
+        draw_ring(scope);
+        stroke(scope, &short_zigzag());
     });
+}
+
+// The same with the long zigzag, whose lines would pin far past the bound
+// if the run never cut them off.
+#[composable]
+fn RingThenLongZigzag() {
+    DrawPage(|scope| {
+        draw_ring(scope);
+        stroke(scope, &long_zigzag());
+    });
+}
+
+#[composable]
+fn RingAlone() {
+    DrawPage(draw_ring);
+}
+
+#[composable]
+fn LongZigzagAlone() {
+    DrawPage(|scope| stroke(scope, &long_zigzag()));
 }
 
 fn red(pixels: &[u8], x: u32, y: u32) -> u8 {
     pixels[((y * FRAME + x) * 4) as usize]
+}
+
+// The quads that a segment may pin on records drawn with more quads than
+// they need, the bound past which a run cuts a new segment.
+const PINNED_QUADS_BOUND: u64 = 512;
+
+// The vertices that the shape draws of `page`'s frame run through the
+// vertex stage, six a quad, which the renderer counts with its GPU stats on.
+fn shape_vertices(page: fn()) -> Option<u64> {
+    support::warm_app_frame_toggled(page, FRAME, FRAME, Some("CRANPOSE_GPU_STATS"))
+        .map(|(_, stats)| stats.shape_vertices)
+}
+
+#[test]
+fn a_stroke_after_a_banded_ring_pins_no_more_quads_than_the_bound() {
+    let (Some(both), Some(ring), Some(zigzag)) = (
+        shape_vertices(RingThenLongZigzag),
+        shape_vertices(RingAlone),
+        shape_vertices(LongZigzagAlone),
+    ) else {
+        return;
+    };
+    // A line in the ring's segment draws with the ring's quads.
+    let pinned = both.saturating_sub(ring + zigzag) / 6;
+    assert!(
+        pinned <= PINNED_QUADS_BOUND,
+        "the stroke pins {pinned} quads in the ring's segment ({both} vertices against {ring} \
+         for the ring and {zigzag} for the stroke)"
+    );
 }
 
 #[test]
@@ -88,9 +157,14 @@ fn a_stroke_that_follows_a_banded_ring_covers_the_pixels_of_its_lines() {
         return;
     };
     let mut lines = Vec::new();
-    for_each_stroke_line(&zigzag(), false, ZIGZAG_STROKE, |line: LineGeometry| {
-        lines.push(line);
-    });
+    for_each_stroke_line(
+        &short_zigzag(),
+        false,
+        ZIGZAG_STROKE,
+        |line: LineGeometry| {
+            lines.push(line);
+        },
+    );
     assert!(lines.len() >= 60, "the zigzag strokes as its segments");
     let mut drawn = 0;
     for y in BELOW_RING..FRAME {

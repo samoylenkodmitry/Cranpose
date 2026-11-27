@@ -82,3 +82,40 @@ impl Frames {
         self.0.stats.snapshot()
     }
 }
+
+/// Producer handle pushing zero-copy [`VideoFrame`]s into a paired [`DecodedFrames`](super::DecodedFrames)
+/// queue, waking `PlayerSurface` on arrival without polling.
+#[derive(Clone)]
+pub struct FrameProducer {
+    queue: Arc<FrameQueue>,
+    max_depth: usize,
+}
+
+impl FrameProducer {
+    pub(super) fn channel(depth: usize) -> (Self, Frames) {
+        let max_depth = depth.max(1);
+        let queue = Arc::new(FrameQueue::new(max_depth + 1, 0));
+        let consumer = Frames(Arc::clone(&queue));
+        (Self { queue, max_depth }, consumer)
+    }
+
+    /// Enqueues a newly decoded [`VideoFrame`], dropping the oldest unread frame if the bounded
+    /// queue is full, and wakes any waiting `PlayerSurface` consumer.
+    pub fn push(&self, frame: VideoFrame) {
+        let decode_time = frame.info().decode_time;
+        let mut frames = self.queue.frames.lock();
+        while frames.len() >= self.max_depth {
+            frames.pop_front();
+            self.queue.stats.dropped();
+        }
+        frames.push_back(frame);
+        drop(frames);
+        self.queue.stats.decoded(decode_time);
+        self.queue.wake();
+    }
+
+    /// Discards all unread queued frames (for example on seek, stop, or media item transition).
+    pub fn clear(&self) {
+        self.queue.frames.lock().clear();
+    }
+}

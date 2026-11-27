@@ -17,9 +17,9 @@ use crate::{
     Pose,
     billboard_pose::billboard_pose,
     eye_camera::FirstRow,
-    handle::{HANDLE_RADIUS, HandleKind},
+    handle::{HANDLE_RADIUS, HandleFocus, HandleKind},
     projected_pass::{Picture, ProjectedLayer},
-    space::PanelSlot,
+    space::{Mobility, PanelSlot},
     vector::{dot, normalize},
 };
 
@@ -38,8 +38,10 @@ const LIGHT: [f32; 3] = [-0.35, 0.45, 1.0];
 // The sharpness of the sphere's highlight and its strength.
 const SHININESS: f32 = 40.0;
 const HIGHLIGHT: f32 = 0.5;
-// The handle that the pointer would grab or carries shows this much larger.
-const ACTIVE_SCALE: f32 = 1.3;
+// The handle that a pointer would grab shows this much larger, and the one that a trigger presses
+// larger still, so the hand sees which handle a pull takes and that the pull took it.
+const HOVERED_SCALE: f32 = 1.3;
+const PRESSED_SCALE: f32 = 1.6;
 
 pub(crate) struct HandleLayers {
     move_sphere: xr::Swapchain<Api>,
@@ -71,7 +73,7 @@ impl HandleLayers {
     pub(crate) fn layers<'a>(
         &'a self,
         slot: &PanelSlot,
-        active: [Option<(u64, HandleKind)>; 2],
+        active: [Option<HandleFocus>; 2],
         head: Option<[f32; 3]>,
     ) -> impl Iterator<Item = QuadLayer<'a>> + use<'a> {
         placed(slot, active, head).map(move |handle| QuadLayer {
@@ -112,17 +114,18 @@ impl Handle {
 // The handles at `slot`'s panel: the one that moves it if the panel is movable, then the one that
 // resizes it if the panel is resizable. The handles face the head at `head`. A headset that tracks
 // no head shows them facing the way the panel faces. A handle that a hand in `active` holds or
-// would grab shows larger.
+// would grab shows larger, and one that a trigger presses larger still. The move handle of a panel
+// that draws its own handle shows only then.
 pub(crate) fn placed(
     slot: &PanelSlot,
-    active: [Option<(u64, HandleKind)>; 2],
+    active: [Option<HandleFocus>; 2],
     head: Option<[f32; 3]>,
 ) -> impl Iterator<Item = Handle> + use<> {
     let slot = *slot;
     HandleKind::ALL
         .into_iter()
         .filter(move |kind| kind.offered_by(&slot))
-        .map(move |kind| {
+        .filter_map(move |kind| {
             let center = kind.center(&slot);
             let pose = head.map_or(
                 Pose {
@@ -131,16 +134,24 @@ pub(crate) fn placed(
                 },
                 |head| billboard_pose(center, head),
             );
-            let scale = if active.contains(&Some((slot.id, kind))) {
-                ACTIVE_SCALE
-            } else {
-                1.0
-            };
-            Handle {
+            let scale = active
+                .iter()
+                .flatten()
+                .filter(|focus| focus.panel == slot.id && focus.kind == kind)
+                .map(|focus| {
+                    if focus.pressed {
+                        PRESSED_SCALE
+                    } else {
+                        HOVERED_SCALE
+                    }
+                })
+                .fold(1.0, f32::max);
+            let drawn = kind == HandleKind::Move && slot.mobility == Mobility::MovableByOwnHandle;
+            (!drawn || scale > 1.0).then_some(Handle {
                 kind,
                 pose,
                 side: 2.0 * HANDLE_RADIUS * scale,
-            }
+            })
         })
 }
 

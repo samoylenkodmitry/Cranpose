@@ -34,6 +34,13 @@ pub(crate) struct Handle {
     pub(crate) kind: HandleKind,
 }
 
+// What a pull takes: a panel's handle, or a place on a panel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum PressTarget {
+    Handle(Handle),
+    Panel(Hit),
+}
+
 // A trigger in a frame, compared with the frame before.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Pull {
@@ -133,18 +140,36 @@ impl Reach {
         }
     }
 
-    // The hit that a press in this frame takes: the one from just before the pull, if the ray
-    // still points near it.
-    pub(crate) fn press_hit(&self, side: Side, time: Duration, scene: Scene<'_>) -> Option<Hit> {
+    // The ray that a press in this frame takes: the one from just before the pull, if the ray
+    // still points near it, else the ray of this frame.
+    fn press_ray(&self, time: Duration) -> Option<Ray> {
         let now = self.ray?;
-        let before = self
-            .rest
-            .filter(|(rest, ray)| {
-                time.saturating_sub(*rest) <= PULL_TIME
-                    && angle_between(ray.direction, now.direction).to_degrees() < CLICK_ANGLE
-            })
-            .and_then(|(_, ray)| nearest_hit(&ray, scene.panels, side, scene.picks));
-        before.or(self.hit)
+        let before = self.rest.filter(|(rest, ray)| {
+            time.saturating_sub(*rest) <= PULL_TIME
+                && angle_between(ray.direction, now.direction).to_degrees() < CLICK_ANGLE
+        });
+        Some(before.map_or(now, |(_, ray)| ray))
+    }
+
+    // What a pull in this frame takes, judged by the ray from just before the pull as a press
+    // is: the handle that this ray meets nearer than any panel, or else the panel that it meets.
+    // A pull turns the controller, and a turn toward a handle below a button must not carry the
+    // panel that the user pressed the button of.
+    pub(crate) fn press_target(
+        &self,
+        side: Side,
+        time: Duration,
+        scene: Scene<'_>,
+    ) -> Option<PressTarget> {
+        let ray = self.press_ray(time)?;
+        let hit = nearest_hit(&ray, scene.panels, side, scene.picks);
+        let handle = nearest_handle(&ray, scene, side)
+            .filter(|(_, distance)| hit.is_none_or(|hit| *distance < hit.distance));
+        match (handle, hit) {
+            (Some((handle, _)), _) => Some(PressTarget::Handle(handle)),
+            (None, Some(hit)) => Some(PressTarget::Panel(hit)),
+            (None, None) => None,
+        }
     }
 
     // What drove this hand's aim in the frame, or `None` while nothing points.

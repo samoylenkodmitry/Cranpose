@@ -58,7 +58,8 @@ const DEPTH_FAR_Z: f32 = 10_000.0;
 // distance `z` along the eye's axis, which is the depth of a camera whose far plane is infinite.
 pub(crate) struct EyeDepth<'a> {
     pub(crate) swapchain: &'a xr::Swapchain<Api>,
-    // The distance of the near plane in meters
+    // The near plane that the layer names, in meters. It can lie farther than the camera's, so the
+    // compositor reads every depth that much farther (`eye_camera::depth_scale`).
     pub(crate) near: f32,
 }
 

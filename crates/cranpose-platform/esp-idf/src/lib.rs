@@ -8,6 +8,9 @@
 
 #![deny(unsafe_code)]
 
+#[cfg(feature = "bench-frames")]
+#[path = "../../../../benchmarks/esp32/boot_frames.rs"]
+mod boot_frames;
 mod memory;
 mod panel;
 mod present;
@@ -222,6 +225,8 @@ pub fn run(
         start,
         finger: None,
         stats: None,
+        #[cfg(feature = "bench-frames")]
+        boot_frames: boot_frames::BootFrames::new(timers),
         last_tick: None,
     };
     let mut pacer = Pacer {
@@ -278,6 +283,8 @@ struct Screen<'d, 't> {
     /// Where the finger is while it touches the panel.
     finger: Option<(u16, u16)>,
     stats: Option<FrameStats>,
+    #[cfg(feature = "bench-frames")]
+    boot_frames: boot_frames::BootFrames,
     /// The start of the last tick. The next one waits `frame_interval` after
     /// it; a wake before then runs the posted tasks only. The waker fires on
     /// every frame request, the composition's own among them.
@@ -307,6 +314,8 @@ impl Screen<'_, '_> {
         let updated = Instant::now();
         let sent = self.presenter.present(self.framebuffer, &mut self.panel)?;
         let presented = Instant::now();
+        #[cfg(feature = "bench-frames")]
+        self.boot_frames.present();
         let phases = FramePhases {
             update: updated.duration_since(now),
             present: presented.duration_since(updated),

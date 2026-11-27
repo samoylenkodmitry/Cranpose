@@ -67,6 +67,14 @@ def git(*args, cwd):
     return result.stdout.strip()
 
 
+def disturbed_subjects(scenario, start):
+    """Subjects whose legs for `start` all stayed disturbed."""
+    legs = [leg for leg in scenario.get('legs', []) if leg.get('start') == start and 'subject' in leg]
+    disturbed = sorted({leg['subject'] for leg in legs if leg.get('disturbed')})
+    undisturbed = {leg['subject'] for leg in legs if not leg.get('disturbed')}
+    return [name for name in disturbed if name not in undisturbed]
+
+
 def index_entry(run, file):
     """What the dashboard needs of a run without opening it."""
     names = [subject['name'] for subject in run['subjects']]
@@ -85,6 +93,8 @@ def index_entry(run, file):
         'scenarios': {
             scenario['scenario']: {
                 'legs': len(scenario['legs']),
+                'app_bytes': scenario.get('app_bytes', {}),
+                'unimplemented': scenario.get('unimplemented', []),
                 'starts': {
                     start: {
                         'summary': {name: {metric: judged['summary'][name][metric]
@@ -98,6 +108,8 @@ def index_entry(run, file):
                         'failures': {failure['subject']: failure['error']
                                      for failure in reversed(scenario.get('failures', []))
                                      if failure['start'] == start},
+                        # Subjects whose legs of the start all stayed disturbed.
+                        'disturbed': disturbed_subjects(scenario, start),
                         # The metrics a second run judged worse again.
                         'confirmed': run.get('confirmed_regressions', {}).get(scenario['scenario'], {}).get(start, []),
                     }

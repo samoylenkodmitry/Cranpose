@@ -11,14 +11,24 @@ use std::{
 };
 
 use cranpose_services::{
-    AccessUnit, DecodedFrames, DecoderConfig, DecoderError, DecoderOutput, FrameInfo, VideoCodec,
-    VideoDecoder, split_access_units,
+    AccessUnit, ColorPrimaries, ColorRange, ColorTransfer, DecodeOrder, DecodedFrames,
+    DecoderConfig, DecoderError, DecoderOutput, FrameInfo, VideoCodec, VideoColorInfo,
+    VideoDecoder, VideoRotation, split_access_units,
 };
 
 const H264_CLIP: &[u8] = include_bytes!("../../../apps/xr-demo/assets/test_clip.h264");
 const HEVC_CLIP: &[u8] = include_bytes!("../../../apps/xr-demo/assets/test_clip.h265");
+const TONES_601_LIMITED: &[u8] =
+    include_bytes!("../../cranpose/tests/assets/test_tones_601_limited.h264");
 // Other parameter sets than the clip's, at the same size
 const TONES_CLIP: &[u8] = include_bytes!("../../cranpose/tests/assets/test_tones_709_full.h264");
+const TONES_2020_PQ: &[u8] = include_bytes!("../../cranpose/tests/assets/test_tones_2020_pq.h265");
+const TONES_2020_HLG: &[u8] =
+    include_bytes!("../../cranpose/tests/assets/test_tones_2020_hlg.h265");
+const BFRAMES_H264: &[u8] = include_bytes!("../../cranpose/tests/assets/test_bframes.h264");
+const BFRAMES_H264_PTS: [u64; 12] = [0, 4, 2, 1, 3, 8, 6, 5, 7, 11, 9, 10];
+const BFRAMES_HEVC: &[u8] = include_bytes!("../../cranpose/tests/assets/test_bframes.h265");
+const BFRAMES_HEVC_PTS: [u64; 12] = [0, 4, 2, 1, 3, 8, 6, 5, 7, 11, 10, 9];
 const STEP: Duration = Duration::from_micros(16_667);
 const DEPTH: usize = 4;
 // The decoder holds up to 8 units while it starts, and outputs their pictures at once
@@ -239,4 +249,158 @@ fn a_stream_that_changes_its_parameter_sets_keeps_decoding() {
     assert_eq!(pictures.len(), units.len());
     assert_eq!(pictures[9].info.metadata, 9 * 7);
     assert_eq!(pictures[9].size, (640, 360));
+}
+
+#[test]
+fn b_frame_streams_reorder_into_presentation_order_and_drain() {
+    for (codec, clip, decode_pts) in [
+        (VideoCodec::H264, BFRAMES_H264, BFRAMES_H264_PTS),
+        (VideoCodec::Hevc, BFRAMES_HEVC, BFRAMES_HEVC_PTS),
+    ] {
+        let units = split_access_units(codec, clip);
+        assert_eq!(units.len(), decode_pts.len(), "{codec:?} unit count");
+        let config = DecoderConfig::new(codec, 160, 96, DecoderOutput::Frames { depth: BURST })
+            .with_order(DecodeOrder::Presentation);
+        let mut decoder = VideoDecoder::new(config).expect("presentation decoder");
+        let frames = decoder.frames();
+        let mut out = Vec::new();
+        for (data, pts_index) in units.iter().zip(decode_pts) {
+            loop {
+                match decoder.submit(unit(data, pts_index)) {
+                    Err(DecoderError::Full) => drain(&frames, &mut out),
+                    result => break result.expect("b-frame unit"),
+                }
+            }
+            drain(&frames, &mut out);
+        }
+        decoder.drain().expect("drain b-frame tail");
+        while frames
+            .next_frame()
+            .map(|frame| {
+                out.push(Picture {
+                    info: frame.info(),
+                    size: frame.size(),
+                    crop_width: frame.crop().width,
+                    has_buffer: !frame.as_pixel_buffer_ptr().is_null(),
+                });
+            })
+            .is_some()
+        {}
+        assert_eq!(out.len(), decode_pts.len(), "{codec:?} output count");
+        let ordered_meta: Vec<u64> = out.iter().map(|picture| picture.info.metadata).collect();
+        let expected_meta: Vec<u64> = (0..decode_pts.len() as u64).map(|i| i * 7).collect();
+        assert_eq!(ordered_meta, expected_meta, "{codec:?} presentation order");
+        for pair in out.windows(2) {
+            assert!(
+                pair[0].info.timestamp < pair[1].info.timestamp,
+                "{codec:?} timestamps must ascend: {:?} vs {:?}",
+                pair[0].info.timestamp,
+                pair[1].info.timestamp
+            );
+        }
+    }
+}
+
+#[test]
+fn flush_discards_buffered_pictures_and_restarts_cleanly() {
+    let units = split_access_units(VideoCodec::H264, BFRAMES_H264);
+    let config = DecoderConfig::new(
+        VideoCodec::H264,
+        160,
+        96,
+        DecoderOutput::Frames { depth: BURST },
+    )
+    .with_order(DecodeOrder::Presentation);
+    let mut decoder = VideoDecoder::new(config).expect("presentation decoder");
+    let frames = decoder.frames();
+    for (data, pts_index) in units.iter().take(5).zip(BFRAMES_H264_PTS) {
+        decoder
+            .submit(unit(data, pts_index + 100))
+            .expect("first segment unit");
+    }
+    decoder.flush().expect("flush");
+    assert!(frames.next_frame().is_none(), "flush empties output queue");
+    for (data, pts_index) in units.iter().zip(BFRAMES_H264_PTS) {
+        decoder
+            .submit(unit(data, pts_index))
+            .expect("second segment unit");
+    }
+    decoder.drain().expect("drain second segment");
+    let mut second = Vec::new();
+    while let Some(frame) = frames.next_frame() {
+        second.push(frame.info().metadata);
+    }
+    let expected: Vec<u64> = (0..BFRAMES_H264_PTS.len() as u64).map(|i| i * 7).collect();
+    assert_eq!(second, expected);
+}
+
+#[test]
+fn decoded_frames_report_stream_color_metadata_and_rotation() {
+    for (codec, clip, size, expected_color, rotation) in [
+        (
+            VideoCodec::H264,
+            TONES_601_LIMITED,
+            (640, 360),
+            VideoColorInfo::sdr(ColorPrimaries::Bt601, ColorRange::Limited),
+            VideoRotation::Degrees0,
+        ),
+        (
+            VideoCodec::H264,
+            TONES_CLIP,
+            (640, 360),
+            VideoColorInfo::sdr(ColorPrimaries::Bt709, ColorRange::Full),
+            VideoRotation::Degrees90,
+        ),
+        (
+            VideoCodec::Hevc,
+            TONES_2020_PQ,
+            (320, 180),
+            VideoColorInfo {
+                primaries: ColorPrimaries::Bt2020,
+                range: ColorRange::Limited,
+                transfer: ColorTransfer::Pq,
+            },
+            VideoRotation::Degrees180,
+        ),
+        (
+            VideoCodec::Hevc,
+            TONES_2020_HLG,
+            (320, 180),
+            VideoColorInfo {
+                primaries: ColorPrimaries::Bt2020,
+                range: ColorRange::Limited,
+                transfer: ColorTransfer::Hlg,
+            },
+            VideoRotation::Degrees270,
+        ),
+    ] {
+        let units = split_access_units(codec, clip);
+        let config = DecoderConfig::new(codec, size.0, size.1, DecoderOutput::Frames { depth: 4 })
+            .with_rotation(rotation);
+        let mut decoder = VideoDecoder::new(config).expect("decoder");
+        let frames = decoder.frames();
+        decoder.submit(unit(units[0], 0)).expect("keyframe");
+        assert!(wait_until(|| frames.stats().decoded >= 1));
+        let frame = frames.next_frame().expect("decoded frame");
+        assert_eq!(frame.color(), expected_color, "{codec:?} color metadata");
+        assert_eq!(frame.rotation(), rotation);
+        let expected_display = if rotation.swaps_axes() {
+            (size.1, size.0)
+        } else {
+            size
+        };
+        assert_eq!(frame.display_size(), expected_display);
+    }
+}
+
+#[test]
+fn capabilities_report_reordering_and_zero_copy_gpu() {
+    let h264 = VideoDecoder::capabilities(VideoCodec::H264).expect("H264 capabilities");
+    assert!(h264.b_frame_reordering);
+    assert!(h264.zero_copy_gpu);
+    assert_eq!(h264.hdr_10bit, Some(false));
+    let hevc = VideoDecoder::capabilities(VideoCodec::Hevc).expect("HEVC capabilities");
+    assert!(hevc.b_frame_reordering);
+    assert!(hevc.zero_copy_gpu);
+    assert_eq!(hevc.hdr_10bit, Some(true));
 }

@@ -33,6 +33,16 @@
 # with the layout added.
 # The gauntlet-t16 realloc row comes from five runs (`--repeats 5`) at 53ebad4ad
 # of #2403 on main 8341807fa.
+# The patchwork-t17 realloc row comes from five runs of steady_frames on main
+# 8341807fa (30.48 to 30.77, matching PR head 30.40 to 30.63). The dashboard
+# malloc row covers main 8341807fa (27.67) and main b1134eb70 (27.62).
+# The realloc and realloc_bytes rows of patchwork-t17, gauntlet-t16,
+# gauntlet-t12 and feed come from the ledger A/B of the text layout's run
+# room (#2512) on main 2bd350b35, one run; spreads as before.
+# The copied rows of wall-t20-start, grid and deep come from the kept base
+# runs of six mains, ab2504b04 to c7f25f08f, and the head of #2508, which read
+# the same value each. The dashboard realloc row spans what runs of equal
+# code read, 0.30 to 0.50 a frame (#2247), as the start's calls move.
 # The ticker's copied spread holds both modes of the scene store's shape
 # chunk compaction (`keep_live_runs`), whose copies differ by 2,920 B from
 # run to run of one binary for a reason not yet known (#2247).
@@ -45,7 +55,7 @@ wall-t20         realloc_bytes                  68          0
 wall-t20-start   malloc                       9.73       0.01
 wall-t20-start   realloc                      0.03       0.00
 wall-t20-start   live                         8.93       0.01
-wall-t20-start   copied                        192          0
+wall-t20-start   copied                         77          0
 wall-t20-start   realloc_bytes                 835          0
 wall-t20-start   group:node                   2.00       0.00
 wall-t20-start   group:parent-lists           1.60       0.00
@@ -55,25 +65,25 @@ wall-t20-start   group:text                   1.05       0.01
 wall-t20-start   group:app                    0.40       0.00
 wall-t20-start   group:other                  0.31       0.00
 patchwork-t17    malloc                    8747.90       3.58
-patchwork-t17    realloc                     30.22       0.20
+patchwork-t17    realloc                     19.88       0.29
 patchwork-t17    live                       206.17       6.27
 patchwork-t17    copied                     676837      28084
-patchwork-t17    realloc_bytes               36077       6256
+patchwork-t17    realloc_bytes               10248       6256
 gauntlet-t16     malloc                    1436.80       0.55
-gauntlet-t16     realloc                     37.63       0.02
+gauntlet-t16     realloc                     23.53       0.02
 gauntlet-t16     live                         2.77       0.67
 gauntlet-t16     copied                     514336        374
-gauntlet-t16     realloc_bytes               61047          3
+gauntlet-t16     realloc_bytes               53282          3
 gauntlet-t12     malloc                     602.25       1.65
-gauntlet-t12     realloc                     23.48       0.05
+gauntlet-t12     realloc                     10.17       0.05
 gauntlet-t12     live                        78.05       3.95
 gauntlet-t12     copied                     233521        253
-gauntlet-t12     realloc_bytes               37616          5
+gauntlet-t12     realloc_bytes               22343          5
 feed             malloc                     351.10       0.00
-feed             realloc                      3.80       0.00
+feed             realloc                      2.17       0.00
 feed             live                         8.95       0.00
 feed             copied                      34014          0
-feed             realloc_bytes                1490          0
+feed             realloc_bytes                1300          0
 ticker           malloc                     303.28       0.42
 ticker           realloc                      0.05       0.00
 ticker           live                        16.18       0.53
@@ -92,7 +102,7 @@ layers           realloc_bytes                1223          0
 grid             malloc                       5.05       0.00
 grid             realloc                      0.30       0.00
 grid             live                         0.00       0.00
-grid             copied                      20953          0
+grid             copied                      20048          0
 grid             realloc_bytes                1598          0
 grid-layer       malloc                       5.05       0.00
 grid-layer       realloc                      0.30       0.00
@@ -102,7 +112,7 @@ grid-layer       realloc_bytes                1597          0
 deep             malloc                       3.05       0.00
 deep             realloc                      0.33       0.00
 deep             live                         0.00       0.00
-deep             copied                      17439          0
+deep             copied                      12580          0
 deep             realloc_bytes                1009          0
 deep-layer       malloc                       3.05       0.00
 deep-layer       realloc                      0.22       0.00
@@ -114,8 +124,8 @@ charts           realloc                      0.13       0.00
 charts           live                         0.00       0.00
 charts           copied                       5024          0
 charts           realloc_bytes                  76          0
-dashboard        malloc                      27.63       0.02
-dashboard        realloc                      0.33       0.02
+dashboard        malloc                      27.67       0.05
+dashboard        realloc                      0.50       0.20
 dashboard        live                         0.00       0.00
 dashboard        copied                      22493          0
 dashboard        realloc_bytes                 371          1
@@ -144,3 +154,18 @@ movable-unordered realloc                   135.00       0.00
 movable-unordered live                        0.00       0.00
 movable-unordered copied                  92038581          0
 movable-unordered realloc_bytes             182256          0
+subcompose-modifiers malloc                1793.00       0.00
+subcompose-modifiers realloc                  0.00       0.00
+subcompose-modifiers live                     0.00       0.00
+subcompose-modifiers copied                1105072          0
+subcompose-modifiers realloc_bytes               0          0
+subcompose-lazy-rows malloc                   9.00       0.00
+subcompose-lazy-rows realloc                  0.00       0.00
+subcompose-lazy-rows live                     0.00       0.00
+subcompose-lazy-rows copied                  40888          0
+subcompose-lazy-rows realloc_bytes               0          0
+layout-modifier-chain malloc                  1.00       0.00
+layout-modifier-chain realloc                 0.00       0.00
+layout-modifier-chain live                    0.00       0.00
+layout-modifier-chain copied                  8368          0
+layout-modifier-chain realloc_bytes              0          0

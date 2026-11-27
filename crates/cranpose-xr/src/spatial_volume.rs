@@ -19,7 +19,7 @@ use crate::{
     space::{Space, local_space, local_subspace_origin},
     subspace_modifier::DEFAULT_VOLUME_SIZE,
     surface_input::{InputSink, PointerSink},
-    volumes::VolumeContent,
+    volumes::{VolumeContent, VolumeDraws},
 };
 
 // The callback that the content registered for the pointer's events.
@@ -43,8 +43,9 @@ impl SpatialVolumeScope {
     /// y down and z away from the viewer. A volume that sets none has no light in its scene.
     ///
     /// A headset draws every volume in one scene, which has one light. The scene takes the light
-    /// of the first volume that sets one and turns it with that volume's pose. A window draws each
-    /// volume in a scene of its own, with that volume's light.
+    /// of the first shown volume whose light casts shadows, else of the first that sets one, and
+    /// turns it with that volume's pose. A window draws each volume in a scene of its own, with
+    /// that volume's light.
     pub fn light(&self, light: Light) {
         self.light.set(Some(light));
     }
@@ -143,16 +144,19 @@ pub fn SpatialVolume(
 ) {
     let size = modifier.size_3d_or(DEFAULT_VOLUME_SIZE);
     match local_space().current() {
-        Some(space) => PlacedVolume(space, modifier, size, content),
+        Some(space) => PlacedVolume(space, modifier, (size, None, VolumeDraws::ANY), content),
         None => FlatVolume(size, content),
     }
 }
 
+// A volume that the space places, with a box of `size` dp, `under` a panel of content when one is
+// given: it then stands where that panel stands and takes no ray. `draws` says whether the content
+// may leave depth in the scene and how far it reaches.
 #[composable]
-fn PlacedVolume(
+pub(crate) fn PlacedVolume(
     space: Space,
     modifier: SubspaceModifier,
-    size: [f32; 3],
+    (size, under, draws): ([f32; 3], Option<u64>, VolumeDraws),
     content: impl FnMut(&SpatialVolumeScope) + 'static,
 ) {
     let panel = remember({
@@ -161,7 +165,7 @@ fn PlacedVolume(
     })
     .with(|panel| *panel);
     let origin = local_subspace_origin().current();
-    space.place_volume(panel, size, origin, origin.then(&modifier.pose()));
+    space.place_volume_under(panel, size, under, origin, origin.then(&modifier.pose()));
     let id = panel.id;
     space.set_move_policy(id, modifier.move_policy());
     space.set_point_source(id, modifier.attached_point_source());
@@ -187,9 +191,11 @@ fn PlacedVolume(
     space.publish_volume(VolumeContent {
         id,
         pose: panel.volume_pose,
+        shown: panel.volume_shown,
         light,
         compose: Rc::new(RefCell::new(Some(compose))),
         node,
+        draws,
     });
     DisposableEffect(id, move |_| {
         DisposableEffectResult::new(move || space.remove(id))

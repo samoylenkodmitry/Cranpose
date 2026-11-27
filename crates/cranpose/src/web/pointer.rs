@@ -200,8 +200,7 @@ impl Pointers {
             }
             None => {
                 let event_time = app.realtime_pointer_event_time(event_ms(event));
-                app.set_cursor_at_event_time(at.x, at.y, event_time);
-                app.pointer_pressed_at_event_time(event_time);
+                app.pointer_pressed_at_position_event_time(at.x, at.y, event_time);
             }
         }
     }

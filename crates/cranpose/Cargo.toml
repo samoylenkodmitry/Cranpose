@@ -210,19 +210,34 @@ media-backend = ["dep:cranpose-media", "dep:objc2-media-player"]
 # hardware buffer and with the YCbCr conversion feature. On macOS and iOS it
 # brings what makes a picture's IOSurface a Metal texture.
 video = [
+    "audio",
+    "cranpose-services/http-native",
+    "dep:pollster",
+    "dep:portable-atomic",
     "dep:objc2",
+    "dep:objc2-av-foundation",
     "dep:objc2-core-foundation",
+    "dep:objc2-core-media",
     "dep:objc2-core-video",
+    "dep:objc2-video-toolbox",
+    "dep:block2",
+    "dep:dispatch2",
     "objc2-core-video/CVPixelBufferIOSurface",
     "objc2-core-video/objc2-io-surface",
     "dep:objc2-io-surface",
     "dep:objc2-metal",
+    "dep:windows",
+    "cranpose-services/video-web",
+    "dep:windows-core",
 ]
 renderer-pixels = ["cranpose-render-pixels"]
 # A composition the CPU draws into an RGBA framebuffer that the host
 # presents (`cranpose::framebuffer`), for hosts without a GPU: watchOS and
 # microcontrollers such as the ESP32-S3.
 framebuffer = ["renderer-pixels"]
+# Host-driven alarms for `delay` (no background timer thread), for bare-metal
+# and single-threaded framebuffer hosts.
+host-timers = ["cranpose-core/host-timers"]
 watchos = [
     "framebuffer",
     "dep:objc2",
@@ -233,7 +248,7 @@ watchos = [
     "dep:objc2-watch-kit",
     "dep:oslog",
 ]
-renderer-wgpu = ["cranpose-render-wgpu", "dep:wgpu", "dep:pollster", "dep:ash"]
+renderer-wgpu = ["cranpose-render-wgpu", "dep:wgpu", "dep:pollster", "dep:ash", "dep:portable-atomic"]
 # App-defined WGSL RuntimeShaders on the slim renderer (naga at runtime,
 # ~0.7 MiB). On by default; drop via `default-features = false` if the app
 # uses only framework effects.
@@ -380,6 +395,18 @@ web-sys = { version = "0.3", optional = true, features = [
     # and the Web Audio graph a visualiser reads.
     "HtmlMediaElement",
     "HtmlAudioElement",
+    "HtmlVideoElement",
+    "Headers",
+    "MediaError",
+    "Request",
+    "RequestInit",
+    "RequestMode",
+    "Response",
+    "DomRectReadOnly",
+    "VideoColorPrimaries",
+    "VideoColorSpace",
+    "VideoFrame",
+    "VideoTransferCharacteristics",
     "TimeRanges",
     "Blob",
     "BlobPropertyBag",
@@ -413,6 +440,7 @@ serde = { version = "1.0.229", features = ["derive"], optional = true }
 serde_json = { version = "1.0.154", optional = true }
 inventory = { version = "0.3.25", optional = true }
 cranpose-macros = { workspace = true }
+portable-atomic = { workspace = true, optional = true }
 sys-locale = { version = "0.3.2", features = ["js"], optional = true }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
@@ -503,8 +531,18 @@ windows = { version = "0.62", optional = true, features = [
     "Media",
     "Storage_Streams",
     "Win32_Foundation",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Media_Audio",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
     "Win32_System_WinRT",
 ] }
+windows-core = { version = "0.62", optional = true }
 wgpu = { workspace = true, optional = true, features = [
     "std",
     "parking_lot",
@@ -536,6 +574,10 @@ objc2-io-surface = { version = "0.3", default-features = false, optional = true,
     "objc2",
     "objc2-core-foundation",
 ] }
+objc2-video-toolbox = { version = "0.3", default-features = false, optional = true, features = [
+    "std",
+    "VTUtilities",
+] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 accesskit_macos = "0.27.2"
@@ -544,7 +586,7 @@ accesskit_macos = "0.27.2"
 # The collection types below that are the camera's (`camera-desktop`): this
 # entry is not optional, so the classes it names are listed here rather than
 # added by the feature.
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSBundle", "NSDictionary", "NSEnumerator", "NSError", "NSObject", "NSGeometry", "NSProcessInfo", "NSString", "NSURL", "NSUserDefaults", "NSValue", "NSData"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSAttributedString", "NSBundle", "NSDictionary", "NSEnumerator", "NSError", "NSLocale", "NSNotification", "NSObject", "NSGeometry", "NSProcessInfo", "NSString", "NSURL", "NSUserDefaults", "NSValue", "NSData"] }
 # The Mac's battery from IOKit's power sources (`macos_power`).
 objc2-io-kit = { version = "0.3", default-features = false, optional = true, features = [
     "std",
@@ -553,6 +595,7 @@ objc2-io-kit = { version = "0.3", default-features = false, optional = true, fea
 objc2-core-foundation = { version = "0.3", default-features = false, optional = true, features = [
     "std",
     "CFArray",
+    "CFCGTypes",
     "CFDictionary",
     "CFNumber",
     "CFString",
@@ -603,7 +646,12 @@ objc2-av-foundation = { version = "0.3", default-features = false, optional = tr
     "dispatch2",
     "std",
     "block2",
+    "objc2-core-foundation",
     "objc2-core-media",
+    "objc2-core-video",
+    "AVAsset",
+    "AVAssetResourceLoader",
+    "AVAssetTrack",
     "AVCaptureSession",
     "AVCaptureSessionPreset",
     "AVCaptureDevice",
@@ -613,12 +661,22 @@ objc2-av-foundation = { version = "0.3", default-features = false, optional = tr
     "AVCaptureVideoDataOutput",
     "AVCapturePhotoOutput",
     "AVMediaFormat",
+    "AVMediaSelection",
+    "AVMediaSelectionGroup",
+    "AVPlayer",
+    "AVPlayerItem",
+    "AVPlayerItemOutput",
+    "AVPlayerItemTrack",
+    "AVTime",
     "AVVideoSettings",
 ] }
 objc2-core-media = { version = "0.3", default-features = false, optional = true, features = [
     "std",
     "objc2-core-video",
+    "CMFormatDescription",
     "CMSampleBuffer",
+    "CMTime",
+    "CMTimeRange",
 ] }
 objc2-core-video = { version = "0.3", default-features = false, optional = true, features = [
     "std",
@@ -646,10 +704,12 @@ objc2 = { version = "0.6", optional = true }
 objc2-foundation = { version = "0.3", default-features = false, optional = true, features = [
     "std",
     "NSArray",
+    "NSAttributedString",
     "NSData",
     "NSDictionary",
     "NSEnumerator",
     "NSError",
+    "NSLocale",
     "NSNotification",
     "NSObject",
     "NSObjCRuntime",
@@ -740,7 +800,9 @@ objc2-av-foundation = { version = "0.3", default-features = false, optional = tr
     "dispatch2",
     "std",
     "block2",
+    "objc2-core-foundation",
     "objc2-core-media",
+    "objc2-core-video",
     "AVCaptureSession",
     "AVCaptureSessionPreset",
     "AVCaptureDevice",
@@ -750,18 +812,27 @@ objc2-av-foundation = { version = "0.3", default-features = false, optional = tr
     "AVCaptureVideoDataOutput",
     "AVCapturePhotoOutput",
     "AVMediaFormat",
+    "AVMediaSelection",
+    "AVMediaSelectionGroup",
     "AVVideoSettings",
-    # Media playback (`ios_media`): AVPlayer streams a remote item as well as a
-    # local one, and the asset is what answers a duration probe.
+    # Media playback (`ios_media` and `apple::player`): AVPlayer streams remote
+    # and local items with zero-copy CVPixelBuffer video output.
     "AVAsset",
+    "AVAssetResourceLoader",
+    "AVAssetTrack",
     "AVPlayer",
     "AVPlayerItem",
+    "AVPlayerItemOutput",
+    "AVPlayerItemTrack",
+    "AVTime",
 ] }
 objc2-core-media = { version = "0.3", default-features = false, optional = true, features = [
     "std",
     "objc2-core-video",
+    "CMFormatDescription",
     "CMSampleBuffer",
     "CMTime",
+    "CMTimeRange",
 ] }
 objc2-core-video = { version = "0.3", default-features = false, optional = true, features = [
     "std",
@@ -934,14 +1005,42 @@ stats_alloc = "0.1.10"
 # Reads the cursor the X server shows (`x11_cursor_tests`).
 x11rb = { version = "0.14.0", features = ["xfixes"] }
 
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# Pumps the main NSRunLoop in the harness-less AVPlayer integration test.
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSDate", "NSRunLoop"] }
+
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
 
 [[test]]
+name = "apple_player"
+path = "tests/apple_player/main.rs"
+required-features = ["desktop", "renderer-wgpu", "video"]
+harness = false
+
+[[test]]
+name = "linux_player"
+path = "tests/linux_player/main.rs"
+required-features = ["desktop", "renderer-wgpu", "video"]
+harness = false
+
+[[test]]
+name = "android_player"
+path = "tests/android_player/main.rs"
+required-features = ["android", "renderer-wgpu", "video"]
+harness = false
+
+[[test]]
 name = "framebuffer_memory"
 path = "tests/framebuffer_memory/main.rs"
 required-features = ["framebuffer"]
+harness = false
+
+[[test]]
+name = "player_memory"
+path = "tests/player_memory/main.rs"
+required-features = ["video"]
 harness = false
 
 [[bench]]

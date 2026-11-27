@@ -236,12 +236,17 @@ fn list(scene: &Scene) -> impl IntoView + use<> {
     }));
     let anchor = RwSignal::new(measured.borrow().anchor);
     advance_anchor(&measured, anchor, frame, gap);
-    let rows = row_window(&measured, anchor, frame, (gap, s));
+    let viewport = RwSignal::new(DESKTOP_WINDOW.1 as f32);
+    let rows = row_window(&measured, anchor, frame, viewport, (gap, s));
     let rows = row_stack(scene, &measured, rows, anchor, gap);
     let layers =
         (0..desktop_gauntlet().tier.layers).map(|layer| stacked_layer(scene, layer).into_any());
     let children: Vec<floem::AnyView> = std::iter::once(rows.into_any()).chain(layers).collect();
-    stack_from_iter(children)
+    stack_from_iter(children).on_resize(move |rect| {
+        if viewport.get_untracked() != rect.height() as f32 {
+            viewport.set(rect.height() as f32);
+        }
+    })
 }
 
 // The anchor moves on once its row scrolled off, as far as the rows reported
@@ -274,17 +279,32 @@ fn row_window(
     measured: &Heights,
     anchor: RwSignal<ListAnchor>,
     frame: Frame,
+    viewport: RwSignal<f32>,
     (gap, s): (f32, f32),
 ) -> Memo<std::ops::Range<usize>> {
     let measured = measured.clone();
-    let (_, window_height) = DESKTOP_WINDOW;
+    let tier = desktop_gauntlet().tier;
     create_memo(move |_| {
         let offset = frame.get() as f32 * SCROLL_PER_FRAME;
         let anchor = anchor.get();
         let measured = measured.borrow();
-        anchor.rows(offset, window_height as f32, gap, 10.0 * s, |row| {
-            measured.heights.get(&row).copied()
-        })
+        // The avatar, sparkline, gaps and padding alone bound an unmeasured card.
+        // Each nested level has a label and vertical padding. These lower bounds
+        // cover the viewport without building an entire screen of off-screen rows.
+        anchor.rows(
+            offset,
+            viewport.get(),
+            gap,
+            (tier.depth + 1) as f32 * 11.0 * s,
+            |row| {
+                measured.heights.get(&row).copied().or_else(|| {
+                    match gauntlet_row(row, tier.columns) {
+                        GauntletRow::Cards(_) => Some((32.0 + 36.0 + 5.0 * 6.0 + 2.0 * 10.0) * s),
+                        GauntletRow::Cluster(_) => None,
+                    }
+                })
+            },
+        )
     })
 }
 

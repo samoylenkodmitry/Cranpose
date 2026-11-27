@@ -177,7 +177,7 @@ fn regular_scroll_modifier_does_not_draw_implicit_scrollbar() {
     let state = state
         .take()
         .expect("scroll state should be created in a runtime");
-    state.set_max_value(600.0);
+    crate::scroll::tests::measure_scroll_max(state, 600.0);
     state.scroll_to(300.0);
     let modifier = Modifier::empty().vertical_scroll(state, false);
     let slices = collect_slices_from_modifier(&modifier);

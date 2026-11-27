@@ -4,11 +4,12 @@
 use std::time::Duration;
 
 use crate::{
-    Hand as Side, PointerMapping,
+    Hand as Side,
     aim::Aim,
     gestures::Gestures,
-    handle::HandleKind,
+    handle::HandleFocus,
     pointer::{Frame, Pointer},
+    pointer_settings::PointerChoice,
     ray::Beam,
     reach::Scene,
     space::{Cursor, PanelMove, PanelResize, PanelSlot},
@@ -43,18 +44,18 @@ impl Default for Pointers {
 
 impl Pointers {
     // Reads a frame at `time` with `aims` over `panels`, left hand then right. A volume whose meshes
-    // `picks` holds takes the ray where it meets one of them. `mapping` says which pointer button
-    // each button of a controller presses. `beams_visible` is whether the app lets the beams show.
-    // The gestures of the frame are in the accessors.
+    // `picks` holds takes the ray where it meets one of them. `choice` says which pointer button
+    // each button of a controller presses, whether the app lets the beams show and whether a hand
+    // touches the panels. The gestures of the frame are in the accessors.
     pub(crate) fn update(
         &mut self,
         aims: [Option<Aim>; 2],
         time: Duration,
         (panels, picks): (&[PanelSlot], &PickMeshes),
-        (mapping, beams_visible): (PointerMapping, bool),
+        choice: PointerChoice,
     ) {
         self.gestures.clear();
-        self.beams_visible = beams_visible;
+        self.beams_visible = choice.beams_visible;
         let dt = self
             .time
             .map_or(0.0, |last| time.saturating_sub(last).as_secs_f32());
@@ -70,7 +71,8 @@ impl Pointers {
                     picks,
                     claimed,
                 },
-                mapping,
+                mapping: choice.mapping,
+                direct_touch: choice.direct_touch,
             };
             self.sides[side.index()].update(aims[side.index()], &frame, &mut self.gestures);
         }
@@ -109,10 +111,15 @@ impl Pointers {
         [0, 1].map(|hand| self.sides[hand].pressed_surface())
     }
 
-    // The panel whose handle each hand holds or would grab, and which of its handles, left then
-    // right.
-    pub(crate) fn handles(&self) -> [Option<(u64, HandleKind)>; 2] {
+    // The handle that each hand presses or would grab, left then right.
+    pub(crate) fn handles(&self) -> [Option<HandleFocus>; 2] {
         [0, 1].map(|hand| self.sides[hand].handle())
+    }
+
+    // The hands whose press took or ended in this frame, left then right. Each gets a light
+    // vibration.
+    pub(crate) fn ticks(&self) -> [bool; 2] {
+        self.gestures.ticks
     }
 
     // The rays to show, left then right. A ray shows only while the app lets beams show and a panel
@@ -133,3 +140,11 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/two_pointer_tests.rs"]
 mod two_pointer_tests;
+
+#[cfg(test)]
+#[path = "tests/press_slop_tests.rs"]
+mod press_slop_tests;
+
+#[cfg(test)]
+#[path = "tests/direct_touch_tests.rs"]
+pub(crate) mod direct_touch_tests;

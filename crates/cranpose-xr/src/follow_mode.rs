@@ -1,6 +1,6 @@
 //! What a following subspace follows, and how.
 
-use crate::{Anchor, Hand, SoftFollowMode};
+use crate::{Anchor, Hand, HandJointType, SoftFollowMode};
 
 /// The dimensions of the target's pose that a following subspace tracks. Jetpack XR's
 /// `TrackedDimensions`.
@@ -100,6 +100,20 @@ pub enum FollowTarget {
     /// the left ray passes through a ball above the left controller. The other hand's ray hits
     /// and presses the ball as it does any panel.
     Controller(Hand, FollowMode),
+    /// A joint of a hand that the cameras track, as `mode` says, for example a ball on the palm.
+    /// Jetpack XR has no hand target: its targets are the head and anchors. Its ARCore `Hand` gives
+    /// the joints' poses, which this target follows.
+    ///
+    /// The subspace's origin is the joint's pose ([`HandState::joint`](crate::HandState::joint)),
+    /// in the OpenXR axes of a hand joint: -z toward the finger tips and +y out of the back of the
+    /// hand. A panel with no turn of its own then lies on the back of the hand, and a panel turned
+    /// by 90 degrees about x faces away from the palm. The app needs `Use::hand_tracking()` in its
+    /// build.
+    ///
+    /// While the cameras do not track the hand, or the runtime gives the joint no valid pose, the
+    /// subspace's panels do not show and take no hits. The hand's own pointer ignores them, as a
+    /// controller's ray ignores the panels on that controller, so the other hand presses them.
+    Hand(Hand, HandJointType, FollowMode),
     /// An anchor, as `mode` says. The content stands in the place that the runtime holds still
     /// for the anchor, so it stays on a table or a wall while the runtime learns more of the room.
     /// Jetpack XR's `FollowTarget.anchor`.
@@ -112,3 +126,7 @@ pub enum FollowTarget {
     /// content where it was.
     Anchor(Anchor, FollowMode),
 }
+
+#[cfg(test)]
+#[path = "tests/follow_mode_tests.rs"]
+mod tests;

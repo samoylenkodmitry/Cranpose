@@ -77,12 +77,15 @@ readonly LAYOUTS=(
     "movable-context-menu movable_content movable_content::steady_frames --steady-ledger --case=lazy_context_menu_scroll"
     "movable-flip movable_content movable_content::steady_frames --steady-ledger --case=movable_parent_flip"
     "movable-unordered movable_content movable_content::steady_frames --steady-ledger --case=movable_unordered_dispose"
+    "subcompose-modifiers subcompose_chain subcompose_chain::steady_frames --steady-ledger --case=subcompose_modifiers"
+    "subcompose-lazy-rows subcompose_chain subcompose_chain::steady_frames --steady-ledger --case=lazy_rows_bounded"
+    "layout-modifier-chain subcompose_chain subcompose_chain::steady_frames --steady-ledger --case=layout_modifier_chain"
 )
 # The layout whose start gets a row of its own, a layout node.
 readonly START_ROW=wall-t20
 # The layouts whose counted frames an A/B also runs under callgrind, beside
 # the start of START_ROW and the dashboard.
-readonly INSTRUCTION_ROWS=" gauntlet-t12 patchwork-t17 feed charts movable-heavy movable-unordered "
+readonly INSTRUCTION_ROWS=" gauntlet-t12 patchwork-t17 feed charts movable-heavy movable-unordered subcompose-modifiers subcompose-lazy-rows layout-modifier-chain "
 # The layouts whose scene changes in the counted window: nodes come and go,
 # texts change and caches fill. The blocks that their window leaves live
 # follow the scene's phase (from -101 to +2 a frame on the gauntlet t16 at
@@ -242,6 +245,10 @@ build() {
     if [ -f "$src/crates/cranpose-app-shell/benches/movable_content.rs" ]; then
         build_bin "$side" movable_content "$ws_target" \
             cargo bench -p cranpose-app-shell --bench movable_content --no-run
+    fi
+    if [ -f "$src/crates/cranpose-app-shell/benches/subcompose_chain.rs" ]; then
+        build_bin "$side" subcompose_chain "$ws_target" \
+            cargo bench -p cranpose-app-shell --bench subcompose_chain --no-run
     fi
 }
 

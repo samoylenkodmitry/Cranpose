@@ -12,8 +12,9 @@ pub(crate) enum PanelKind {
     Surface(StereoMode),
     // 3D content that the scene of the volumes draws. The panel's pose is the center of its box,
     // its size is the box's width and height in dp, and `depth` is the box's depth in dp. It has no
-    // part of the atlas: a ray stops on the box.
-    Volume { depth: f32 },
+    // part of the atlas: a ray stops on the box. A volume `under` a panel of content stands where
+    // that panel stands and takes no ray: the panel in front of it takes the input.
+    Volume { depth: f32, under: Option<u64> },
 }
 
 // A panel as the backend sees it.
@@ -60,7 +61,7 @@ impl PanelSlot {
     // meeting with the box.
     pub(crate) fn face(&self) -> Pose {
         match self.kind {
-            PanelKind::Volume { depth } => {
+            PanelKind::Volume { depth, .. } => {
                 self.pose
                     .then(&Pose::at([0.0, 0.0, depth * METERS_PER_DP / 2.0]))
             }
@@ -86,12 +87,69 @@ impl PanelSlot {
     pub(crate) fn hit(&self, ray: &Ray) -> Option<PanelHit> {
         let size = self.size().map(|dp| dp * METERS_PER_DP);
         match (self.kind, self.shape) {
-            (PanelKind::Volume { depth }, _) => {
+            (PanelKind::Volume { depth, .. }, _) => {
                 ray.hit_box(&self.pose, [size[0], size[1], depth * METERS_PER_DP])
             }
             (_, Shape::Flat) => ray.hit_panel(&self.pose, size),
             (_, Shape::Curved { radius }) => ray.hit_cylinder(&self.pose, size, radius),
         }
+    }
+
+    #[cfg_attr(
+        not(any(test, headset)),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    // Where the point `at` of the room stands against the panel's face, flat or on its curve. A
+    // volume has no face that a finger touches: its box has depth, and its meshes take a ray.
+    pub(crate) fn face_place(&self, at: [f32; 3]) -> Option<FacePlace> {
+        if matches!(self.kind, PanelKind::Volume { .. }) {
+            return None;
+        }
+        let local = self.pose.unrotate([
+            at[0] - self.pose.position[0],
+            at[1] - self.pose.position[1],
+            at[2] - self.pose.position[2],
+        ]);
+        let (across, height) = match self.shape {
+            Shape::Flat => (local[0], local[2]),
+            // The cylinder's axis stands `radius` in front of the panel's center, so a point
+            // nearer the axis than the radius stands in front of the face
+            Shape::Curved { radius } => {
+                let from_axis = local[0].hypot(local[2] - radius);
+                (
+                    local[0].atan2(radius - local[2]) * radius,
+                    radius - from_axis,
+                )
+            }
+        };
+        let [width, tall] = self.size();
+        Some(FacePlace {
+            x: across / METERS_PER_DP + width / 2.0,
+            y: tall / 2.0 - local[1] / METERS_PER_DP,
+            height,
+        })
+    }
+}
+
+// Where a point stands against a panel's face: its place across the face in dp from the panel's
+// top left corner, which may lie outside the panel, and its height above the face toward the
+// panel's front in meters, below zero behind the face.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct FacePlace {
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) height: f32,
+}
+
+impl FacePlace {
+    #[cfg_attr(
+        not(any(test, headset)),
+        expect(dead_code, reason = "the headset backend calls it")
+    )]
+    // Whether the place lies within the edges of `slot`'s panel.
+    pub(crate) fn within(&self, slot: &PanelSlot) -> bool {
+        let [width, height] = slot.size();
+        (0.0..=width).contains(&self.x) && (0.0..=height).contains(&self.y)
     }
 }
 
@@ -133,4 +191,13 @@ pub(crate) enum TrackedSpace {
 pub(crate) enum Mobility {
     Fixed,
     Movable,
+    // Movable by a handle that the content draws itself, such as a hologram's projector: the
+    // handle's sphere shows only while a ray points at it or presses it
+    MovableByOwnHandle,
+}
+
+impl Mobility {
+    pub(crate) fn movable(self) -> bool {
+        self != Self::Fixed
+    }
 }

@@ -157,18 +157,30 @@ impl RecordTables {
         trim_growth(&mut self.segments);
     }
 
+    // Empty tables with room for `shapes` shapes in `segments` segments.
+    pub(super) fn with_capacity(shapes: usize, segments: usize) -> Self {
+        Self::with_parts(shapes, segments, None)
+    }
+
+    fn with_parts(shapes: usize, segments: usize, gradients: Option<Box<GradientTables>>) -> Self {
+        Self {
+            shapes: ShapeRecords::with_capacity(shapes),
+            segments: Vec::with_capacity(segments),
+            gradients,
+            fingerprint: OnceLock::new(),
+        }
+    }
+
     // Empty tables with this one's capacities, so a recording that starts
     // while a scene still holds the last one grows nothing.
     pub(super) fn with_capacity_of(&self) -> Self {
-        Self {
-            shapes: ShapeRecords::with_capacity(self.shapes.capacity()),
-            segments: Vec::with_capacity(self.segments.capacity()),
-            gradients: self
-                .gradients
+        Self::with_parts(
+            self.shapes.capacity(),
+            self.segments.capacity(),
+            self.gradients
                 .as_deref()
                 .map(|tables| Box::new(tables.with_capacity_of())),
-            fingerprint: OnceLock::new(),
-        }
+        )
     }
 
     /// A hash of everything the GPU reads and of the segments, computed
