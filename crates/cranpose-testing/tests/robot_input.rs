@@ -47,6 +47,10 @@ fn headless_robot_dispatches_pointer_and_accessibility_activation() {
 // A column of 1,000 rows of 40 points that scrolls in a 200 by 400 window.
 // With `busy`, each pointer move takes that much of the machine's time before
 // the column sees it, as a loaded machine stretches each frame.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the sleep stands for a loaded machine, which the test needs"
+)]
 fn scrolling_column(
     busy: Option<Duration>,
 ) -> (
