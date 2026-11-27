@@ -108,6 +108,8 @@ fn pairs(graph: impl Fn() -> LayerNode) -> Option<[Pair; 2]> {
     let without_depth = pair(&mut renderer, &graph);
     set_debug_toggle(NO_INTERIORS_FIRST, None);
     set_debug_toggle(GPU_STATS, None);
+    // The renderer's lock spans the resets: the toggles are process-wide.
+    drop(renderer);
     Some([with_depth, without_depth])
 }
 
