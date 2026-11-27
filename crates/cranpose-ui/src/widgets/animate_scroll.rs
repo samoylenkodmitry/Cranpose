@@ -61,22 +61,16 @@ impl SpringTarget for LazyListState {
 impl SpringTarget for ScrollState {
     type Landing = f32;
 
-    // A column can leave the composition while the spring runs.
     fn move_by(self, delta: f32) -> f32 {
-        if self.try_value().is_none() {
-            return 0.0;
-        }
         self.dispatch_raw_delta(delta)
     }
 
     fn land(self, value: f32) {
-        if self.try_value().is_some() {
-            self.scroll_to(value);
-        }
+        self.scroll_to(value);
     }
 
     fn start_run(self, stop: impl FnOnce() + 'static) -> Option<ScrollId> {
-        Some(self.start_scroll_animation(stop))
+        self.start_scroll_animation(stop)
     }
 
     fn end_run(self, id: ScrollId) {
@@ -100,7 +94,10 @@ impl AnimateScroll for LazyListState {
 
 // Springs `state` to `value`, which lies within its range.
 pub(crate) fn animate_scroll_state_to(state: ScrollState, value: f32) {
-    animate(state, value - state.value_non_reactive(), Some(value));
+    let Some(current) = state.try_value() else {
+        return;
+    };
+    animate(state, value - current, Some(value));
 }
 
 /// How far item `index` starts past where `scroll_to_item(index, 0)` puts

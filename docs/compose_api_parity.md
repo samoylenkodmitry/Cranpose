@@ -46,7 +46,7 @@ Current counts (`0.5` dp tolerance):
 - `1.75x`: 405/462 common nodes pass (`87.7%`, 335 exact), 0 non-finite bounds,
   0 nodes absent from Cranpose, 18 expected text-metric divergences, 39
   unexpected divergences.
-- Stress suite: Compose `8/8` pass. Cranpose `19/20` pass.
+- Stress suite: Compose `8/8` pass. Cranpose `20/20` pass.
 
 ### Expected divergences
 
@@ -64,7 +64,6 @@ linked GitHub issue and a ratchet entry in `divergences.toml`.
 
 | Ledger rule | Issue | Densities | Kind | Observed impact | Summary |
 |---|---|---|---|---|---|
-| `scroll_state_owner_disposed_before_scroll_node_detaches` (stress) | [#2457](https://github.com/samoylenkodmitry/Cranpose/issues/2457) | stress | panic | `19/20` pass | `ScrollState::remove_invalidate_callback` panics in `ScrollNode::on_detach` after the owner of the `ScrollState` is disposed. |
 | `semantics-bounds-ignore-layer-and-offset-with` | [#2459](https://github.com/samoylenkodmitry/Cranpose/issues/2459) (see also [#2059](https://github.com/samoylenkodmitry/Cranpose/issues/2059), [#2386](https://github.com/samoylenkodmitry/Cranpose/issues/2386)) | `1.0x`, `1.75x` | `bounds_delta` | 2 nodes (`z11_gl_nest_c` `5.44` dp, `z11_off_lam` `10.00`–`10.29` dp) | Semantics bounds ignore ancestor `graphicsLayer` transforms and `Modifier::offset_with` layer translation. |
 | `fractional-density-rounding-drift` | [#2460](https://github.com/samoylenkodmitry/Cranpose/issues/2460) | `1.75x` | `bounds_delta` | 37 nodes across Zones 1, 2, 7, 8, 9, 10, 15, 19 (`0.57`–`1.14` dp) | Layout rounding at `1.75x` drifts by 1 to 2 physical pixels from Compose pixel-snapped constraints and placements. |
 

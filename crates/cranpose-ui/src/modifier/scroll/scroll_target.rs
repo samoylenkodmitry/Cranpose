@@ -158,6 +158,22 @@ impl<S: ScrollTarget> ScrollTarget for NestedTarget<S> {
     }
 }
 
+macro_rules! delegate_scroll_animation {
+    () => {
+        fn stop_animation(&self) -> bool {
+            self.stop_scroll_animation()
+        }
+
+        fn start_scroll(&self, stop: impl FnOnce() + 'static) -> Option<ScrollId> {
+            self.start_scroll_animation(stop)
+        }
+
+        fn end_scroll(&self, id: ScrollId) {
+            self.end_scroll_animation(id);
+        }
+    };
+}
+
 impl ScrollTarget for ScrollState {
     fn apply_delta(&self, delta: f32) -> f32 {
         -self.dispatch_raw_delta(-delta)
@@ -170,7 +186,7 @@ impl ScrollTarget for ScrollState {
     fn invalidate(&self) {}
 
     fn current_offset(&self) -> f32 {
-        self.value()
+        self.try_value().unwrap_or(0.0)
     }
 
     fn can_scroll(&self) -> bool {
@@ -178,11 +194,14 @@ impl ScrollTarget for ScrollState {
     }
 
     fn can_consume(&self, gesture_delta: f32) -> bool {
+        let Some(value) = self.try_value() else {
+            return false;
+        };
         let raw = -gesture_delta;
         if raw > 0.0 {
-            self.value_non_reactive() < self.max_value()
+            value < self.max_value()
         } else {
-            self.value_non_reactive() > 0.0
+            value > 0.0
         }
     }
 
@@ -190,17 +209,7 @@ impl ScrollTarget for ScrollState {
         Self::settle_policy(self)
     }
 
-    fn stop_animation(&self) -> bool {
-        self.stop_scroll_animation()
-    }
-
-    fn start_scroll(&self, stop: impl FnOnce() + 'static) -> Option<ScrollId> {
-        Some(self.start_scroll_animation(stop))
-    }
-
-    fn end_scroll(&self, id: ScrollId) {
-        self.end_scroll_animation(id);
-    }
+    delegate_scroll_animation!();
 }
 
 impl ScrollTarget for LazyListState {
@@ -251,17 +260,7 @@ impl ScrollTarget for LazyListState {
         self.set_dragged(dragging);
     }
 
-    fn stop_animation(&self) -> bool {
-        self.stop_scroll_animation()
-    }
-
-    fn start_scroll(&self, stop: impl FnOnce() + 'static) -> Option<ScrollId> {
-        self.start_scroll_animation(stop)
-    }
-
-    fn end_scroll(&self, id: ScrollId) {
-        self.end_scroll_animation(id);
-    }
+    delegate_scroll_animation!();
 }
 
 impl ScrollTarget for DraggableState {

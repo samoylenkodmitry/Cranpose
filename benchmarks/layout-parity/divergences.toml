@@ -117,9 +117,3 @@ tags = [
   "z19_ag4",
   "z19_ag5",
 ]
-
-[[stress.unexpected]]
-framework = "cranpose"
-scenario = "scroll_state_owner_disposed_before_scroll_node_detaches"
-issue = "#2457"
-reason = "ScrollState::remove_invalidate_callback panics in ScrollNode::on_detach when the ScrollState owner is disposed before the scroll node detaches."

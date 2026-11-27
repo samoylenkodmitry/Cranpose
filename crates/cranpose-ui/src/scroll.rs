@@ -182,7 +182,9 @@ impl ScrollState {
 
     /// The currently installed settle policy, if any.
     pub fn settle_policy(&self) -> Option<ScrollSettlePolicy> {
-        self.inner().settle_policy.borrow().clone()
+        self.inner
+            .try_with(|inner| inner.settle_policy.borrow().clone())
+            .flatten()
     }
 
     /// Whether a drag, a fling, a settle or a scroll animation moves the
@@ -240,14 +242,21 @@ impl ScrollState {
 
     /// Gets the maximum scroll value.
     pub fn max_value(&self) -> f32 {
-        *self.inner().max_value.borrow()
+        self.inner
+            .try_with(|inner| *inner.max_value.borrow())
+            .unwrap_or(0.0)
     }
 
     /// Scrolls by the given delta, clamping to valid range [0, max_value].
     /// Returns the actual amount scrolled.
     pub fn dispatch_raw_delta(&self, delta: f32) -> f32 {
-        let current = self.value_non_reactive();
-        let max = self.max_value();
+        let Some(current) = self.value.try_value() else {
+            return 0.0;
+        };
+        let Some(inner) = self.inner.try_get() else {
+            return 0.0;
+        };
+        let max = *inner.max_value.borrow();
         let new_value = (current + delta).clamp(0.0, max);
         let actual_delta = new_value - current;
 
@@ -263,7 +272,9 @@ impl ScrollState {
     /// The main-axis extent of the scroll viewport, as the last measure pass
     /// resolved it.
     pub fn viewport_extent(&self) -> f32 {
-        *self.inner().viewport_extent.borrow()
+        self.inner
+            .try_with(|inner| *inner.viewport_extent.borrow())
+            .unwrap_or(0.0)
     }
 
     /// The whole scrollable content along the main axis.
@@ -288,11 +299,15 @@ impl ScrollState {
     }
 
     pub(crate) fn set_max_value(&self, max: f32) {
-        *self.inner().max_value.borrow_mut() = max;
+        if let Some(inner) = self.inner.try_get() {
+            *inner.max_value.borrow_mut() = max;
+        }
     }
 
     pub(crate) fn set_viewport_extent(&self, extent: f32) {
-        *self.inner().viewport_extent.borrow_mut() = extent;
+        if let Some(inner) = self.inner.try_get() {
+            *inner.viewport_extent.borrow_mut() = extent;
+        }
     }
 
     /// Scrolls to the given position immediately. It stops a running fling,
@@ -326,13 +341,14 @@ impl ScrollState {
 
     // Makes the motion that `stop` stops the running scroll. The motion that
     // ran before stops.
-    pub(crate) fn start_scroll_animation(&self, stop: impl FnOnce() + 'static) -> ScrollId {
-        let (id, previous) = self.inner().running_scroll.borrow_mut().start(stop);
+    pub(crate) fn start_scroll_animation(&self, stop: impl FnOnce() + 'static) -> Option<ScrollId> {
+        let inner = self.inner.try_get()?;
+        let (id, previous) = inner.running_scroll.borrow_mut().start(stop);
         if let Some(previous) = previous {
             previous.run();
         }
         self.refresh_scroll_in_progress();
-        id
+        Some(id)
     }
 
     // Forgets the running scroll `id` once it ended, while the state lives.
@@ -345,14 +361,19 @@ impl ScrollState {
 
     // Stops the running scroll and returns whether one ran.
     pub(crate) fn stop_scroll_animation(&self) -> bool {
-        let running = self.inner().running_scroll.borrow_mut().take();
+        let Some(inner) = self.inner.try_get() else {
+            return false;
+        };
+        let running = inner.running_scroll.borrow_mut().take();
         let stopped = running.map(ScrollStop::run).is_some();
         self.refresh_scroll_in_progress();
         stopped
     }
 
     pub(crate) fn add_invalidate_callback(&self, callback: Box<dyn Fn()>) -> u64 {
-        let inner = self.inner();
+        let Some(inner) = self.inner.try_get() else {
+            return 0;
+        };
         let callback = app_owned_invalidation_callback(callback);
         let id = inner.invalidate_callbacks.add(Rc::clone(&callback));
         if inner.pending_invalidation.replace(false) {
@@ -362,11 +383,15 @@ impl ScrollState {
     }
 
     pub(crate) fn remove_invalidate_callback(&self, id: u64) {
-        self.inner().invalidate_callbacks.remove(id);
+        if let Some(inner) = self.inner.try_get() {
+            inner.invalidate_callbacks.remove(id);
+        }
     }
 
     fn invalidate(&self) {
-        let inner = self.inner();
+        let Some(inner) = self.inner.try_get() else {
+            return;
+        };
         let callbacks = inner.invalidate_callbacks.snapshot();
         if callbacks.is_empty() {
             inner.pending_invalidation.set(true);
@@ -797,7 +822,7 @@ impl LayoutModifierNode for ScrollNode {
             });
         }
 
-        let scroll = self.state.value_non_reactive().clamp(0.0, max_scroll);
+        let scroll = self.state.try_value().unwrap_or(0.0).clamp(0.0, max_scroll);
 
         let abs_scroll = if self.reverse_scrolling {
             scroll - max_scroll

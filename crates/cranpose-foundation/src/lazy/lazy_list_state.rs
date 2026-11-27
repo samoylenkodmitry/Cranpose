@@ -268,8 +268,8 @@ impl LazyListState {
 
     /// How many items the list holds, as of its last measure.
     pub fn total_items_count(&self) -> usize {
-        self.inner
-            .with(|cell| cell.borrow().layout_info.total_items_count)
+        self.with_layout_info(|info| info.total_items_count)
+            .unwrap_or(0)
     }
 
     /// Returns the first visible item index without subscribing the current composition scope.
