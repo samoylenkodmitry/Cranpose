@@ -57,7 +57,7 @@ pub struct Ktx2Transcoder<'a> {
 #[cfg(feature = "zstd")]
 fn zstd_inflate(comp: &[u8], want: usize) -> Option<Vec<u8>> {
     use ruzstd::io::Read;
-    let mut dec = ruzstd::StreamingDecoder::new(comp).ok()?;
+    let mut dec = ruzstd::decoding::StreamingDecoder::new(comp).ok()?;
     let mut out = vec![0u8; want];
     // Require an exact fill: read_exact errors if the stream yields fewer bytes.
     dec.read_exact(&mut out).ok()?;
