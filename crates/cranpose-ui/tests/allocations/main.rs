@@ -721,7 +721,9 @@ fn a_new_wrapped_paragraph_layout_keeps_its_first_room() {
             ));
             region.change().reallocations
         };
-        (0..PASSES).for_each(|index| drop(reallocations_of(index)));
+        for index in 0..PASSES {
+            reallocations_of(index);
+        }
         let reallocations: usize = (PASSES..2 * PASSES).map(reallocations_of).sum();
         println!("reallocations of {PASSES} new wrapped paragraphs' layouts: {reallocations}");
         assert!(
