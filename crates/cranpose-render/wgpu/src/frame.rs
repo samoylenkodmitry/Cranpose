@@ -4703,21 +4703,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         surfaces: &mut Vec<(usize, SurfaceRender)>,
     ) -> Result<(), String> {
         let limit = self.renderer.max_texture_dim();
-        let area: u64 = group
-            .iter()
-            .map(|member| u64::from(member.plan.width) * u64::from(member.plan.height))
-            .sum();
         let shelf_width = if keeps {
-            u32::try_from(area.isqrt()).unwrap_or(limit)
+            square_width(group, limit)
         } else {
-            let widest = group
-                .iter()
-                .map(|member| member.plan.width)
-                .max()
-                .unwrap_or(0);
-            self.renderer
-                .surface_atlas_sizes
-                .shelf_width(area, widest, limit)
+            self.renderer.surface_atlases.shelf_width(group, limit)
         };
         let mut packer = AtlasPacker::new(limit).with_shelf_width(shelf_width);
         // A kept surface is read in place or copied out, so where it lands
@@ -4738,12 +4727,14 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .atlases
             .iter()
             .map(|atlas| {
-                let size = atlas.padded_size(limit);
+                let renderer = &mut *self.renderer;
                 if keeps {
-                    Rc::new(self.renderer.acquire_retained_surface(size.0, size.1))
+                    let size = atlas.padded_size(limit);
+                    Rc::new(renderer.acquire_retained_surface(size.0, size.1))
                 } else {
-                    let (width, height) = self.renderer.surface_atlas_sizes.settle(size, limit);
-                    self.acquire_transient("Layer Surface Atlas", width, height)
+                    let stats = &renderer.frame_stats;
+                    let atlases = &mut renderer.surface_atlases;
+                    atlases.acquire(&renderer.device, atlas, limit, stats)
                 }
             })
             .collect();
@@ -5392,8 +5383,8 @@ pub(crate) fn scene_bounds(layer: &LayerScene, scale: f32) -> Option<Rect> {
 
 #[path = "frame_atlas.rs"]
 mod surface_atlas;
-pub(crate) use surface_atlas::SurfaceAtlasSizes;
-use surface_atlas::{AtlasPacker, AtlasPlacement};
+pub(crate) use surface_atlas::SurfaceAtlases;
+use surface_atlas::{AtlasPacker, AtlasPlacement, square_width};
 
 #[path = "frame_composites.rs"]
 mod composites;

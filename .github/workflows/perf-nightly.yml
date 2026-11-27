@@ -216,7 +216,9 @@ jobs:
           benchmarks/compose-vs-cranpose/build_apps.sh release "$(git describe --tags --abbrev=0 --match 'v*')"
 
       - name: Measure the desktop apps
-        # Outside the job's shared lock: a measurement empties the machine.
+        # Outside the job's shared lock: desktop.py takes the exclusive host
+        # lock around each subject and releases it between subjects so 20-minute
+        # CI jobs pass between measurements (#2417).
         # desktop.py also asks the display for its state and for how often
         # the window server composites it with nothing but a quiet window on
         # it; a display that is asleep or not at 60 Hz, or that something
@@ -224,7 +226,7 @@ jobs:
         # before it measures, or after it ran, and nothing is published.
         shell: bash --noprofile --norc -eo pipefail {0}
         run: |
-          scripts/ci/with_host_lock.sh --exclusive python3 benchmarks/compose-vs-cranpose/desktop.py \
+          python3 benchmarks/compose-vs-cranpose/desktop.py --host-lock \
             --output "$RUNNER_TEMP/desktop" --scenario gauntlet:16 --scenario wall:20 --scenario patchwork:17 --main "$(git rev-parse HEAD)" \
             --release "$(git describe --tags --abbrev=0 --match 'v*')"
 
@@ -236,7 +238,7 @@ jobs:
       - name: Measure the browser apps in Chrome
         shell: bash --noprofile --norc -eo pipefail {0}
         run: |
-          scripts/ci/with_host_lock.sh --exclusive python3 benchmarks/compose-vs-cranpose/desktop.py \
+          python3 benchmarks/compose-vs-cranpose/desktop.py --host-lock \
             --output "$RUNNER_TEMP/desktop-browser" --browser "$RUNNER_TEMP/gauntlet-browser" \
             --scenario gauntlet:16 --scenario wall:20 --main "$(git rev-parse HEAD)"
 

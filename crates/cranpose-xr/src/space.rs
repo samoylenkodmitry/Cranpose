@@ -23,6 +23,8 @@ pub(crate) mod field_dock;
 mod panel_slot;
 mod surface_delivery;
 
+#[cfg(any(test, headset))]
+pub(crate) use panel_slot::FacePlace;
 pub(crate) use panel_slot::{Mobility, PanelKind, PanelSlot, Ride, Shape, TrackedSpace};
 
 #[cfg(any(test, headset))]

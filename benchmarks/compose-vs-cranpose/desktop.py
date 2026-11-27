@@ -59,8 +59,10 @@ a removable volume, and the checkout may be on one.
 
 import argparse
 import bisect
+import contextlib
 import ctypes
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -992,6 +994,14 @@ def main():
     parser.add_argument('--max-others', type=float, default=1.5,
                         help='cores other processes may spend in a leg above what they spend while the machine '
                              'idles, before it is measured again')
+    parser.add_argument('--max-idle-others', dest='max_idle', type=float, default=MAX_IDLE_OTHERS,
+                        help='ceiling on host idle load before waiting for a quiet host; a reading above it '
+                             'never raises the disturbance bar')
+    parser.add_argument('--max-idle-wait', dest='max_idle_wait', type=float, default=MAX_IDLE_WAIT_S,
+                        help='maximum seconds to wait for host idle load to drop to --max-idle-others')
+    parser.add_argument('--host-lock', action=argparse.BooleanOptionalAction, default=True,
+                        help='take the exclusive host capacity lock around each subject and release it between '
+                             'subjects so builds and measurements do not overlap')
     parser.add_argument('--parity', action='store_true')
     parser.add_argument('--freeze', type=int, default=120)
     parser.add_argument('--shift', type=int, default=8)
@@ -1015,7 +1025,9 @@ def main():
         apps = [name for name in APPS if name == 'web' or Path(APPS[name][0]).exists()]
         print('not built:', ', '.join(name for name in APPS if name not in apps) or 'none', flush=True)
     args.output.mkdir(parents=True, exist_ok=True)
-    current_framecount()
+    # A FrameCount build would load the host while another measurement runs.
+    with host_lock(args.host_lock):
+        current_framecount()
     started = time.monotonic()
     server = BrowserServer(args.browser) if args.browser else serve_page()
     with tempfile.TemporaryDirectory(prefix='gauntlet-') as folder:
@@ -1023,11 +1035,13 @@ def main():
         shutil.copytree(FONTS, stage / 'fonts')
         shutil.copytree(CHAT_ASSETS, stage / 'chat-assets')
         # No measuring on a display that is not as the run is calibrated for.
-        began, problems = observe_display(stage, 'start')
+        with host_lock(args.host_lock):
+            began, problems = observe_display(stage, 'start')
         if problems:
             sys.exit(refusal(problems))
         report = run(args, apps, server, stage)
-        ended, problems = observe_display(stage, 'end')
+        with host_lock(args.host_lock):
+            ended, problems = observe_display(stage, 'end')
     # The display the apps' windows opened on, as the run began and ended: the
     # rest of the run's numbers mean little without it.
     report['display'] = {'start': began, 'end': ended}
@@ -1040,24 +1054,81 @@ def main():
         sys.exit(refusal(problems) + ' by the end of the run')
 
 
-# How long the machine's own background load is read for, before each round.
+# How long the machine's own background load is read for before measuring a subject.
 IDLE_SPAN_S = 5.0
+# Quiet nights on macm3 (2026-11-20 to 2026-11-26): 51 of 53 idle readings were
+# 0.21 to 0.89 cores (median 0.44, p90 0.78); busy bursts started at 1.22.
+MAX_IDLE_OTHERS = 0.9
+# Bounded wait for the host to quiet down to MAX_IDLE_OTHERS before a leg runs.
+MAX_IDLE_WAIT_S = 60.0
+# Pause after releasing the exclusive host lock between subjects so a waiting
+# shared CI job polling in host_flock.py (50 ms) enters before the next take.
+HOST_LOCK_YIELD_S = 0.2
+
+
+def _load_host_flock():
+    path = HERE.parents[1] / 'scripts/ci/host_flock.py'
+    spec = importlib.util.spec_from_file_location('cranpose_host_flock', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+HOST_FLOCK = _load_host_flock()
+
+
+@contextlib.contextmanager
+def host_lock(enabled):
+    """Takes the shared/exclusive host capacity lock exclusively while measuring
+    one subject, releasing it between subjects so CI jobs pass (#2417)."""
+    if not enabled:
+        yield
+        return
+    with HOST_FLOCK.exclusive_lock():
+        yield
+    if HOST_LOCK_YIELD_S > 0:
+        time.sleep(HOST_LOCK_YIELD_S)
 
 
 def idle_others(span_s=IDLE_SPAN_S):
     """The cores the machine's processes spend while no app runs, over
-    `span_s`: its own background load, which a Mac up for weeks can hold
-    above a core (macm3, 2026-10-11: `dasd`, `launchd` and `notifyd`)."""
+    `span_s`: its own background load."""
     before, started = processes(), time.monotonic()
     time.sleep(span_s)
     after, wall = processes(), time.monotonic() - started
     return sum(max(0.0, cpu - before[pid][1]) for pid, (_, cpu, _, _) in after.items() if pid in before) / wall
 
 
-def undisturbed_leg(name, args, server, stage, label, earlier, failures, profile, start, idle, install):
+def quiet_idle(max_idle=MAX_IDLE_OTHERS, max_wait_s=MAX_IDLE_WAIT_S, span_s=IDLE_SPAN_S):
+    """Reads host idle load; while it stays above `max_idle`, waits up to
+    `max_wait_s` seconds and reads again. Returns `(idle, waited_s)`."""
+    idle = idle_others(span_s)
+    if idle <= max_idle or max_wait_s <= 0:
+        return idle, 0.0
+    print(f'host idles at {idle:.2f} cores (limit {max_idle:.2f}); waiting up to {max_wait_s:.0f} s', flush=True)
+    started = time.monotonic()
+    reads = 0
+    max_reads = max(1, int(max_wait_s // max(span_s, 1e-6)))
+    while idle > max_idle and reads < max_reads and time.monotonic() - started < max_wait_s:
+        idle = idle_others(span_s)
+        reads += 1
+    waited = round(time.monotonic() - started, 2)
+    print(f'host idles at {idle:.2f} cores after waiting {waited:.1f} s', flush=True)
+    return idle, waited
+
+
+def disturbed_limit(idle, max_others, max_idle):
+    """Maximum other-process cores allowed before a leg is marked disturbed.
+    An idle reading above `max_idle` never raises the bar."""
+    baseline = idle if idle <= max_idle else 0.0
+    return baseline + max_others
+
+
+def undisturbed_leg(name, args, server, stage, label, earlier, failures, profile, start, idle, install,
+                    idle_waited=0.0):
     """A leg of `start`, measured again, up to three times, while other
-    processes spend more than `--max-others` cores above the machine's `idle`
-    load in it or it fails. Every
+    processes spend more than `--max-others` cores above a quiet `idle`
+    baseline in it or it fails. Every
     attempt at a first start begins after the apps' state and Chrome's
     `profile` are removed, on a fresh install of the app's program it leaves
     in `install`; a second start runs that install and follows the earlier
@@ -1065,7 +1136,12 @@ def undisturbed_leg(name, args, server, stage, label, earlier, failures, profile
     marked `disturbed`, and every failed attempt is added to `failures`; none
     when every attempt failed, so one app cannot end the run."""
     legs = []
+    max_idle = getattr(args, 'max_idle', MAX_IDLE_OTHERS)
+    max_idle_wait = getattr(args, 'max_idle_wait', MAX_IDLE_WAIT_S)
+    current_idle, current_waited = idle, idle_waited
     for attempt in range(3):
+        if attempt > 0 and legs and legs[-1]['disturbed'] and not legs[-1].get('display_problems'):
+            current_idle, current_waited = quiet_idle(max_idle, max_idle_wait)
         checks_waited = None
         if start == STARTS[0]:
             clear_app_state(profile)
@@ -1083,10 +1159,12 @@ def undisturbed_leg(name, args, server, stage, label, earlier, failures, profile
             failures.append({'subject': name, 'start': start, 'label': f'{label}-{attempt + 1}',
                              'error': str(failure)[:600]})
             continue
-        leg['idle_other_cores'] = round(idle, 2)
+        leg['idle_other_cores'] = round(current_idle, 2)
+        leg['idle_waited_s'] = round(current_waited, 2)
         if checks_waited is not None:
             leg['program_checks_waited_s'] = checks_waited
-        leg['disturbed'] = leg['other_cores'] > idle + args.max_others or bool(leg.get('display_problems'))
+        limit = disturbed_limit(current_idle, args.max_others, max_idle)
+        leg['disturbed'] = leg['other_cores'] > limit or bool(leg.get('display_problems'))
         legs.append(leg)
         print(f'{label:16} fps {leg["fps"]:6.1f} cpu/f {leg["cpu_ms_per_frame"]} first frame '
               f'{leg["first_frame_s"]} s p99 {leg["interval_p99_ms"]} others {leg["other_cores"]}', flush=True)
@@ -1135,7 +1213,8 @@ def run(args, apps, server, stage):
     built_file = args.browser / 'versions.json' if args.browser else HERE / 'desktop-versions.json'
     built = json.loads(built_file.read_text()) if built_file.exists() else {}
     if args.browser:
-        warm_chrome(args, server, stage)
+        with host_lock(getattr(args, 'host_lock', False)):
+            warm_chrome(args, server, stage)
     width, height = DESKTOP_WINDOW
     window = f'{width} x {height} {"browser " if args.browser else ""}window'
     scenarios = [measure_screen(screen_args(args, screen), apps, server, stage, window) for screen in args.screens]
@@ -1154,7 +1233,10 @@ def run(args, apps, server, stage):
         'device': {'ro.product.model': chip},
         'subjects': [versions.subject(name, platform, built, args.release) for name in apps],
         'protocol': {'run_s': args.run, 'starts': list(STARTS), 'rounds': args.rounds,
-                     'max_other_cores': args.max_others, **slow_rule()},
+                     'max_other_cores': args.max_others,
+                     'max_idle_other_cores': getattr(args, 'max_idle', MAX_IDLE_OTHERS),
+                     'max_idle_wait_s': getattr(args, 'max_idle_wait', MAX_IDLE_WAIT_S),
+                     **slow_rule()},
         'scenarios': scenarios,
     }
 
@@ -1192,32 +1274,38 @@ def measure_screen(args, apps, server, stage, window):
         print(f'{args.scenario}: not drawn by {", ".join(skipped)}', flush=True)
     apps = [name for name in apps if name not in skipped]
     legs, failures = [], []
+    use_lock = getattr(args, 'host_lock', False)
+    max_idle = getattr(args, 'max_idle', MAX_IDLE_OTHERS)
+    max_idle_wait = getattr(args, 'max_idle_wait', MAX_IDLE_WAIT_S)
     for round_index in range(args.rounds):
-        idle = idle_others()
-        print(f'round {round_index + 1}: the machine idles at {idle:.2f} cores', flush=True)
         for name in apps:
-            # Chrome's profile of the round: made by the first start, kept
-            # for the second.
-            profile = stage / f'chrome-profile-{name}-{round_index + 1}'
-            # The program the first start installs, which the second runs.
-            install = []
-            for start in STARTS:
-                earlier = [leg['fps'] for leg in legs
-                           if leg['subject'] == name and leg['start'] == start and not leg['disturbed']]
-                label = f'{name}-{round_index + 1}-{start}'
-                measured = undisturbed_leg(name, args, server, stage, label, earlier, failures, profile, start,
-                                           idle, install)
-                if not measured:
-                    # No second start without a first one.
-                    break
-                legs += [{'subject': name, 'round': round_index, 'start': start, **leg} for leg in measured]
-                kept = [leg for leg in measured if not leg['disturbed']]
-                if kept and disagrees(kept[-1]['fps'], earlier):
-                    print(f'{name}: {kept[-1]["fps"]} fps disagrees with its earlier legs; measuring once more',
-                          flush=True)
-                    again = undisturbed_leg(name, args, server, stage, f'{label}-again', earlier, failures,
-                                            profile, start, idle, install)
-                    legs += [{'subject': name, 'round': round_index, 'start': start, **leg} for leg in again]
+            with host_lock(use_lock):
+                idle, idle_waited = quiet_idle(max_idle, max_idle_wait)
+                print(f'round {round_index + 1} {name}: the machine idles at {idle:.2f} cores', flush=True)
+                # Chrome's profile of the round: made by the first start, kept
+                # for the second.
+                profile = stage / f'chrome-profile-{name}-{round_index + 1}'
+                # The program the first start installs, which the second runs.
+                install = []
+                for start in STARTS:
+                    earlier = [leg['fps'] for leg in legs
+                               if leg['subject'] == name and leg['start'] == start and not leg['disturbed']]
+                    label = f'{name}-{round_index + 1}-{start}'
+                    measured = undisturbed_leg(name, args, server, stage, label, earlier, failures, profile, start,
+                                               idle, install, idle_waited)
+                    if not measured:
+                        # No second start without a first one.
+                        break
+                    legs += [{'subject': name, 'round': round_index, 'start': start, **leg} for leg in measured]
+                    idle = measured[-1]['idle_other_cores']
+                    idle_waited = measured[-1]['idle_waited_s']
+                    kept = [leg for leg in measured if not leg['disturbed']]
+                    if kept and disagrees(kept[-1]['fps'], earlier):
+                        print(f'{name}: {kept[-1]["fps"]} fps disagrees with its earlier legs; measuring once more',
+                              flush=True)
+                        again = undisturbed_leg(name, args, server, stage, f'{label}-again', earlier, failures,
+                                                profile, start, idle, install, idle_waited)
+                        legs += [{'subject': name, 'round': round_index, 'start': start, **leg} for leg in again]
     return {'scenario': args.scenario, 'extras': f'tier {args.tier}, {window}', 'legs': legs, 'failures': failures,
             'unimplemented': skipped,
             'starts': {start: {'summary': summarize(legs, apps, start), 'verdicts': {}} for start in STARTS}}

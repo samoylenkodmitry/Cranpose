@@ -15,9 +15,9 @@ use super::{
     tracking::{EyeGazeAction, Trackers, TrackingSetup},
 };
 use crate::{
-    Controller, Hand, Haptics, HeadsetProperties, PointerMapping, PointerSettings, Pose, Recenter,
-    RenderViewpoint, TrackingFeature, XrFrame, aim::Aim, follow_origin::Poses,
-    frame_effects::FrameEffects, haptics::controller_asks, pointer_aim::pointer_aim,
+    Controller, Hand, Haptics, HeadsetProperties, PointerSettings, Pose, Recenter, RenderViewpoint,
+    TrackingFeature, XrFrame, aim::Aim, follow_origin::Poses, frame_effects::FrameEffects,
+    haptics::controller_asks, pointer_aim::pointer_aim, pointer_settings::PointerChoice,
     session_status::SessionStatus,
 };
 
@@ -90,13 +90,10 @@ impl HeadsetInput {
         }
     }
 
-    // The app's choices that the pointer reads each frame: the button mapping, and whether the
-    // beams show.
-    pub(crate) fn pointer_choice(&self) -> (PointerMapping, bool) {
-        (
-            self.pointer_settings.mapping(),
-            self.pointer_settings.beams_visible(),
-        )
+    // The app's choices that the pointer reads each frame: the button mapping, whether the beams
+    // show and whether a hand touches the panels.
+    pub(crate) fn pointer_choice(&self) -> PointerChoice {
+        self.pointer_settings.choice()
     }
 
     // Plays the pointer's press vibration on `hand`'s controller in the next frame.

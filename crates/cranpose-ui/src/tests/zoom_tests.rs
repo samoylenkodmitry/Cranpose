@@ -426,7 +426,7 @@ fn scroll_ignores_secondary_pointer_events() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let scroll_state = crate::ScrollState::new(100.0);
-        scroll_state.set_max_value(400.0);
+        crate::scroll::tests::measure_scroll_max(scroll_state, 400.0);
         let (handler, _chain) =
             pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 

@@ -157,6 +157,12 @@ impl ShapeVariant {
         })
     }
 
+    // Whether every record that the variant draws takes its colour from
+    // flat values and the fragment position alone: a solid brush, undithered.
+    pub(crate) fn shades_flat(self) -> bool {
+        self.solid && !self.dither
+    }
+
     /// The vertex and fragment entry points of this variant, for records
     /// drawn `flat` (none of them turned).
     fn entries(self, flat: bool) -> (&'static str, &'static str) {

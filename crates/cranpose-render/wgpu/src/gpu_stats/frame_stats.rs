@@ -5,7 +5,7 @@ use cranpose_render_common::raster_cache::{LAYER_RASTER_CACHE_KIND_COUNT, LayerR
 use cranpose_ui_graphics::Rect;
 
 use super::{
-    FrameDamage, FrameStatsSnapshot, IsolatedLayerStat, TOP_ISOLATED_LAYER_LIMIT,
+    BatchBreaks, FrameDamage, FrameStatsSnapshot, IsolatedLayerStat, TOP_ISOLATED_LAYER_LIMIT,
     shadow_cache_diagnostics_enabled,
 };
 use crate::{frame_graph::FrameCommandStats, run_geometry::ShapeFill};
@@ -64,6 +64,8 @@ pub(crate) struct FrameStats {
     pub image_passes: Cell<u32>,
     pub text_passes: Cell<u32>,
     pub draw_calls: Cell<u32>,
+    pub batch_breaks: Cell<BatchBreaks>,
+    pub glyph_pixels: Cell<f64>,
     pub damage: Cell<FrameDamage>,
     pub repainted_pixels: Cell<u64>,
     pub kept_stand_in_pixels: Cell<u64>,
@@ -349,6 +351,16 @@ impl FrameStats {
             .set(self.draw_calls.get().saturating_add(count));
     }
 
+    pub(crate) fn add_glyph_pixels(&self, pixels: f64) {
+        self.glyph_pixels.set(self.glyph_pixels.get() + pixels);
+    }
+
+    pub(crate) fn add_batch_breaks(&self, breaks: BatchBreaks) {
+        let mut total = self.batch_breaks.get();
+        total.add(breaks);
+        self.batch_breaks.set(total);
+    }
+
     pub(crate) fn bump_text(&self) {
         self.text_passes.set(self.text_passes.get() + 1);
     }
@@ -465,6 +477,8 @@ impl FrameStats {
             image_passes: self.image_passes.get(),
             text_passes: self.text_passes.get(),
             draw_calls: self.draw_calls.get(),
+            batch_breaks: self.batch_breaks.get(),
+            glyph_pixels: self.glyph_pixels.get(),
             damage: self.damage.get(),
             repainted_pixels: self.repainted_pixels.get(),
             kept_stand_in_pixels: self.kept_stand_in_pixels.get(),
@@ -543,6 +557,8 @@ impl FrameStats {
         self.image_passes.set(0);
         self.text_passes.set(0);
         self.draw_calls.set(0);
+        self.batch_breaks.set(BatchBreaks::default());
+        self.glyph_pixels.set(0.0);
         self.damage.set(FrameDamage::default());
         self.repainted_pixels.set(0);
         self.kept_stand_in_pixels.set(0);

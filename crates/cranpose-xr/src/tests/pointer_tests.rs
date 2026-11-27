@@ -16,14 +16,15 @@ use cranpose_testing::{
 
 use super::*;
 use crate::{
-    Controller, HandAim, HandState, InputSource, MovePolicy, Pinch, PointerMapping, Pose, Ray,
-    ResizeLimits, ResizePolicy, SpatialExternalSurface, SpatialMoveEvent, SpatialMoveEventType,
-    SpatialPanel, SpatialResizeEvent, SpatialResizeEventType, SpatialVolume, StereoMode,
-    SubspaceModifier, TrackedPose, TrackingState, XrFrame,
+    Controller, HandAim, HandState, InputSource, MovePolicy, Pinch, Pose, Ray, ResizeLimits,
+    ResizePolicy, SpatialExternalSurface, SpatialMoveEvent, SpatialMoveEventType, SpatialPanel,
+    SpatialResizeEvent, SpatialResizeEventType, SpatialVolume, StereoMode, SubspaceModifier,
+    TrackedPose, TrackingState, XrFrame,
     aim::{Aim, Buttons},
     atlas_input,
     handle::{HandleFocus, HandleKind},
     pointer_aim::pointer_aim,
+    pointer_settings::PointerChoice,
     scripted_hand::{PinchCycle, ScriptedHand, play},
     space::{
         Cursor, Mobility, PanelKind, PanelMove, PanelResize, PanelSlot, Ride, SUBSPACE_ORIGIN,
@@ -159,7 +160,7 @@ pub(super) struct Frames {
     pub(super) pointer: Pointers,
     frame: u64,
     picks: PickMeshes,
-    pub(super) mapping: PointerMapping,
+    pub(super) choice: PointerChoice,
 }
 
 impl Frames {
@@ -184,7 +185,7 @@ impl Frames {
         self.frame += 1;
         let time = Duration::from_millis(10 * self.frame);
         self.pointer
-            .update(aims, time, (panels, &self.picks), (self.mapping, true));
+            .update(aims, time, (panels, &self.picks), self.choice);
         (self.pointer.atlas().to_vec(), self.pointer.cursors())
     }
 
@@ -858,7 +859,7 @@ fn carry_right(space: &Space) {
             [None, aim],
             time,
             (&space.panels(), &PickMeshes::default()),
-            (PointerMapping::default(), true),
+            PointerChoice::default(),
         );
         for step in pointer.moves() {
             space.carry(step);
@@ -940,7 +941,7 @@ fn resize_right(space: &Space) {
             [None, aim],
             time,
             (&space.panels(), &PickMeshes::default()),
-            (PointerMapping::default(), true),
+            PointerChoice::default(),
         );
         for step in pointer.resizes() {
             space.resize(step);
@@ -1191,6 +1192,7 @@ fn a_ray_that_enters_a_volume_by_its_side_reports_the_place_on_its_front_face() 
         stick: [0.0; 2],
         buttons: Buttons::default(),
         source: InputSource::Controller,
+        tip: None,
     });
     frames.update([None, aim], &space.panels());
     for gesture in frames.pointer.surface_events() {
@@ -1675,7 +1677,7 @@ pub(super) fn clicks_of(aims: impl IntoIterator<Item = Option<Aim>>) -> u32 {
             [None, aim],
             millis(10 * frame),
             (&[BUTTON_PANEL], &PickMeshes::default()),
-            (PointerMapping::default(), true),
+            PointerChoice::default(),
         );
         atlas_input::deliver(robot.shell_mut(), pointer.atlas());
         robot.wait_for_idle();

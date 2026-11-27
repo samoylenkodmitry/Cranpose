@@ -32,6 +32,8 @@ pub(crate) struct Ablation {
     pub(crate) text: bool,
     pub(crate) shape: ShapeAblation,
     pub(crate) glass_flags: GlassAblation,
+    // Fills draw whole under the opaque fills laid after them.
+    pub(crate) occlusion_cut: bool,
 }
 
 impl Ablation {
@@ -54,6 +56,7 @@ impl Ablation {
                 "shape_fill" => ablation.shape.fill = true,
                 "glass_dispersion" => ablation.glass_flags.dispersion = true,
                 "glass_refraction" => ablation.glass_flags.refraction = true,
+                "occlusion_cut" => ablation.occlusion_cut = true,
                 _ => {}
             }
         }

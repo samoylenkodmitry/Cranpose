@@ -38,19 +38,42 @@ const SPARKS_SPREAD: f32 = 0.25;
 const SPARKS_RISE: f32 = 120.0;
 // The room that an object takes beyond its control's place, as it blooms, floats or orbits, in dp
 const OBJECT_REACH: f32 = 40.0;
+// The room that a gem takes beyond its place, in dp: its halo reaches a little past the place, and
+// a press sinks it 6 dp away from the viewer
+const GEM_REACH: f32 = 10.0;
+
+// What the objects of a hologram's page do, as the box that holds them needs to know.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PageObjects {
+    // Objects that bloom, float or orbit beyond their places, or a page that rises out of its
+    // projector or sinks back into it
+    Any,
+    // Gems alone on a page that stands at its place. A gem turns within its place.
+    StillGems,
+}
 
 // The half sizes, in dp, of the box about the page's middle that holds every object of a page of
 // `size` dp with `stage` around it, as the projection layer covers it. A movable page's handle
-// stands under it.
+// stands under it. A page of gems alone that stands at its place takes a box little larger than
+// itself, so the projection layer of a small gem, such as one on a hand, stays small.
 pub(crate) fn hologram_extent(
     [width, height]: [f32; 2],
     (stage, movable): (HologramStage, bool),
+    objects: PageObjects,
 ) -> [f32; 3] {
-    let mut extent = [
-        width / 2.0 + OBJECT_REACH,
-        height / 2.0 + OBJECT_REACH,
-        OBJECT_REACH,
-    ];
+    let mut extent = match objects {
+        PageObjects::Any => [
+            width / 2.0 + OBJECT_REACH,
+            height / 2.0 + OBJECT_REACH,
+            OBJECT_REACH,
+        ],
+        // A gem is as deep as it is wide, and its width is the smaller side of its place at most
+        PageObjects::StillGems => [
+            width / 2.0 + GEM_REACH,
+            height / 2.0 + GEM_REACH,
+            width.min(height) / 2.0 + GEM_REACH,
+        ],
+    };
     let mut reach = |x: f32, y: f32, z: f32| {
         extent[0] = extent[0].max(x);
         extent[1] = extent[1].max(y);

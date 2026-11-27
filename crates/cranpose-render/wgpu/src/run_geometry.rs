@@ -1,6 +1,7 @@
 use cranpose_ui_graphics::{
-    BAND_MARGIN, BAND_MAX_STEP, FRAGMENT_KIND_ARC, Point, QUAD_VERTICES, RecordTables, ShapeRecord,
-    StrokeCap, arc_trig, band_padded_range, strip_vertices,
+    BAND_MARGIN, BAND_MAX_STEP, FRAGMENT_KIND_ARC, FRAGMENT_KIND_FILL, Point, QUAD_VERTICES,
+    RecordTables, ShapeRecord, ShapeRecordBody, StrokeCap, arc_trig, band_padded_range,
+    strip_vertices,
 };
 
 pub(crate) fn device_shape_edges(
@@ -272,6 +273,13 @@ impl ShapeFill {
             }
         }
         fill
+    }
+
+    // Takes back `pixels` of the fill `body` that a later opaque interior
+    // hides, which its record no longer rasterizes.
+    pub(crate) fn hide(&mut self, body: &ShapeRecordBody, pixels: f64) {
+        let class = FRAGMENT_KIND_FILL as usize * 2 + usize::from(body.brush != 0);
+        self.pixels[class] -= pixels;
     }
 
     pub(crate) fn total(&self) -> f64 {

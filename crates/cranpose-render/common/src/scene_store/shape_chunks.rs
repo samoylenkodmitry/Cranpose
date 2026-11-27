@@ -713,8 +713,10 @@ impl SceneStore {
     }
 
     // Notes the update the store began, and moves the items of the chunks
-    // that went sparse `MOVE_AFTER_UPDATES` updates before or earlier.
-    #[inline]
+    // that went sparse `MOVE_AFTER_UPDATES` updates before or earlier. Out
+    // of line: `begin_update` runs from the boards' IRAM, which has no room
+    // for this check.
+    #[inline(never)]
     pub(super) fn begin_shapes_update(&mut self, update: SceneUpdate) {
         let chunks = &mut self.shape_chunks;
         chunks.update = update;

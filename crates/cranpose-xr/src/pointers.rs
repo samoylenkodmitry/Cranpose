@@ -4,11 +4,12 @@
 use std::time::Duration;
 
 use crate::{
-    Hand as Side, PointerMapping,
+    Hand as Side,
     aim::Aim,
     gestures::Gestures,
     handle::HandleFocus,
     pointer::{Frame, Pointer},
+    pointer_settings::PointerChoice,
     ray::Beam,
     reach::Scene,
     space::{Cursor, PanelMove, PanelResize, PanelSlot},
@@ -43,18 +44,18 @@ impl Default for Pointers {
 
 impl Pointers {
     // Reads a frame at `time` with `aims` over `panels`, left hand then right. A volume whose meshes
-    // `picks` holds takes the ray where it meets one of them. `mapping` says which pointer button
-    // each button of a controller presses. `beams_visible` is whether the app lets the beams show.
-    // The gestures of the frame are in the accessors.
+    // `picks` holds takes the ray where it meets one of them. `choice` says which pointer button
+    // each button of a controller presses, whether the app lets the beams show and whether a hand
+    // touches the panels. The gestures of the frame are in the accessors.
     pub(crate) fn update(
         &mut self,
         aims: [Option<Aim>; 2],
         time: Duration,
         (panels, picks): (&[PanelSlot], &PickMeshes),
-        (mapping, beams_visible): (PointerMapping, bool),
+        choice: PointerChoice,
     ) {
         self.gestures.clear();
-        self.beams_visible = beams_visible;
+        self.beams_visible = choice.beams_visible;
         let dt = self
             .time
             .map_or(0.0, |last| time.saturating_sub(last).as_secs_f32());
@@ -70,7 +71,8 @@ impl Pointers {
                     picks,
                     claimed,
                 },
-                mapping,
+                mapping: choice.mapping,
+                direct_touch: choice.direct_touch,
             };
             self.sides[side.index()].update(aims[side.index()], &frame, &mut self.gestures);
         }
@@ -142,3 +144,7 @@ mod two_pointer_tests;
 #[cfg(test)]
 #[path = "tests/press_slop_tests.rs"]
 mod press_slop_tests;
+
+#[cfg(test)]
+#[path = "tests/direct_touch_tests.rs"]
+pub(crate) mod direct_touch_tests;

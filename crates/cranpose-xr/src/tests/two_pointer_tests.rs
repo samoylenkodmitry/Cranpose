@@ -22,19 +22,20 @@ use crate::{
     aim::{Aim, Buttons},
     atlas_input,
     handle::HandleKind,
+    pointer_settings::PointerChoice,
     pointers::Pointers,
     scripted_hand::aim_pose,
     space::{PanelSlot, Space, field_dock::point_on, local_space},
     volume_pick::PickMeshes,
 };
 
-const LEFT: PointerId = PointerId(1);
-const RIGHT: PointerId = PointerId(2);
+pub(super) const LEFT: PointerId = PointerId(1);
+pub(super) const RIGHT: PointerId = PointerId(2);
 
-type Log = PointerLog;
+pub(super) type Log = PointerLog;
 
 // A box that fills its panel and records every pointer event that reaches it.
-fn recording(log: &Log) {
+pub(super) fn recording(log: &Log) {
     Layer(
         Modifier::empty().fill_max_size().then(log.recorder()),
         BoxSpec::default(),
@@ -48,17 +49,17 @@ fn of_kind(log: &Log, kind: PointerEventKind) -> Vec<PointerId> {
 }
 
 // A headset: the app's panels in a space, the two hands' pointers and the shell of the content.
-struct Headset {
+pub(super) struct Headset {
     robot: RobotTestRule<TestRenderer>,
-    space: Space,
+    pub(super) space: Space,
     pointers: Pointers,
     picks: PickMeshes,
-    mapping: PointerMapping,
+    pub(super) choice: PointerChoice,
     frame: u64,
 }
 
 // A headset whose content `compose` composes.
-fn headset(compose: impl Fn() + 'static) -> Headset {
+pub(super) fn headset(compose: impl Fn() + 'static) -> Headset {
     let held = Rc::new(RefCell::new(None));
     let keep = Rc::clone(&held);
     let compose = Rc::new(compose);
@@ -75,23 +76,29 @@ fn headset(compose: impl Fn() + 'static) -> Headset {
         space,
         pointers: Pointers::default(),
         picks: PickMeshes::default(),
-        mapping: PointerMapping::default(),
+        choice: PointerChoice::default(),
         frame: 0,
     }
 }
 
 impl Headset {
     // One frame of the headset's loop, 10 ms after the one before.
-    fn frame(&mut self, aims: [Option<Aim>; 2]) {
+    pub(super) fn frame(&mut self, aims: [Option<Aim>; 2]) {
         self.frame += 1;
         let panels = self.space.panels();
         self.pointers.update(
             aims,
             Duration::from_millis(10 * self.frame),
             (&panels, &self.picks),
-            (self.mapping, true),
+            self.choice,
         );
         atlas_input::deliver(self.robot.shell_mut(), self.pointers.atlas());
+        for gesture in self.pointers.surface_events() {
+            self.space.deliver_to_surface(gesture);
+        }
+        for (hand, cursor) in Side::BOTH.into_iter().zip(self.pointers.cursors()) {
+            self.space.set_cursor(hand, cursor);
+        }
         for step in self.pointers.moves() {
             self.space.carry(step);
         }
@@ -102,14 +109,24 @@ impl Headset {
     }
 
     // `frames` frames, with the aims that `aims` gives for the number of the frame.
-    fn run(&mut self, frames: u32, aims: impl Fn(u32) -> [Option<Aim>; 2]) {
+    pub(super) fn run(&mut self, frames: u32, aims: impl Fn(u32) -> [Option<Aim>; 2]) {
         for frame in 0..frames {
             self.frame(aims(frame));
         }
     }
 
-    fn slot(&self, index: usize) -> PanelSlot {
+    pub(super) fn slot(&self, index: usize) -> PanelSlot {
         self.space.panels()[index]
+    }
+
+    // The beams that the pointers show, left then right.
+    pub(super) fn beams(&self) -> [bool; 2] {
+        self.pointers.beams().map(|beam| beam.is_some())
+    }
+
+    // The cursors that the pointers show, left then right.
+    pub(super) fn cursors(&self) -> [Option<crate::space::Cursor>; 2] {
+        self.pointers.cursors()
     }
 }
 
@@ -356,7 +373,7 @@ fn the_other_hand_cannot_grab_the_handle_that_a_hand_holds() {
 }
 
 // A panel of 400 by 300 dp with a recording box, and the log.
-fn recording_panel() -> (Headset, Log) {
+pub(super) fn recording_panel() -> (Headset, Log) {
     let log = Log::default();
     let shown = log.clone();
     let headset = headset(move || {
@@ -511,7 +528,7 @@ fn a_stick_that_carries_a_panel_does_not_scroll() {
 fn an_app_remaps_the_buttons_and_the_scroll() {
     use PointerButton::{Middle, Secondary};
     let (mut headset, log) = recording_panel();
-    headset.mapping = PointerMapping::new()
+    headset.choice.mapping = PointerMapping::new()
         .with_button(ControllerInput::Trigger, Some(Middle))
         .with_button(ControllerInput::Squeeze, Some(Secondary))
         .with_button(ControllerInput::Primary, None)
@@ -663,7 +680,10 @@ fn a_beam_shows_only_while_a_panel_is_in_reach_and_the_app_lets_it() {
         [aim(-0.1, 0.0, 0.0), aim(0.1, 0.0, 0.0)],
         Duration::from_millis(500),
         (&[PANEL], &PickMeshes::default()),
-        (PointerMapping::default(), false),
+        PointerChoice {
+            beams_visible: false,
+            ..PointerChoice::default()
+        },
     );
     assert_eq!(frames.pointer.beams(), [None, None]);
     assert!(!frames.pointer.cursors().iter().all(Option::is_none));

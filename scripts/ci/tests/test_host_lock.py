@@ -1,4 +1,5 @@
 import fcntl
+import importlib.util
 import os
 from pathlib import Path
 import shutil
@@ -8,9 +9,15 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 
 WRAPPER = Path(__file__).resolve().parents[1] / "with_host_lock.sh"
+HOST_FLOCK_SPEC = importlib.util.spec_from_file_location(
+    "host_flock", Path(__file__).resolve().parents[1] / "host_flock.py"
+)
+HOST_FLOCK = importlib.util.module_from_spec(HOST_FLOCK_SPEC)
+HOST_FLOCK_SPEC.loader.exec_module(HOST_FLOCK)
 
 
 class HostLockProcesses(unittest.TestCase):
@@ -233,6 +240,40 @@ class HostLockProcesses(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(called.exists(), fault == "none", result.stdout + result.stderr)
+
+
+    def test_python_exclusive_lock_blocks_and_releases_shared_wrapper(self):
+        entered = self.root / "entered-via-context"
+        with patch.dict(os.environ, self.env, clear=True):
+            with HOST_FLOCK.exclusive_lock(max_wait_seconds=2):
+                self.assertEqual(os.environ.get("CRANPOSE_HOST_LOCK_HELD"), "exclusive")
+                child = self.start(
+                    "--shared",
+                    "from pathlib import Path; import sys; Path(sys.argv[1]).touch()",
+                    entered,
+                )
+                time.sleep(0.2)
+                self.assertFalse(entered.exists(), "Build overlapped Python exclusive_lock")
+                with HOST_FLOCK.exclusive_lock(max_wait_seconds=0.1):
+                    pass
+            self.assertNotIn("CRANPOSE_HOST_LOCK_HELD", os.environ)
+            self.assert_success(child)
+        self.assertTrue(entered.exists())
+
+    def test_python_exclusive_lock_times_out_and_refuses_upgrade_from_shared(self):
+        with patch.dict(os.environ, {**self.env, "CRANPOSE_HOST_LOCK_HELD": "shared"}, clear=True):
+            with self.assertRaises(RuntimeError):
+                with HOST_FLOCK.exclusive_lock(max_wait_seconds=0.2):
+                    pass
+        first, release = self.holder("--shared")
+        try:
+            with patch.dict(os.environ, self.env, clear=True):
+                with self.assertRaises(TimeoutError):
+                    with HOST_FLOCK.exclusive_lock(max_wait_seconds=0.2):
+                        pass
+        finally:
+            release.touch()
+            self.assert_success(first)
 
 
 if __name__ == "__main__":

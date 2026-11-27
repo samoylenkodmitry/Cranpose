@@ -1,6 +1,6 @@
 use cranpose_ui_graphics::BlendMode;
 
-use super::PassScratch;
+use super::{PassScratch, tracked_pass::DrawKind};
 use crate::{
     effect_renderer::{PreparedCompositeDraw, PreparedProjectiveComposite, PreparedShaderDraw},
     instant_triangles::InstantDraw,
@@ -46,6 +46,19 @@ pub(super) enum Batch<'a> {
     Shader(PreparedShaderDraw<'a>),
     Projective(PreparedProjectiveComposite<'a>),
     Instant(InstantDraw<'a>),
+}
+
+impl Batch<'_> {
+    pub(super) fn kind(&self) -> DrawKind {
+        match self {
+            Self::StoreRun { .. } | Self::Arena { .. } => DrawKind::Shapes,
+            Self::Images { .. } => DrawKind::Images,
+            Self::Glyphs { .. } => DrawKind::Glyphs,
+            Self::Shadows { .. } => DrawKind::Shadows,
+            Self::Composite(_) | Self::Shader(_) | Self::Projective(_) => DrawKind::Layers,
+            Self::Instant(_) => DrawKind::StandIns,
+        }
+    }
 }
 
 /// The scissor a shape batch's `stage` draws under: the batch's, and for its

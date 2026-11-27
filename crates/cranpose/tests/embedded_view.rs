@@ -1,19 +1,16 @@
-use std::time::{Duration, Instant};
-
 use cranpose::{
     AppLauncher,
     embedded_view::{EmbeddedView, EmbeddedViewError},
     prelude::*,
 };
 
+use crate::gpu_support::draw_until_settled;
+
 /// Draws until the view has nothing left to draw. A frame skips a shape
 /// whose pipeline still compiles, and the view draws again once it lands.
 fn draw_settled(view: &mut EmbeddedView, pixels: &mut Vec<u8>) {
-    let deadline = Instant::now() + Duration::from_secs(30);
     assert!(view.draw(pixels).expect("first frame"));
-    while view.draw(pixels).expect("follow-up frame") {
-        assert!(Instant::now() < deadline, "the view kept drawing");
-    }
+    draw_until_settled(view, |view| view.draw(pixels).expect("follow-up frame"));
 }
 
 #[test]

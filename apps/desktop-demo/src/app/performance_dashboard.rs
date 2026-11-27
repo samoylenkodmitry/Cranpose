@@ -588,7 +588,7 @@ fn Trend(palette: Palette, nightly: Rc<Vec<PerfRun>>, scenario: MutableState<Str
             nightly
                 .iter()
                 .map(|run| {
-                    run.median(&shown, start, subject, measured.key())
+                    run.undisturbed_median(&shown, start, subject, measured.key())
                         .unwrap_or(f64::NAN) as f32
                 })
                 .collect()
@@ -936,7 +936,7 @@ fn RunView(
                 .collect(),
         )
     };
-    let lines = launch_lines(palette, &run, &selection.scenario, start, &subjects);
+    let lines = launch_lines(palette, &run, &frames, &selection, &subjects);
     LaunchChart(
         palette,
         focus,

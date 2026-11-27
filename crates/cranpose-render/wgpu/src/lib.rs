@@ -103,7 +103,9 @@ use frame_packet::RenderReturns;
 #[doc(hidden)]
 pub use frame_packet::{CancelReason, PresentOutcome};
 use frontend::RendererFrontend;
-pub use gpu_stats::{FrameDamage, FrameStatsSnapshot as RenderStatsSnapshot, WindowRects};
+pub use gpu_stats::{
+    BatchBreaks, FrameDamage, FrameStatsSnapshot as RenderStatsSnapshot, WindowRects,
+};
 pub use gpu_target::{GpuTarget, optional_device_features};
 pub use initial_present::{clear_to_background, clear_to_default_background};
 #[cfg(all(not(target_arch = "wasm32"), feature = "test-support"))]
