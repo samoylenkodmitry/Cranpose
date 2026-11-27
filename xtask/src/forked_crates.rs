@@ -4,6 +4,7 @@
 pub(crate) const FORKED_CRATES: &[&str] = &[
     "cranpose-basisu",
     "cranpose-opus-pure",
+    "cranpose-tiny-skia",
     "cranpose-wgpu",
     "cranpose-wgpu-core",
     "cranpose-wgpu-core-deps-apple",
