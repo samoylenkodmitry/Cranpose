@@ -185,11 +185,18 @@ impl OcclusionCut {
                 self.hide(interior, (bodies, draws), fill);
             }
             if let Some(kept) = kept {
-                if self.kept.len() == KEPT_FILLS {
-                    self.kept.remove(0);
-                }
-                self.kept.push(kept);
+                self.keep(kept);
             }
+        }
+    }
+
+    // Keeps `fill` in the place of the earliest laid kept fill once the list
+    // is full, so no kept fill moves.
+    fn keep(&mut self, fill: KeptFill) {
+        if self.kept.len() < KEPT_FILLS {
+            self.kept.push(fill);
+        } else if let Some(earliest) = self.kept.iter_mut().min_by_key(|kept| kept.record) {
+            *earliest = fill;
         }
     }
 
