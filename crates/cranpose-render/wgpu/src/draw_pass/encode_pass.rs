@@ -4,6 +4,7 @@ use super::{
     interiors_first::takes_depth,
     mixed_turns::turns_mixed,
     pass_buffers::PassBuffers,
+    tracked_pass::DrawKind,
 };
 use crate::{
     frame_graph::FrameCommandRecorder,
@@ -54,8 +55,14 @@ impl GpuRenderer {
             }),
             shadows: (!scratch.shadow_instances.is_empty())
                 .then(|| self.upload_shadow_instances(recorder, &scratch.shadow_instances)),
-            glyphs: (!scratch.glyph_instances.plain.is_empty())
-                .then(|| self.upload_glyph_instances(recorder, &scratch.glyph_instances.plain)),
+            glyphs: (!scratch.glyph_instances.plain.is_empty()).then(|| {
+                if crate::gpu_stats::gpu_stats_enabled() {
+                    let plain = scratch.glyph_instances.plain.iter();
+                    let pixels: f64 = plain.map(crate::render::GlyphInstance::pixels).sum();
+                    self.frame_stats.add_glyph_pixels(pixels.round() as u64);
+                }
+                self.upload_glyph_instances(recorder, &scratch.glyph_instances.plain)
+            }),
             turned_glyphs: (!scratch.glyph_instances.turned.is_empty())
                 .then(|| self.upload_turned_glyphs(recorder, &scratch.glyph_instances.turned)),
             instant: scratch.instant.upload(&self.device),
@@ -257,12 +264,14 @@ impl GpuRenderer {
         buffers: &PassBuffers,
     ) -> Result<(), String> {
         if frame.depth.is_on() {
+            pass.begin_kind(DrawKind::Shapes);
             for batch in batches.iter().rev() {
                 self.draw_shape_batch(pass, batch, cmds.arena, None, frame, RunStage::Interiors)?;
             }
         }
         let meshes = buffers.run_meshes(cmds.meshes);
         for batch in batches {
+            pass.begin_kind(batch.kind());
             match batch {
                 Batch::StoreRun { .. } | Batch::Arena { .. } => {
                     self.draw_shape_batch(pass, batch, cmds.arena, meshes, frame, RunStage::Paint)?;
@@ -324,6 +333,9 @@ impl GpuRenderer {
                 | Batch::Projective(_)
                 | Batch::Instant(_) => self.draw_layer(pass, frame, batch, buffers)?,
             }
+        }
+        if let Some(breaks) = pass.breaks() {
+            self.frame_stats.add_batch_breaks(breaks);
         }
         Ok(())
     }
