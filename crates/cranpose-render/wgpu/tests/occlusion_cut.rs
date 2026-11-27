@@ -1,6 +1,6 @@
 // A fill that a later opaque fill of its pass hides in part draws only the
-// frame around the hidden part, and one it hides whole draws nothing. The
-// cut must change no pixel: every scene here draws the same with it and
+// frame around the hidden part. A fill that one hides whole draws nothing.
+// The cut must change no pixel: every scene here draws the same with it and
 // with it left out (`CRANPOSE_ABLATE=occlusion_cut`), with the depth
 // pre-pass of opaque interiors and without it, as GL draws.
 
@@ -10,7 +10,8 @@ use cranpose_render_common::{
     graph::{LayerNode, ProjectiveTransform, RenderNode},
 };
 use cranpose_ui_graphics::{
-    Color, GraphicsLayer, LayerShape, Rect, RenderEffect, RoundedCornerShape,
+    Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, LayerShape, Rect, RenderEffect,
+    RoundedCornerShape,
 };
 
 use crate::{shared_test_support, support, support::round_rect_fill as fill};
@@ -54,7 +55,7 @@ fn page(children: Vec<RenderNode>) -> LayerNode {
     )
 }
 
-// One frame of a scene: its pixels and the shape pixels it rasterized.
+// One frame of a scene: its pixels and the shape pixels that it rasterized.
 struct Capture {
     pixels: Vec<u8>,
     fill_pixels: u64,
@@ -298,8 +299,40 @@ fn a_turned_fill_neither_hides_nor_draws_as_a_frame() {
     assert_whole(&under);
 }
 
-// The opaque fill reaches past the fill under it and past the clip both
-// draw under: it hides only what lies under it within the clip.
+// A gradient joins the red fill's draw, whose pipeline then draws vertex
+// gradients. A turned fill draws between the red fill and the green one
+// that hides its middle. The red fill still draws as a frame with the
+// same pixels.
+#[test]
+fn a_frame_beside_a_gradient_and_a_turned_fill_keeps_its_pixels() {
+    let graph = || {
+        page(vec![
+            fill(rect(10.0, 10.0, 180.0, 180.0), RED, 4.0, None),
+            support::draw_node(
+                DrawPrimitive::RoundRect {
+                    rect: rect(100.0, 20.0, 80.0, 150.0),
+                    brush: Brush::linear_gradient(vec![GREEN, BLUE]),
+                    radii: CornerRadii::uniform(0.0),
+                    stroke: None,
+                },
+                None,
+            ),
+            layer(
+                GraphicsLayer::default(),
+                support::turned_about_centre(rect(20.0, 150.0, 40.0, 30.0), 9.0),
+                vec![fill(rect(20.0, 150.0, 40.0, 30.0), BLUE, 0.0, None)],
+            ),
+            fill(rect(40.0, 40.0, 90.0, 100.0), GREEN, 4.0, None),
+        ])
+    };
+    let Some(pairs) = pairs(graph) else {
+        return;
+    };
+    assert_cut(&pairs);
+}
+
+// The opaque fill reaches past the fill under it and past the clip over
+// both fills. It hides only what lies under it within the clip.
 #[test]
 fn an_opaque_fill_reaching_past_its_clip_hides_only_what_the_clip_shows() {
     let clip = rect(0.0, 0.0, FRAME as f32, 120.0);

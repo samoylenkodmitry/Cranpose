@@ -157,8 +157,8 @@ impl ShapeVariant {
         })
     }
 
-    // Whether every record the variant draws takes its colour from flat
-    // values and the fragment position alone: a solid brush, undithered.
+    // Whether every record that the variant draws takes its colour from
+    // flat values and the fragment position alone: a solid brush, undithered.
     pub(crate) fn shades_flat(self) -> bool {
         self.solid && !self.dither
     }

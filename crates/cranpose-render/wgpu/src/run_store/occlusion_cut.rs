@@ -1,14 +1,17 @@
 // What a later opaque fill hides of the fills laid before it in one arena
 // chunk, cut where the chunk's records are laid. A fill whole under the
-// interior of a later opaque fill draws nothing; a solid fill partly under
-// one draws as the strip of four quads around the hidden part, which the
-// vertex stage builds from the hole a record keeps in `arc_geometry`. The
-// records between the two draw into the same render pass, one after the
-// other, and none of them reads the target, so the opaque interior covers
-// the hidden pixels whatever was drawn there before it. The search keeps
-// to the draws since the chunk's last cut: a cut draws held glyphs, images,
-// a stored run or a composite between the chunk's draws, and it clears the
-// fills kept.
+// interior of a later opaque fill draws nothing. A solid fill partly under
+// one draws as the strip of four quads around the hidden part. The vertex
+// stage builds the strip from the hole that the record keeps in
+// `arc_geometry`. The records between the two draw into the same render
+// pass, one after the other. None of them reads the target, so the opaque
+// interior covers the hidden pixels whatever was drawn there before it. The
+// search keeps to the draws since the chunk's last cut. A cut draws held
+// glyphs, images, a stored run or a composite between the chunk's draws,
+// then clears the kept fills. Every pipeline that a solid draw can take by
+// a join shades an unturned record from the fragment position and flat
+// values: the pipeline of vertex gradients gives a record without one its
+// colour whole.
 
 use cranpose_ui_graphics::{
     BlendMode, FRAGMENT_KIND_FILL, OCCLUDER_MIN_AREA, ShapeRecordBody, ShapeRecordCurve,
@@ -26,14 +29,14 @@ use crate::{
 // The record flag of a framed fill, above every flag `cranpose_ui_graphics`
 // packs (`RECORD_FRAMED` in shape.wgsl).
 const RECORD_FRAMED: u32 = 1 << 25;
-// The band class a framed fill's draw instances over: its strip of four
-// quads. A quad of the same draw leaves its later vertices on its last
-// corner, so it draws as before.
+// The band class of a framed fill's draw: a strip of four quads. A quad of
+// the same draw leaves its later vertices on its last corner, so it draws
+// as before.
 const FRAME_CLASS: u8 = 2;
 // Whether a draw at band class `class` may join the draw at `into` before
-// it: at the same class, or as quads joining a strip of the class a frame
-// takes, whose later vertices each quad leaves on its last corner. Without
-// it every framed fill would split the draws of the records after it.
+// it: at the same class, or as quads joining a strip of the frame class.
+// Each quad leaves its later vertices on its last corner. Without this join
+// every framed fill would split the draws of the records after it.
 pub(super) fn joins(into: u8, class: u8) -> bool {
     into == class || (into == FRAME_CLASS && class == 0)
 }
@@ -54,19 +57,19 @@ fn widened_vertices(from: u8, to: u8, records: &std::ops::Range<u32>) -> u64 {
     u64::from(added) * u64::from(records.end - records.start)
 }
 
-// The fills, the latest laid, that a later opaque interior may still hide:
-// an opaque fill hides what was painted shortly before it, as a nested
-// background hides its parent's and a card the panel under it.
+// The count of latest fills kept for a later opaque interior to hide. An
+// opaque fill hides what was painted shortly before it: a nested background
+// hides its parent's background, a card hides the panel under it.
 const KEPT_FILLS: usize = 8;
 
-// A rect in the device pixels the vertex stage places a chunk's records at:
-// left, top, right, bottom.
+// A rect in the device pixels where the vertex stage places a chunk's
+// records: left, top, right, bottom.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct DeviceRect([f32; 4]);
 
 impl DeviceRect {
-    // The rect `body` rasterizes under `placement`, as `record_geometry`
-    // places an unstroked one.
+    // The rect that `body` rasterizes under `placement`, as
+    // `record_geometry` places an unstroked record.
     fn of(body: &ShapeRecordBody, placement: &PlacementData) -> Self {
         let [x, y, width, height] = body.rect;
         let [dx, dy] = placement.offset;
@@ -105,16 +108,16 @@ impl DeviceRect {
 // A fill laid since the chunk's last cut.
 #[derive(Clone, Copy, Debug)]
 struct KeptFill {
-    // Its index in the chunk's records, and its draw's in the chunk's draws.
+    // Its index in the chunk's records. Its draw's index in the chunk's draws.
     record: usize,
     draw: usize,
     rect: DeviceRect,
     // Whether its pixels take their colour from the fragment position and
     // flat values alone, so a strip shades each one as the quad did.
     shades_flat: bool,
-    // The device area of the part a later interior hides of it so far, and
-    // the least worth a frame: the strip costs its draw six more vertices a
-    // record.
+    // The device area of its part that later interiors hide so far. The
+    // least area worth a frame: the strip costs its draw six more vertices
+    // a record.
     hidden: f32,
     least_hidden: f32,
 }
@@ -170,7 +173,7 @@ impl OcclusionCut {
                 .then(|| opaque_interior(rect, &curves[index], placement))
                 .flatten();
             let [_, _, width, height] = body.rect;
-            let kept = (width * height >= OCCLUDER_MIN_AREA).then(|| KeptFill {
+            let kept = (width * height >= OCCLUDER_MIN_AREA).then_some(KeptFill {
                 record: index,
                 draw: draw_index,
                 rect,
@@ -190,8 +193,8 @@ impl OcclusionCut {
         }
     }
 
-    // Drops the kept fills that `interior` covers whole and frames those it
-    // hides more of than before.
+    // Drops the kept fills that `interior` covers whole. Frames each kept
+    // fill whose hidden part `interior` makes larger than before.
     fn hide(
         &mut self,
         interior: DeviceRect,
@@ -225,11 +228,11 @@ impl OcclusionCut {
     }
 }
 
-// The part of an opaque fill at `rect` whose every pixel centre it covers
-// with its whole colour: the rect inset by its largest corner radius and a
-// pixel, cut to its clip, its edges on whole pixels. `None` under a paint
-// that lets anything through (an alpha below 1, a colour filter) or a
-// rounded clip, or when nothing is left.
+// The part of an opaque fill at `rect` where the fill covers every pixel
+// centre with its whole colour: the rect inset by its largest corner radius
+// and a pixel, cut to its clip, with its edges on whole pixels. `None` under
+// a paint that lets anything through (an alpha below 1, a colour filter),
+// under a rounded clip, or when nothing is left.
 fn opaque_interior(
     rect: DeviceRect,
     curve: &ShapeRecordCurve,
