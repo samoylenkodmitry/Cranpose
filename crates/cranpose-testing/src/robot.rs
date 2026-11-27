@@ -36,7 +36,8 @@ const FRAME_NANOS: u64 = 16_666_667;
 // The gap between the samples of a drag: a 120 Hz touch panel's, which the gesture velocity also
 // takes for a gesture's first samples.
 const DRAG_SAMPLE_NANOS: u64 = 8_000_000;
-// The frames for which a long press holds the pointer down: longer than a long press's timeout.
+// The frames for which a long press holds the pointer down: 833 ms, longer than the 400 ms
+// timeout of `long_press` and the 500 ms of a text selection's long press.
 const LONG_PRESS_FRAMES: u32 = 50;
 
 /// Main robot testing rule that provides programmatic control over a real app.
