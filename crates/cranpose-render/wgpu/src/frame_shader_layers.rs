@@ -248,7 +248,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .record_layer_cache_miss(&key, width, height);
         let kept = Rc::new(self.renderer.acquire_retained_surface(width, height));
         let cache = &mut self.renderer.layer_cache;
-        if stored && cache.disk.upload(&self.renderer.queue, stored_key, &kept) {
+        if stored && let Some(stats) = cache.disk.upload(&self.renderer.queue, stored_key, &kept) {
+            self.renderer.frame_stats.record_command_stats(stats);
             let retained = Retained::surface(Rc::clone(&kept), StandInPixels::Final);
             cache.insert(key, retained, None);
             return Some(Some(kept_slot(kept)));
@@ -270,7 +271,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let cache = &mut self.renderer.layer_cache;
         cache.insert(key, Retained::surface(Rc::clone(&kept), held), None);
         if held == StandInPixels::Final {
-            cache.disk.keep(stored_key, Rc::clone(&kept));
+            let gpu = (&*self.renderer.device, &*self.renderer.queue);
+            let submits = self.renderer.frame_stats.submits.get();
+            cache.disk.keep(gpu, stored_key, Rc::clone(&kept), submits);
         }
         Some(Some(kept_slot(kept)))
     }

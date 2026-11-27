@@ -4,7 +4,7 @@ mod mapped_pool;
 pub(crate) mod pass_timing;
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) mod submit_nothing;
-mod texture_copies;
+pub(crate) mod texture_copies;
 
 use std::fmt;
 

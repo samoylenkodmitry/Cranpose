@@ -240,10 +240,10 @@ impl LayerCache {
     }
 
     /// Ends a frame, releasing every raster no frame has read for
-    /// [`IDLE_FRAMES`].
-    pub(crate) fn end_frame(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+    /// [`IDLE_FRAMES`]. `submits` counts the frame's submits so far.
+    pub(crate) fn end_frame(&mut self, submits: u32) {
         self.fills.end_frame();
-        self.disk.end_frame(device, queue);
+        self.disk.end_frame(submits);
         self.frame += 1;
         let oldest_kept = self.frame.saturating_sub(IDLE_FRAMES);
         while self

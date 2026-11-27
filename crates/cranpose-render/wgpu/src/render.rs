@@ -1437,7 +1437,7 @@ impl GpuRenderer {
         for target in self.deferred_offscreen_releases.drain(..) {
             self.effect_renderer.release_offscreen(target);
         }
-        self.layer_cache.end_frame(&self.device, &self.queue);
+        self.layer_cache.end_frame(self.frame_stats.submits.get());
         for (transient, target) in self.layer_cache.take_released() {
             match transient {
                 Some(descriptor) => executor.return_cached_transient(descriptor, target),

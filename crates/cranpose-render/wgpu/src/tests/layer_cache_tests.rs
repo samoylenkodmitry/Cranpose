@@ -179,7 +179,7 @@ fn the_budget_evicts_the_least_recently_used_entry_and_returns_its_surface() {
 
 #[test]
 fn a_raster_no_frame_reads_for_the_idle_frames_is_released() {
-    let (_lock, device, queue) = upload_test_device();
+    let (_lock, device, _queue) = upload_test_device();
     let mut cache = LayerCache::new();
     cache.insert(
         key(1),
@@ -193,12 +193,12 @@ fn a_raster_no_frame_reads_for_the_idle_frames_is_released() {
     );
     for _ in 0..IDLE_FRAMES {
         assert!(cache.get(&key(1)).is_some());
-        cache.end_frame(&device, &queue);
+        cache.end_frame(0);
     }
     assert_eq!(cache.len(), 2, "a raster unread for the idle frames stays");
     assert!(cache.take_released().next().is_none());
     assert!(cache.get(&key(1)).is_some());
-    cache.end_frame(&device, &queue);
+    cache.end_frame(0);
     assert_eq!(cache.len(), 1, "one frame more releases it");
     assert!(cache.get(&key(2)).is_none());
     assert!(
@@ -287,7 +287,7 @@ fn many_small_surfaces_stay_cached_within_the_byte_budget() {
 
 #[test]
 fn an_atlas_whose_kept_surfaces_mostly_left_goes_back_to_its_pool() {
-    let (_lock, device, queue) = upload_test_device();
+    let (_lock, device, _queue) = upload_test_device();
     let mut cache = LayerCache::with_budget(1 << 20);
     let atlas = texture(&device, 80);
     for index in 0..5 {
@@ -307,11 +307,11 @@ fn an_atlas_whose_kept_surfaces_mostly_left_goes_back_to_its_pool() {
     for index in 0..3 {
         cache.remove(&key(index));
     }
-    cache.end_frame(&device, &queue);
+    cache.end_frame(0);
     assert_eq!(cache.len(), 2, "two of five members still use the atlas");
     assert!(cache.take_released().next().is_none());
     cache.remove(&key(3));
-    cache.end_frame(&device, &queue);
+    cache.end_frame(0);
     assert_eq!(
         cache.len(),
         0,
