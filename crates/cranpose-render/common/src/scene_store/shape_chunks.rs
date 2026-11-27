@@ -272,14 +272,14 @@ impl ShapeChunk {
 impl ShapeChunks {
     // Records the shapes of one item, the run at index `owner`, with
     // `record`, which draw what `print` hashes, into a chunk that takes
-    // them, and returns where they went. Out of line: a background drawn
-    // again unchanged keeps its shapes.
+    // them, and returns where they went. Out of line and one body for every
+    // caller: a background drawn again unchanged keeps its shapes.
     #[inline(never)]
     fn record(
         &mut self,
         runs: &mut Slab<ShapeRun>,
         (owner, print): (usize, u64),
-        record: impl FnOnce(&mut ShapeRecorder),
+        record: &mut dyn FnMut(&mut ShapeRecorder),
     ) -> ShapeRun {
         let chunk = self.writable_chunk(runs);
         let entry = &mut self.chunks[chunk.index()];
@@ -347,7 +347,7 @@ impl ShapeChunks {
                 self.chunks[id.index()].reset();
                 id
             }
-            None => self.insert_chunk(ShapeRecorder::default(), CHUNK_SHAPES, ChunkAge::Young),
+            None => self.insert_chunk(0, CHUNK_SHAPES, ChunkAge::Young),
         };
         self.open = Some(id);
         id
@@ -358,16 +358,18 @@ impl ShapeChunks {
         match self.nothing {
             Some(id) => id,
             None => {
-                let id = self.insert_chunk(ShapeRecorder::default(), 0, ChunkAge::Old);
+                let id = self.insert_chunk(0, 0, ChunkAge::Old);
                 self.nothing = Some(id);
                 id
             }
         }
     }
 
-    // A new chunk of `recorder`, with room for `rows` owner entries.
+    // A new chunk with room for `shapes` shapes in as many segments and for
+    // `rows` owner entries.
     #[cold]
-    fn insert_chunk(&mut self, recorder: ShapeRecorder, rows: usize, age: ChunkAge) -> ChunkId {
+    fn insert_chunk(&mut self, shapes: usize, rows: usize, age: ChunkAge) -> ChunkId {
+        let recorder = ShapeRecorder::with_capacity(shapes, shapes);
         ChunkId::at(self.chunks.insert(ShapeChunk::new(recorder, rows, age)))
     }
 
@@ -534,11 +536,7 @@ impl ShapeChunks {
                 self.chunks[id.index()].reset();
                 id
             }
-            None => self.insert_chunk(
-                ShapeRecorder::with_capacity(room, room),
-                room,
-                ChunkAge::Old,
-            ),
+            None => self.insert_chunk(room, room, ChunkAge::Old),
         }
     }
 
@@ -665,11 +663,11 @@ impl SceneStore {
     /// Adds an item of the shapes `record` records into a chunk the store
     /// shares among its shape items. `print` is a hash of what they draw,
     /// the same for the same shapes.
-    pub fn add_shapes(&mut self, print: u64, record: impl FnOnce(&mut ShapeRecorder)) -> Item {
+    pub fn add_shapes(&mut self, print: u64, mut record: impl FnMut(&mut ShapeRecorder)) -> Item {
         let index = self.shape_runs.reserve();
         let run = self
             .shape_chunks
-            .record(&mut self.shape_runs, (index, print), record);
+            .record(&mut self.shape_runs, (index, print), &mut record);
         self.shape_runs.put(index, run);
         Item::new(ItemKind::Shape, index)
     }
@@ -681,7 +679,7 @@ impl SceneStore {
         &mut self,
         item: Item,
         print: u64,
-        record: impl FnOnce(&mut ShapeRecorder),
+        mut record: impl FnMut(&mut ShapeRecorder),
     ) {
         let index = item.index();
         let Some(old) = self.shape_runs.lend(index) else {
@@ -690,7 +688,7 @@ impl SceneStore {
         self.shape_chunks.release(&old);
         let run = self
             .shape_chunks
-            .record(&mut self.shape_runs, (index, print), record);
+            .record(&mut self.shape_runs, (index, print), &mut record);
         self.shape_runs.put(index, run);
     }
 
