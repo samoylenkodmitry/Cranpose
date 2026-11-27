@@ -235,7 +235,7 @@ fn offscreen_rotated_cells_drawn_together_draw_what_each_drawn_alone_draws() {
             continue;
         }
         assert!(
-            support::pipelines_settled(&stats),
+            stats.pipelines_settled(),
             "frame {frame} drew with stand-in pipelines: {stats:?}"
         );
         assert!(

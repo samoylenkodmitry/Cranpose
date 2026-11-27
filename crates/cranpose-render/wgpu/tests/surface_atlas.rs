@@ -150,7 +150,7 @@ fn surfaces_at_different_scales_share_one_atlas_pass_and_draw_as_they_do_alone()
     let (left_stats, left) = alone([true, false]);
     let (_, right) = alone([false, true]);
     assert!(
-        support::pipelines_settled(&both_stats),
+        both_stats.pipelines_settled(),
         "the measured frame drew with stand-in pipelines: {both_stats:?}"
     );
     assert_eq!(both_stats.isolated_layer_renders, 2);
@@ -369,7 +369,7 @@ fn a_starting_screens_animated_atlas_members_take_no_copies() {
         }
         let (stats, _) = support::update_and_capture(&mut shell, WIDTH, HEIGHT);
         assert!(
-            support::pipelines_settled(&stats),
+            stats.pipelines_settled(),
             "frame {frame} drew with stand-in pipelines: {stats:?}"
         );
         copies.push(stats.copy_count);

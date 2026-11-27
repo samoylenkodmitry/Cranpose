@@ -118,7 +118,7 @@ fn landed(before: Option<&LayerNode>, graph: &LayerNode) -> Vec<u8> {
     support::capture_graph(&mut renderer, first, WIDTH, HEIGHT);
     let stats = renderer.last_frame_stats().expect("frame statistics");
     assert!(
-        !support::pipelines_settled(&stats),
+        !stats.pipelines_settled(),
         "the first frame draws while its pipelines compile: {stats:?}"
     );
     assert!(

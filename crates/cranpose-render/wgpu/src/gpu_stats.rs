@@ -361,6 +361,18 @@ pub struct FrameStatsSnapshot {
 }
 
 impl FrameStatsSnapshot {
+    /// Whether every draw of the frame took its own pipeline: no draw was
+    /// left out, and none drew a placeholder, fallback triangles, a general
+    /// pipeline or the instant pipeline while its own compiled. No part of
+    /// the frame kept such a stand-in from an earlier frame either.
+    pub fn pipelines_settled(&self) -> bool {
+        self.shape_pipeline_fallback_draws == 0
+            && self.shader_pipeline_fallback_draws == 0
+            && self.placeholder_draws == 0
+            && self.instant_draws == 0
+            && self.kept_stand_in_pixels == 0
+    }
+
     fn shape_fill_by_class_text(&self) -> String {
         let mut text = String::new();
         for (label, pixels) in ShapeFill::LABELS

@@ -1100,14 +1100,6 @@ pub(crate) fn wait_for_background_compiler_idle() {
     }
 }
 
-pub(crate) fn pipelines_settled(stats: &RenderStatsSnapshot) -> bool {
-    stats.shape_pipeline_fallback_draws == 0
-        && stats.shader_pipeline_fallback_draws == 0
-        && stats.placeholder_draws == 0
-        && stats.instant_draws == 0
-        && stats.kept_stand_in_pixels == 0
-}
-
 pub(crate) fn capture_settled(
     renderer: &mut LockedRenderer,
     mut capture: impl FnMut(&mut LockedRenderer) -> CapturedFrame,
@@ -1123,7 +1115,7 @@ pub(crate) fn settle<T>(mut frame: impl FnMut() -> (RenderStatsSnapshot, T)) -> 
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
         let (stats, captured) = frame();
-        if pipelines_settled(&stats) {
+        if stats.pipelines_settled() {
             return captured;
         }
         assert!(
