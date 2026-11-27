@@ -311,7 +311,7 @@ pub struct FrameStatsSnapshot {
     /// The target pixels the frame's plain glyph quads cover, a glyph run
     /// kept on the GPU left out. Counted only while `CRANPOSE_GPU_STATS` is
     /// on.
-    pub glyph_pixels: u64,
+    pub glyph_pixels: f64,
     /// The window pixels the frame changes against the frame the
     /// renderer's composition target kept.
     pub damage: FrameDamage,

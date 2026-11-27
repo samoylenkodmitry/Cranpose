@@ -59,7 +59,7 @@ impl GpuRenderer {
                 if crate::gpu_stats::gpu_stats_enabled() {
                     let plain = scratch.glyph_instances.plain.iter();
                     let pixels: f64 = plain.map(crate::render::GlyphInstance::pixels).sum();
-                    self.frame_stats.add_glyph_pixels(pixels.round() as u64);
+                    self.frame_stats.add_glyph_pixels(pixels);
                 }
                 self.upload_glyph_instances(recorder, &scratch.glyph_instances.plain)
             }),

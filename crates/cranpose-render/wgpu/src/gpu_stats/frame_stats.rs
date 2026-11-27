@@ -65,7 +65,7 @@ pub(crate) struct FrameStats {
     pub text_passes: Cell<u32>,
     pub draw_calls: Cell<u32>,
     pub batch_breaks: Cell<BatchBreaks>,
-    pub glyph_pixels: Cell<u64>,
+    pub glyph_pixels: Cell<f64>,
     pub damage: Cell<FrameDamage>,
     pub repainted_pixels: Cell<u64>,
     pub kept_stand_in_pixels: Cell<u64>,
@@ -351,9 +351,8 @@ impl FrameStats {
             .set(self.draw_calls.get().saturating_add(count));
     }
 
-    pub(crate) fn add_glyph_pixels(&self, pixels: u64) {
-        self.glyph_pixels
-            .set(self.glyph_pixels.get().saturating_add(pixels));
+    pub(crate) fn add_glyph_pixels(&self, pixels: f64) {
+        self.glyph_pixels.set(self.glyph_pixels.get() + pixels);
     }
 
     pub(crate) fn add_batch_breaks(&self, breaks: BatchBreaks) {
@@ -559,7 +558,7 @@ impl FrameStats {
         self.text_passes.set(0);
         self.draw_calls.set(0);
         self.batch_breaks.set(BatchBreaks::default());
-        self.glyph_pixels.set(0);
+        self.glyph_pixels.set(0.0);
         self.damage.set(FrameDamage::default());
         self.repainted_pixels.set(0);
         self.kept_stand_in_pixels.set(0);
