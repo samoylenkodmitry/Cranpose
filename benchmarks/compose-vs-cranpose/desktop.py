@@ -30,6 +30,9 @@ seconds count as the rest of the run does, and the frames of every second
 are kept. A leg whose app presented fewer than `SLOW_FPS` frames in each of
 `SLOW_SECONDS` seconds in a row since its first frame ends there, marked
 `stopped`. A disturbed leg stays in the run, marked, out of the medians.
+A page's leg keeps what the page said of itself as `page`
+(`BrowserServer.page_record`); a page that loses its GPU device after its
+first frame is measured as it drew.
 
 Before the first leg and after the last, `FrameCount.app` reports the state of
 the main display and how often the window server composites it for a window
@@ -877,7 +880,7 @@ def measure(name, args, work, server, stage, label, earlier, profile, program=No
         log = app.log.read_text(errors='replace')
         if 'PERF first_frame' not in log:
             raise RuntimeError(f'{name} logged no first frame within its {run_s:.0f} s run')
-        server.check_device(since)
+        page = server.page_record(since, launched, ended)
         mine = tree(app.pid, after, ended - app.started + 1)
         held = memory(mine, stage)
         shutil.copy(out, work / out.name)
@@ -894,17 +897,17 @@ def measure(name, args, work, server, stage, label, earlier, profile, program=No
     # ended within the run counts for neither.
     wall = ended - launched
     spent = {pid: cpu - before.get(pid, (0, 0.0))[1] for pid, (_, cpu, _, _) in after.items()}
-    server = {pid for pid, (_, _, _, command) in after.items() if command.endswith(WINDOW_SERVER)}
-    server_cores = sum(spent[pid] for pid in server) / wall
+    window_server = {pid for pid, (_, _, _, command) in after.items() if command.endswith(WINDOW_SERVER)}
+    server_cores = sum(spent[pid] for pid in window_server) / wall
     # The window server's work counts toward the app in front: its layers
     # are what the window server renders.
     cores = sum(value for pid, value in spent.items() if pid in mine) / wall + server_cores
-    others = sum(value for pid, value in spent.items() if pid not in mine and pid not in server) / wall
+    others = sum(value for pid, value in spent.items() if pid not in mine and pid not in window_server) / wall
     return {**counted, 'cpu_cores': round(cores, 2), 'server_cores': round(server_cores, 2),
             'other_cores': round(others, 2), 'cpu_ms_per_frame': round(cores * 1000 / fps, 2),
             # The run at each interval of `Usage`.
             'samples': run_samples(taken, clock_samples, launched, times),
-            **held, **clocked}
+            **held, **clocked, **({'page': page} if page else {})}
 
 
 def frame_stats(name, frames, launched, run_s, drawn):
