@@ -105,7 +105,7 @@ impl ShapeRecorder {
 
     /// Records the shapes in `segments` of `source` again after this
     /// recorder's shapes, from the primitives they were recorded from.
-    pub fn push_shapes_of(&mut self, source: &ShapeRecorder, segments: &Range<u32>) {
+    pub fn push_shapes_of(&mut self, source: &Self, segments: &Range<u32>) {
         for segment in source.segments_in(segments) {
             if segment.lane != RecordLane::Shapes {
                 continue;

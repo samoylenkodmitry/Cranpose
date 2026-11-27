@@ -460,15 +460,6 @@ impl ShapeChunks {
             .is_some_and(|&(_, listed)| self.update.since(listed) >= after)
     }
 
-    // How many of the listed chunks went sparse at least `after` updates
-    // ago, the first of the list.
-    fn due(&self, after: u32) -> usize {
-        self.sparse
-            .iter()
-            .take_while(|&&(_, listed)| self.update.since(listed) >= after)
-            .count()
-    }
-
     // The chunk `id` while it waits in the entry `listed` of the list.
     fn listed_chunk(&self, id: ChunkId, listed: SceneUpdate) -> Option<&ShapeChunk> {
         self.chunks
@@ -481,13 +472,17 @@ impl ShapeChunks {
     // line: most updates move nothing.
     #[inline(never)]
     fn move_sparse_items(&mut self, runs: &mut Slab<ShapeRun>, after: u32) {
-        let due = self.due(after);
-        let (items, shapes) = self
+        // How many of the listed chunks went sparse at least `after` updates
+        // ago, the first of the list, and the items and shapes they hold.
+        let (due, items, shapes) = self
             .sparse
-            .range(..due)
-            .filter_map(|&(id, listed)| self.listed_chunk(id, listed))
-            .fold((0, 0), |(items, shapes), chunk| {
-                (items + chunk.items, shapes + chunk.shapes as usize)
+            .iter()
+            .take_while(|&&(_, listed)| self.update.since(listed) >= after)
+            .fold((0, 0, 0), |(due, items, shapes), &(id, listed)| match self
+                .listed_chunk(id, listed)
+            {
+                Some(chunk) => (due + 1, items + chunk.items, shapes + chunk.shapes as usize),
+                None => (due + 1, items, shapes),
             });
         let mut home = (items > 0).then(|| {
             let home = self.home(shapes);
