@@ -1121,13 +1121,11 @@ fn scroll_semantics(
 ) -> impl Fn(&mut cranpose_foundation::SemanticsConfiguration) + 'static {
     let spec = current_bring_into_view_spec();
     move |config| {
-        let range = cranpose_foundation::ScrollAxisRange::new(
-            state.value(),
-            state.max_value(),
-            reverse_scrolling,
-        )
-        .with_content_padding(content_padding.0, content_padding.1)
-        .with_bring_into_view_spec(spec);
+        let value = state.try_value_subscribed().unwrap_or(0.0);
+        let range =
+            cranpose_foundation::ScrollAxisRange::new(value, state.max_value(), reverse_scrolling)
+                .with_content_padding(content_padding.0, content_padding.1)
+                .with_bring_into_view_spec(spec);
         if axis.is_vertical() {
             config.vertical_scroll = Some(range);
         } else {

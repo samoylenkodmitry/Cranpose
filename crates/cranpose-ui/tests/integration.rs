@@ -8,6 +8,7 @@ mod constant_modifier_closures;
 mod content_order;
 mod debug_and_draw_scopes;
 mod directional_layout;
+mod disposed_state_detach;
 mod draw_scope_text_integration;
 mod fixed_box_resize;
 mod flex_box;

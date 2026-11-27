@@ -5,6 +5,7 @@
 
 use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
+use base64::Engine as _;
 use cranpose::{
     AppLauncher,
     embedded_view::EmbeddedView,
@@ -191,4 +192,156 @@ fn a_masked_texture_shows_where_it_is_opaque_and_the_window_where_it_is_clear() 
         rgb_at(&pixels, MIDDLE + 56, MIDDLE),
         [false, true, false]
     ));
+}
+
+fn uastc_solid_block(color: [u8; 4]) -> [u8; 16] {
+    let mut bits: u128 = 0x17;
+    for (index, &channel) in color.iter().enumerate() {
+        bits |= u128::from(channel) << (5 + 8 * index);
+    }
+    bits.to_le_bytes()
+}
+
+fn zstd_raw_frame(payload: &[u8]) -> Vec<u8> {
+    let size = u32::try_from(payload.len()).expect("zstd raw block size fits in u32");
+    assert!(size < (1 << 17), "zstd raw block exceeds 128 KiB limit");
+    let block_header = (size << 3) | 1;
+    let mut frame = Vec::with_capacity(12 + payload.len());
+    frame.extend_from_slice(&[0x28, 0xB5, 0x2F, 0xFD]);
+    // Single-segment frame with a 4-byte Frame_Content_Size field and no checksum.
+    frame.push(0xA0);
+    frame.extend_from_slice(&size.to_le_bytes());
+    frame.extend_from_slice(&block_header.to_le_bytes()[..3]);
+    frame.extend_from_slice(payload);
+    frame
+}
+
+fn ktx2_zstd_uastc(width: u32, height: u32, levels: &[(&[u8], u64)]) -> Vec<u8> {
+    let mut descriptor = Vec::with_capacity(44);
+    for word in [44_u32, 0] {
+        descriptor.extend_from_slice(&word.to_le_bytes());
+    }
+    for half in [2_u16, 40] {
+        descriptor.extend_from_slice(&half.to_le_bytes());
+    }
+    descriptor.extend_from_slice(&[166, 1, 2, 0, 3, 3, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0]);
+    descriptor.extend_from_slice(&0_u16.to_le_bytes());
+    descriptor.extend_from_slice(&[127, 0, 0, 0, 0, 0]);
+    descriptor.extend_from_slice(&0_u32.to_le_bytes());
+    descriptor.extend_from_slice(&u32::MAX.to_le_bytes());
+
+    let dfd_offset = 80 + 24 * u32::try_from(levels.len()).expect("level count fits in u32");
+    let mut cursor = ((u64::from(dfd_offset) + descriptor.len() as u64) + 15) & !15;
+    let mut offsets = Vec::with_capacity(levels.len());
+    for &(compressed, _) in levels {
+        offsets.push(cursor);
+        cursor = (cursor + compressed.len() as u64 + 15) & !15;
+    }
+
+    let mut out = Vec::with_capacity(usize::try_from(cursor).expect("ktx2 size fits in usize"));
+    out.extend_from_slice(b"\xABKTX 20\xBB\r\n\x1A\n");
+    for field in [
+        0_u32,
+        1,
+        width,
+        height,
+        0,
+        0,
+        1,
+        u32::try_from(levels.len()).expect("level count fits in u32"),
+        2,
+    ] {
+        out.extend_from_slice(&field.to_le_bytes());
+    }
+    for field in [dfd_offset, 44, 0, 0] {
+        out.extend_from_slice(&field.to_le_bytes());
+    }
+    out.extend_from_slice(&0_u64.to_le_bytes());
+    out.extend_from_slice(&0_u64.to_le_bytes());
+    for (&(compressed, uncompressed), &offset) in levels.iter().zip(&offsets) {
+        out.extend_from_slice(&offset.to_le_bytes());
+        out.extend_from_slice(&(compressed.len() as u64).to_le_bytes());
+        out.extend_from_slice(&uncompressed.to_le_bytes());
+    }
+    out.extend_from_slice(&descriptor);
+    for (&(compressed, _), &offset) in levels.iter().zip(&offsets) {
+        let target = usize::try_from(offset).expect("offset fits in usize");
+        out.resize(target, 0);
+        out.extend_from_slice(compressed);
+    }
+    out
+}
+
+fn basisu_gltf_with_ktx2(ktx2: &[u8]) -> SpatialGltfModelSource {
+    let template = include_str!("models/basisu_quad.gltf");
+    let original_uri = template
+        .split('"')
+        .find(|part| part.starts_with("data:image/ktx2;base64,"))
+        .expect("basisu_quad.gltf carries a KTX2 data URI");
+    let encoded = base64::engine::general_purpose::STANDARD.encode(ktx2);
+    let replacement = format!("data:image/ktx2;base64,{encoded}");
+    SpatialGltfModelSource::from_bytes(template.replace(original_uri, &replacement).into_bytes())
+}
+
+#[test]
+fn a_zstd_ktx2_model_selects_the_first_mip_that_fits_the_texture_limit() {
+    // Mip 0 is 4096x4 (exceeds the 2048 px texture limit) and red; mip 1 is 2048x2 and green.
+    let level0_raw: Vec<u8> = uastc_solid_block([255, 0, 0, 255])
+        .into_iter()
+        .cycle()
+        .take(1024 * 16)
+        .collect();
+    let level1_raw: Vec<u8> = uastc_solid_block([0, 255, 0, 255])
+        .into_iter()
+        .cycle()
+        .take(512 * 16)
+        .collect();
+    let level0_zstd = zstd_raw_frame(&level0_raw);
+    let level1_zstd = zstd_raw_frame(&level1_raw);
+    let ktx2 = ktx2_zstd_uastc(
+        4096,
+        4,
+        &[
+            (&level0_zstd, level0_raw.len() as u64),
+            (&level1_zstd, level1_raw.len() as u64),
+        ],
+    );
+
+    let (mut view, _state) = window(basisu_gltf_with_ktx2(&ktx2));
+    let mut pixels = Vec::new();
+    draw_until(&mut view, &mut pixels, |pixels| {
+        is_pure(rgb_at(pixels, MIDDLE, MIDDLE), [false, true, false])
+    });
+    assert!(
+        is_pure(rgb_at(&pixels, MIDDLE, MIDDLE), [false, true, false]),
+        "nonzero mip 1 renders green, not {:?}",
+        rgb_at(&pixels, MIDDLE, MIDDLE)
+    );
+}
+
+#[test]
+fn a_zstd_ktx2_model_whose_stream_exceeds_its_declared_size_fails() {
+    // The KTX2 level declares 16 uncompressed bytes (one 4x4 UASTC block),
+    // while the Zstandard frame decompresses to 32 bytes.
+    let oversized_zstd = zstd_raw_frame(&[0x55; 32]);
+    let ktx2 = ktx2_zstd_uastc(4, 4, &[(&oversized_zstd, 16)]);
+
+    let (mut view, state) = window(basisu_gltf_with_ktx2(&ktx2));
+    let mut pixels = Vec::new();
+    let status = |state: &Rc<RefCell<Option<SpatialGltfModelState>>>| {
+        state.borrow().as_ref().map(SpatialGltfModelState::status)
+    };
+    draw_until(&mut view, &mut pixels, |_| {
+        matches!(status(&state), Some(SpatialGltfModelStatus::Failed(_)))
+    });
+    assert!(matches!(
+        status(&state),
+        Some(SpatialGltfModelStatus::Failed(_))
+    ));
+    assert!(
+        rgb_at(&pixels, MIDDLE, MIDDLE)
+            .iter()
+            .all(|&value| value < 60),
+        "nothing shows"
+    );
 }

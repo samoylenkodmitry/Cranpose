@@ -591,3 +591,22 @@ as `crate::x86_intrinsics` and the CELT and SILK code imports from it. The
 intrinsics exist in both modules, so 64-bit x86 is unchanged. Offered
 upstream as [stephenberry/opus-pure#6](https://github.com/stephenberry/opus-pure/pull/6);
 the fork goes when a release has it.
+
+## basisu 0.1.0
+
+Upstream: <https://github.com/marcogomez/basisu>, the crates.io package of
+0.1.0 (commit `cca5a1c8f90147a5f2b74bcabbc6329d30c9d6f2`). `cranpose-basisu`
+keeps 0.1.0 and its library name `basisu`. `cranpose-xr` uses it for
+`KHR_texture_basisu` KTX2 textures under the `gltf` feature.
+
+| fork | upstream |
+| --- | --- |
+| `cranpose-basisu` | `basisu` |
+
+### The patch: Zstandard decompression uses `ruzstd` 0.9.1
+
+Upstream `basisu` 0.1.0 depends on `ruzstd` 0.7, which is covered by
+`RUSTSEC-2026-0344`. The fork upgrades `ruzstd` to 0.9.1 and updates the two
+`StreamingDecoder::new` calls in `src/transcoder.rs` and `src/xuastc/decode.rs`
+to `ruzstd::decoding::StreamingDecoder::new`. The fork goes once an upstream
+`basisu` release moves past `ruzstd` 0.7.

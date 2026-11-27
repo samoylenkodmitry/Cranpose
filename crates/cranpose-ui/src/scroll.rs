@@ -23,9 +23,12 @@ use cranpose_foundation::{
 use cranpose_ui_graphics::Size;
 use cranpose_ui_layout::{Axis, LayoutModifierMeasureResult};
 
+mod overscroll;
+pub(crate) use overscroll::OverscrollEffect;
+
 type InvalidationCallbackMap = HashMap<u64, Rc<dyn Fn()>>;
 
-struct InvalidationCallbacks {
+pub(super) struct InvalidationCallbacks {
     callbacks: RefCell<Rc<InvalidationCallbackMap>>,
     next_id: Cell<u64>,
 }
@@ -139,154 +142,6 @@ impl ScrollMetrics {
 /// half-faded.
 pub type ScrollSettlePolicy = Rc<dyn Fn(f32, f32) -> f32>;
 
-const RUBBER_BAND_COEFFICIENT: f32 = 0.55;
-
-fn rubber_band(raw: f32, dimension: f32) -> f32 {
-    if !dimension.is_finite() || dimension <= 0.0 {
-        return raw;
-    }
-    let x = raw.abs();
-    let c = RUBBER_BAND_COEFFICIENT;
-    (x * dimension * c / (dimension + c * x)).copysign(raw)
-}
-
-fn rubber_band_inverse(visible: f32, dimension: f32) -> f32 {
-    if !dimension.is_finite() || dimension <= 0.0 {
-        return visible;
-    }
-    let c = RUBBER_BAND_COEFFICIENT;
-    let v = visible.abs().min(dimension * 0.999_9);
-    (v * dimension / (c * (dimension - v))).copysign(visible)
-}
-
-#[derive(Clone)]
-pub(crate) struct OverscrollEffect {
-    inner: Rc<OverscrollEffectInner>,
-}
-
-struct OverscrollEffectInner {
-    raw: Cell<f32>,
-    visible: Cell<f32>,
-    dimension: Cell<f32>,
-    invalidate_callbacks: InvalidationCallbacks,
-}
-
-impl OverscrollEffect {
-    pub(crate) fn new() -> Self {
-        Self {
-            inner: Rc::new(OverscrollEffectInner {
-                raw: Cell::new(0.0),
-                visible: Cell::new(0.0),
-                dimension: Cell::new(0.0),
-                invalidate_callbacks: InvalidationCallbacks::new(),
-            }),
-        }
-    }
-
-    pub(crate) fn offset(&self) -> f32 {
-        self.inner.visible.get()
-    }
-
-    pub(crate) fn set_dimension(&self, dimension: f32) {
-        if !dimension.is_finite() || dimension <= 0.0 {
-            return;
-        }
-        self.inner.dimension.set(dimension);
-        self.set_visible(rubber_band(self.inner.raw.get(), dimension));
-    }
-
-    pub(crate) fn apply_drag_delta(&self, delta: f32) -> f32 {
-        if !delta.is_finite() || delta.abs() <= f32::EPSILON {
-            return 0.0;
-        }
-        let before = self.offset();
-        let raw = self.inner.raw.get() + delta;
-        self.inner.raw.set(raw);
-        self.set_visible(rubber_band(raw, self.inner.dimension.get()));
-        self.offset() - before
-    }
-
-    pub(crate) fn apply_settle_delta(&self, delta: f32) -> f32 {
-        let offset = self.offset();
-        if offset.abs() <= f32::EPSILON {
-            return 0.0;
-        }
-        let proposed = offset + delta;
-        let crosses_edge = proposed.signum() != offset.signum();
-        let next = if crosses_edge { 0.0 } else { proposed };
-        let applied = next - offset;
-        self.inner
-            .raw
-            .set(rubber_band_inverse(next, self.inner.dimension.get()));
-        self.set_visible(next);
-        applied
-    }
-
-    pub(crate) fn apply_to_scroll<F>(&self, delta: f32, perform_scroll: F) -> f32
-    where
-        F: FnOnce(f32) -> f32,
-    {
-        if !delta.is_finite() || delta.abs() <= f32::EPSILON {
-            return 0.0;
-        }
-        let mut remaining = delta;
-        let mut consumed = 0.0;
-        let offset = self.offset();
-        if offset.abs() > f32::EPSILON && delta.signum() != offset.signum() {
-            let release = delta.abs().min(offset.abs()) * delta.signum();
-            let released = self.apply_settle_delta(release);
-            consumed += released;
-            remaining -= released;
-        }
-        if remaining.abs() > f32::EPSILON {
-            let target_consumed = perform_scroll(remaining);
-            consumed += target_consumed;
-            let unconsumed = remaining - target_consumed;
-            if unconsumed.abs() > f32::EPSILON {
-                consumed += self.apply_drag_delta(unconsumed);
-            }
-        }
-        consumed
-    }
-
-    pub(crate) fn apply_to_fling<F>(&self, delta: f32, perform_scroll: F) -> f32
-    where
-        F: FnOnce(f32) -> f32,
-    {
-        let consumed = perform_scroll(delta);
-        let unconsumed = delta - consumed;
-        if unconsumed.abs() > f32::EPSILON {
-            self.apply_drag_delta(-unconsumed);
-        }
-        consumed
-    }
-
-    pub(crate) fn add_invalidate_callback(&self, callback: Box<dyn Fn()>) -> u64 {
-        self.inner
-            .invalidate_callbacks
-            .add(app_owned_invalidation_callback(callback))
-    }
-
-    pub(crate) fn remove_invalidate_callback(&self, id: u64) {
-        self.inner.invalidate_callbacks.remove(id);
-    }
-
-    pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.inner, &other.inner)
-    }
-
-    fn set_visible(&self, visible: f32) {
-        if (visible - self.offset()).abs() <= f32::EPSILON {
-            return;
-        }
-        self.inner.visible.set(visible);
-        let callbacks = self.inner.invalidate_callbacks.snapshot();
-        for callback in callbacks.values() {
-            callback();
-        }
-    }
-}
-
 impl PartialEq for ScrollState {
     fn eq(&self, other: &Self) -> bool {
         self.inner == other.inner
@@ -327,14 +182,16 @@ impl ScrollState {
 
     /// The currently installed settle policy, if any.
     pub fn settle_policy(&self) -> Option<ScrollSettlePolicy> {
-        self.inner().settle_policy.borrow().clone()
+        self.inner
+            .try_with(|inner| inner.settle_policy.borrow().clone())
+            .flatten()
     }
 
     /// Whether a drag, a fling, a settle or a scroll animation moves the
     /// content now: Compose's `isScrollInProgress`. A composable that reads it
     /// recomposes when a scroll starts and when it ends.
     pub fn is_scroll_in_progress(&self) -> bool {
-        self.in_progress.is_alive() && self.in_progress.get()
+        self.in_progress.try_value_subscribed().unwrap_or(false)
     }
 
     pub(crate) fn set_scroll_in_progress(&self, active: bool) {
@@ -349,7 +206,11 @@ impl ScrollState {
             return;
         };
         let moving = inner.gesture_scrolling.get() || inner.running_scroll.borrow().is_running();
-        if self.in_progress.is_alive() && self.in_progress.get_non_reactive() != moving {
+        if self
+            .in_progress
+            .try_get_non_reactive()
+            .is_some_and(|current| current != moving)
+        {
             self.in_progress.set(moving);
         }
     }
@@ -383,16 +244,31 @@ impl ScrollState {
         self.value.try_value()
     }
 
+    pub(crate) fn try_value_non_reactive(&self) -> Option<f32> {
+        self.value.try_get_non_reactive()
+    }
+
+    pub(crate) fn try_value_subscribed(&self) -> Option<f32> {
+        self.value.try_value_subscribed()
+    }
+
     /// Gets the maximum scroll value.
     pub fn max_value(&self) -> f32 {
-        *self.inner().max_value.borrow()
+        self.inner
+            .try_with(|inner| *inner.max_value.borrow())
+            .unwrap_or(0.0)
     }
 
     /// Scrolls by the given delta, clamping to valid range [0, max_value].
     /// Returns the actual amount scrolled.
     pub fn dispatch_raw_delta(&self, delta: f32) -> f32 {
-        let current = self.value_non_reactive();
-        let max = self.max_value();
+        let Some(current) = self.value.try_get_non_reactive() else {
+            return 0.0;
+        };
+        let Some(inner) = self.inner.try_get() else {
+            return 0.0;
+        };
+        let max = *inner.max_value.borrow();
         let new_value = (current + delta).clamp(0.0, max);
         let actual_delta = new_value - current;
 
@@ -432,12 +308,11 @@ impl ScrollState {
         }
     }
 
-    pub(crate) fn set_max_value(&self, max: f32) {
-        *self.inner().max_value.borrow_mut() = max;
-    }
-
-    pub(crate) fn set_viewport_extent(&self, extent: f32) {
-        *self.inner().viewport_extent.borrow_mut() = extent;
+    fn set_layout_metrics(&self, max: f32, viewport_extent: f32) {
+        self.inner.try_with(|inner| {
+            *inner.max_value.borrow_mut() = max;
+            *inner.viewport_extent.borrow_mut() = viewport_extent;
+        });
     }
 
     /// Scrolls to the given position immediately. It stops a running fling,
@@ -471,13 +346,14 @@ impl ScrollState {
 
     // Makes the motion that `stop` stops the running scroll. The motion that
     // ran before stops.
-    pub(crate) fn start_scroll_animation(&self, stop: impl FnOnce() + 'static) -> ScrollId {
-        let (id, previous) = self.inner().running_scroll.borrow_mut().start(stop);
+    pub(crate) fn start_scroll_animation(&self, stop: impl FnOnce() + 'static) -> Option<ScrollId> {
+        let inner = self.inner.try_get()?;
+        let (id, previous) = inner.running_scroll.borrow_mut().start(stop);
         if let Some(previous) = previous {
             previous.run();
         }
         self.refresh_scroll_in_progress();
-        id
+        Some(id)
     }
 
     // Forgets the running scroll `id` once it ended, while the state lives.
@@ -490,28 +366,35 @@ impl ScrollState {
 
     // Stops the running scroll and returns whether one ran.
     pub(crate) fn stop_scroll_animation(&self) -> bool {
-        let running = self.inner().running_scroll.borrow_mut().take();
+        let Some(inner) = self.inner.try_get() else {
+            return false;
+        };
+        let running = inner.running_scroll.borrow_mut().take();
         let stopped = running.map(ScrollStop::run).is_some();
         self.refresh_scroll_in_progress();
         stopped
     }
 
-    pub(crate) fn add_invalidate_callback(&self, callback: Box<dyn Fn()>) -> u64 {
-        let inner = self.inner();
+    pub(crate) fn add_invalidate_callback(&self, callback: Box<dyn Fn()>) -> Option<u64> {
+        let inner = self.inner.try_get()?;
         let callback = app_owned_invalidation_callback(callback);
         let id = inner.invalidate_callbacks.add(Rc::clone(&callback));
         if inner.pending_invalidation.replace(false) {
             callback();
         }
-        id
+        Some(id)
     }
 
     pub(crate) fn remove_invalidate_callback(&self, id: u64) {
-        self.inner().invalidate_callbacks.remove(id);
+        if let Some(inner) = self.inner.try_get() {
+            inner.invalidate_callbacks.remove(id);
+        }
     }
 
     fn invalidate(&self) {
-        let inner = self.inner();
+        let Some(inner) = self.inner.try_get() else {
+            return;
+        };
         let callbacks = inner.invalidate_callbacks.snapshot();
         if callbacks.is_empty() {
             inner.pending_invalidation.set(true);
@@ -523,7 +406,7 @@ impl ScrollState {
     }
 }
 
-fn app_owned_invalidation_callback(callback: Box<dyn Fn()>) -> Rc<dyn Fn()> {
+pub(super) fn app_owned_invalidation_callback(callback: Box<dyn Fn()>) -> Rc<dyn Fn()> {
     let Some(owner) = crate::render_state::current_app_context() else {
         return Rc::from(callback);
     };
@@ -857,10 +740,10 @@ impl ModifierNode for ScrollNode {
         self.node_id = node_id;
 
         if let Some(node_id) = node_id {
-            let callback_id = self.state.add_invalidate_callback(Box::new(move || {
-                crate::schedule_layout_repass(node_id);
-            }));
-            self.invalidation_callback_id = Some(callback_id);
+            self.invalidation_callback_id =
+                self.state.add_invalidate_callback(Box::new(move || {
+                    crate::schedule_layout_repass(node_id);
+                }));
             let callback_id = self.overscroll.add_invalidate_callback(Box::new(move || {
                 crate::schedule_layout_repass(node_id);
             }));
@@ -929,20 +812,20 @@ impl LayoutModifierNode for ScrollNode {
         if (self.axis.is_vertical() && constraints.max_height.is_finite())
             || (!self.axis.is_vertical() && constraints.max_width.is_finite())
         {
-            self.state.set_max_value(max_scroll);
-            self.state.set_viewport_extent(if self.axis.is_vertical() {
+            let viewport_extent = if self.axis.is_vertical() {
                 height
             } else {
                 width
-            });
-            self.overscroll.set_dimension(if self.axis.is_vertical() {
-                height
-            } else {
-                width
-            });
+            };
+            self.state.set_layout_metrics(max_scroll, viewport_extent);
+            self.overscroll.set_dimension(viewport_extent);
         }
 
-        let scroll = self.state.value_non_reactive().clamp(0.0, max_scroll);
+        let scroll = self
+            .state
+            .try_value_non_reactive()
+            .unwrap_or(0.0)
+            .clamp(0.0, max_scroll);
 
         let abs_scroll = if self.reverse_scrolling {
             scroll - max_scroll
@@ -993,4 +876,4 @@ macro_rules! rememberScrollState {
 
 #[cfg(test)]
 #[path = "tests/scroll_tests.rs"]
-mod tests;
+pub(crate) mod tests;

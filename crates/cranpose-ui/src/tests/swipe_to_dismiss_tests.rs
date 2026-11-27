@@ -498,7 +498,7 @@ impl NestedHarness {
         ));
 
         let scroll_state = ScrollState::new(100.0);
-        scroll_state.set_max_value(400.0);
+        crate::scroll::tests::measure_scroll_max(scroll_state, 400.0);
         let (scroll, scroll_chain) =
             pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 

@@ -7,8 +7,7 @@ use super::*;
 
 fn scrollable_state(viewport: f32, content: f32, offset: f32) -> ScrollState {
     let state = ScrollState::new(0.0);
-    state.set_viewport_extent(viewport);
-    state.set_max_value((content - viewport).max(0.0));
+    crate::scroll::tests::measure_scroll_extent(state, viewport, content);
     state.scroll_to(offset);
     state
 }
