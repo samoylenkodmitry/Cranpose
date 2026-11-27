@@ -13,7 +13,7 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::{
     Brush, Color, DrawScope, LIQUID_GLASS_SPECIALIZATIONS, LIQUID_GLASS_WGSL, Point, RenderEffect,
-    RuntimeShader, ShaderTarget, ShaderWarmUp, TileMode,
+    RuntimeShader, TileMode,
 };
 
 use crate::support;
@@ -308,12 +308,7 @@ fn first_drawn_frame(shell: &mut AppShell<WgpuRenderer>) -> (CapturedFrame, Rend
 /// Asks renderers to build the glass shader's general pipelines on their
 /// background compilers.
 fn request_glass_general() {
-    cranpose_ui_graphics::request_shader_warm_ups([ShaderTarget::Page, ShaderTarget::Layer].map(
-        |target| ShaderWarmUp {
-            shader: RuntimeShader::new(LIQUID_GLASS_WGSL),
-            target,
-        },
-    ));
+    cranpose_ui_graphics::request_shader_warm_ups([RuntimeShader::new(LIQUID_GLASS_WGSL)]);
 }
 
 /// The general draws a glass several times slower than its own pipelines

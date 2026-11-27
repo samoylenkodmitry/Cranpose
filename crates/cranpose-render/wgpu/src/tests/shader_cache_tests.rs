@@ -3,10 +3,7 @@ use std::sync::atomic::Ordering;
 use cranpose_ui_graphics::RuntimeShader;
 use web_time::{Duration, Instant};
 
-use super::{
-    RuntimeShaderPipelineMode, ShaderPipelineCache, ShaderPipelineFit,
-    validate_runtime_shader_source,
-};
+use super::{ShaderPipelineCache, ShaderPipelineFit, validate_runtime_shader_source};
 use crate::{
     effect_renderer::{EffectRenderer, framework_shader_sources},
     pipeline_compiler::{CompileLane, PipelineCompiler, tests::hold_warm_ups},
@@ -48,13 +45,9 @@ fn material_shader() -> RuntimeShader {
 }
 
 /// How `shader`'s draw was served.
-fn draw(
-    cache: &mut ShaderPipelineCache,
-    shader: &RuntimeShader,
-    mode: RuntimeShaderPipelineMode,
-) -> ShaderPipelineFit {
+fn draw(cache: &mut ShaderPipelineCache, shader: &RuntimeShader) -> ShaderPipelineFit {
     cache
-        .get_or_create(shader, shader.draw_specialization(0), mode)
+        .get_or_create(shader, shader.draw_specialization(0))
         .expect("valid shader")
         .1
 }
@@ -74,7 +67,7 @@ fn warm_pipeline_lookups_do_not_rebuild_constants() {
     for forced in [false, true, false] {
         cache.set_forced_flags(forced.then_some("RED").into_iter());
         for _ in 0..12 {
-            let fit = draw(&mut cache, &shader, RuntimeShaderPipelineMode::Replace);
+            let fit = draw(&mut cache, &shader);
             assert_eq!(fit, ShaderPipelineFit::Specialized);
         }
     }
@@ -87,23 +80,15 @@ fn warm_pipeline_lookups_do_not_rebuild_constants() {
 }
 
 /// Whether `shader` draws now; when it does not, it asks for its pipeline.
-fn ready(
-    cache: &mut ShaderPipelineCache,
-    shader: &RuntimeShader,
-    mode: RuntimeShaderPipelineMode,
-) -> bool {
-    cache.ready_to_draw(shader, shader.draw_specialization(0), mode)
+fn ready(cache: &mut ShaderPipelineCache, shader: &RuntimeShader) -> bool {
+    cache.ready_to_draw(shader, shader.draw_specialization(0))
 }
 
 /// Builds `shader`'s general pipeline: the unspecialized draw.
-fn build_general(
-    cache: &mut ShaderPipelineCache,
-    shader: &RuntimeShader,
-    mode: RuntimeShaderPipelineMode,
-) {
+fn build_general(cache: &mut ShaderPipelineCache, shader: &RuntimeShader) {
     let general = RuntimeShader::new(shader.source());
     cache
-        .get_or_create(&general, general.draw_specialization(0), mode)
+        .get_or_create(&general, general.draw_specialization(0))
         .expect("valid general shader");
 }
 
@@ -115,19 +100,18 @@ fn a_new_material_waits_for_its_own_pipeline_rather_than_draw_with_the_general()
     let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
     let mut cache = cache(&device, PipelineCompiler::spawn(wgpu::Backend::Vulkan));
     let shader = material_shader();
-    let mode = RuntimeShaderPipelineMode::Replace;
-    build_general(&mut cache, &shader, mode);
+    build_general(&mut cache, &shader);
     assert!(
-        !ready(&mut cache, &shader, mode),
+        !ready(&mut cache, &shader),
         "a built general does not stand in"
     );
     let deadline = Instant::now() + SETTLE;
-    while !ready(&mut cache, &shader, mode) {
+    while !ready(&mut cache, &shader) {
         assert!(Instant::now() < deadline, "the pipeline never landed");
         std::thread::sleep(Duration::from_millis(5));
     }
     assert_eq!(
-        draw(&mut cache, &shader, mode),
+        draw(&mut cache, &shader),
         ShaderPipelineFit::Specialized,
         "the material draws with its own pipeline"
     );
@@ -156,7 +140,6 @@ fn a_first_screens_shared_stand_in_draws_its_materials_before_their_own() {
         )
         .into_boxed_str(),
     );
-    let mode = RuntimeShaderPipelineMode::Replace;
     let materials = [0.0, 1.0].map(|green| two_flag_material(text, green));
     let records: Vec<ShaderPipelineRecord> = materials
         .iter()
@@ -165,7 +148,6 @@ fn a_first_screens_shared_stand_in_draws_its_materials_before_their_own() {
             ShaderPipelineRecord {
                 source: shader.source_hash(),
                 overrides: specialization.overrides_hash(),
-                mode: mode.disk_byte(),
                 constants: specialization
                     .overrides()
                     .iter()
@@ -177,7 +159,7 @@ fn a_first_screens_shared_stand_in_draws_its_materials_before_their_own() {
     cache.warm_first_screen(&records, [text]);
     for shader in &materials {
         let (_, fit) = cache
-            .get_or_create(shader, shader.draw_specialization(0), mode)
+            .get_or_create(shader, shader.draw_specialization(0))
             .expect("valid shader");
         assert_eq!(
             fit,
@@ -191,7 +173,7 @@ fn a_first_screens_shared_stand_in_draws_its_materials_before_their_own() {
         "one shared pipeline: neither material's own nor the general"
     );
     for shader in &materials {
-        let own = cache.key(shader, shader.draw_specialization(0), mode);
+        let own = cache.key(shader, shader.draw_specialization(0));
         assert!(
             !cache.pipelines.contains_key(&own),
             "a covered material's own pipeline waits for the first frame to be drawn"
@@ -203,7 +185,7 @@ fn a_first_screens_shared_stand_in_draws_its_materials_before_their_own() {
     loop {
         let landed = materials
             .iter()
-            .all(|shader| draw(&mut cache, shader, mode) == ShaderPipelineFit::Specialized);
+            .all(|shader| draw(&mut cache, shader) == ShaderPipelineFit::Specialized);
         if landed {
             break;
         }
@@ -226,7 +208,7 @@ fn an_override_that_is_not_a_fold_compiles_inside_the_frame() {
     let mut cache = cache(&device, PipelineCompiler::spawn(wgpu::Backend::Vulkan));
     let mut shader = material_shader();
     shader.set_specialization_exact(false);
-    let fit = draw(&mut cache, &shader, RuntimeShaderPipelineMode::Replace);
+    let fit = draw(&mut cache, &shader);
     assert_eq!(fit, ShaderPipelineFit::Specialized);
     assert_eq!(
         builds(&cache),
@@ -240,16 +222,15 @@ fn a_warmed_general_pipeline_is_ready_before_its_first_draw() {
     let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
     let mut cache = cache(&device, PipelineCompiler::spawn(wgpu::Backend::Vulkan));
     let shader = RuntimeShader::new(&valid_shader());
-    let mode = RuntimeShaderPipelineMode::PremultipliedSrcOver;
-    cache.warm(&shader, mode);
-    cache.warm(&shader, mode);
+    cache.warm(&shader);
+    cache.warm(&shader);
     let deadline = Instant::now() + SETTLE;
-    while !cache.ready(cache.key(&shader, shader.draw_specialization(0), mode)) {
+    while !cache.ready(cache.key(&shader, shader.draw_specialization(0))) {
         assert!(Instant::now() < deadline, "the warm-up never finished");
         std::thread::sleep(Duration::from_millis(5));
     }
     assert_eq!(builds(&cache), (1, 1), "one warm-up per general pipeline");
-    assert_eq!(draw(&mut cache, &shader, mode), ShaderPipelineFit::General);
+    assert_eq!(draw(&mut cache, &shader), ShaderPipelineFit::General);
     assert_eq!(
         builds(&cache),
         (1, 1),
@@ -267,13 +248,9 @@ fn a_drawn_specialization_does_not_wait_for_its_queued_warm_up() {
     });
     let mut cache = cache(&device, compiler.clone());
     let shader = material_shader();
-    let mode = RuntimeShaderPipelineMode::Replace;
-    build_general(&mut cache, &shader, mode);
-    cache.warm(&shader, mode);
-    assert_eq!(
-        draw(&mut cache, &shader, mode),
-        ShaderPipelineFit::Specialized
-    );
+    build_general(&mut cache, &shader);
+    cache.warm(&shader);
+    assert_eq!(draw(&mut cache, &shader), ShaderPipelineFit::Specialized);
     release.send(()).expect("the blocking warm-up is waiting");
     let (drained, warm_ups_done) = std::sync::mpsc::channel();
     compiler.enqueue(CompileLane::WarmUp, move || {
@@ -295,15 +272,14 @@ fn an_invalid_shader_is_validated_once() {
     let mut cache = cache(&device, PipelineCompiler::spawn(wgpu::Backend::Vulkan));
     let mut shader = RuntimeShader::new("this is not wgsl");
     shader.set_override("RED", 1.0);
-    let mode = RuntimeShaderPipelineMode::Replace;
     assert!(
         cache
-            .get_or_create(&shader, shader.draw_specialization(0), mode)
+            .get_or_create(&shader, shader.draw_specialization(0))
             .is_none()
     );
     assert!(
         cache
-            .get_or_create(&shader, shader.draw_specialization(0), mode)
+            .get_or_create(&shader, shader.draw_specialization(0))
             .is_none()
     );
     assert_eq!(

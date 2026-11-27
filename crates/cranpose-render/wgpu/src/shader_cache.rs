@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use cranpose_ui_graphics::{DrawSpecialization, FxHashMap, FxHashSet, RuntimeShader, ShaderTarget};
+use cranpose_ui_graphics::{DrawSpecialization, FxHashMap, FxHashSet, RuntimeShader};
 #[cfg(not(target_arch = "wasm32"))]
 use cranpose_ui_graphics::{runtime_shader_overrides_hash, runtime_shader_source_hash};
 
@@ -15,48 +15,6 @@ use crate::{
     lazy_resource::LazyGpuResource,
     pipeline_compiler::{CompileLane, PipelineCompiler},
 };
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum RuntimeShaderPipelineMode {
-    Replace,
-    PremultipliedSrcOver,
-}
-
-impl RuntimeShaderPipelineMode {
-    /// The pipeline a shader draws through at `target`: a layer's own
-    /// texture takes the shader's output as is, the page beneath composites
-    /// it.
-    pub(crate) fn for_target(target: ShaderTarget) -> Self {
-        match target {
-            ShaderTarget::Layer => Self::Replace,
-            ShaderTarget::Page => Self::PremultipliedSrcOver,
-        }
-    }
-
-    fn blend_state(self) -> wgpu::BlendState {
-        match self {
-            Self::Replace => wgpu::BlendState::REPLACE,
-            Self::PremultipliedSrcOver => wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn disk_byte(self) -> u8 {
-        match self {
-            Self::Replace => 0,
-            Self::PremultipliedSrcOver => 1,
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn from_disk_byte(byte: u8) -> Option<Self> {
-        match byte {
-            0 => Some(Self::Replace),
-            1 => Some(Self::PremultipliedSrcOver),
-            _ => None,
-        }
-    }
-}
 
 pub(crate) fn shader_specialization_enabled() -> bool {
     !cranpose_core::DIAGNOSTICS
@@ -81,20 +39,19 @@ struct PipelineKey {
     source: u64,
     overrides: u64,
     forced: u64,
-    mode: RuntimeShaderPipelineMode,
 }
 
-/// A pipeline as a record names it: its source, overrides and blend mode.
+/// A pipeline as a record names it: its source and overrides.
 #[cfg(not(target_arch = "wasm32"))]
-type PipelineIdentity = (u64, u64, u8);
+type PipelineIdentity = (u64, u64);
 
 impl PipelineKey {
     #[cfg(not(target_arch = "wasm32"))]
     fn identity(self) -> PipelineIdentity {
-        (self.source, self.overrides, self.mode.disk_byte())
+        (self.source, self.overrides)
     }
 
-    /// The key of every material's pipeline for this source and blend mode.
+    /// The key of every material's pipeline for this source.
     fn general(self) -> Self {
         Self {
             overrides: 0,
@@ -146,7 +103,15 @@ impl PipelineFactory {
     fn module(&self, source: &str, source_hash: u64) -> Option<RuntimeShaderModule> {
         #[cfg(test)]
         self.counters.modules.fetch_add(1, Relaxed);
-        create_runtime_shader_module(&self.device, source, source_hash, self.backend)
+        let started = web_time::Instant::now();
+        let module = create_runtime_shader_module(&self.device, source, source_hash, self.backend);
+        log::info!(
+            "[module] {source_hash:x} {} bytes {:.1}ms on {}",
+            source.len(),
+            started.elapsed().as_secs_f64() * 1000.0,
+            std::thread::current().name().unwrap_or("unnamed thread"),
+        );
+        module
     }
 }
 
@@ -177,14 +142,13 @@ impl PipelineJob {
         let module = module
             .get_or_init(factory.backend, || factory.module(&source, key.source))
             .as_ref()?;
-        let mode = key.mode;
         #[cfg(test)]
         factory.counters.pipelines.fetch_add(1, Relaxed);
         Some(crate::shared_shader::create_fullscreen_strip_pipeline(
             &factory.device,
             factory.pipeline_cache.as_ref(),
             &format!(
-                "runtime-shader mode={mode:?} source={:016x} \
+                "runtime-shader source={:016x} \
                  overrides={:016x} forced={:016x} constants={}",
                 key.source,
                 key.overrides,
@@ -201,7 +165,7 @@ impl PipelineJob {
             (
                 wgpu::ColorTargetState {
                     format: factory.format,
-                    blend: Some(mode.blend_state()),
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 },
                 None,
@@ -316,12 +280,7 @@ impl ShaderPipelineCache {
         }
     }
 
-    fn key(
-        &self,
-        shader: &RuntimeShader,
-        specialization: DrawSpecialization<'_>,
-        mode: RuntimeShaderPipelineMode,
-    ) -> PipelineKey {
+    fn key(&self, shader: &RuntimeShader, specialization: DrawSpecialization<'_>) -> PipelineKey {
         PipelineKey {
             source: shader.source_hash(),
             overrides: if shader_specialization_enabled() {
@@ -330,7 +289,6 @@ impl ShaderPipelineCache {
                 0
             },
             forced: self.forced_hash,
-            mode,
         }
     }
 
@@ -438,12 +396,12 @@ impl ShaderPipelineCache {
         });
     }
 
-    pub(crate) fn warm(&mut self, shader: &RuntimeShader, mode: RuntimeShaderPipelineMode) {
+    pub(crate) fn warm(&mut self, shader: &RuntimeShader) {
         if !self.compiler.takes_warm_ups() {
             return;
         }
         let specialization = shader.draw_specialization(0);
-        let key = self.key(shader, specialization, mode);
+        let key = self.key(shader, specialization);
         self.request(shader, specialization, key, CompileLane::WarmUp);
     }
 
@@ -451,9 +409,8 @@ impl ShaderPipelineCache {
         &mut self,
         shader: &RuntimeShader,
         specialization: DrawSpecialization<'_>,
-        mode: RuntimeShaderPipelineMode,
     ) -> Option<(&wgpu::RenderPipeline, ShaderPipelineFit)> {
-        let key = self.key(shader, specialization, mode);
+        let key = self.key(shader, specialization);
         #[cfg(not(target_arch = "wasm32"))]
         self.note_drawn(specialization, key);
         let (build, fit, stand_in) = self.choose(shader, specialization, key);
@@ -473,12 +430,11 @@ impl ShaderPipelineCache {
         &mut self,
         shader: &RuntimeShader,
         specialization: DrawSpecialization<'_>,
-        mode: RuntimeShaderPipelineMode,
     ) -> bool {
         if !self.compiler.is_active() {
             return true;
         }
-        let key = self.key(shader, specialization, mode);
+        let key = self.key(shader, specialization);
         if self.ready(key) || self.cached(key) {
             return true;
         }
@@ -595,7 +551,6 @@ impl ShaderPipelineCache {
         let record = ShaderPipelineRecord {
             source: key.source,
             overrides: key.overrides,
-            mode: key.mode.disk_byte(),
             constants: if key.overrides == 0 {
                 Vec::new()
             } else {
@@ -624,8 +579,8 @@ impl ShaderPipelineCache {
     }
 
     /// [`Self::warm_recorded`] for the pipelines the last launch drew its
-    /// first screen with, behind a stand-in per shader source, blend mode and
-    /// draw part that several of them share. A stand-in folds only the
+    /// first screen with, behind a stand-in per shader source and draw part
+    /// that several of them share. A stand-in folds only the
     /// overrides all of those share. Every override of the framework's own
     /// shaders is an exact fold on its own, so any subset of a material's
     /// folds draws that material's bytes (for an arbitrary shader, an exact
@@ -701,7 +656,7 @@ impl ShaderPipelineCache {
         self.cached.extend(
             records
                 .into_iter()
-                .map(|record| (record.source, record.overrides, record.mode)),
+                .map(|record| (record.source, record.overrides)),
         );
     }
 
@@ -759,7 +714,7 @@ impl ShaderPipelineCache {
     }
 
     /// The stand-in that draws `key` with the bytes of its own pipeline:
-    /// same source, blend mode and part, its overrides among the draw's.
+    /// same source and part, its overrides among the draw's.
     fn stand_in_for(
         &self,
         key: PipelineKey,
@@ -806,7 +761,6 @@ fn recorded_key(
         source: record.source,
         overrides: record.overrides,
         forced: 0,
-        mode: RuntimeShaderPipelineMode::from_disk_byte(record.mode)?,
     };
     Some((key, constants))
 }
@@ -941,7 +895,3 @@ use validation::{validate_runtime_shader_source, validate_shader_source};
 #[cfg(test)]
 #[path = "tests/shader_cache_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tests/shader_cache_target_tests.rs"]
-mod target_tests;

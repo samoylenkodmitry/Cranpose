@@ -94,6 +94,36 @@ pub(crate) enum FixedDraw<'a> {
     LeftOut,
 }
 
+// The draws that took a stand-in while their pipelines compiled.
+#[derive(Default)]
+pub(crate) struct StandIns {
+    // how many so far
+    drawn: Cell<u64>,
+    // whether one was drawn since the kept layers and blurred shadows were
+    // last dropped, so they may hold it
+    kept: Cell<bool>,
+}
+
+impl StandIns {
+    fn note(&self) {
+        self.drawn.set(self.drawn.get() + 1);
+        self.kept.set(true);
+    }
+
+    pub(crate) fn drawn(&self) -> u64 {
+        self.drawn.get()
+    }
+
+    pub(crate) fn kept(&self) -> bool {
+        self.kept.get()
+    }
+
+    // The kept layers and blurred shadows were dropped.
+    pub(crate) fn drop_kept(&self) {
+        self.kept.set(false);
+    }
+}
+
 pub(crate) struct RendererPipelines {
     // The device, target format and backend every pipeline here builds
     // for; a job that builds one off the frame holds the device.
@@ -122,9 +152,7 @@ pub(crate) struct RendererPipelines {
     /// Whether this frame drew a placeholder in place of an effect whose
     /// pipelines were compiling, or left out a draw whose pipeline was.
     pub(crate) drew_placeholder: Cell<bool>,
-    // Whether a frame drew a stand-in since the kept layers and blurred
-    // shadows were last dropped, so they may hold it.
-    pub(crate) stand_ins_kept: Cell<bool>,
+    pub(crate) stand_ins: StandIns,
     pub(crate) shape_pipelines: ShapePipelines,
     /// Image and glyph pipelines for passes without and with a depth buffer.
     pub(crate) image_pipeline: [FixedPipeline; 8],
@@ -206,7 +234,7 @@ impl RendererPipelines {
         {
             let landings = self.landings();
             let started = std::mem::replace(&mut self.built_at_frame_start, landings);
-            started != landings && self.stand_ins_kept.get()
+            started != landings && self.stand_ins.kept()
         }
     }
 
@@ -733,7 +761,7 @@ impl RendererPipelines {
     /// Asks for the frame after the next pipeline lands: this one drew
     /// something in place of what that pipeline draws.
     fn await_landing(&self) {
-        self.stand_ins_kept.set(true);
+        self.stand_ins.note();
         self.await_landing_over_stand_ins();
     }
 

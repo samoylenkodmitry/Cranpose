@@ -1,6 +1,6 @@
 use std::sync::{Once, OnceLock};
 
-use cranpose_ui_graphics::{Color, RenderEffect, RuntimeShader, ShaderTarget, ShaderWarmUp, Size};
+use cranpose_ui_graphics::{Color, RenderEffect, RuntimeShader, Size};
 
 use super::control_motion::ControlContactKind;
 use crate::material::{
@@ -18,16 +18,7 @@ fn profile(kind: ControlContactKind) -> (f32, f32, f32, f32, f32) {
 pub(super) fn material(kind: ControlContactKind) -> Glass {
     static WARM_UP: Once = Once::new();
     WARM_UP.call_once(|| {
-        cranpose_ui_graphics::request_shader_warm_ups([
-            ShaderWarmUp {
-                shader: shader(false),
-                target: ShaderTarget::Layer,
-            },
-            ShaderWarmUp {
-                shader: shader(true),
-                target: ShaderTarget::Page,
-            },
-        ]);
+        cranpose_ui_graphics::request_shader_warm_ups([shader(false), shader(true)]);
     });
     let (surface_reach, surface_depth, black, shadow_opacity, _) = profile(kind);
     let mut glass = Glass::lens()

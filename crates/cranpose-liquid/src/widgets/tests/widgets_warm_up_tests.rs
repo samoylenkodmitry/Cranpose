@@ -1,5 +1,5 @@
 use cranpose_ui::Modifier;
-use cranpose_ui_graphics::{LIQUID_GLASS_WGSL, ShaderTarget, shader_warm_ups_after};
+use cranpose_ui_graphics::{LIQUID_GLASS_WGSL, shader_warm_ups_after};
 
 use super::{tab_lighting, vibrancy};
 use crate::prelude::*;
@@ -34,15 +34,10 @@ fn composing_a_tab_bar_requests_the_shaders_its_touch_draws() {
             "a composed tab bar must ask for the pipelines its press and ink draw with"
         );
     }
-    // A touch strains the lens: one glass layer draws into a texture and
-    // the other over the page.
-    for target in [ShaderTarget::Layer, ShaderTarget::Page] {
-        assert!(
-            requested
-                .iter()
-                .any(|warm_up| warm_up.target == target
-                    && warm_up.shader.source() == LIQUID_GLASS_WGSL),
-            "a composed tab bar must ask for its touched lens's glass at {target:?}"
-        );
-    }
+    assert!(
+        requested
+            .iter()
+            .any(|warm_up| warm_up.source() == LIQUID_GLASS_WGSL),
+        "a composed tab bar must ask for its touched lens's glass"
+    );
 }

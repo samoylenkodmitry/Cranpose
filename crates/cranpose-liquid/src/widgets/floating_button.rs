@@ -13,9 +13,7 @@ use cranpose_ui::{
     Modifier, PointerEvent, PointerEventKind, PointerInputScope,
     widgets::{Box, BoxSpec},
 };
-use cranpose_ui_graphics::{
-    GraphicsLayer, RenderEffect, RuntimeShader, ShaderTarget, ShaderWarmUp, Size,
-};
+use cranpose_ui_graphics::{GraphicsLayer, RenderEffect, RuntimeShader, Size};
 use cranpose_ui_layout::Alignment;
 
 use crate::{
@@ -162,10 +160,7 @@ pub(super) fn FloatingButtonSurface(
     if native_lighting {
         static WARM_UP: Once = Once::new();
         WARM_UP.call_once(|| {
-            cranpose_ui_graphics::request_shader_warm_ups([ShaderWarmUp {
-                shader: lighting_shader(),
-                target: ShaderTarget::Layer,
-            }]);
+            cranpose_ui_graphics::request_shader_warm_ups([lighting_shader()]);
         });
     }
     let transform = Modifier::empty().graphics_layer(move || {

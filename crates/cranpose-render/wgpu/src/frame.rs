@@ -14,7 +14,7 @@ use cranpose_render_common::{
 };
 use cranpose_ui_graphics::{
     BlendMode, Color, FrontPolygon, MAX_SUBSTRATES, Point, Rect, RenderEffect, RenderHash,
-    RuntimeShader, ShaderPlaceholder, ShaderTarget, SubstrateSpec, TileMode, expand_rect,
+    RuntimeShader, ShaderPlaceholder, SubstrateSpec, TileMode, expand_rect,
 };
 use smallvec::SmallVec;
 
@@ -938,17 +938,6 @@ impl PendingBackdrop<'_> {
     /// composited over what is beneath rather than into a texture first.
     fn composites_tail(&self, shader: &RuntimeShader) -> bool {
         (self.rounded_mask.is_none() && self.alpha >= 1.0) || shader.batched_source()
-    }
-
-    /// Where the effect's last shader draws: over the page, or into a texture.
-    fn shader_target(&self) -> ShaderTarget {
-        let composites = self.batched.is_some()
-            || shader_tail(self.effect).is_some_and(|(_, shader)| self.composites_tail(shader));
-        if composites {
-            ShaderTarget::Page
-        } else {
-            ShaderTarget::Layer
-        }
     }
 
     fn layer_pixel_rect(&self) -> [f32; 4] {
@@ -1988,6 +1977,8 @@ pub(crate) struct FrameExecutor<'r, 'c, C: FrameCommandRecorder> {
     empty_scene: CompositorScene,
     depth: usize,
     prefix_admitted_pixels: u64,
+    // The stand-ins drawn before this frame began.
+    stand_ins_at_start: StandInMark,
 }
 
 // Where a frame records its commands and keeps the transients it frees at its end.
@@ -2010,6 +2001,7 @@ struct SurfaceRender {
     scale: f32,
     grid_dest: Option<DeviceRect>,
     region: Option<DeviceRect>,
+    pixels: StandInPixels,
 }
 
 #[derive(Clone, Copy)]
@@ -2337,13 +2329,19 @@ impl SurfacePlan {
         })
     }
 
-    fn surface(&self, source: CompositeSource, region: Option<DeviceRect>) -> SurfaceRender {
+    fn surface(
+        &self,
+        source: CompositeSource,
+        region: Option<DeviceRect>,
+        pixels: StandInPixels,
+    ) -> SurfaceRender {
         SurfaceRender {
             source,
             rect: self.surface_rect,
             scale: self.surface_scale,
             grid_dest: self.grid_dest,
             region,
+            pixels,
         }
     }
 }
@@ -2412,6 +2410,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .effect_renderer
             .shader_cache
             .set_forced_flags(ablation.glass_flags.forced_flags());
+        let stand_ins_at_start = renderer.stand_in_mark();
         Self {
             renderer,
             recorder,
@@ -2419,6 +2418,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             empty_scene: CompositorScene::new(),
             depth: 0,
             prefix_admitted_pixels: 0,
+            stand_ins_at_start,
         }
     }
 
@@ -2509,41 +2509,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             )?;
         }
         Ok(())
-    }
-
-    /// Whether `effect` over a `source_size` source draws a layer at
-    /// `layer_pixel_rect` without waiting for a pipeline to compile, its
-    /// last shader `composited` over what is beneath or drawn into a
-    /// texture. When it does not, what it misses is queued and the frame
-    /// draws without it.
-    fn effect_draws_now(
-        &mut self,
-        effect: &RenderEffect,
-        layer_pixel_rect: [f32; 4],
-        source_size: (u32, u32),
-        target: ShaderTarget,
-    ) -> bool {
-        let renderer = &mut *self.renderer;
-        let ready = renderer.effect_renderer.effect_ready(
-            &renderer.device,
-            effect,
-            crate::effect_renderer::layer_pixels(layer_pixel_rect),
-            source_size,
-            target,
-        );
-        if !ready {
-            renderer.pipelines.note_placeholder(&renderer.frame_stats);
-        }
-        ready
-    }
-
-    fn backdrop_draws_now(&mut self, item: &PendingBackdrop<'_>) -> bool {
-        self.effect_draws_now(
-            item.effect,
-            item.layer_pixel_rect(),
-            item.capture_rect.pixel_size(),
-            item.shader_target(),
-        )
     }
 
     /// The backdrop's placeholder, drawn at `scale`, while its effect's
@@ -2990,6 +2955,34 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     /// the whole page, or else replays that opaque op from the layer cache
     /// or admits it there, when nothing composited or drawn in place lies
     /// beneath it.
+    // Draws the prefix `ops` into the page, and the pixels it drew.
+    fn encode_prefix(
+        &mut self,
+        pass: &LayerPass<'_>,
+        ops: &[DrawOp],
+        base: wgpu::LoadOp<wgpu::Color>,
+    ) -> Result<StandInPixels, String> {
+        let segment = PassSegment {
+            scene: &pass.layer.scene,
+            ops,
+            composites: &[],
+            offset: pass.page.offset,
+            scissor: None,
+            first_run_window: Some(0..1),
+            transform: SegmentTransform::IDENTITY,
+            scale: pass.scale,
+        };
+        let mark = self.renderer.stand_in_mark();
+        self.renderer.encode_pass(
+            self.recorder,
+            pass.page.pass_target(),
+            (std::slice::from_ref(&segment), SegmentLayout::Stacked),
+            base,
+            "Layer Pass Prefix",
+        )?;
+        Ok(self.pixels_since(mark))
+    }
+
     fn reuse_opaque_prefix(
         &mut self,
         pass: &mut LayerPass<'_>,
@@ -3066,23 +3059,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         {
             return Ok(None);
         }
-        let segment = PassSegment {
-            scene: &pass.layer.scene,
-            ops: &ops[..1],
-            composites: &[],
-            offset: pass.page.offset,
-            scissor: None,
-            first_run_window: Some(0..1),
-            transform: SegmentTransform::IDENTITY,
-            scale: pass.scale,
-        };
-        self.renderer.encode_pass(
-            self.recorder,
-            pass.page.pass_target(),
-            (std::slice::from_ref(&segment), SegmentLayout::Stacked),
-            base,
-            "Layer Pass Prefix",
-        )?;
+        let held = self.encode_prefix(pass, &ops[..1], base)?;
         let texture = Rc::new(
             self.renderer
                 .acquire_retained_surface(pixel_width, pixel_height),
@@ -3100,7 +3077,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         if self
             .renderer
             .layer_cache
-            .insert(prefix.key, Retained::surface(texture), None)
+            .insert(prefix.key, Retained::surface(texture, held), None)
         {
             self.renderer.frame_stats.record_prefix_admission();
             if let Some(gate) = self.renderer.gates.fills.get_mut(&prefix.command) {
@@ -3324,7 +3301,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let Some(descriptor) = self.transient_descriptor(&output.source) else {
             return;
         };
-        let retained = Retained::composite(Rc::clone(&output.source), output.kind.clone());
+        let retained = Retained::composite(
+            Rc::clone(&output.source),
+            output.kind.clone(),
+            self.page_pixels(),
+        );
         if !self
             .renderer
             .layer_cache
@@ -3986,9 +3967,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             layer_rect_device.height,
         ];
         let size = (width, height);
-        let waiting = effect.effect.as_ref().filter(|pending| {
-            !self.effect_draws_now(pending, layer_pixel_rect, size, ShaderTarget::Layer)
-        });
+        let waiting = effect
+            .effect
+            .as_ref()
+            .filter(|pending| !self.effect_draws_now(pending, layer_pixel_rect, size));
         let result = match &effect.effect {
             Some(render_effect) if waiting.is_none() => self.apply_effect(
                 &texture,
@@ -4231,12 +4213,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let layer_pixel_rect = layer_pixel_rect(child, surface.rect, surface.scale);
         let source = &surface.source.texture;
         let (width, height) = (source.width, source.height);
-        if !self.effect_draws_now(
-            effect,
-            layer_pixel_rect,
-            (width, height),
-            ShaderTarget::Layer,
-        ) {
+        if !self.effect_draws_now(effect, layer_pixel_rect, (width, height)) {
             return Ok(None);
         }
         let content = surface.source.content.derived(&effect.render_hash());
@@ -4279,6 +4256,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             );
             if admits && self.renderer.layer_cache.fits(width, height) {
                 let dest = Rc::new(self.renderer.acquire_retained_surface(width, height));
+                let mark = self.renderer.stand_in_mark();
                 self.apply_effect_into(
                     source,
                     &dest,
@@ -4286,11 +4264,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     layer_pixel_rect,
                     EffectReads::default(),
                 )?;
-                if self
-                    .renderer
-                    .layer_cache
-                    .insert(key, Retained::surface(Rc::clone(&dest)), None)
-                    && let Some(gate) = self.renderer.gates.node(node_id, NodeGate::Effect)
+                let pixels = surface.pixels.with(self.pixels_since(mark));
+                if self.renderer.layer_cache.insert(
+                    key,
+                    Retained::surface(Rc::clone(&dest), pixels),
+                    None,
+                ) && let Some(gate) = self.renderer.gates.node(node_id, NodeGate::Effect)
                 {
                     gate.admitted();
                 }
@@ -4348,7 +4327,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         }
         let layer_pixel_rect = layer_pixel_rect(child, surface.rect, surface.scale);
         let source_size = (surface.source.texture.width, surface.source.texture.height);
-        if !self.effect_draws_now(effect, layer_pixel_rect, source_size, ShaderTarget::Page) {
+        if !self.effect_draws_now(effect, layer_pixel_rect, source_size) {
             return Some(None);
         }
         let slot = CompositeSlot {
@@ -4401,12 +4380,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         };
         let layer_pixel_rect = layer_pixel_rect(child, surface_rect, scale);
         let rounded_mask = grid_rounded_mask(child, snap, scale);
-        if !self.effect_draws_now(
-            effect,
-            layer_pixel_rect,
-            (width, height),
-            ShaderTarget::Page,
-        ) {
+        if !self.effect_draws_now(effect, layer_pixel_rect, (width, height)) {
             let [x, y, width, height] = layer_pixel_rect;
             let layer = DeviceRect {
                 x: dest.x + x,
@@ -4490,6 +4464,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     content: SourceContent::retained(&key),
                 },
                 retained.region,
+                retained.pixels,
             ));
         }
         SourceDecision::Render(
@@ -4525,6 +4500,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             child.node_id,
             plan.surface_logical,
         );
+        let mark = self.renderer.stand_in_mark();
         self.render_layer(
             &child.content,
             child_page,
@@ -4532,11 +4508,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             beneath,
         )?;
+        let pixels = self.pixels_since(mark);
         let retained = retain.filter(|key| {
             self.retain_source(
                 child.node_id,
                 *key,
-                Retained::surface(Rc::clone(&texture)),
+                Retained::surface(Rc::clone(&texture), pixels),
                 None,
             )
         });
@@ -4548,6 +4525,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 }),
             },
             None,
+            pixels,
         ))
     }
 
@@ -5051,13 +5029,17 @@ mod scene_surfaces;
 #[path = "frame_flat_children.rs"]
 mod flat_children;
 
+#[path = "frame_stand_ins.rs"]
+mod stand_ins;
+
 #[path = "window_damage.rs"]
 mod window_damage;
 
 pub(crate) use window_damage::{
     Capture, ClearedImages, Damage, DamageBuilder, DamageRects, FrameDamages, FrameWindow, Held,
     ImageContent, MAX_DAMAGE_RECTS, OwnSake, PacketDamage, PresentedImage, Repaint, Since,
-    StandInPixels, SwapchainHistory, collect_captures, keeps_copy, whole_when_lighter, widen,
+    StandInMark, StandInPixels, SwapchainHistory, collect_captures, keeps_copy, whole_when_lighter,
+    widen,
 };
 
 #[cfg(test)]

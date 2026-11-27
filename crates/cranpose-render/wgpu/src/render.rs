@@ -973,7 +973,7 @@ impl GpuRenderer {
                 compiler: pipeline_compiler,
                 built_at_frame_start: 0,
                 drew_placeholder: Cell::new(false),
-                stand_ins_kept: Cell::new(false),
+                stand_ins: StandIns::default(),
                 shape_pipelines,
                 image_pipeline: IMAGE_SRC_OVER_PIPELINES.map(FixedPipeline::new),
                 image_pipeline_dst_out: IMAGE_DST_OUT_PIPELINES.map(FixedPipeline::new),
@@ -3009,7 +3009,7 @@ mod renderer_pipelines;
 use renderer_pipelines::MESH_FALLBACK_PIPELINES;
 use renderer_pipelines::{
     FixedDraw, GLYPH_ATLAS_PIPELINES, IMAGE_DST_OUT_PIPELINES, IMAGE_SRC_OVER_PIPELINES,
-    RRECT_SHADOW_PIPELINES, RendererPipelines,
+    RRECT_SHADOW_PIPELINES, RendererPipelines, StandIns,
 };
 mod draw_space;
 mod interior_run_draws;

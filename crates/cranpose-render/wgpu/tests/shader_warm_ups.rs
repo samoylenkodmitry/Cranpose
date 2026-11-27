@@ -1,7 +1,7 @@
 use cranpose_render_common::graph::{LayerNode, ProjectiveTransform, RenderNode};
 use cranpose_ui_graphics::{
     BlendMode, Color, GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect,
-    RuntimeShader, ShaderTarget, ShaderWarmUp, request_shader_warm_ups,
+    RuntimeShader, request_shader_warm_ups,
 };
 
 use crate::{shared_test_support, support};
@@ -121,22 +121,10 @@ fn requested_shaders_draw_without_waiting() {
     let page = probe("page target");
     let layer = probe("layer target");
     let masked = override_probe("override target");
-    request_shader_warm_ups([
-        ShaderWarmUp {
-            shader: page.clone(),
-            target: ShaderTarget::Page,
-        },
-        ShaderWarmUp {
-            shader: layer.clone(),
-            target: ShaderTarget::Layer,
-        },
-    ]);
+    request_shader_warm_ups([page.clone(), layer.clone()]);
     support::reinit_gpu(&mut renderer)
         .expect("a renderer created later compiles the requests made before it");
-    request_shader_warm_ups([ShaderWarmUp {
-        shader: masked.clone(),
-        target: ShaderTarget::Page,
-    }]);
+    request_shader_warm_ups([masked.clone()]);
     prime(&mut renderer);
     assert_eq!(
         frame_waits_for(&mut renderer, page_draw(page)),
@@ -179,10 +167,7 @@ fn a_requested_specialization_draws_without_a_general_stand_in() {
         support::capture_graph_settled(&mut renderer, &page_draw(reference), WIDTH, HEIGHT);
     shader.set_override("UNUSED", 1.0);
     shader.set_specialization_exact(true);
-    request_shader_warm_ups([ShaderWarmUp {
-        shader: shader.clone(),
-        target: ShaderTarget::Page,
-    }]);
+    request_shader_warm_ups([shader.clone()]);
     let pixels = support::settle(|| {
         let pixels =
             support::capture_graph(&mut renderer, &page_draw(shader.clone()), WIDTH, HEIGHT);

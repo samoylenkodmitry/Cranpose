@@ -424,11 +424,11 @@ impl GpuRenderer {
             Ok(submitted) => *submitted || plan.repaint == Repaint::Nothing,
             Err(_) => false,
         };
-        let stand_ins = self.frame_stats.drew_stand_in() || self.pipelines.stand_ins_kept.get();
+        let stand_ins = self.frame_stats.drew_stand_in() || self.pipelines.stand_ins.kept();
         // Without a placeholder, fallback triangles or an instant draw kept,
         // the frame's stand-ins are general or universal pipelines, which
         // draw the bytes of their specializations.
-        let pixels = if self.pipelines.stand_ins_kept.get() {
+        let pixels = if self.pipelines.stand_ins.kept() {
             StandInPixels::Interim
         } else {
             StandInPixels::Final

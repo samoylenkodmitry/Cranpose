@@ -4,12 +4,16 @@
 //! frame drawn then shows what a renderer that builds every pipeline where
 //! it is first needed shows, though earlier frames kept layers drawn before.
 
+use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
-    graph::{DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderNode},
+    graph::{CachePolicy, DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderNode},
     layer_transform::layer_transform_to_parent,
 };
-use cranpose_ui_graphics::{Color, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect, Size};
+use cranpose_ui_graphics::{
+    Color, DrawScope, DrawScopeDefault, GraphicsLayer, Point, RUNTIME_SHADER_PRELUDE_WGSL, Rect,
+    RenderEffect, RuntimeShader, ShaderPlaceholder, Size,
+};
 
 use crate::{
     shared_test_support,
@@ -32,8 +36,13 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
 /// a label of its own: the card draws in a pass of its own, which the page's
 /// pass then composites.
 fn page_with_tilted_card() -> LayerNode {
+    page_with_tilted_card_and(Vec::new())
+}
+
+/// [`page_with_tilted_card`] with `more` drawn over it.
+fn page_with_tilted_card_and(more: Vec<RenderNode>) -> LayerNode {
     let frame = Rect::from_size(Size::new(WIDTH as f32, HEIGHT as f32));
-    let card = shared_test_support::layer_node(
+    let mut card = shared_test_support::layer_node(
         rect(70.0, 20.0, 80.0, 60.0),
         ProjectiveTransform::identity(),
         GraphicsLayer {
@@ -47,18 +56,48 @@ fn page_with_tilted_card() -> LayerNode {
             support::text_node(9, "Card", rect(8.0, 36.0, 64.0, 20.0), 14.0),
         ],
     );
-    let nodes: Vec<RenderNode> = vec![
+    // a node whose layer the cache may keep
+    card.node_id = Some(NodeId(1));
+    card.cache_policy = CachePolicy::Auto;
+    let mut nodes: Vec<RenderNode> = vec![
         support::solid_rect(frame, Color::BLACK),
         support::solid_rect(rect(6.0, 6.0, 50.0, 50.0), Color(0.9, 0.2, 0.2, 1.0)),
         support::text_node(7, "Page", rect(6.0, 62.0, 60.0, 24.0), 16.0),
         RenderNode::Layer(Box::new(card)),
     ];
+    nodes.extend(more);
     shared_test_support::layer_node(
         frame,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
         nodes,
     )
+}
+
+/// A pane drawn by a shader no other test draws, red while it compiles.
+fn shader_pane() -> RenderNode {
+    let mut shader = RuntimeShader::new(&format!(
+        "{RUNTIME_SHADER_PRELUDE_WGSL}
+         // a pane beside a kept card {}
+         @fragment fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
+             return vec4<f32>(0.0, 0.0, 1.0, 1.0);
+         }}",
+        std::process::id()
+    ));
+    shader.set_placeholder(Some(ShaderPlaceholder {
+        color: Color(1.0, 0.0, 0.0, 1.0),
+        shape: None,
+    }));
+    shader.set_position_independent(true);
+    RenderNode::Layer(Box::new(shared_test_support::layer_node(
+        rect(0.0, 0.0, 24.0, 16.0),
+        ProjectiveTransform::translation(8.0, 70.0),
+        GraphicsLayer {
+            render_effect: Some(RenderEffect::runtime_shader(shader)),
+            ..GraphicsLayer::default()
+        },
+        Vec::new(),
+    )))
 }
 
 /// Solid, gradient and stroked shapes, each kind with a pipeline of its own.
@@ -152,5 +191,40 @@ fn a_layer_turned_back_onto_the_pixel_grid_while_its_blit_compiled_draws_it_once
         WIDTH,
         &landed(Some(&turned), &back),
         &built_where_needed(Some(&turned), &back),
+    );
+}
+
+#[test]
+fn a_kept_layer_drawn_with_its_own_pipelines_stays_kept_when_another_pipeline_lands() {
+    let (card, beside) = (
+        page_with_tilted_card(),
+        page_with_tilted_card_and(vec![shader_pane()]),
+    );
+    let mut renderer = support::headless_renderer_compiling_in_background().expect("GPU required");
+    support::capture_graph_settled(&mut renderer, &card, WIDTH, HEIGHT);
+    for _ in 0..3 {
+        support::capture_graph(&mut renderer, &card, WIDTH, HEIGHT);
+    }
+    let kept = renderer.last_frame_stats().expect("frame statistics");
+    assert!(kept.layer_cache_hits > 0, "the card is kept: {kept:?}");
+    support::capture_graph(&mut renderer, &beside, WIDTH, HEIGHT);
+    let waiting = renderer.last_frame_stats().expect("frame statistics");
+    assert_eq!(
+        waiting.placeholder_draws, 1,
+        "the pane waits for its shader"
+    );
+    support::wait_for_background_compiler_idle();
+    let landed = support::capture_graph(&mut renderer, &beside, WIDTH, HEIGHT);
+    let stats = renderer.last_frame_stats().expect("frame statistics");
+    assert_eq!(stats.placeholder_draws, 0, "the pane's shader landed");
+    assert!(
+        stats.layer_cache_hits > 0,
+        "the card holds no stand-in, so the landing keeps it: {stats:?}"
+    );
+    support::assert_same_bytes(
+        "the frame once the pane's shader landed",
+        WIDTH,
+        &landed.pixels,
+        &built_where_needed(Some(&card), &beside),
     );
 }

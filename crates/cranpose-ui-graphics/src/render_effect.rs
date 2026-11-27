@@ -965,31 +965,6 @@ fn cached_shader_source(
     (shared, source_hash)
 }
 
-/// Where a runtime shader's pipeline draws, which decides how its output
-/// blends: `Page` composites the shader over what lies beneath (a backdrop
-/// effect, or a render effect the renderer draws straight onto the page),
-/// `Layer` renders into the layer's own texture, whose content the shader
-/// replaces (a render effect under a blend mode or clip the page draw cannot
-/// apply, such as a `DstOut` mask).
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum ShaderTarget {
-    /// The shader composites over what lies beneath.
-    Page,
-    /// The shader renders into the layer's own texture and replaces its content.
-    Layer,
-}
-
-/// A runtime shader to compile before its first draw, at the target it will
-/// draw to, so a renderer's background compiler builds the pipeline at
-/// start instead of inside the frame that first needs it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ShaderWarmUp {
-    /// The shader to compile.
-    pub shader: RuntimeShader,
-    /// The target the shader will draw to.
-    pub target: ShaderTarget,
-}
-
 /// A render effect applied to a graphics layer's rendered content.
 ///
 /// Matches Jetpack Compose's `RenderEffect` sealed class hierarchy,

@@ -4,7 +4,7 @@
 
 [counts]
 too_many_arguments = 10
-private_docs = 12063
+private_docs = 12055
 for_test_fns = 38
 cranpose_env_names = 76
 source_text_checks = 324
@@ -55,8 +55,8 @@ limit = 1000
 "crates/cranpose-render/gl-templates/src/generate.rs" = 1343
 "crates/cranpose-render/shader-passes/src/flatten.rs" = 1726
 "crates/cranpose-render/wgpu/src/draw_pass.rs" = 1636
-"crates/cranpose-render/wgpu/src/effect_renderer.rs" = 2921
-"crates/cranpose-render/wgpu/src/frame.rs" = 5065
+"crates/cranpose-render/wgpu/src/effect_renderer.rs" = 2916
+"crates/cranpose-render/wgpu/src/frame.rs" = 5047
 "crates/cranpose-render/wgpu/src/frame_graph.rs" = 2346
 "crates/cranpose-render/wgpu/src/mesh_fallback.rs" = 1189
 "crates/cranpose-render/wgpu/src/pipeline.rs" = 1092
@@ -68,7 +68,7 @@ limit = 1000
 "crates/cranpose-testing/src/robot_helpers.rs" = 1430
 "crates/cranpose-ui-graphics/src/geometry.rs" = 1868
 "crates/cranpose-ui-graphics/src/record.rs" = 1719
-"crates/cranpose-ui-graphics/src/render_effect.rs" = 1161
+"crates/cranpose-ui-graphics/src/render_effect.rs" = 1136
 "crates/cranpose-ui/src/layout/mod.rs" = 2293
 "crates/cranpose-ui/src/modifier/scroll.rs" = 1186
 "crates/cranpose-ui/src/modifier_nodes.rs" = 1161

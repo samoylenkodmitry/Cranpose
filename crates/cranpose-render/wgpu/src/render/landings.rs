@@ -1,6 +1,7 @@
 // What a frame does once pipelines that earlier frames waited for land.
 
 use super::GpuRenderer;
+use crate::frame::StandInMark;
 
 impl GpuRenderer {
     /// Starts a frame: once a pipeline a placeholder waited for has landed,
@@ -20,12 +21,22 @@ impl GpuRenderer {
         self.pipelines.compiler.note_landing();
     }
 
-    // Drops the layers and the blurred shadows earlier frames drew and
-    // kept, which may hold stand-ins, as pipelines landed.
+    // The stand-ins drawn so far: a layer drawn while the mark moved may
+    // hold one.
+    pub(crate) fn stand_in_mark(&self) -> StandInMark {
+        StandInMark(
+            self.pipelines.stand_ins.drawn()
+                + self.effect_renderer.skipped_draws()
+                + self.layer_cache.interim_reads(),
+        )
+    }
+
+    // Drops the layers that may hold stand-ins and the blurred shadows
+    // earlier frames drew and kept, as pipelines landed.
     fn drop_kept_drawing(&mut self) {
-        self.layer_cache.clear();
+        self.layer_cache.drop_interim();
         self.shadow_surfaces.clear();
-        self.pipelines.stand_ins_kept.set(false);
+        self.pipelines.stand_ins.drop_kept();
     }
 
     /// Queues every pipeline the cache file records, as the first frame of

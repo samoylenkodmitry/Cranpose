@@ -274,6 +274,33 @@ pub(crate) enum StandInPixels {
     Interim,
 }
 
+impl StandInPixels {
+    // Interim when either part may show a stand-in.
+    pub(crate) fn with(self, other: Self) -> Self {
+        match self {
+            Self::Final => other,
+            Self::Interim => Self::Interim,
+        }
+    }
+}
+
+// How many stand-ins the frames drew so far, reads of kept layers that may
+// hold one among them: a layer holds a stand-in when the mark moved while
+// it was drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StandInMark(pub(crate) u64);
+
+impl StandInMark {
+    // The pixels drawn between this mark and `now`.
+    pub(crate) fn pixels_until(self, now: Self) -> StandInPixels {
+        if now == self {
+            StandInPixels::Final
+        } else {
+            StandInPixels::Interim
+        }
+    }
+}
+
 impl FrameWindow<'_> {
     /// The frame as a target holds it once drawn.
     pub(crate) fn held(&self) -> Held {

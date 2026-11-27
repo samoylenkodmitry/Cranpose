@@ -7,7 +7,7 @@ use cranpose_render_common::raster_cache::LayerRasterCacheKey;
 
 use super::{
     AtlasPacker, AtlasPlacement, BatchMember, Beneath, ChildFrame, CompositeSource, DeviceRect,
-    FrameExecutor, LayerPass, Resolved, SourceDecision, SurfacePlan, SurfaceRender,
+    FrameExecutor, LayerPass, Resolved, SourceDecision, StandInPixels, SurfacePlan, SurfaceRender,
     child_surface_bound, composites_nothing, renders_flat, z_ordered_ops,
 };
 use crate::{
@@ -217,7 +217,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 }
             })
             .collect();
-        self.encode_atlases(layer, group, &placements, &atlases)?;
+        // Members share their passes, so one stand-in marks them all.
+        let pixels = self.encode_atlases(layer, group, &placements, &atlases)?;
         for (member, placement) in group.iter().zip(placements) {
             let child = &layer.children[member.index];
             let surface = match placement {
@@ -232,7 +233,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                         child,
                         member,
                         &atlases[placement.atlas],
-                        (placement, keeps),
+                        (placement, keeps, pixels),
                     )
                 }
                 None => self.render_member_alone(layer, member)?,
@@ -242,14 +243,16 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         Ok(())
     }
 
-    // Draws `group`'s members into `atlases` where `placements` put them.
+    // Draws `group`'s members into `atlases` where `placements` put them,
+    // and the pixels it drew.
     fn encode_atlases(
         &mut self,
         layer: &LayerScene,
         group: &[BatchMember],
         placements: &[Option<AtlasPlacement>],
         atlases: &[Rc<OffscreenTarget>],
-    ) -> Result<(), String> {
+    ) -> Result<StandInPixels, String> {
+        let mark = self.renderer.stand_in_mark();
         let ops: Vec<Cow<'_, [DrawOp]>> = group
             .iter()
             .map(|member| z_ordered_ops(&layer.children[member.index].content.scene.draw_ops))
@@ -290,7 +293,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 "Layer Surface Atlas Pass",
             )?;
         }
-        Ok(())
+        Ok(self.pixels_since(mark))
     }
 
     /// The member's surface in `atlas`, kept by the cache when it admits
@@ -301,7 +304,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         child: &ChildLayer,
         member: &BatchMember,
         atlas: &Rc<OffscreenTarget>,
-        (placement, in_place): (AtlasPlacement, bool),
+        (placement, in_place, pixels): (AtlasPlacement, bool, StandInPixels),
     ) -> SurfaceRender {
         let plan = &member.plan;
         let in_atlas = plan.surface(
@@ -315,6 +318,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 width: plan.width as f32,
                 height: plan.height as f32,
             }),
+            pixels,
         );
         let Some(key) = member.retain else {
             return in_atlas;
@@ -332,7 +336,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         if !self.retain_source(
             child.node_id,
             key,
-            Retained::surface_in(Rc::clone(atlas), region),
+            Retained::surface_in(Rc::clone(atlas), region, pixels),
             transient,
         ) {
             return in_atlas;
@@ -343,6 +347,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 content: SourceContent::retained(&key),
             },
             Some(region),
+            pixels,
         )
     }
 
@@ -370,10 +375,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             dest_origin: [0, 0],
             size: [plan.width, plan.height],
         });
+        let pixels = in_atlas.pixels;
         if !self.retain_source(
             child.node_id,
             key,
-            Retained::surface(Rc::clone(&retained)),
+            Retained::surface(Rc::clone(&retained), pixels),
             None,
         ) {
             return in_atlas;
@@ -384,6 +390,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 content: SourceContent::retained(&key),
             },
             None,
+            pixels,
         )
     }
 }
