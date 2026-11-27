@@ -30,7 +30,7 @@ fn layout_and_semantics(composition: &mut TestComposition) {
     let root = composition.root().expect("composed root");
     composition.with_runtime_applier(|applier| {
         measure_layout(applier, root, VIEWPORT).expect("layout succeeds");
-        let _ = build_semantics_tree_from_applier(applier, root);
+        build_semantics_tree_from_applier(applier, root).expect("semantics tree builds");
     });
 }
 
