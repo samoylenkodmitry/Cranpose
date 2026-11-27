@@ -295,13 +295,13 @@ fn draw_through(
     camera: impl Fn(&RenderViewpoint) -> EyeCamera,
 ) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let mut attempt = 0.0_f32;
+    let mut attempt = 0_u32;
     loop {
-        // A head is never still, and a frame that changes nothing draws nothing: each attempt
-        // moves the eye by a hair
-        attempt += 1.0;
+        // A head is never still, and a frame that changes nothing draws nothing: alternate a
+        // bounded hair so long shader compiles never drift the eye away from `view`.
+        attempt = attempt.wrapping_add(1);
         let mut moved = *view;
-        moved.pose.position[1] += attempt * 1e-5;
+        moved.pose.position[1] += if attempt & 1 == 1 { 1e-5 } else { 0.0 };
         let camera = camera(&moved);
         let drew = pass
             .draw(&mut headset.guest, &headset.space, &camera, &eye.image())
