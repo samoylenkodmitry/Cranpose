@@ -7,9 +7,7 @@ all-features = true
 
 [advisories]
 unmaintained = "workspace"
-ignore = [
-    { id = "RUSTSEC-2026-0344", reason = "basisu 0.1.0 pins ruzstd 0.7 for Zstandard supercompression in Quest KTX2 controller models; no basisu release upgrades ruzstd yet" },
-]
+ignore = []
 
 [licenses]
 allow = [
