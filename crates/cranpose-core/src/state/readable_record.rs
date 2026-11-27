@@ -3,7 +3,8 @@
 use std::{fmt, rc::Rc};
 
 use super::{
-    ObjectId, RecordChain, SnapshotMutableState, StateObject, StateRecord, active_snapshot,
+    MutableState, ObjectId, RecordChain, SnapshotMutableState, State, StateArenaHandle,
+    StateObject, StateRecord, active_snapshot,
 };
 use crate::{
     snapshot_id_set::{SnapshotId, SnapshotIdSet},
@@ -101,5 +102,47 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         readable_record_for_active_snapshot(ReadNotice::Nobody, &self.records, self.id)
             .unwrap_or_else(|failure| panic!("{failure}"))
             .with_value(Clone::clone)
+    }
+
+    // The value, read without telling the snapshot's read observers, or `None`
+    // when no record is readable.
+    pub(crate) fn try_value_unobserved(&self) -> Option<T> {
+        readable_record_for_active_snapshot(ReadNotice::Nobody, &self.records, self.id)
+            .ok()?
+            .try_with_value(Clone::clone)
+    }
+}
+
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "optional unobserved reads live beside the snapshot record reader"
+)]
+impl<T: Clone + 'static> State<T> {
+    /// Reads the value without subscribing the current scope or telling a read observer. Returns
+    /// `None` if the state was released or has no readable value.
+    pub fn try_get_non_reactive(&self) -> Option<T> {
+        self.try_with_fresh_inner(|inner| inner.state.try_value_unobserved())?
+    }
+}
+
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "optional reads live beside the snapshot record reader"
+)]
+impl<T: Clone + 'static> MutableState<T> {
+    /// Returns a copy of the value without subscribing a scope or observer, or `None` if the state
+    /// was released or has no readable value.
+    pub fn try_get_non_reactive(&self) -> Option<T> {
+        self.try_with_inner(|inner| inner.state.try_value_unobserved())?
+    }
+
+    /// Returns a copy of the value and subscribes the current scope, or `None` if the state was
+    /// released or has no readable value.
+    pub fn try_value_subscribed(&self) -> Option<T> {
+        self.try_with_inner(|inner| {
+            let value = inner.state.try_get()?;
+            inner.register_current_scope();
+            Some(value)
+        })?
     }
 }

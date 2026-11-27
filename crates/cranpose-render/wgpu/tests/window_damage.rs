@@ -125,6 +125,9 @@ enum Scene {
     // A layer painted by a shader whose compile outlasts a few frames, at
     // the spot from the first frame on.
     SlowShader,
+    // A line at the top new each step, as the wall's clock is, and a cursor
+    // that rests on another place of a row each step, as the wall's does.
+    WallCursor,
 }
 
 // The lazy list of `Scene::LazyLabel`, its padding, its rows' height and the
@@ -144,6 +147,12 @@ const LAZY_LABEL: [f32; 4] = [
 
 /// A caret near the bottom, far from the spinner.
 const CARET: [f32; 4] = [40.0, 372.0, 2.0, 16.0];
+
+// The line at the top of `Scene::WallCursor`, the row its cursor rests on
+// and the places of that row, one a step.
+const CLOCK: [f32; 4] = [10.0, 10.0, 100.0, 12.0];
+const CURSOR_ROW: [f32; 4] = [10.0, 300.0, 300.0, 12.0];
+const CURSOR_PLACES: u32 = 10;
 
 // Small spots scattered over the window, no two in a row or a column.
 const SPOTS: [[f32; 4]; 10] = [
@@ -446,7 +455,8 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         | Scene::ManySpots
         | Scene::TurnedSurface
         | Scene::ShrunkParent
-        | Scene::LazyLabel => return None,
+        | Scene::LazyLabel
+        | Scene::WallCursor => return None,
     })
 }
 
@@ -517,6 +527,7 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
             );
         }
         Scene::TenSpots | Scene::ManySpots => Spots(scene, step),
+        Scene::WallCursor => WallCursor(step),
         Scene::MovedCaster => {
             let [x, y, width, height] = SPOT;
             Box(
@@ -567,6 +578,24 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
             }
         }
     }
+}
+
+// The line of `Scene::WallCursor`, new each step, and its cursor, on
+// another place of its row each step.
+#[composable]
+fn WallCursor(step: MutableState<u32>) {
+    Box(
+        rect_modifier(CLOCK).background(shade(step.get())),
+        BoxSpec::default(),
+        || {},
+    );
+    let place = (step.get() % CURSOR_PLACES) as f32;
+    let [x, y, _, height] = CURSOR_ROW;
+    Box(
+        rect_modifier([x + place * 30.0, y, height, height]).background(Color::WHITE),
+        BoxSpec::default(),
+        || {},
+    );
 }
 
 // The spots of `Scene::TenSpots` or `Scene::ManySpots`, changing colour a
@@ -2041,6 +2070,63 @@ fn a_start_draws_a_kept_target_whole_once() {
     }) = start(Scene::Shape, Keeper::Composition, &[], 8)
     {
         assert_eq!(drawn_whole, START_FRAMES);
+    }
+}
+
+// A Metal layer cycles two of its three drawables while frames keep up, and
+// hands out the third once the window server holds both. The third comes back
+// after more frames than the renderer keeps the damage of each: it draws what
+// changed since its frame, the top line and the cursor's row, as rects of
+// their own. A still frame meanwhile, which the surface already shows, takes
+// no image and leaves that so.
+#[test]
+fn a_swapchain_image_back_after_many_frames_draws_what_changed_since_its_frame() {
+    const AWAY: u32 = 20;
+    const FRAMES: u32 = SWAPCHAIN_START_FRAMES + AWAY + 1;
+    const ORDER: [usize; FRAMES as usize] = {
+        let mut order = [0; FRAMES as usize];
+        let mut frame = 0;
+        while frame < FRAMES as usize {
+            order[frame] = if frame < SWAPCHAIN_IMAGES {
+                frame
+            } else {
+                frame % 2
+            };
+            frame += 1;
+        }
+        order[FRAMES as usize - 1] = SWAPCHAIN_IMAGES - 1;
+        order
+    };
+    let reach: f32 = [around(CLOCK, 8.0), around(CURSOR_ROW, 8.0)]
+        .iter()
+        .map(|[_, _, width, height]| width * height)
+        .sum();
+    for still_at in [None, Some(SWAPCHAIN_START_FRAMES + AWAY / 2)] {
+        let Some((_lock, renderer)) = renderer() else {
+            return;
+        };
+        let mut harness = Harness::new(renderer, Scene::WallCursor, 1.0, Keeper::Swapchain(DIRECT));
+        harness.order = &ORDER;
+        let mut last = None;
+        for step in 0..FRAMES {
+            let frame = harness.frame(step);
+            let label = format!("step {step}, a still frame at {still_at:?}");
+            support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+            last = Some(frame.stats);
+            if still_at == Some(step) {
+                harness.update(step);
+                assert!(
+                    harness.shell.renderer().shows_scene(WIDTH, HEIGHT),
+                    "{label}: the surface shows the still frame"
+                );
+            }
+        }
+        let stats = last.expect("frames were drawn");
+        assert!(
+            stats.repainted_pixels as f32 <= reach,
+            "a still frame at {still_at:?}: the image back draws the line and the row, \
+             {reach} pixels at most: {stats:?}"
+        );
     }
 }
 

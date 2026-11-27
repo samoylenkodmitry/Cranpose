@@ -5,6 +5,8 @@
 // In Slint's declarative idiom the tiles come from a Rust model, made once,
 // each placed by its index. The clock's text and the cursor are the only
 // bindings on the frame, so a frame re-evaluates those two and nothing else.
+// The tiles draw once into a cached layer. A frame draws only the clock and
+// the cursor over it.
 
 export struct WallTile {
     label: string,
@@ -29,31 +31,40 @@ export component TileBox inherits Rectangle {
     in property <length> dot;
     background: fill;
     border-radius: 2px;
-    clip: true;
-    label := Text {
-        x: pad;
-        y: pad;
-        text: tile.label;
-        font-size: label-size;
-        font-weight: 700;
-        color: white;
-        wrap: no-wrap;
-    }
+    // The other apps cut each text at its own box inside the padding. A
+    // rounded clip would draw each tile into a layer of its own on renderers
+    // without rounded clip paths.
     Rectangle {
         x: pad;
-        y: pad + label.preferred-height + (value.preferred-height - dot) / 2;
-        width: dot;
-        height: dot;
-        border-radius: dot / 2;
-        background: tile.dot;
-    }
-    value := Text {
-        x: pad + dot * 1.5;
-        y: pad + label.preferred-height;
-        text: tile.value;
-        font-size: value-size;
-        color: white;
-        wrap: no-wrap;
+        y: pad;
+        width: parent.width - 2 * pad;
+        height: parent.height - 2 * pad;
+        clip: true;
+        label := Text {
+            x: 0;
+            y: 0;
+            text: tile.label;
+            font-size: label-size;
+            font-weight: 700;
+            color: white;
+            wrap: no-wrap;
+        }
+        Rectangle {
+            x: 0;
+            y: label.preferred-height + (value.preferred-height - dot) / 2;
+            width: dot;
+            height: dot;
+            border-radius: dot / 2;
+            background: tile.dot;
+        }
+        value := Text {
+            x: dot * 1.5;
+            y: label.preferred-height;
+            text: tile.value;
+            font-size: value-size;
+            color: white;
+            wrap: no-wrap;
+        }
     }
 }
 
@@ -97,16 +108,21 @@ export component WallWindow inherits Window {
             }
         }
         Rectangle {
-            for t[index] in tiles: TileBox {
-                x: 1px + Math.mod(index, columns) * (tile-width + 1px);
-                y: 1px + floor(index / columns) * (tile-height + 1px);
-                width: tile-width;
-                height: tile-height;
-                tile: t;
-                pad: pad;
-                label-size: label-size;
-                value-size: value-size;
-                dot: dot;
+            // The tiles never change. The renderer draws them once into a
+            // layer and composites that layer every frame.
+            Rectangle {
+                cache-rendering-hint: true;
+                for t[index] in tiles: TileBox {
+                    x: 1px + Math.mod(index, columns) * (tile-width + 1px);
+                    y: 1px + floor(index / columns) * (tile-height + 1px);
+                    width: tile-width;
+                    height: tile-height;
+                    tile: t;
+                    pad: pad;
+                    label-size: label-size;
+                    value-size: value-size;
+                    dot: dot;
+                }
             }
             Rectangle {
                 x: 1px + Math.mod(cursor, columns) * (tile-width + 1px);
