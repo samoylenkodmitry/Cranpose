@@ -32,30 +32,26 @@ fn style(size: f32, stroke: Option<f32>, weight: Option<FontWeight>) -> TextStyl
 }
 
 #[composable]
-fn Lines() {
+fn Lines(strokes: Option<[f32; 3]>, weight: Option<FontWeight>) {
     Column(Modifier::empty(), ColumnSpec::default(), move || {
-        for width in [0.5, 1.0, 2.0] {
+        for width in strokes.unwrap_or([0.0; 3]) {
             Text(
                 "Rag stroke",
                 Modifier::empty(),
-                style(18.0, Some(width), None),
+                style(18.0, strokes.map(|_| width), None),
             );
         }
         for size in [12.0, 14.0, 16.0, 18.0, 40.0] {
-            Text(
-                "Rag bold",
-                Modifier::empty(),
-                style(size, None, Some(FontWeight::BOLD)),
-            );
+            Text("Rag bold", Modifier::empty(), style(size, None, weight));
         }
     });
 }
 
-fn frame() -> Vec<u8> {
+fn frame(strokes: Option<[f32; 3]>, weight: Option<FontWeight>) -> Vec<u8> {
     let mut shell = AppShell::new_with_size(
         PixelsRenderer::new(),
         location_key(file!(), line!(), column!()),
-        || Lines(),
+        move || Lines(strokes, weight),
         (WIDTH, HEIGHT),
         (WIDTH as f32, HEIGHT as f32),
     );
@@ -75,11 +71,21 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 
 #[test]
 fn stroked_and_fake_bold_text_draws_its_pinned_picture() {
-    let pixels = frame();
+    let pixels = frame(Some([0.5, 1.0, 2.0]), Some(FontWeight::BOLD));
     let colors = pixels.as_chunks::<4>().0;
     assert!(
         colors.iter().any(|pixel| *pixel != colors[0]),
         "the frame shows no text"
+    );
+    // The embedded face has no bold and the strokes draw: the lines differ
+    // from the same lines filled at the regular weight.
+    assert!(
+        fnv1a(&pixels) != fnv1a(&frame(Some([0.5, 1.0, 2.0]), None)),
+        "the bold lines drew as the regular weight"
+    );
+    assert!(
+        fnv1a(&pixels) != fnv1a(&frame(None, Some(FontWeight::BOLD))),
+        "the stroked lines drew filled"
     );
     assert_eq!(
         fnv1a(&pixels),
