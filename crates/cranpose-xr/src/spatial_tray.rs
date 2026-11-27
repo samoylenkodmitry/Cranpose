@@ -9,12 +9,12 @@ use cranpose_core::{CompositionLocalProvider, derivedStateOf, remember, remember
 use crate::{
     HologramColors, HologramStage, SubspaceModifier,
     hologram_scene::{HOLOGRAM_HIDE_MILLIS, HOLOGRAM_SHOW_MILLIS, HologramScene},
-    hologram_stage::hologram_extent,
+    hologram_stage::{PageObjects, hologram_extent},
     space::{Space, local_space},
     spatial_panel::PlacedPanel,
     spatial_volume::PlacedVolume,
     subspace_modifier::DEFAULT_PANEL_SIZE,
-    tray_part::{TrayParts, local_tray},
+    tray_part::{PartShape, TrayParts, local_tray},
     tray_scene::{TRAY_LIGHT, TrayScene},
     volumes::VolumeDraws,
 };
@@ -92,8 +92,8 @@ impl TrayLook {
 
     // What the tray's volume draws: a hologram's objects add light and leave no depth. A tray's
     // controls rise and lift a little out of its box, and a hologram's stage and the handle of a
-    // `movable` one stand around it.
-    fn draws(self, size: [f32; 2], movable: bool) -> VolumeDraws {
+    // `movable` one stand around it. `objects` says how far a hologram's objects reach.
+    fn draws(self, size: [f32; 2], movable: bool, objects: PageObjects) -> VolumeDraws {
         match self {
             Self::Solid(_) => VolumeDraws {
                 writes_depth: true,
@@ -105,7 +105,7 @@ impl TrayLook {
             },
             Self::Hologram(_, stage) => VolumeDraws {
                 writes_depth: false,
-                extent: Some(hologram_extent(size, (stage, movable))),
+                extent: Some(hologram_extent(size, (stage, movable), objects)),
             },
         }
     }
@@ -187,15 +187,42 @@ fn PlacedTray(
     if movable && matches!(look, TrayLook::Hologram(..)) {
         space.draw_own_handle(panel);
     }
-    PlacedVolume(
+    TrayVolume(
         space,
         SubspaceModifier::new()
             .size(size[0], size[1])
             .with_pose(pose),
+        (size, look, movable),
+        (tray, panel),
+    );
+}
+
+// The tray's volume. It reads the tray's parts and whether the tray stands at its place, so a part
+// that comes or goes and the end of the show compose it again and leave the panel as it is.
+#[composable]
+fn TrayVolume(
+    space: Space,
+    modifier: SubspaceModifier,
+    (size, look, movable): ([f32; 2], TrayLook, bool),
+    (tray, panel): (TrayParts, u64),
+) {
+    let shown = tray.shown;
+    let still = derivedStateOf(move || shown.get() >= 1.0);
+    let gems = tray
+        .list
+        .with(|parts| parts.iter().all(|part| part.shape == PartShape::Gem));
+    let objects = if still.get() && gems {
+        PageObjects::StillGems
+    } else {
+        PageObjects::Any
+    };
+    PlacedVolume(
+        space,
+        modifier,
         (
             [size[0], size[1], TRAY_DEPTH],
             Some(panel),
-            look.draws(size, movable),
+            look.draws(size, movable, objects),
         ),
         move |scope| match look {
             TrayLook::Solid(base) => {

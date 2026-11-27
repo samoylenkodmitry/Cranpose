@@ -5,7 +5,7 @@ use std::{
 
 use cranpose::{AppLauncher, AppSettings, GpuContext, GuestView, gpu_context, prelude::*};
 
-use crate::gpu_support::{draw_settled, fill, pixel, read_texture};
+use crate::gpu_support::{draw_settled, draw_until_settled, fill, pixel, read_texture};
 
 const SIZE: u32 = 8;
 
@@ -163,18 +163,10 @@ fn a_rounded_box_on_a_transparent_texture_is_a_premultiplied_circle() {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        loop {
+        draw_until_settled(|| {
             guest.draw(&texture, &view).expect("frame");
-            if !guest.shell().needs_redraw() {
-                break;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the view kept asking for frames"
-            );
-            std::thread::yield_now();
-        }
+            guest.shell().needs_redraw()
+        });
         let pixels = read_texture(&gpu, &texture);
         assert_eq!(
             pixel(&pixels, side, 0, 0),

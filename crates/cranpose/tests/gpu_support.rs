@@ -32,17 +32,34 @@ pub(crate) fn pixel(pixels: &[u8], width: u32, x: u32, y: u32) -> &[u8] {
 /// shows once those landed. Returns whether the first draw drew.
 pub(crate) fn draw_settled(view: &mut EmbeddedView, pixels: &mut Vec<u8>) -> bool {
     let drew = view.draw(pixels).expect("frame");
+    draw_until_settled(|| {
+        let more = view.shell().needs_redraw();
+        if more {
+            view.draw(pixels).expect("frame");
+        }
+        more
+    });
+    drew
+}
+
+// Calls `frame`, which draws when the view asks for a frame and says
+// whether it did, until it asks for none, a frame at a time as a display
+// asks for them. A loop that draws again at once submits a frame every few
+// microseconds; on a busy machine it starves the off-frame compile of the
+// pipelines those frames wait for, past the 30 s this allows.
+pub(crate) fn draw_until_settled(mut frame: impl FnMut() -> bool) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while view.shell().needs_redraw() {
+    while frame() {
         assert!(
             std::time::Instant::now() < deadline,
             "the view kept asking for frames"
         );
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        view.draw(pixels).expect("frame");
+        std::thread::sleep(FRAME_PAUSE);
     }
-    drew
 }
+
+// The pause between the frames of `draw_until_settled`.
+const FRAME_PAUSE: std::time::Duration = std::time::Duration::from_millis(2);
 
 // The pixels of `texture`, four bytes each, as the GPU holds them.
 pub(crate) fn read_texture(gpu: &GpuContext, texture: &wgpu::Texture) -> Vec<u8> {

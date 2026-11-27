@@ -137,26 +137,48 @@ pub struct EyePlace {
 /// Where the renderer leaves an eye's [`EyeWorld`] each time it places the
 /// scene, and where the eye reads it when it walks.
 #[derive(Clone, Debug, Default)]
-pub struct WorldSink(Arc<Mutex<Arc<EyeWorld>>>);
+pub struct WorldSink(Arc<Mutex<WorldSinkInner>>);
+
+#[derive(Debug, Default)]
+struct WorldSinkInner {
+    current: Arc<EyeWorld>,
+    spare: Option<Arc<EyeWorld>>,
+}
 
 impl WorldSink {
-    /// Builds the world again with `build`, in the storage of the last one
-    /// while no walk holds it.
+    /// Builds the world again with `build`, in owned storage outside the lock
+    /// so `build` may read [`Self::current`] without deadlocking.
     pub fn rebuild(&self, build: impl FnOnce(&mut EyeWorld)) {
-        let mut held = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(world) = Arc::get_mut(&mut held) {
-            world.clear();
-            build(world);
-            return;
+        let mut next = self
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .spare
+            .take()
+            .unwrap_or_default();
+        if Arc::get_mut(&mut next).is_none() {
+            next = Arc::new(EyeWorld::default());
         }
-        let mut world = EyeWorld::default();
-        build(&mut world);
-        *held = Arc::new(world);
+        let world = Arc::get_mut(&mut next).expect("replacement world is uniquely owned");
+        world.clear();
+        build(world);
+        let discarded = {
+            let mut inner = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+            let previous = std::mem::replace(&mut inner.current, next);
+            inner.spare.replace(previous)
+        };
+        drop(discarded);
     }
 
     /// The world the renderer left last.
     pub fn current(&self) -> Arc<EyeWorld> {
-        Arc::clone(&self.0.lock().unwrap_or_else(PoisonError::into_inner))
+        Arc::clone(
+            &self
+                .0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .current,
+        )
     }
 }
 

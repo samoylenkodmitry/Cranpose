@@ -445,22 +445,21 @@ impl PersistSignal {
     }
 
     fn wait_for_quiet(&self, written: u64, quiet: Duration, stopped: &AtomicBool) -> Wake {
-        let is_stopped = || stopped.load(Ordering::Acquire);
         let mut revision = self
             .changed
             .wait_while(self.lock(), |revision| {
-                *revision == written && !is_stopped()
+                *revision == written && !stopped.load(Ordering::Acquire)
             })
             .unwrap_or_else(PoisonError::into_inner);
         loop {
-            if is_stopped() {
+            if stopped.load(Ordering::Acquire) {
                 return Wake::Stopped(*revision);
             }
             let seen = *revision;
             let (next, waited) = self
                 .changed
                 .wait_timeout_while(revision, quiet, |revision| {
-                    *revision == seen && !is_stopped()
+                    *revision == seen && !stopped.load(Ordering::Acquire)
                 })
                 .unwrap_or_else(PoisonError::into_inner);
             revision = next;
