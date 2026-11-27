@@ -1,5 +1,5 @@
 use super::{
-    Capture, Damage, FrameDamages, FrameWindow, Held, PresentedImage, Since,
+    Capture, Damage, FrameDamages, FrameWindow, Held, PacketDamage, PresentedImage, Since,
     captures::{collect, widen},
 };
 use crate::frame_packet::HeldWindow;
@@ -14,6 +14,14 @@ pub(crate) struct SwapchainHistory {
     surface_epoch: u64,
     /// By image index, the frame the image holds.
     held: [Option<Held>; IMAGES],
+    // By image index, the damages of the packets after the frame the image
+    // holds, folded as each packet comes. A Metal layer cycles two of its
+    // three drawables while frames keep up and hands out the third once the
+    // window server holds both: back after more packets than the damages
+    // kept, the third draws these.
+    changed: [Damage; IMAGES],
+    // The packet whose damage `changed` took last.
+    last_folded: Option<u64>,
     // By image index, a bit for each image the surface handed out.
     seen: u8,
     // How many images the surface hands out, and whether it handed one out
@@ -43,6 +51,8 @@ impl SwapchainHistory {
     // Forgets what the images hold.
     pub(crate) fn forget(&mut self) {
         self.held = [None; IMAGES];
+        self.changed = [Damage::NONE; IMAGES];
+        self.last_folded = None;
         self.seen = 0;
         self.cycled = false;
         self.reused = 0;
@@ -153,8 +163,10 @@ impl SwapchainHistory {
         frame: &FrameWindow<'_>,
         damages: &FrameDamages,
     ) -> Since {
-        let held = self.held.get(image.index as usize).copied().flatten();
-        let since = damages.since(held.filter(|_| image.kept), frame);
+        let index = image.index as usize;
+        let held = self.held.get(index).copied().flatten();
+        let changed = self.changed.get(index).unwrap_or(&Damage::Full);
+        let since = damages.since_over(held.filter(|_| image.kept), frame, changed);
         let Damage::Part(mut rects) = since.damage else {
             return since;
         };
@@ -178,9 +190,36 @@ impl SwapchainHistory {
     /// frame did not draw there whole.
     pub(crate) fn record(&mut self, image: PresentedImage, held: Option<Held>) {
         self.see(image);
-        if let Some(slot) = self.held.get_mut(image.index as usize) {
+        let index = image.index as usize;
+        if let (Some(slot), Some(changed)) = (self.held.get_mut(index), self.changed.get_mut(index))
+        {
             *slot = held;
+            *changed = Damage::NONE;
         }
         self.presented = held;
+    }
+
+    // Takes the damage of the packet of `frame`, in a window of `viewport`,
+    // into what the frame each image holds misses, once for each packet. A
+    // packet that does not follow the one taken last leaves them the whole
+    // window.
+    pub(crate) fn fold(&mut self, frame: u64, damage: &PacketDamage, viewport: (u32, u32)) {
+        if self.last_folded == Some(frame) {
+            return;
+        }
+        let follows = damage.since.is_some() && damage.since == self.last_folded;
+        self.last_folded = Some(frame);
+        for (changed, _) in self
+            .changed
+            .iter_mut()
+            .zip(&self.held)
+            .filter(|(_, held)| held.is_some())
+        {
+            if follows {
+                changed.add(&damage.damage, viewport);
+            } else {
+                *changed = Damage::Full;
+            }
+        }
     }
 }
