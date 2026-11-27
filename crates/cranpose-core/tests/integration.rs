@@ -25,6 +25,7 @@ mod recompose_child_order;
 mod recompose_queue_order;
 #[cfg(feature = "inspection")]
 mod recomposition_inspection;
+mod retention_after_eviction;
 mod returned_values;
 mod runtimes_on_one_thread;
 mod scene_attachment_scratch;

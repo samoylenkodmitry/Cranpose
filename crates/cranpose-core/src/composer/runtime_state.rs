@@ -451,22 +451,17 @@ impl ComposerRuntimeState {
             return;
         }
 
-        let host_key = host.storage_key();
-        let mut retention = self.retention_by_host.borrow_mut();
-        if let Some(retained) = retention.get_mut(&host_key) {
-            if compact_anchors {
-                table.compact_anchor_registry_storage(Some(&mut *retained));
-            }
-            if compact_payloads {
-                table.compact_payload_anchor_registry_storage(Some(&mut *retained));
-            }
-        } else {
-            if compact_anchors {
-                table.compact_anchor_registry_storage(None);
-            }
-            if compact_payloads {
-                table.compact_payload_anchor_registry_storage(None);
-            }
+        let mut retention = self
+            .retains_any()
+            .then(|| self.retention_by_host.borrow_mut());
+        let mut retained = retention
+            .as_deref_mut()
+            .and_then(|map| map.get_mut(&host.storage_key()));
+        if compact_anchors {
+            table.compact_anchor_registry_storage(retained.as_deref_mut());
+        }
+        if compact_payloads {
+            table.compact_payload_anchor_registry_storage(retained);
         }
     }
 
