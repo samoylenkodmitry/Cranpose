@@ -19,9 +19,9 @@ an install leaves them (`APP_STATE`; in the browser, a new Chrome profile),
 from an install of its program that macOS never ran (`fresh_install`), then
 a second time. In the browser, Chrome opens once on no app's page before the
 first round (`warm_chrome`), so no app's leg is Chrome's first launch of the
-run. A leg that fails, or in
-which other processes spent more than `--max-others` cores, is measured again,
-up to three times; an app no attempt measured leaves its leg out. A leg
+run. A leg that fails, in
+which other processes spent more than `--max-others` cores, or whose page was
+hidden (`BrowserServer.page_record`), is measured again, up to three times; an app no attempt measured leaves its leg out. A leg
 whose frame rate is more than 1.5 times off the app's earlier legs is measured
 once more, with a picture of its window kept beside the results. Every leg
 is one launch measured from its start for `--run` seconds, the same span for
@@ -878,6 +878,7 @@ def measure(name, args, work, server, stage, label, earlier, profile, program=No
         if 'PERF first_frame' not in log:
             raise RuntimeError(f'{name} logged no first frame within its {run_s:.0f} s run')
         server.check_device(since)
+        page = server.page_record(since, launched, ended)
         mine = tree(app.pid, after, ended - app.started + 1)
         held = memory(mine, stage)
         shutil.copy(out, work / out.name)
@@ -894,17 +895,17 @@ def measure(name, args, work, server, stage, label, earlier, profile, program=No
     # ended within the run counts for neither.
     wall = ended - launched
     spent = {pid: cpu - before.get(pid, (0, 0.0))[1] for pid, (_, cpu, _, _) in after.items()}
-    server = {pid for pid, (_, _, _, command) in after.items() if command.endswith(WINDOW_SERVER)}
-    server_cores = sum(spent[pid] for pid in server) / wall
+    window_server = {pid for pid, (_, _, _, command) in after.items() if command.endswith(WINDOW_SERVER)}
+    server_cores = sum(spent[pid] for pid in window_server) / wall
     # The window server's work counts toward the app in front: its layers
     # are what the window server renders.
     cores = sum(value for pid, value in spent.items() if pid in mine) / wall + server_cores
-    others = sum(value for pid, value in spent.items() if pid not in mine and pid not in server) / wall
+    others = sum(value for pid, value in spent.items() if pid not in mine and pid not in window_server) / wall
     return {**counted, 'cpu_cores': round(cores, 2), 'server_cores': round(server_cores, 2),
             'other_cores': round(others, 2), 'cpu_ms_per_frame': round(cores * 1000 / fps, 2),
             # The run at each interval of `Usage`.
             'samples': run_samples(taken, clock_samples, launched, times),
-            **held, **clocked}
+            **held, **clocked, **({'page': page} if page else {})}
 
 
 def frame_stats(name, frames, launched, run_s, drawn):
@@ -1164,7 +1165,8 @@ def undisturbed_leg(name, args, server, stage, label, earlier, failures, profile
         if checks_waited is not None:
             leg['program_checks_waited_s'] = checks_waited
         limit = disturbed_limit(current_idle, args.max_others, max_idle)
-        leg['disturbed'] = leg['other_cores'] > limit or bool(leg.get('display_problems'))
+        leg['disturbed'] = (leg['other_cores'] > limit or bool(leg.get('display_problems'))
+                            or leg.get('page', {}).get('hidden', False))
         legs.append(leg)
         print(f'{label:16} fps {leg["fps"]:6.1f} cpu/f {leg["cpu_ms_per_frame"]} first frame '
               f'{leg["first_frame_s"]} s p99 {leg["interval_p99_ms"]} others {leg["other_cores"]}', flush=True)

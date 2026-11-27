@@ -836,6 +836,11 @@ class PageTarget:
         self.server.wait_for('PERF first_frame', 0, self.mark)
         self.server.check_device(self.mark)
 
+    def page_record(self, started, ended):
+        """What the page said of itself from its launch at `started` to the
+        run's end at `ended` (`BrowserServer.page_record`)."""
+        return self.server.page_record(self.mark, started, ended)
+
     def memory(self, device, pids):
         """What every one of Chrome's processes holds, summed."""
         total = {}
@@ -877,10 +882,12 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
     run['extras'] = extras
     launched_host = time.monotonic()
     target.prepare(device)
+    sent = time.monotonic()
     output = device.shell('sh', REMOTE_WINDOW, target.package, target.processes, target.layer_pattern,
                           f'{run_s:.2f}', str(args.interval), '1' if target.gfx else '0',
                           str(0 if getattr(args, 'full_run', False) else SLOW_FPS), str(SLOW_SECONDS), *target.start_args(scenario, extras.split()),
                           timeout=run_s + 60)
+    ended = time.monotonic()
     (destination / f'{target.name}-{scenario}-{int(time.time())}.txt').write_text(output)
     run['launch'], pids, layer = window_start(output, target)
     launched = run['launch']['uptime_s']
@@ -897,6 +904,7 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
         raise RuntimeError(f'{focused or "no window"} had the focus at the end of the run, not {target.package}')
     if isinstance(target, PageTarget):
         target.check_page()
+        run['page'] = target.page_record(sent, ended)
     elapsed = t1 - launched
     frames, calibration, vsync_ms, poll_gaps = presents(output)
     # /proc/uptime counts suspended time and SurfaceFlinger's monotonic clock

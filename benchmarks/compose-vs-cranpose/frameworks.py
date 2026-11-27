@@ -16,6 +16,9 @@ per start the per-app medians.
 nightly hands over the builds macm3 made. `--browser DIR` measures the pages
 `build_apps.sh browser DIR` built instead, each open in Chrome on the phone at
 each of `--tiers`, one scenario a tier, and writes a run of kind `browser`.
+Each of its legs keeps what the page said of itself (`BrowserServer.page_record`);
+a leg whose page was hidden stays in the run, marked `disturbed`, out of the
+medians.
 Usage: frameworks.py --serial SERIAL --output DIR [--apps compose,cranpose,...]
                      [--install DIR | --browser DIR --tiers N,N] [--main COMMIT]
 """
@@ -74,7 +77,8 @@ def measure_scenario(device, name, extras, targets, args, install_errors):
                 legs.append(leg_record(run, app, len(legs), start))
                 print(f'{app:10} {start:6} fps {run["fps"]:5.1f} cpu/f {figure(run["cpu_ms_per_frame"], "6.1f")} '
                       f'frames {run["frames"]:4d} first frame {figure(run["first_frame_s"], "4.1f")} s '
-                      f'run {run["run_s"]:4.1f} s{" stopped, slow" if run["stopped"] else ""}', flush=True)
+                      f'run {run["run_s"]:4.1f} s{" stopped, slow" if run["stopped"] else ""}'
+                      f'{" disturbed, the page was hidden" if legs[-1].get("disturbed") else ""}', flush=True)
     return {
         'scenario': name,
         'extras': extras,

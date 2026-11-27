@@ -931,6 +931,14 @@ takes its tier and freeze frame from the query string, `?tier=12&freeze=120`,
 and logs its `PERF` lines on the console. `browser.py` serves the pages, and
 puts one script in each page's head that forwards those lines to the server,
 because Chrome on a phone logs a page's console nowhere a harness can read.
+The script also reports the page itself: its visibility at its start and at
+each change, each lost or restored WebGL context and each lost WebGPU device,
+and once a second a beat with the page's clock and its last frame request.
+Each leg of a page keeps them with its console errors and uncaught errors as
+`page`: the seconds after the start command at which each arrived, and when
+the page last asked for a frame. A leg whose page was hidden is `disturbed`:
+it stays in the run, out of the medians. A page that stops drawing while shown
+is measured as it drew.
 
 `desktop.py --browser DIR` opens each page in its own Chrome app window, as
 it opens the plain page, and counts frames, CPU, memory and clocks as for any

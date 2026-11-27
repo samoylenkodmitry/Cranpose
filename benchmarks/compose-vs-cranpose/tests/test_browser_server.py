@@ -88,6 +88,52 @@ class BrowserServerTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, r'the page lost its GPU device: .*device lost \(Unknown\)'):
             self.server.check_device(since)
 
+    def test_what_a_page_said_of_itself_in_a_leg_is_its_record(self):
+        post(self.server, 'PERF page beat 9000 8990 540')
+        since = self.server.mark()
+        started = time.monotonic()
+        for line in ('PERF page visibility visible 120', 'PERF first_frame', 'PERF page beat 1120 1100 31',
+                     'PERF page context_lost 1500 ', 'PERF page context_restored 1700',
+                     'PERF page device_lost 1800 unknown the GPU process exited',
+                     'PERF console.error: panicked at src/lib.rs:7:5: index out of bounds',
+                     'PERF error Uncaught RuntimeError: unreachable', 'PERF page beat 2120 1300 40',
+                     'PERF page visibility hidden 2500'):
+            post(self.server, line)
+        ended = time.monotonic()
+        post(self.server, 'PERF page beat 3120 3100 99')
+        record = self.server.page_record(since, started, ended)
+        self.assertTrue(record['hidden'])
+        self.assertEqual([state for _, state in record['visibility']], ['visible', 'hidden'])
+        self.assertEqual([(event, detail) for _, event, detail in record['gpu_events']],
+                         [('context_lost', ''), ('context_restored', ''),
+                          ('device_lost', 'unknown the GPU process exited')])
+        self.assertEqual([text for _, text in record['errors']],
+                         ['console.error: panicked at src/lib.rs:7:5: index out of bounds',
+                          'error Uncaught RuntimeError: unreachable'])
+        self.assertEqual(record['error_count'], 2)
+        # The last beat in the leg came 820 ms of the page's clock after its
+        # last frame request, and a beat after the leg's end is not its.
+        self.assertEqual(record['frame_requests'], 40)
+        self.assertAlmostEqual(record['last_beat_s'] - record['last_frame_request_s'], 0.82, delta=0.011)
+        for at, *_ in [*record['visibility'], *record['gpu_events'], *record['errors']]:
+            self.assertTrue(0 <= at <= ended - started + 0.01)
+
+    def test_a_shown_page_that_never_asked_for_a_frame_is_no_hidden_one(self):
+        since = self.server.mark()
+        started = time.monotonic()
+        post(self.server, 'PERF page visibility visible 80')
+        post(self.server, 'PERF page beat 1080 -1 0')
+        record = self.server.page_record(since, started, time.monotonic())
+        self.assertFalse(record['hidden'])
+        self.assertIsNone(record['last_frame_request_s'])
+        self.assertEqual(record['frame_requests'], 0)
+
+    def test_a_leg_whose_app_loaded_no_page_has_no_page_record(self):
+        since = self.server.mark()
+        started = time.monotonic()
+        post(self.server, 'PERF first_frame')
+        self.assertIsNone(self.server.page_record(since, started, time.monotonic()))
+
     def test_a_silent_page_times_out_with_its_last_lines(self):
         since = self.server.mark()
         post(self.server, 'PERF loading')

@@ -43,9 +43,62 @@ PERF_SCRIPT = """\
   };
   window.addEventListener('error', function (event) { failure(event.message); });
   window.addEventListener('unhandledrejection', function (event) { failure(event.reason); });
+  // What a leg's record needs of the page (`BrowserServer.page_record`): when
+  // it was hidden, when it lost its WebGL context or its WebGPU device, and
+  // until when it asked for frames. A beat each second carries the page's
+  // clock and its last frame request: a beat that stops says the page's
+  // thread stopped running.
+  var now = function () { return Math.round(performance.now()); };
+  var visibility = function () { report('PERF page visibility ' + document.visibilityState + ' ' + now()); };
+  visibility();
+  document.addEventListener('visibilitychange', visibility);
+  var lastRequest = -1, requests = 0;
+  var requestFrame = window.requestAnimationFrame;
+  window.requestAnimationFrame = function (callback) {
+    lastRequest = performance.now();
+    requests++;
+    return requestFrame.call(window, callback);
+  };
+  setInterval(function () {
+    report('PERF page beat ' + now() + ' ' + Math.round(lastRequest) + ' ' + requests);
+  }, 1000);
+  var watched = new WeakSet();
+  [window.HTMLCanvasElement, window.OffscreenCanvas].forEach(function (type) {
+    if (!type) return;
+    var getContext = type.prototype.getContext;
+    type.prototype.getContext = function () {
+      if (!watched.has(this)) {
+        watched.add(this);
+        this.addEventListener('webglcontextlost', function (event) {
+          report('PERF page context_lost ' + now() + ' ' + (event.statusMessage || ''));
+        });
+        this.addEventListener('webglcontextrestored', function () { report('PERF page context_restored ' + now()); });
+      }
+      return getContext.apply(this, arguments);
+    };
+  });
+  if (window.GPUAdapter) {
+    var requestDevice = GPUAdapter.prototype.requestDevice;
+    GPUAdapter.prototype.requestDevice = function () {
+      return requestDevice.apply(this, arguments).then(function (device) {
+        device.lost.then(function (info) {
+          report('PERF page device_lost ' + now() + ' ' + info.reason + ' ' + String(info.message).slice(0, 300));
+        });
+        return device;
+      });
+    };
+  }
 })();
 """
 SCRIPT_TAG = b'<script src="/__perf.js"></script>'
+# The lines the script posts of the page itself, times on the page's clock in
+# milliseconds; a beat's request is -1 before the page's first.
+PAGE_VISIBILITY = re.compile(r'PERF page visibility (?P<state>\w+) \d+$')
+PAGE_BEAT = re.compile(r'PERF page beat (?P<clock>\d+) (?P<request>-?\d+) (?P<requests>\d+)$')
+PAGE_GPU_EVENT = re.compile(r'PERF page (?P<event>context_lost|context_restored|device_lost) \d+ ?(?P<detail>.*)$',
+                            re.DOTALL)
+# A page that logs an error each frame would fill its leg's record.
+PAGE_ERRORS_KEPT = 20
 
 
 def with_script(page):
@@ -167,6 +220,39 @@ class BrowserServer:
             lost = next((line for _, line in self.heard[since:] if '[gpu-device]' in line), None)
         if lost:
             raise RuntimeError(f'the page lost its GPU device: {lost[:300]}')
+
+    def page_record(self, since, started, ended):
+        """What the page of a leg said of itself in the lines heard since
+        `since` that arrived between `started` and `ended` (both on
+        `time.monotonic()`), each at the seconds after `started` it arrived:
+        its visibility at its start and at each change, its WebGL context
+        losses and restores and its WebGPU device losses, its console errors
+        and uncaught errors (a Rust panic logs one), its last beat and its
+        last frame request. `hidden` says the page was hidden at some time in
+        the leg. None when no page spoke."""
+        with self.condition:
+            lines = [(round(at - started, 2), line) for at, line in self.heard[since:] if started <= at <= ended]
+        if not any(line.startswith('PERF page ') for _, line in lines):
+            return None
+        record = {'hidden': False, 'visibility': [], 'gpu_events': [], 'errors': [], 'error_count': 0,
+                  'last_beat_s': None, 'frame_requests': 0, 'last_frame_request_s': None}
+        for at, line in lines:
+            if found := PAGE_VISIBILITY.match(line):
+                record['visibility'].append([at, found['state']])
+                record['hidden'] |= found['state'] == 'hidden'
+            elif found := PAGE_BEAT.match(line):
+                clock, request = int(found['clock']), int(found['request'])
+                record['last_beat_s'] = at
+                record['frame_requests'] = int(found['requests'])
+                # The beat's own clock dates its last request on the host's.
+                record['last_frame_request_s'] = round(at - (clock - request) / 1000, 2) if request >= 0 else None
+            elif found := PAGE_GPU_EVENT.match(line):
+                record['gpu_events'].append([at, found['event'], found['detail'][:300]])
+            elif line.startswith(('PERF console.error', 'PERF error')):
+                record['error_count'] += 1
+                if len(record['errors']) < PAGE_ERRORS_KEPT:
+                    record['errors'].append([at, line[len('PERF '):][:300]])
+        return record
 
     def wait_for(self, text, timeout, since=0):
         """Waits until a page has reported a line holding `text`; the page's
