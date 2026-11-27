@@ -79,10 +79,11 @@ stats_alloc = "0.1.10"
 # what the device runs, not the framework repository's.
 [workspace]
 
-# The framework's wgpu fork from this checkout, as the framework workspace
-# builds it (its root Cargo.toml).
+# The framework's forks from this checkout, as the framework workspace
+# builds them (its root Cargo.toml).
 [patch.crates-io]
 cranpose-wgpu = { path = "../../../forks/wgpu/wgpu" }
+cranpose-tiny-skia = { path = "../../../forks/tiny-skia/tiny-skia" }
 
 [profile.release]
 opt-level = 3

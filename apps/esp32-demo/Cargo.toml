@@ -61,6 +61,11 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(esp_idf_idf_target_esp32)"
 [workspace]
 members = [".", "../../crates/cranpose-platform/esp-idf"]
 
+# The forks Cranpose's crates take, as the root workspace builds them
+# (forks/README.md).
+[patch.crates-io]
+cranpose-tiny-skia = { path = "../../forks/tiny-skia/tiny-skia" }
+
 # Measured under QEMU's instruction counter with the S3's 16 KB instruction
 # cache simulated. Against "s", opt-level 2 runs a frame of the demo in 19%
 # fewer instructions with 11% fewer cache misses, for 290 KB more code in an
