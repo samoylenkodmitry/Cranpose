@@ -50,4 +50,8 @@ impl GpuRenderer {
         }
         self.pipelines.compiling()
     }
+
+    pub(crate) fn needs_frame_warmup(&self) -> bool {
+        self.history.warming_up() || self.pipelines.placeholder_awaits_frame()
+    }
 }

@@ -1626,10 +1626,6 @@ impl GpuRenderer {
         self.history.last()
     }
 
-    pub(crate) fn needs_frame_warmup(&self) -> bool {
-        self.history.warming_up() || self.pipelines.placeholder_awaits_frame()
-    }
-
     pub(crate) fn debug_cpu_allocation_stats(&self) -> DebugCpuAllocationStats {
         DebugCpuAllocationStats {
             text_renderer_pool_len: self.text.image_cache.len(),
