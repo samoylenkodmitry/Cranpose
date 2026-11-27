@@ -13,13 +13,13 @@ use cranpose_testing::{
 
 use super::*;
 use crate::{
-    Controller, Hand, PointerMapping, Pose, Ray, SpatialMoveEventType, SpatialPanel,
-    SubspaceModifier, XrFrame,
+    Controller, Hand, Pose, Ray, SpatialMoveEventType, SpatialPanel, SubspaceModifier, XrFrame,
     aim::Aim,
     atlas_input,
     key_layout::{self, KeyKind, Page},
     keyboard_panel::SoftKeyboardPanel,
     pointer_aim::pointer_aim,
+    pointer_settings::PointerChoice,
     pointers::Pointers,
     scripted_hand::{PinchCycle, ScriptedHand, play},
     space::{
@@ -104,7 +104,7 @@ impl Headset {
             [None, aim],
             time,
             (&panels, &PickMeshes::default()),
-            (PointerMapping::default(), true),
+            PointerChoice::default(),
         );
         atlas_input::deliver(self.robot.shell_mut(), self.pointer.atlas());
         self.keyboard.pump(self.robot.shell_mut(), &self.space);

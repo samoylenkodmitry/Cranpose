@@ -143,7 +143,7 @@ controller, and the panel follows the hand at that offset after it.
 the joints' poses. The origin has the joint's pose with OpenXR's axes of a hand joint: -z toward the
 finger tips and +y out of the back of the hand. While the hand is not tracked or the joint has no
 valid pose, the panels do not show and take no hits. The hand's own pointer ignores them, so the
-other hand's pinch presses them. The app needs `Use::hand_tracking()`.
+other hand's pinch or fingertip presses them. The app needs `Use::hand_tracking()`.
 
 With `FollowMode::Tight(TrackedDimensions::All)` a panel holds its place against the controller as
 the hand tilts and rolls. The headset hands the panel's layers to the compositor in the space of
@@ -748,6 +748,30 @@ as they take a controller, because the pointer of each hand serves both.
   press ends with a release. The new input presses after its trigger went up.
 - A hand holds no motor, so a vibration that the app asks for on that side is dropped.
 
+A tracked hand also presses by direct touch, with no pinch. The tip of its index finger hovers over
+a panel when it comes within 6 cm in front of the panel's face, and presses the face where it touches
+it. Every Cranpose `clickable` shows its hover and press for the touch as for a ray: the buttons and
+switches of flat panels, the objects of a `SpatialHologram` and a `SpatialTray`, a `SpatialGem`, the
+panels that follow the other hand, and a `SpatialExternalSurface`, which gets the touch as a press of
+the primary button at the touched point. The cursor's dot shows where the finger will touch and turns blue while it
+presses.
+
+- The press holds its point while the finger shakes, drags once the finger slides 12 dp along the
+  face, and ends when the finger comes back 5 mm out of the face or leaves its edges.
+- Only a finger that comes to a face from the front presses. A finger that pushes through a panel
+  presses nothing behind it, and a finger that the cameras first see behind a face presses nothing.
+- While the finger is near a panel, that hand's beam hides, its handles do not light, and its pinch
+  presses nothing. A pinch that closed then counts as held from before. The ray and the pinch work
+  again once the finger is away.
+- One input holds a press until it ends: a ray's press or carry keeps the finger from touching, and a
+  touch keeps the pinch from pressing. The other hand keeps its own pointer.
+- A curved panel takes the touch on its curve. A volume takes no touch: its meshes take the ray. A
+  controller presses only with its ray.
+- The finger touches only while the cameras see its tip. A tip that the runtime only estimates
+  touches nothing.
+- `PointerSettings::set_direct_touch(false)` turns the touch off. Android XR gives every panel its
+  direct touch, and Jetpack XR has no such setting.
+
 `XrFrame::pointer(Hand)` gives the app the `InputSource` that points for a side, `Controller` or
 `Hands`, or `None`. `InputSource` is Jetpack XR's `InputEvent.Source`. Jetpack XR tags each input event
 with its source. Cranpose tags the frame instead, and the pointer's events reach the composition as
@@ -758,7 +782,10 @@ check where no hand can be tracked, such as an emulator. `script_hand(ScriptedHa
 from, at, PinchCycle::default()))` installs a hand whose aim pose points at a place in the room and
 whose index finger pinches in a cycle. The frame holds it as a tracked hand, so the pointer treats
 it as the cameras' hand. `with_palm(pose)` also holds its palm joint at a pose, for content that
-follows the palm. A script for each hand plays at once. The feature is off by default.
+follows the palm. `ScriptedHand::touching(hand, from, at, fingertip)` holds the tip of the index
+finger at a place and never pinches, and `moving_fingertip_to(duration, place)` and
+`holding_fingertip(duration)` move the tip in steps, for a check of the direct touch. A script for
+each hand plays at once. The feature is off by default.
 
 ## One pointer for each hand
 

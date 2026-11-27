@@ -1,6 +1,6 @@
 //! What a controller or a tracked hand does in a frame, as the pointer reads it.
 
-use crate::{InputSource, Pose, Ray};
+use crate::{InputSource, Pose, Ray, direct_touch::Fingertip};
 
 // The inputs of a controller besides its trigger and its thumbstick's lean. A tracked hand has
 // none, so they stay at rest.
@@ -16,7 +16,7 @@ pub(crate) struct Buttons {
 // What a controller or a tracked hand does in a frame: where it points, how far its trigger is
 // pulled or its index finger pinches from 0 to 1, how far its thumbstick leans to the right and
 // forward from -1 to 1, and which other buttons it has down. A hand has no thumbstick, so its
-// stick stays at 0.
+// stick stays at 0. A tracked hand also has the tip of its index finger, which touches the panels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Aim {
     pub(crate) ray: Ray,
@@ -25,6 +25,7 @@ pub(crate) struct Aim {
     pub(crate) stick: [f32; 2],
     pub(crate) buttons: Buttons,
     pub(crate) source: InputSource,
+    pub(crate) tip: Option<Fingertip>,
 }
 
 impl Aim {
@@ -65,6 +66,7 @@ impl Aim {
             stick: [0.0; 2],
             buttons: Buttons::default(),
             source: InputSource::Controller,
+            tip: None,
         }
     }
 }

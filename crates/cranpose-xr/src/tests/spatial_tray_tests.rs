@@ -7,12 +7,13 @@ use std::time::{Duration, Instant};
 
 use super::*;
 use crate::{
-    ButtonShape, PointerMapping, Ray, SliderColors, SpatialButton, SpatialMoveEventType,
-    SpatialSlider, SpatialSwitch, SpatialTray, SwitchColors,
+    ButtonShape, Ray, SliderColors, SpatialButton, SpatialMoveEventType, SpatialSlider,
+    SpatialSwitch, SpatialTray, SwitchColors,
     aim::Aim,
     atlas_input,
     content_ray::ContentRay,
     eye_camera::{EyeCamera, FirstRow},
+    pointer_settings::PointerChoice,
     pointers::Pointers,
     space::{PanelKind, PanelMove, PanelSlot, field_dock::point_on},
     tray_scene::{KNOB, PRESS_DEPTH},
@@ -218,10 +219,30 @@ impl Bench {
             [None, Some(aim)],
             Duration::from_millis(10 * self.frame),
             (&panels, &self.picks),
-            (PointerMapping::default(), true),
+            PointerChoice::default(),
         );
         atlas_input::deliver(self.headset.guest.shell(), self.pointer.atlas());
         self.redraw();
+    }
+
+    // Frames of the hand that `script` plays, 10 ms apart on the script's clock, from `from` to
+    // `until` milliseconds after its start: the pointer takes the hand's aim as the frame loop does,
+    // the panel takes the pointer's events and the scene draws.
+    fn play(&mut self, script: &crate::scripted_hand::ScriptedHand, (from, until): (u64, u64)) {
+        for at in (from..until).step_by(10) {
+            self.frame += 1;
+            let aims =
+                crate::pointers::direct_touch_tests::aims_at(&[script], Duration::from_millis(at));
+            let panels = self.headset.space.panels();
+            self.pointer.update(
+                aims,
+                Duration::from_millis(10 * self.frame),
+                (&panels, &self.picks),
+                PointerChoice::default(),
+            );
+            atlas_input::deliver(self.headset.guest.shell(), self.pointer.atlas());
+            self.redraw();
+        }
     }
 
     // Frames at `at` for `millis` milliseconds of the clock, as the animations count them.

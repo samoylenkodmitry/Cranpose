@@ -1,8 +1,10 @@
 //! Which input points for a hand in a frame.
 
 use crate::{
-    Controller, HandAim, HandState, InputSource, InteractionProfile, Ray, TrackingState,
+    Controller, HandAim, HandJointType, HandState, InputSource, InteractionProfile, Ray,
+    TrackingState,
     aim::{Aim, Buttons},
+    direct_touch::Fingertip,
 };
 
 // The aim that the pointer takes for one hand, or `None` while nothing points for it.
@@ -21,6 +23,10 @@ use crate::{
 // same through the hand interaction profile: the hand's `aim` pose, and a pinch that the profile
 // binds to the trigger. The hand interaction profile never counts as a controller, so a hand that
 // points through it is a hand in the rules above.
+//
+// A hand's aim carries the tip of its index finger while the cameras see that joint, for the
+// direct touch of the panels. A joint that the runtime only estimates touches nothing: a finger
+// that the cameras do not see could press a panel where the finger is not.
 pub(crate) fn pointer_aim(controller: &Controller, hand: Option<&HandState>) -> Option<Aim> {
     let by_hands = controller.profile.is_some_and(InteractionProfile::is_hand);
     if !by_hands && let Some(aim) = of_controller(controller, InputSource::Controller) {
@@ -30,11 +36,19 @@ pub(crate) fn pointer_aim(controller: &Controller, hand: Option<&HandState>) -> 
     if hand.tracking_state != TrackingState::Tracking {
         return None;
     }
-    match hand.aim {
+    let aim = match hand.aim {
         Some(aim) => of_hand(&aim),
         None if by_hands => of_controller(controller, InputSource::Hands),
         None => None,
-    }
+    }?;
+    let tip = hand.joint(HandJointType::IndexTip);
+    Some(Aim {
+        tip: (tip.valid && tip.tracked).then_some(Fingertip {
+            position: tip.pose.position,
+            radius: tip.radius,
+        }),
+        ..aim
+    })
 }
 
 // The aim that a controller's actions give. The hand interaction profile has no thumbstick and no
@@ -61,6 +75,7 @@ fn of_controller(controller: &Controller, source: InputSource) -> Option<Aim> {
         stick,
         buttons,
         source,
+        tip: None,
     })
 }
 
@@ -78,6 +93,7 @@ fn of_hand(aim: &HandAim) -> Option<Aim> {
         stick: [0.0; 2],
         buttons: Buttons::default(),
         source: InputSource::Hands,
+        tip: None,
     })
 }
 
