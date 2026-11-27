@@ -23,7 +23,8 @@ use crate::{
     offscreen::OffscreenTarget,
 };
 
-impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
+#[expect(clippy::multiple_inherent_impl, reason = "shader layers in their file")]
+impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
     // Whether a child's runtime shader can draw in the final pass over the
     // child's content: the shader must apply the child's clip and alpha
     // itself unless the child has neither.
@@ -272,8 +273,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         cache.insert(key, Retained::surface(Rc::clone(&kept), held), None);
         if held == StandInPixels::Final {
             let gpu = (&*self.renderer.device, &*self.renderer.queue);
-            let submits = self.renderer.frame_stats.submits.get();
-            cache.disk.keep(gpu, stored_key, Rc::clone(&kept), submits);
+            cache.disk.keep(gpu, stored_key, Rc::clone(&kept));
         }
         Some(Some(kept_slot(kept)))
     }

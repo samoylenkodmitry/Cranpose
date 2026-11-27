@@ -38,7 +38,6 @@ use crate::{
         DevicePixelBounds, SegmentTransform, anchored_device_rect, canonicalize_device_coordinate,
         snap_delta_for_anchor, translate_quad, translation_stable_anchored_device_pixel_bounds,
     },
-    glyph_run_arena::GlyphRunArena,
     gpu_stats::{self, gpu_stats_enabled},
     layer_cache::LayerCache,
     lazy_resource::Pending,
@@ -1435,7 +1434,7 @@ impl GpuRenderer {
         for target in self.deferred_offscreen_releases.drain(..) {
             self.effect_renderer.release_offscreen(target);
         }
-        self.layer_cache.end_frame(self.frame_stats.submits.get());
+        self.layer_cache.end_frame();
         for (transient, target) in self.layer_cache.take_released() {
             match transient {
                 Some(descriptor) => executor.return_cached_transient(descriptor, target),
@@ -1858,9 +1857,7 @@ impl GpuRenderer {
             }
         }
         if !submitted {
-            self.run_store.invalidate_uploads();
-            self.text.glyph_gpu_run_cache.clear();
-            self.text.glyph_run_arena = GlyphRunArena::new(self.copy_free);
+            self.drop_unsubmitted_frame();
         }
         returns.scene = Some(FrameSceneStorage { root, overlay });
         result.map(|()| submitted)

@@ -3,6 +3,10 @@
 use super::GpuRenderer;
 use crate::frame::StandInMark;
 
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "pipeline landings in their file"
+)]
 impl GpuRenderer {
     /// Starts a frame: once a pipeline a placeholder waited for has landed,
     /// the retained layers, which may hold that placeholder, are dropped.

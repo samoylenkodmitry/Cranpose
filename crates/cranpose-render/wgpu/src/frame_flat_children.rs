@@ -21,7 +21,8 @@ use crate::{
     scene::DrawOp,
 };
 
-impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
+#[expect(clippy::multiple_inherent_impl, reason = "flat children in their file")]
+impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
     /// Whether a child that can draw in place does this frame: unless its
     /// surface is cached or retained this frame, which it then resolves into
     /// the pass for `resolve_child`. Content that holds still costs less to

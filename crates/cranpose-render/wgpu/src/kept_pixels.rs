@@ -56,8 +56,6 @@ struct KeptFile {
 struct Requested {
     key: u64,
     target: Rc<OffscreenTarget>,
-    // the submits counted before the frame that draws it
-    submits: u32,
 }
 
 struct Reading {
@@ -173,23 +171,26 @@ impl KeptPixels {
     }
 
     // Keeps the output a frame of `device` draws into `target` under `key`
-    // once that frame is submitted; `submits` counts the submits before it.
+    // once that frame is submitted.
     pub(crate) fn keep(
         &mut self,
         (device, queue): (&wgpu::Device, &wgpu::Queue),
         key: u64,
         target: Rc<OffscreenTarget>,
-        submits: u32,
     ) {
         if let Some(file) = self.file.as_mut() {
             file.gpu
                 .get_or_insert_with(|| (device.clone(), queue.clone()));
             file.used.insert(key);
-            file.requested.push(Requested {
-                key,
-                target,
-                submits,
-            });
+            file.requested.push(Requested { key, target });
+        }
+    }
+
+    // Forgets the outputs of a frame that submitted nothing: their targets
+    // hold no drawn pixels.
+    pub(crate) fn forget_unsubmitted(&mut self) {
+        if let Some(file) = self.file.as_mut() {
+            file.requested.clear();
         }
     }
 
@@ -201,9 +202,8 @@ impl KeptPixels {
     }
 
     // Ends a frame: copies the outputs it drew to buffers the CPU reads, and
-    // hands the copies that finished to the file. `submits` counts the
-    // submits so far; an output whose frame did not submit is not kept.
-    pub(crate) fn end_frame(&mut self, submits: u32) {
+    // hands the copies that finished to the file.
+    pub(crate) fn end_frame(&mut self) {
         let Some(file) = self.file.as_mut() else {
             return;
         };
@@ -211,7 +211,7 @@ impl KeptPixels {
             return;
         };
         if !file.requested.is_empty() {
-            file.read_back(&device, &queue, submits);
+            file.read_back(&device, &queue);
         }
         if !file.reading.is_empty() {
             let _ = device.poll(wgpu::PollType::Poll);
@@ -221,20 +221,16 @@ impl KeptPixels {
 }
 
 impl KeptFile {
-    fn read_back(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, submits: u32) {
+    fn read_back(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let launch = self.launch;
         let copies: Vec<(Rc<OffscreenTarget>, Reading)> = self
             .requested
             .drain(..)
-            .filter(|requested| submits > requested.submits)
-            .map(|Requested { key, target, .. }| {
+            .map(|Requested { key, target }| {
                 let reading = Reading::new(device, key, &target, launch);
                 (target, reading)
             })
             .collect();
-        if copies.is_empty() {
-            return;
-        }
         read_back_textures(
             device,
             queue,

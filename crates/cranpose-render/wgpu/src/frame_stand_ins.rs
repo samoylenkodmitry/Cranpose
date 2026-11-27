@@ -6,7 +6,11 @@ use cranpose_ui_graphics::RenderEffect;
 use super::{FrameExecutor, PendingBackdrop, StandInMark, StandInPixels};
 use crate::frame_graph::FrameCommandRecorder;
 
-impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "stand-in steps in their file"
+)]
+impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
     // The pixels drawn since `mark`.
     pub(super) fn pixels_since(&self, mark: StandInMark) -> StandInPixels {
         mark.pixels_until(self.renderer.stand_in_mark())
