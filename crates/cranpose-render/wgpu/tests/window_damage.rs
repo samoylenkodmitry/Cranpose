@@ -2080,12 +2080,12 @@ fn a_start_draws_a_kept_target_whole_once() {
 // their own.
 #[test]
 fn a_swapchain_image_back_after_many_frames_draws_what_changed_since_its_frame() {
-    const AWAY: usize = 20;
-    const FRAMES: usize = SWAPCHAIN_IMAGES + AWAY + 1;
-    const ORDER: [usize; FRAMES] = {
-        let mut order = [0; FRAMES];
+    const AWAY: u32 = 20;
+    const FRAMES: u32 = SWAPCHAIN_START_FRAMES + AWAY + 1;
+    const ORDER: [usize; FRAMES as usize] = {
+        let mut order = [0; FRAMES as usize];
         let mut frame = 0;
-        while frame < FRAMES {
+        while frame < FRAMES as usize {
             order[frame] = if frame < SWAPCHAIN_IMAGES {
                 frame
             } else {
@@ -2093,7 +2093,7 @@ fn a_swapchain_image_back_after_many_frames_draws_what_changed_since_its_frame()
             };
             frame += 1;
         }
-        order[FRAMES - 1] = SWAPCHAIN_IMAGES - 1;
+        order[FRAMES as usize - 1] = SWAPCHAIN_IMAGES - 1;
         order
     };
     let Some((_lock, renderer)) = renderer() else {
@@ -2102,7 +2102,7 @@ fn a_swapchain_image_back_after_many_frames_draws_what_changed_since_its_frame()
     let mut harness = Harness::new(renderer, Scene::WallCursor, 1.0, Keeper::Swapchain(DIRECT));
     harness.order = &ORDER;
     let mut last = None;
-    for step in 0..FRAMES as u32 {
+    for step in 0..FRAMES {
         let frame = harness.frame(step);
         support::assert_same_bytes(&format!("step {step}"), WIDTH, &frame.kept, &frame.direct);
         last = Some(frame.stats);
