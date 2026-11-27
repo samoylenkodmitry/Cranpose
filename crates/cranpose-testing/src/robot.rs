@@ -22,7 +22,7 @@
 //! robot.wait_for_idle();
 //! ```
 
-use cranpose_app_shell::AppShell;
+use cranpose_app_shell::{AppShell, PointerEventTime};
 use cranpose_core::{MemoryApplier, NodeId, location_key};
 use cranpose_render_common::{
     RenderScene, Renderer, SceneUpdates, graph_scene::Scene, text_fonts::TextFonts,
@@ -33,6 +33,11 @@ use cranpose_ui_graphics::{Point, Rect, Size};
 const HEADLESS_IDLE_UPDATE_LIMIT: u32 = 100;
 const HEADLESS_MOTION_FRAME_LIMIT: u32 = 120;
 const FRAME_NANOS: u64 = 16_666_667;
+// The gap between the samples of a drag: a 120 Hz touch panel's, which the gesture velocity also
+// takes for a gesture's first samples.
+const DRAG_SAMPLE_NANOS: u64 = 8_000_000;
+// The frames for which a long press holds the pointer down: longer than a long press's timeout.
+const LONG_PRESS_FRAMES: u32 = 50;
 
 /// Main robot testing rule that provides programmatic control over a real app.
 ///
@@ -151,13 +156,46 @@ where
         self.shell.has_active_animations() || self.shell.has_transient_frame_callbacks()
     }
 
+    // The time of an input sample at the robot's frame clock, in both clocks of the shell. A
+    // gesture's velocity and the animations that the input starts read the robot's time and never
+    // the machine's, so a busy machine sees the same gesture as an idle one.
+    fn sample_time(&self) -> PointerEventTime {
+        let time = self
+            .shell
+            .exact_pointer_event_time(i64::try_from(self.frame_time_nanos / 1_000_000).ok());
+        PointerEventTime {
+            animation_time_nanos: time.animation_time_nanos.max(self.frame_time_nanos),
+            ..time
+        }
+    }
+
+    // Processes the input at the robot's frame time, which delivers no frame callback.
+    fn update_now(&mut self) {
+        self.shell.update_at_frame_time_nanos(self.frame_time_nanos);
+    }
+
+    fn move_pointer(&mut self, x: f32, y: f32) -> bool {
+        let time = self.sample_time();
+        self.shell.set_cursor_at_event_time(x, y, time)
+    }
+
+    fn press(&mut self) -> bool {
+        let time = self.sample_time();
+        self.shell.pointer_pressed_at_event_time(time)
+    }
+
+    fn release(&mut self) -> bool {
+        let time = self.sample_time();
+        self.shell.pointer_released_at_event_time(time)
+    }
+
     /// Perform a click at the given coordinates.
     ///
     /// Returns true if the click hit a UI element, false otherwise.
     pub fn click_at(&mut self, x: f32, y: f32) -> bool {
-        self.shell.set_cursor(x, y);
-        let pressed = self.shell.pointer_pressed();
-        let released = self.shell.pointer_released();
+        self.move_pointer(x, y);
+        let pressed = self.press();
+        let released = self.release();
         self.wait_for_idle();
         pressed || released
     }
@@ -166,48 +204,50 @@ where
     ///
     /// Returns true if the move hit a UI element, false otherwise.
     pub fn move_to(&mut self, x: f32, y: f32) -> bool {
-        let hit = self.shell.set_cursor(x, y);
+        let hit = self.move_pointer(x, y);
         self.wait_for_idle();
         hit
     }
 
     /// Perform a drag from one point to another.
     ///
-    /// This simulates a pointer down, move, and up sequence.
+    /// This simulates a pointer down, ten moves and an up, the moves 8 ms apart on the robot's
+    /// frame clock, as a 120 Hz touch panel reports them. The drag ends with the velocity of
+    /// that pace, however long the machine takes for each move.
     pub fn drag(&mut self, from_x: f32, from_y: f32, to_x: f32, to_y: f32) {
-        self.shell.set_cursor(from_x, from_y);
-
-        self.shell.pointer_pressed();
+        self.move_pointer(from_x, from_y);
+        self.press();
 
         let steps = 10;
         for i in 1..=steps {
             let t = i as f32 / steps as f32;
             let x = from_x + (to_x - from_x) * t;
             let y = from_y + (to_y - from_y) * t;
-            self.shell.set_cursor(x, y);
-            self.shell.update();
+            self.frame_time_nanos = self.frame_time_nanos.saturating_add(DRAG_SAMPLE_NANOS);
+            self.move_pointer(x, y);
+            self.update_now();
         }
 
-        self.shell.pointer_released();
+        self.release();
         self.wait_for_idle();
     }
 
     /// Move the mouse cursor to the given coordinates.
     pub fn mouse_move(&mut self, x: f32, y: f32) {
-        self.shell.set_cursor(x, y);
-        self.shell.update();
+        self.move_pointer(x, y);
+        self.update_now();
     }
 
     /// Press the mouse button.
     pub fn mouse_down(&mut self) {
-        self.shell.pointer_pressed();
-        self.shell.update();
+        self.press();
+        self.update_now();
     }
 
     /// Release the mouse button.
     pub fn mouse_up(&mut self) {
-        self.shell.pointer_released();
-        self.shell.update();
+        self.release();
+        self.update_now();
     }
 
     /// Find an element by text content.
@@ -394,17 +434,17 @@ where
 
     /// Perform a long press on this element.
     ///
-    /// This holds the pointer down for a duration before releasing.
+    /// This holds the pointer down for 50 frames of the robot's clock before releasing.
     pub fn long_press(&mut self) -> bool {
         if let Some(center) = self.center() {
-            self.robot.shell_mut().set_cursor(center.x, center.y);
-            self.robot.shell_mut().pointer_pressed();
+            self.robot.move_pointer(center.x, center.y);
+            self.robot.press();
 
-            for _ in 0..50 {
-                self.robot.shell_mut().update();
+            for _ in 0..LONG_PRESS_FRAMES {
+                self.robot.advance_time(FRAME_NANOS);
             }
 
-            self.robot.shell_mut().pointer_released();
+            self.robot.release();
             self.robot.wait_for_idle();
             true
         } else {
