@@ -5,13 +5,31 @@
 use std::{ops::Range, slice};
 
 use super::{
-    NO_SEGMENT_KEY, RecordLane, RecordSegment, ShapeRecorder, materialize::materialize_shape,
-    record_coverage,
+    NO_SEGMENT_KEY, RecordLane, RecordSegment, RecordTables, ShapeRecorder,
+    materialize::materialize_shape, record_coverage,
 };
 use crate::{DrawPrimitive, Rect};
 
 #[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
 impl ShapeRecorder {
+    /// An empty recorder with room for `shapes` shapes in `segments`
+    /// segments, so that shapes that fit grow none of its tables.
+    pub fn with_capacity(shapes: usize, segments: usize) -> Self {
+        Self::with_tables(RecordTables::with_capacity(shapes, segments))
+    }
+
+    // An empty recorder over `tables`.
+    pub(super) fn with_tables(tables: RecordTables) -> Self {
+        Self {
+            tables,
+            gradient_lists: crate::rare_list::RareList::default(),
+            last_segment_key: NO_SEGMENT_KEY,
+            segment_waste: 0,
+            min: [f32::INFINITY; 2],
+            max: [f32::NEG_INFINITY; 2],
+        }
+    }
+
     /// Starts a segment of its own for the next shape, so that a run can
     /// name the shapes recorded after this call apart from those before.
     pub fn end_segment(&mut self) {
@@ -76,13 +94,26 @@ impl ShapeRecorder {
             .sum()
     }
 
-    /// The rect the pixels of the shapes in `segments` lie within; `None`
-    /// when the segments hold no shape.
-    pub fn coverage_in(&self, segments: &Range<u32>) -> Option<Rect> {
-        let bodies = self.tables.shapes.bodies();
-        self.shapes_in(segments)
-            .map(|index| record_coverage(&bodies[index]))
+    /// The rect the pixels of the shapes from the shape at index `first` on
+    /// lie within; `None` when the recorder holds no shape past `first`.
+    pub fn coverage_from(&self, first: usize) -> Option<Rect> {
+        self.tables.shapes.bodies()[first..]
+            .iter()
+            .map(record_coverage)
             .reduce(|covered, coverage| covered.union(coverage))
+    }
+
+    /// Records the shapes in `segments` of `source` again after this
+    /// recorder's shapes, from the primitives they were recorded from.
+    pub fn push_shapes_of(&mut self, source: &Self, segments: &Range<u32>) {
+        for segment in source.segments_in(segments) {
+            if segment.lane != RecordLane::Shapes {
+                continue;
+            }
+            for index in segment.range() {
+                self.push_primitive(materialize_shape(source, index));
+            }
+        }
     }
 
     /// The primitive each shape in `segments` was recorded from, in order.
