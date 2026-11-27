@@ -292,12 +292,7 @@ impl WearScalingListState {
         };
         let state = *self;
         let registration = runtime.frame_clock().with_frame_nanos(move |_| {
-            let Some(inner) = state.inner.try_get() else {
-                return;
-            };
-            if !state.anchor.is_alive() {
-                return;
-            }
+            let inner = state.inner();
             inner.scroll_animation.borrow_mut().take();
             let remaining = state.distance_to_item(index, offset);
             if remaining.abs() <= SCROLL_ANIMATION_EPSILON {
@@ -316,9 +311,7 @@ impl WearScalingListState {
             }
             state.step_scroll_animation(index, offset);
         });
-        if let Some(inner) = self.inner.try_get() {
-            *inner.scroll_animation.borrow_mut() = Some(registration);
-        }
+        *self.inner().scroll_animation.borrow_mut() = Some(registration);
     }
 
     /// Rows placed by the last measure pass, with their transformed bounds.

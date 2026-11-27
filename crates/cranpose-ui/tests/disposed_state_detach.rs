@@ -301,6 +301,51 @@ fn scroll_state_animation_steps_after_owner_disposes() {
 }
 
 #[test]
+fn scroll_state_is_scroll_in_progress_returns_false_after_owner_disposes() {
+    let show_slot: Rc<Cell<Option<MutableState<bool>>>> = Rc::new(Cell::new(None));
+    let state_slot: Rc<Cell<Option<ScrollState>>> = Rc::new(Cell::new(None));
+
+    let show_cap = Rc::clone(&show_slot);
+    let state_cap = Rc::clone(&state_slot);
+    let mut composition = run_test_composition(move || {
+        let show = rememberMutableStateOf(|| true);
+        show_cap.set(Some(show));
+        let state_cap = Rc::clone(&state_cap);
+        Box(
+            Modifier::empty().fill_max_size(),
+            BoxSpec::default(),
+            move || {
+                if show.get() {
+                    let state = remember(|| ScrollState::new(0.0)).with(|state| *state);
+                    scrollable_column(state);
+                    state_cap.set(Some(state));
+                }
+            },
+        );
+    });
+
+    layout_and_semantics(&mut composition);
+    let state = state_slot.get().expect("scroll state");
+    let show = show_slot.get().expect("show switch");
+
+    composition.with_app_context(|| {
+        state.animate_scroll_to(120.0);
+    });
+    assert!(
+        state.is_scroll_in_progress(),
+        "scroll should report in progress while animation runs"
+    );
+
+    show.set(false);
+    settle_composition(&mut composition);
+
+    assert!(
+        !state.is_scroll_in_progress(),
+        "disposed ScrollState must report is_scroll_in_progress() == false"
+    );
+}
+
+#[test]
 fn interaction_node_detaches_after_interaction_source_owner_disposes() {
     let mut harness = SplitOwnerHarness::new(
         3001,

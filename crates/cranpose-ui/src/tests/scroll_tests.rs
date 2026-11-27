@@ -34,6 +34,66 @@ fn pointer_handler_for(modifier: Modifier) -> (Rc<dyn Fn(PointerEvent)>, Modifie
     (handler, chain)
 }
 
+pub(crate) fn measure_scroll_extent(state: ScrollState, viewport: f32, content: f32) {
+    struct FixedMeasurable(Size);
+
+    impl cranpose_ui_layout::Measurable for FixedMeasurable {
+        fn measure(
+            &self,
+            constraints: cranpose_ui_layout::Constraints,
+        ) -> cranpose_ui_layout::Placeable {
+            cranpose_ui_layout::Placeable::value(
+                self.0.width.max(constraints.min_width),
+                self.0.height.max(constraints.min_height),
+                NodeId(0),
+            )
+        }
+
+        fn min_intrinsic_width(&self, _height: f32) -> f32 {
+            self.0.width
+        }
+
+        fn max_intrinsic_width(&self, _height: f32) -> f32 {
+            self.0.width
+        }
+
+        fn min_intrinsic_height(&self, _width: f32) -> f32 {
+            self.0.height
+        }
+
+        fn max_intrinsic_height(&self, _width: f32) -> f32 {
+            self.0.height
+        }
+    }
+
+    let elements = Modifier::empty().vertical_scroll(state, false).elements();
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    chain.update_from_slice(&elements, &mut context);
+    let measurable = FixedMeasurable(Size {
+        width: viewport,
+        height: content,
+    });
+    let constraints = cranpose_ui_layout::Constraints::tight(viewport, viewport);
+    let mut measured = false;
+    chain.for_each_forward_matching(cranpose_foundation::NodeCapabilities::LAYOUT, |node_ref| {
+        node_ref.with_node(|node| {
+            if let Some(layout) = node.as_layout_node() {
+                layout.measure(&mut context, &measurable, constraints);
+                measured = true;
+            }
+        });
+    });
+    assert!(
+        measured,
+        "vertical_scroll must provide a layout modifier node"
+    );
+}
+
+pub(crate) fn measure_scroll_max(state: ScrollState, max: f32) {
+    measure_scroll_extent(state, 100.0, 100.0 + max);
+}
+
 #[test]
 fn scroll_invalidation_callback_ids_are_instance_owned() {
     let source = include_str!("../scroll.rs");
@@ -143,7 +203,7 @@ fn first_edge_drag_consumes_event_with_effect_motion() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = ScrollState::new(0.0);
-        state.set_max_value(100.0);
+        measure_scroll_max(state, 100.0);
         let (handler, _chain) =
             pointer_handler_for(Modifier::empty().vertical_scroll(state, false));
 
@@ -297,7 +357,7 @@ fn vertical_scroll_ignores_move_consumed_by_child_drag() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let scroll_state = ScrollState::new(100.0);
-        scroll_state.set_max_value(400.0);
+        measure_scroll_max(scroll_state, 400.0);
         let (handler, _chain) =
             pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
@@ -319,7 +379,7 @@ fn touch_drag_moves_content_with_the_finger() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let scroll_state = ScrollState::new(100.0);
-        scroll_state.set_max_value(400.0);
+        measure_scroll_max(scroll_state, 400.0);
         let (handler, _chain) =
             pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
@@ -340,7 +400,7 @@ fn touch_drag_down_moves_content_down() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let scroll_state = ScrollState::new(100.0);
-        scroll_state.set_max_value(400.0);
+        measure_scroll_max(scroll_state, 400.0);
         let (handler, _chain) =
             pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
@@ -372,9 +432,9 @@ fn exhausted_inner_scrollable_yields_the_drag_to_its_parent() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let inner = ScrollState::new(400.0);
-        inner.set_max_value(400.0);
+        measure_scroll_max(inner, 400.0);
         let outer = ScrollState::new(0.0);
-        outer.set_max_value(600.0);
+        measure_scroll_max(outer, 600.0);
         let (child, _child_chain) =
             pointer_handler_for(Modifier::empty().vertical_scroll(inner, false));
         let (parent, _parent_chain) =
@@ -451,9 +511,9 @@ fn horizontal_drag_with_jitter_scrolls_nested_horizontal_not_vertical_parent() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let horizontal = ScrollState::new(100.0);
-        horizontal.set_max_value(400.0);
+        measure_scroll_max(horizontal, 400.0);
         let vertical = ScrollState::new(100.0);
-        vertical.set_max_value(400.0);
+        measure_scroll_max(vertical, 400.0);
         let (child, _child_chain) =
             pointer_handler_for(Modifier::empty().horizontal_scroll(horizontal, false));
         let (parent, _parent_chain) =
@@ -513,9 +573,9 @@ fn vertical_drag_with_horizontal_jitter_scrolls_parent_not_nested_child() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let horizontal = ScrollState::new(100.0);
-        horizontal.set_max_value(400.0);
+        measure_scroll_max(horizontal, 400.0);
         let vertical = ScrollState::new(100.0);
-        vertical.set_max_value(400.0);
+        measure_scroll_max(vertical, 400.0);
         let (child, _child_chain) =
             pointer_handler_for(Modifier::empty().horizontal_scroll(horizontal, false));
         let (parent, _parent_chain) =
@@ -565,7 +625,7 @@ fn cross_axis_drag_locks_scrollable_out_for_the_rest_of_the_gesture() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let horizontal = ScrollState::new(100.0);
-        horizontal.set_max_value(400.0);
+        measure_scroll_max(horizontal, 400.0);
         let (handler, _chain) =
             pointer_handler_for(Modifier::empty().horizontal_scroll(horizontal, false));
 
@@ -622,7 +682,7 @@ fn wheel_scroll_updates_vertical_scroll_state() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let scroll_state = ScrollState::new(100.0);
-        scroll_state.set_max_value(400.0);
+        measure_scroll_max(scroll_state, 400.0);
         let (handler, _chain) =
             pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
@@ -646,7 +706,7 @@ fn wheel_scroll_uses_horizontal_delta_for_horizontal_scroll() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let scroll_state = ScrollState::new(100.0);
-        scroll_state.set_max_value(400.0);
+        measure_scroll_max(scroll_state, 400.0);
         let (handler, _chain) =
             pointer_handler_for(Modifier::empty().horizontal_scroll(scroll_state, false));
 
@@ -670,7 +730,7 @@ fn scroll_state_invalidation_callback_can_register_follow_up_callback() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let scroll_state = ScrollState::new(0.0);
-        scroll_state.set_max_value(100.0);
+        measure_scroll_max(scroll_state, 100.0);
         let follow_up_called = Rc::new(Cell::new(false));
         let state_for_callback = scroll_state;
         let follow_up_for_callback = Rc::clone(&follow_up_called);
@@ -816,7 +876,7 @@ fn scroll_motion_context_survives_modifier_recomposition_with_stale_pointer_task
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let scroll_state = ScrollState::new(100.0);
-        scroll_state.set_max_value(400.0);
+        measure_scroll_max(scroll_state, 400.0);
 
         let mut chain = ModifierNodeChain::new();
         let mut context = BasicModifierNodeContext::new();
@@ -1028,7 +1088,7 @@ fn detaching_scroll_cancels_pending_motion_on_both_axes() {
         ] {
             let runtime = Runtime::new(Arc::new(DefaultScheduler));
             let state = ScrollState::new(0.0);
-            state.set_max_value(10_000.0);
+            measure_scroll_max(state, 10_000.0);
             if matches!(motion, DetachedScrollMotion::Settle) {
                 state.set_settle_policy(Some(Rc::new(|_, _| 1000.0)));
             }
@@ -1080,7 +1140,7 @@ fn assert_deferred_scroll_stops_on_detach(kind: PointerEventKind) {
     let _app_context = crate::render_state::app_context_test_scope();
     let runtime = Runtime::new(Arc::new(DefaultScheduler));
     let state = ScrollState::new(0.0);
-    state.set_max_value(100.0);
+    measure_scroll_max(state, 100.0);
     let (handler, mut chain) = pointer_handler_for(Modifier::empty().vertical_scroll(state, false));
     let event = if kind == PointerEventKind::Scroll {
         scroll_wheel_event(0.0, 200.0)
@@ -1107,7 +1167,7 @@ fn an_idle_modifier_clone_cannot_cancel_another_instances_fling() {
     let _app_context = crate::render_state::app_context_test_scope();
     let runtime = Runtime::new(Arc::new(DefaultScheduler));
     let state = ScrollState::new(200.0);
-    state.set_max_value(10_000.0);
+    measure_scroll_max(state, 10_000.0);
     let modifier = Modifier::empty().vertical_scroll(state, false);
     let (handler, _chain) = pointer_handler_for(modifier.clone());
     let (_, mut idle_chain) = pointer_handler_for(modifier);
@@ -1218,7 +1278,7 @@ fn batched_touch_delivery_computes_real_finger_velocity() {
     with_test_runtime(|| {
         crate::render_state::debug_reset_last_fling_velocity();
         let scroll_state = ScrollState::new(200.0);
-        scroll_state.set_max_value(4000.0);
+        measure_scroll_max(scroll_state, 4000.0);
         let (handler, _chain) =
             pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
@@ -1257,7 +1317,7 @@ fn release_jitter_does_not_reverse_or_inflate_fling() {
     with_test_runtime(|| {
         crate::render_state::debug_reset_last_fling_velocity();
         let scroll_state = ScrollState::new(200.0);
-        scroll_state.set_max_value(4000.0);
+        measure_scroll_max(scroll_state, 4000.0);
         let (handler, _chain) =
             pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
@@ -1304,7 +1364,7 @@ fn batched_same_millisecond_samples_do_not_explode_velocity() {
     with_test_runtime(|| {
         crate::render_state::debug_reset_last_fling_velocity();
         let scroll_state = ScrollState::new(200.0);
-        scroll_state.set_max_value(4000.0);
+        measure_scroll_max(scroll_state, 4000.0);
         let (handler, _chain) =
             pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
@@ -1402,7 +1462,7 @@ fn three_consecutive_flings_compute_the_same_velocity_sign() {
     crate::render_state::debug_reset_last_fling_velocity();
 
     let scroll_state = ScrollState::new(5_000.0);
-    scroll_state.set_max_value(100_000.0);
+    measure_scroll_max(scroll_state, 100_000.0);
     let (handler, _chain) =
         pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
@@ -1581,7 +1641,7 @@ fn drags_over_fully_realized_lazy_list_scroll_the_outer_container() {
         assert!(!list_state.can_scroll_forward_non_reactive());
 
         let outer_state = ScrollState::new(0.0);
-        outer_state.set_max_value(1000.0);
+        measure_scroll_max(outer_state, 1000.0);
 
         let (inner_handler, _inner_chain) =
             pointer_handler_for(Modifier::empty().lazy_vertical_scroll(list_state, false));
@@ -1631,7 +1691,7 @@ fn drag_release_inside_settle_band_springs_to_policy_edge() {
     let _app_context = crate::render_state::app_context_test_scope();
     let runtime = Runtime::new(Arc::new(DefaultScheduler));
     let scroll_state = ScrollState::new(0.0);
-    scroll_state.set_max_value(400.0);
+    measure_scroll_max(scroll_state, 400.0);
     scroll_state.set_settle_policy(Some(Rc::new(|proposed, _velocity| {
         if proposed <= 0.0 || proposed >= 52.0 {
             proposed
@@ -1671,7 +1731,7 @@ fn drag_release_below_band_midpoint_springs_back_to_zero() {
     let _app_context = crate::render_state::app_context_test_scope();
     let runtime = Runtime::new(Arc::new(DefaultScheduler));
     let scroll_state = ScrollState::new(0.0);
-    scroll_state.set_max_value(400.0);
+    measure_scroll_max(scroll_state, 400.0);
     scroll_state.set_settle_policy(Some(Rc::new(|proposed, _velocity| {
         if proposed <= 0.0 || proposed >= 52.0 {
             proposed
@@ -1706,7 +1766,7 @@ fn fling_release_is_retargeted_by_settle_policy() {
     let _app_context = crate::render_state::app_context_test_scope();
     let runtime = Runtime::new(Arc::new(DefaultScheduler));
     let scroll_state = ScrollState::new(0.0);
-    scroll_state.set_max_value(10_000.0);
+    measure_scroll_max(scroll_state, 10_000.0);
     scroll_state.set_settle_policy(Some(Rc::new(|proposed, _velocity| {
         if proposed > 0.0 && proposed < 9_000.0 {
             123.0
@@ -1745,7 +1805,7 @@ fn wheel_idle_inside_settle_band_snaps_to_policy_edge() {
     let _app_context = crate::render_state::app_context_test_scope();
     let runtime = Runtime::new(Arc::new(DefaultScheduler));
     let scroll_state = ScrollState::new(0.0);
-    scroll_state.set_max_value(400.0);
+    measure_scroll_max(scroll_state, 400.0);
     scroll_state.set_settle_policy(Some(Rc::new(|proposed, _velocity| {
         if proposed <= 0.0 || proposed >= 52.0 {
             proposed
@@ -1783,7 +1843,7 @@ fn wheel_edge_overscroll_settles_without_custom_policy() {
     let _app_context = crate::render_state::app_context_test_scope();
     let runtime = Runtime::new(Arc::new(DefaultScheduler));
     let scroll_state = ScrollState::new(0.0);
-    scroll_state.set_max_value(400.0);
+    measure_scroll_max(scroll_state, 400.0);
     let (handler, _chain) =
         pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
     for _ in 0..20 {
@@ -1812,7 +1872,7 @@ fn wheel_overscroll_rearms_after_interrupted_settle() {
     let _app_context = crate::render_state::app_context_test_scope();
     let runtime = Runtime::new(Arc::new(DefaultScheduler));
     let scroll_state = ScrollState::new(0.0);
-    scroll_state.set_max_value(400.0);
+    measure_scroll_max(scroll_state, 400.0);
     let (handler, _chain) =
         pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
@@ -1857,7 +1917,7 @@ fn a_scroll_without_gestures_leaves_the_drag_for_its_owner() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = ScrollState::new(0.0);
-        state.set_max_value(100.0);
+        measure_scroll_max(state, 100.0);
         let (handler, _chain) =
             pointer_handler_for(Modifier::empty().vertical_scroll_without_gestures(state, false));
 
@@ -1884,7 +1944,7 @@ fn a_scroll_without_gestures_still_moves_programmatically() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = ScrollState::new(0.0);
-        state.set_max_value(100.0);
+        measure_scroll_max(state, 100.0);
         let (_handler, _chain) =
             pointer_handler_for(Modifier::empty().horizontal_scroll_without_gestures(state, false));
 
@@ -1903,7 +1963,7 @@ fn an_ordinary_scroll_still_claims_the_drag() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = ScrollState::new(0.0);
-        state.set_max_value(100.0);
+        measure_scroll_max(state, 100.0);
         let (handler, _chain) =
             pointer_handler_for(Modifier::empty().vertical_scroll(state, false));
 

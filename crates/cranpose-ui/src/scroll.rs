@@ -191,7 +191,7 @@ impl ScrollState {
     /// content now: Compose's `isScrollInProgress`. A composable that reads it
     /// recomposes when a scroll starts and when it ends.
     pub fn is_scroll_in_progress(&self) -> bool {
-        self.in_progress.get()
+        self.in_progress.try_value_subscribed().unwrap_or(false)
     }
 
     pub(crate) fn set_scroll_in_progress(&self, active: bool) {
@@ -306,16 +306,6 @@ impl ScrollState {
             max_offset,
             viewport_extent,
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_max_value(&self, max: f32) {
-        *self.inner().max_value.borrow_mut() = max;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_viewport_extent(&self, extent: f32) {
-        *self.inner().viewport_extent.borrow_mut() = extent;
     }
 
     fn set_layout_metrics(&self, max: f32, viewport_extent: f32) {
@@ -886,4 +876,4 @@ macro_rules! rememberScrollState {
 
 #[cfg(test)]
 #[path = "tests/scroll_tests.rs"]
-mod tests;
+pub(crate) mod tests;
