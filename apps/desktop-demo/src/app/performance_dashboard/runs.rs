@@ -79,8 +79,8 @@ pub struct PerfFramesLeg {
     /// When each frame was presented, in milliseconds since the launch.
     #[serde(default)]
     pub frame_ms: Vec<f64>,
-    /// Another process spent more than the run allows in this leg: it is
-    /// shown, and left out of the medians.
+    /// Another process spent more than the run allows in this leg, or the
+    /// leg's page was hidden: it is shown, and left out of the medians.
     #[serde(default)]
     pub disturbed: bool,
     /// The run at each of the sampler's intervals; none in a run before the

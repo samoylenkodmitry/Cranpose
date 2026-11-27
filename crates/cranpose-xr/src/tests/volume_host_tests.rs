@@ -278,8 +278,8 @@ impl Eye {
     }
 }
 
-// Draws the scene for `view` into `eye`, again until pipelines that were still compiling have
-// landed and something shows. Returns whether the pass found a scene.
+// Draws the scene for `view` into `eye`, again until a frame drawn from `view` itself took its own
+// pipeline for every draw. Returns whether the pass found a scene.
 fn draw(headset: &mut Headset, pass: &mut VolumePass, view: &RenderViewpoint, eye: &Eye) -> bool {
     draw_through(headset, pass, (view, eye), |moved| {
         EyeCamera::of(moved, (EYE, EYE), FirstRow::Top).expect("a camera")
@@ -297,23 +297,39 @@ fn draw_through(
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let mut attempt = 0_u32;
     loop {
-        // A head is never still, and a frame that changes nothing draws nothing: alternate a
-        // bounded hair so long shader compiles never drift the eye away from `view`.
+        // A head is never still, and a frame that changes nothing draws nothing into a new image:
+        // the odd frames move the eye by a hair, and an even one draws from `view` after a moved
+        // one, whatever frame the last call ended on.
         attempt = attempt.wrapping_add(1);
+        let at_view = attempt & 1 == 0;
         let mut moved = *view;
-        moved.pose.position[1] += if attempt & 1 == 1 { 1e-5 } else { 0.0 };
+        moved.pose.position[1] += if at_view { 0.0 } else { 1e-5 };
         let camera = camera(&moved);
         let drew = pass
             .draw(&mut headset.guest, &headset.space, &camera, &eye.image())
             .expect("a frame");
-        if !drew
-            || shows_something(&headset.gpu, &eye.color)
-            || std::time::Instant::now() > deadline
-        {
+        if !drew || (at_view && pipelines_settled(&mut headset.guest, pass)) {
             return drew;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the scene's pipelines never landed"
+        );
         std::thread::yield_now();
     }
+}
+
+// Whether the last frame of the scene's window took its own pipeline for every draw, as its
+// renderer counts it.
+fn pipelines_settled(guest: &mut GuestView, pass: &VolumePass) -> bool {
+    pass.root()
+        .and_then(|root| {
+            guest
+                .shell()
+                .surface(cranpose_app_shell::RootId::Window(root))
+        })
+        .and_then(|mut surface| surface.renderer().last_frame_stats())
+        .is_some_and(|stats| stats.pipelines_settled())
 }
 
 // Whether any pixel of `color` holds a colour or covers what lies behind it: a surface that glows

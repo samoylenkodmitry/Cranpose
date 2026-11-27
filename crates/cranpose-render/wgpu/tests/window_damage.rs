@@ -1163,7 +1163,7 @@ fn a_frame_drawn_with_a_stand_in_keeps_its_image_with_the_stand_in_marked() {
     let mut held = 0;
     for frame in 0.. {
         let still = harness.frame(0);
-        let settled = support::pipelines_settled(&still.stats);
+        let settled = still.stats.pipelines_settled();
         held = if settled && still.stats.repainted_pixels == 0 {
             held + 1
         } else {
@@ -1206,7 +1206,7 @@ fn frames_until_the_shader_is_drawn(
         let frame = harness.frame(step);
         let label = format!("frame {index} after the stand-in: {:?}", frame.stats.damage);
         check(&label, &frame.stats);
-        if support::pipelines_settled(&frame.stats) {
+        if frame.stats.pipelines_settled() {
             support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
             settled += 1;
             last = Some(frame.stats);
@@ -1291,7 +1291,7 @@ fn a_still_page_over_a_stand_in_draws_nothing_until_a_pipeline_lands() {
                 "{label}: drawn again before a landing"
             );
             kept += 1;
-        } else if support::pipelines_settled(&stats) {
+        } else if stats.pipelines_settled() {
             support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
             if settled > 0 {
                 assert_eq!(
@@ -1332,7 +1332,7 @@ fn a_still_page_over_stand_ins_draws_nothing_once_it_keeps_a_copy() {
     for index in 0..16 {
         let frame = harness.frame(0);
         let label = format!("frame {index}: {:?}", frame.stats);
-        if !support::pipelines_settled(&frame.stats) {
+        if !frame.stats.pipelines_settled() {
             support::wait_for_background_compiler_idle();
             continue;
         }

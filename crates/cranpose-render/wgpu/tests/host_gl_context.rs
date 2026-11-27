@@ -133,7 +133,7 @@ fn a_host_gl_context_draws_its_first_frame_whole() {
     // would show stand-ins.
     let frame = support::capture_graph(&mut renderer, &graph, SIZE, SIZE);
     let stats = renderer.last_frame_stats().expect("frame statistics");
-    assert!(support::pipelines_settled(&stats), "{stats:?}");
+    assert!(stats.pipelines_settled(), "{stats:?}");
     let middle = ((SIZE / 2 * SIZE + SIZE / 2) * 4) as usize;
     let pixel = &frame.pixels[middle..middle + 4];
     assert!(pixel[0] > 200 && pixel[1] < 60, "{pixel:?}");
