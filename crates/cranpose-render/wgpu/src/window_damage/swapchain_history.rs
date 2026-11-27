@@ -1,5 +1,6 @@
 use super::{
-    Capture, Damage, FrameDamages, FrameWindow, Held, PacketDamage, PresentedImage, Since,
+    Capture, Damage, DamageRects, FrameDamages, FrameWindow, HISTORY, Held, PacketDamage,
+    PresentedImage, Since,
     captures::{collect, widen},
 };
 use crate::frame_packet::HeldWindow;
@@ -15,13 +16,19 @@ pub(crate) struct SwapchainHistory {
     /// By image index, the frame the image holds.
     held: [Option<Held>; IMAGES],
     // By image index, the damages of the packets after the frame the image
-    // holds, folded as each packet comes. A Metal layer cycles two of its
-    // three drawables while frames keep up and hands out the third once the
-    // window server holds both: back after more packets than the damages
-    // kept, the third draws these.
-    changed: [Damage; IMAGES],
-    // The packet whose damage `changed` took last.
+    // holds, as rects of a frame's damage: taken from the kept damages once
+    // that frame is about to leave them, then packet by packet. A Metal layer
+    // cycles two of its three drawables while frames keep up and hands out
+    // the third once the window server holds both: back after more packets
+    // than the damages kept, the third draws these rects, as the kept
+    // damages would have drawn them. `None` while the kept damages reach the
+    // image's frame, which then costs a frame nothing.
+    changed: [Option<Damage>; IMAGES],
+    // The packet whose damage `changed` took last, and the first packet of
+    // the run up to it that changed nothing: a packet after any of those
+    // follows, as one after a still packet the surface showed does.
     last_folded: Option<u64>,
+    still_from: u64,
     // By image index, a bit for each image the surface handed out.
     seen: u8,
     // How many images the surface hands out, and whether it handed one out
@@ -51,7 +58,7 @@ impl SwapchainHistory {
     // Forgets what the images hold.
     pub(crate) fn forget(&mut self) {
         self.held = [None; IMAGES];
-        self.changed = [Damage::NONE; IMAGES];
+        self.changed = [None; IMAGES];
         self.last_folded = None;
         self.seen = 0;
         self.cycled = false;
@@ -165,7 +172,11 @@ impl SwapchainHistory {
     ) -> Since {
         let index = image.index as usize;
         let held = self.held.get(index).copied().flatten();
-        let changed = self.changed.get(index).unwrap_or(&Damage::Full);
+        let changed = self
+            .changed
+            .get(index)
+            .and_then(Option::as_ref)
+            .unwrap_or(&Damage::Full);
         let since = damages.since_over(held.filter(|_| image.kept), frame, changed);
         let Damage::Part(mut rects) = since.damage else {
             return since;
@@ -194,31 +205,53 @@ impl SwapchainHistory {
         if let (Some(slot), Some(changed)) = (self.held.get_mut(index), self.changed.get_mut(index))
         {
             *slot = held;
-            *changed = Damage::NONE;
+            *changed = None;
         }
         self.presented = held;
     }
 
     // Takes the damage of the packet of `frame`, in a window of `viewport`,
-    // into what the frame each image holds misses, once for each packet. A
-    // packet that does not follow the one taken last leaves them the whole
-    // window.
-    pub(crate) fn fold(&mut self, frame: u64, damage: &PacketDamage, viewport: (u32, u32)) {
+    // into what the frame of each image misses, once for each packet: of an
+    // image whose frame is about to leave the kept `damages`, the damages
+    // since that frame. A packet that does not follow the ones taken leaves
+    // them the whole window.
+    pub(crate) fn fold(
+        &mut self,
+        frame: u64,
+        damage: &PacketDamage,
+        viewport: (u32, u32),
+        damages: &FrameDamages,
+    ) {
         if self.last_folded == Some(frame) {
             return;
         }
-        let follows = damage.since.is_some() && damage.since == self.last_folded;
+        let follows = damage
+            .since
+            .zip(self.last_folded)
+            .is_some_and(|(since, last)| (self.still_from..=last).contains(&since));
+        if !follows || !damage.damage.is_none() {
+            self.still_from = frame;
+        }
         self.last_folded = Some(frame);
-        for (changed, _) in self
-            .changed
-            .iter_mut()
-            .zip(&self.held)
-            .filter(|(_, held)| held.is_some())
-        {
-            if follows {
-                changed.add(&damage.damage, viewport);
-            } else {
-                *changed = Damage::Full;
+        for (changed, held) in self.changed.iter_mut().zip(&self.held) {
+            let Some(held) = held else {
+                continue;
+            };
+            match changed {
+                Some(changed) if follows => changed.add(&damage.damage, viewport),
+                Some(changed) => *changed = Damage::Full,
+                None if frame.saturating_sub(held.frame) + 1 >= HISTORY as u64 => {
+                    let mut union = DamageRects::default();
+                    *changed = Some(match damages.union_back(frame, held.frame, &mut union) {
+                        Ok(()) => {
+                            let mut kept = Damage::Part(union);
+                            kept.settle(viewport);
+                            kept
+                        }
+                        Err(_) => Damage::Full,
+                    });
+                }
+                None => {}
             }
         }
     }

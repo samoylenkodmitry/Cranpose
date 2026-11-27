@@ -2077,7 +2077,8 @@ fn a_start_draws_a_kept_target_whole_once() {
 // hands out the third once the window server holds both. The third comes back
 // after more frames than the renderer keeps the damage of each: it draws what
 // changed since its frame, the top line and the cursor's row, as rects of
-// their own.
+// their own. A still frame meanwhile, which the surface already shows, takes
+// no image and leaves that so.
 #[test]
 fn a_swapchain_image_back_after_many_frames_draws_what_changed_since_its_frame() {
     const AWAY: u32 = 20;
@@ -2096,26 +2097,37 @@ fn a_swapchain_image_back_after_many_frames_draws_what_changed_since_its_frame()
         order[FRAMES as usize - 1] = SWAPCHAIN_IMAGES - 1;
         order
     };
-    let Some((_lock, renderer)) = renderer() else {
-        return;
-    };
-    let mut harness = Harness::new(renderer, Scene::WallCursor, 1.0, Keeper::Swapchain(DIRECT));
-    harness.order = &ORDER;
-    let mut last = None;
-    for step in 0..FRAMES {
-        let frame = harness.frame(step);
-        support::assert_same_bytes(&format!("step {step}"), WIDTH, &frame.kept, &frame.direct);
-        last = Some(frame.stats);
-    }
-    let stats = last.expect("frames were drawn");
     let reach: f32 = [around(CLOCK, 8.0), around(CURSOR_ROW, 8.0)]
         .iter()
         .map(|[_, _, width, height]| width * height)
         .sum();
-    assert!(
-        stats.repainted_pixels as f32 <= reach,
-        "the image back draws the line and the row, {reach} pixels at most: {stats:?}"
-    );
+    for still_at in [None, Some(SWAPCHAIN_START_FRAMES + AWAY / 2)] {
+        let Some((_lock, renderer)) = renderer() else {
+            return;
+        };
+        let mut harness = Harness::new(renderer, Scene::WallCursor, 1.0, Keeper::Swapchain(DIRECT));
+        harness.order = &ORDER;
+        let mut last = None;
+        for step in 0..FRAMES {
+            let frame = harness.frame(step);
+            let label = format!("step {step}, a still frame at {still_at:?}");
+            support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+            last = Some(frame.stats);
+            if still_at == Some(step) {
+                harness.update(step);
+                assert!(
+                    harness.shell.renderer().shows_scene(WIDTH, HEIGHT),
+                    "{label}: the surface shows the still frame"
+                );
+            }
+        }
+        let stats = last.expect("frames were drawn");
+        assert!(
+            stats.repainted_pixels as f32 <= reach,
+            "a still frame at {still_at:?}: the image back draws the line and the row, \
+             {reach} pixels at most: {stats:?}"
+        );
+    }
 }
 
 /// Once every image of a swapchain holds the frame, a frame that changes

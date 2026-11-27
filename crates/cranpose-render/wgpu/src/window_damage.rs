@@ -59,12 +59,6 @@ pub(crate) enum Damage {
     Full,
 }
 
-impl Default for Damage {
-    fn default() -> Self {
-        Self::NONE
-    }
-}
-
 impl Damage {
     // No pixel.
     pub(crate) const NONE: Self = Self::Part(DamageRects::EMPTY);
