@@ -1007,6 +1007,45 @@ fn a_relaunch_shows_the_kept_shader_outputs_from_its_first_frame() {
     assert_drawn_from_disk(&mut third, &page(&shader, Offscreen, LATER), &expected[2]);
 }
 
+// Only an output that the frame after its fill shows again goes to the file.
+// A cell drawn anew every frame stays off the disk, so the next launch draws
+// it while its still neighbours come from the file.
+#[test]
+fn an_output_drawn_anew_every_frame_stays_off_the_disk() {
+    use cranpose_ui_graphics::CompositingStrategy::{Auto, Offscreen};
+
+    use crate::offscreen_shader_layers::{page, shader};
+
+    // shades no other cell of the page has, each drawn for one frame
+    const MOVING: [f32; 4] = [0.71, 0.73, 0.77, 0.79];
+    let _lock = support::gpu_test_lock();
+    let files = CacheFiles::new();
+    files.select("moving-outputs.bin");
+    let shader = shader();
+    let mut reference = support::LockedRenderer::beside_locked().expect("reference renderer");
+    let expected =
+        support::capture_graph_settled(&mut reference, &page(&shader, Auto, MOVING[1]), 96, 96);
+    drop(reference);
+
+    let mut launch = support::LockedRenderer::beside_locked().expect("GPU required");
+    draw_kept_settled(&mut launch, &page(&shader, Offscreen, 0.0));
+    for shade in MOVING {
+        support::capture_graph(&mut launch, &page(&shader, Offscreen, shade), 96, 96);
+    }
+    drop(launch);
+
+    let mut relaunch = support::LockedRenderer::beside_locked().expect("GPU required");
+    let moving = page(&shader, Offscreen, MOVING[1]);
+    let frame = support::capture_graph(&mut relaunch, &moving, 96, 96);
+    let stats = relaunch.last_frame_stats().expect("frame statistics");
+    assert_eq!(
+        (stats.placeholder_draws, stats.effect_applies),
+        (0, 1),
+        "the moving cell draws and its neighbours come from the file: {stats:?}"
+    );
+    support::assert_same_bytes("a moving cell", 96, &frame.pixels, &expected.pixels);
+}
+
 fn draw_kept_settled(renderer: &mut support::LockedRenderer, page: &LayerNode) {
     for _ in 0..64 {
         support::capture_graph(renderer, page, 96, 96);

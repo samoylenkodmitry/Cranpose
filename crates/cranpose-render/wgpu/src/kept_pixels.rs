@@ -2,7 +2,9 @@
 // launches beside the pipeline cache: a launch uploads the pixels an earlier
 // one drew in place of drawing them again. The file names each output by
 // what it draws, so an output whose shader or uniforms changed is drawn
-// afresh. An output no launch used for a few launches goes.
+// afresh. An output goes to the file when the frame after its fill shows it
+// again, so a layer drawn anew every frame never does. An output no launch
+// used for a few launches goes.
 
 use std::{
     fs::File,
@@ -39,8 +41,12 @@ struct KeptFile {
     earlier: Option<File>,
     // where the pixels of earlier launches lie in `earlier`, by key
     index: HashMap<u64, Indexed>,
-    // the keys this launch used, whose pixels stay on disk
+    // the keys this launch kept or uploaded, whose pixels stay on disk
     used: HashSet<u64>,
+    // the outputs this frame drew, and those the last submitted frame drew,
+    // which this frame keeps when it shows them again
+    drawn: Vec<u64>,
+    last_drawn: Vec<u64>,
     // the device and queue that draw the outputs, from the first kept one
     gpu: Option<(wgpu::Device, wgpu::Queue)>,
     // outputs drawn this frame, to copy once the frame is submitted
@@ -107,6 +113,8 @@ impl KeptPixels {
                 earlier,
                 index,
                 used: HashSet::default(),
+                drawn: Vec::new(),
+                last_drawn: Vec::new(),
                 gpu: None,
                 requested: Vec::new(),
                 reading: Vec::new(),
@@ -170,35 +178,55 @@ impl KeptPixels {
         Some(stats)
     }
 
-    // Keeps the output a frame of `device` draws into `target` under `key`
-    // once that frame is submitted.
-    pub(crate) fn keep(
+    // Notes that this frame drew the output named `key`.
+    pub(crate) fn drew(&mut self, key: u64) {
+        if let Some(file) = self.file.as_mut() {
+            file.drawn.push(key);
+        }
+    }
+
+    // Keeps the output under `key`, which `target` of `device` shows again,
+    // when the last submitted frame drew it.
+    pub(crate) fn shown(
         &mut self,
         (device, queue): (&wgpu::Device, &wgpu::Queue),
-        key: u64,
-        target: Rc<OffscreenTarget>,
+        key: &LayerRasterCacheKey,
+        target: &Rc<OffscreenTarget>,
     ) {
-        if let Some(file) = self.file.as_mut() {
-            file.gpu
-                .get_or_insert_with(|| (device.clone(), queue.clone()));
-            file.used.insert(key);
-            file.requested.push(Requested { key, target });
+        let Some(file) = self.file.as_mut() else {
+            return;
+        };
+        if file.last_drawn.is_empty() {
+            return;
         }
+        let key = disk_key(key);
+        let Some(at) = file.last_drawn.iter().position(|drawn| *drawn == key) else {
+            return;
+        };
+        file.last_drawn.swap_remove(at);
+        file.used.insert(key);
+        file.gpu
+            .get_or_insert_with(|| (device.clone(), queue.clone()));
+        file.requested.push(Requested {
+            key,
+            target: Rc::clone(target),
+        });
     }
 
     // Forgets the outputs of a frame that submitted nothing: their targets
     // hold no drawn pixels.
     pub(crate) fn forget_unsubmitted(&mut self) {
         if let Some(file) = self.file.as_mut() {
-            file.requested.clear();
+            file.drawn.clear();
         }
     }
 
-    // Whether copies of drawn outputs wait for a later frame to collect them.
+    // Whether outputs wait for a later frame: one that shows them again, or
+    // one that collects their copies.
     pub(crate) fn awaits_frame(&self) -> bool {
         self.file
             .as_ref()
-            .is_some_and(|file| !file.reading.is_empty())
+            .is_some_and(|file| !file.last_drawn.is_empty() || !file.reading.is_empty())
     }
 
     // Ends a frame: copies the outputs it drew to buffers the CPU reads, and
@@ -207,6 +235,8 @@ impl KeptPixels {
         let Some(file) = self.file.as_mut() else {
             return;
         };
+        std::mem::swap(&mut file.last_drawn, &mut file.drawn);
+        file.drawn.clear();
         let Some((device, queue)) = file.gpu.clone() else {
             return;
         };

@@ -224,6 +224,9 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             self.renderer
                 .frame_stats
                 .record_layer_cache_hit(&key, width, height);
+            let gpu = (&*self.renderer.device, &*self.renderer.queue);
+            let disk = &mut self.renderer.layer_cache.disk;
+            disk.shown(gpu, &key, &cached.texture);
             return Some(Some(kept_slot(cached.texture)));
         }
         if !self.renderer.layer_cache.fits(width, height) {
@@ -272,8 +275,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         let cache = &mut self.renderer.layer_cache;
         cache.insert(key, Retained::surface(Rc::clone(&kept), held), None);
         if held == StandInPixels::Final {
-            let gpu = (&*self.renderer.device, &*self.renderer.queue);
-            cache.disk.keep(gpu, stored_key, Rc::clone(&kept));
+            cache.disk.drew(stored_key);
         }
         Some(Some(kept_slot(kept)))
     }
