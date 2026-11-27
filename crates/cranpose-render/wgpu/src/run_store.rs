@@ -37,11 +37,13 @@ const INITIAL_BRUSHES: usize = 64;
 const INITIAL_STOPS: usize = 128;
 const INITIAL_PLACEMENTS: usize = 64;
 
+mod arena_staging;
 mod arena_tables;
 mod placement_data;
 #[cfg(test)]
 #[path = "../tests/unit/uniform_placement_chunks.rs"]
 mod uniform_placement_chunks;
+use arena_staging::ArenaStaging;
 use arena_tables::ArenaTables;
 pub(crate) use placement_data::PlacementData;
 
@@ -742,105 +744,6 @@ impl StripIndexBuffer {
     }
 }
 
-/// The CPU side of one arena chunk while a pass fills it.
-#[derive(Default)]
-pub(crate) struct ArenaStaging {
-    bodies: Vec<ShapeRecordBody>,
-    curves: Vec<ShapeRecordCurve>,
-    brushes: Vec<BrushRecord>,
-    stops: Vec<GradientStopRecord>,
-    placements: Vec<PlacementData>,
-    brush_map: Vec<u32>,
-    painted: Vec<GradientStopRecord>,
-    draws: Vec<RunDrawCall>,
-    pub(crate) fill: ShapeFill,
-    arcs: bool,
-}
-
-impl ArenaStaging {
-    fn clear(&mut self) {
-        self.arcs = false;
-        self.bodies.clear();
-        self.curves.clear();
-        self.brushes.clear();
-        self.stops.clear();
-        self.placements.clear();
-        self.draws.clear();
-        self.fill = ShapeFill::default();
-    }
-
-    pub(crate) fn heap_bytes(&self) -> usize {
-        self.bodies.capacity() * size_of::<ShapeRecordBody>()
-            + self.curves.capacity() * size_of::<ShapeRecordCurve>()
-            + self.brushes.capacity() * size_of::<BrushRecord>()
-            + self.stops.capacity() * size_of::<GradientStopRecord>()
-            + self.placements.capacity() * size_of::<PlacementData>()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.bodies.is_empty()
-    }
-
-    fn fits(&self, mode: RunBufferMode, records: usize, brushes: usize, stops: usize) -> bool {
-        if mode.storage {
-            return true;
-        }
-        self.bodies.len() + records <= RECORD_CHUNK
-            && self.brushes.len() + brushes <= BRUSH_CHUNK
-            && self.stops.len() + stops <= STOP_CHUNK
-            && self.placements.len() < PLACEMENT_CHUNK
-    }
-
-    fn push_draw(
-        &mut self,
-        key: crate::render::ShapePipelineKey,
-        band_class: u8,
-        records: std::ops::Range<u32>,
-        occluders: bool,
-    ) {
-        if self
-            .draws
-            .last_mut()
-            .is_some_and(|last| last.absorb(key, band_class, records.clone(), occluders))
-        {
-            return;
-        }
-        self.draws
-            .push(RunDrawCall::new(key, band_class, records, occluders));
-    }
-
-    fn map_brush(
-        &mut self,
-        tables: &RecordTables,
-        placement: &Placement,
-        storage: bool,
-        source: usize,
-    ) -> Option<u32> {
-        let mapped = self.brush_map[source];
-        if mapped != u32::MAX {
-            return Some(mapped);
-        }
-        let brush = tables.brushes()[source];
-        let stop_range = brush.stop_start as usize..(brush.stop_start + brush.stop_count) as usize;
-        if !storage
-            && (self.brushes.len() >= BRUSH_CHUNK
-                || self.stops.len() + brush.stop_count as usize > STOP_CHUNK)
-        {
-            return None;
-        }
-        painted_stops(&tables.stops()[stop_range], placement, &mut self.painted);
-        let stop_start = self.stops.len() as u32;
-        self.stops.extend_from_slice(&self.painted);
-        self.brushes.push(BrushRecord {
-            stop_start,
-            ..brush
-        });
-        let index = self.brushes.len() as u32;
-        self.brush_map[source] = index;
-        Some(index)
-    }
-}
-
 /// Where one closed chunk's tables sit: the frame's generation of arena
 /// buffers and the chunk's dynamic offset into each table.
 #[derive(Clone, Copy, Default)]
@@ -1450,7 +1353,7 @@ impl RunStore {
                         let Some(mapped) = staging.map_brush(
                             tables,
                             &run.placement,
-                            mode.storage,
+                            mode,
                             (body.brush - 1) as usize,
                         ) else {
                             stopped = true;
@@ -1474,12 +1377,12 @@ impl RunStore {
             }
             if taken > segment_start {
                 let records_end = staging.bodies.len() as u32;
-                staging.push_draw(
+                staging.push_draw(RunDrawCall::new(
                     key,
                     band_class,
                     records_start..records_end,
                     segment.occluders,
-                );
+                ));
                 pipelines.add(key);
             }
             if stopped || available < segment.count - skip_in_segment {
