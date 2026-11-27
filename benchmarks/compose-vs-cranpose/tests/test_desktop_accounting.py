@@ -18,6 +18,39 @@ SPEC.loader.exec_module(desktop)
 
 WEBCONTENT = '/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/' \
              'com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent'
+HOST_LOCK_WRAPPER = BENCHMARK.parents[1] / 'scripts/ci/with_host_lock.sh'
+
+
+def host_lock_env(root):
+    """The environment with a host lock of its own in `root`."""
+    env = {k: v for k, v in os.environ.items() if k != 'CRANPOSE_HOST_LOCK_HELD'}
+    env.update(
+        CRANPOSE_USE_SCCACHE='0',
+        CRANPOSE_HOST_LOCK_FILE=str(root / 'capacity.lock'),
+        CRANPOSE_HOST_LOCK_TURNSTILE_FILE=str(root / 'turnstile.lock'),
+        CRANPOSE_HOST_LOCK_MAX_WAIT_SECS='10',
+    )
+    return env
+
+
+def queue_on_host_lock(mode, entered, env):
+    """Starts `with_host_lock.sh mode` around a command that creates `entered`.
+    Returns the process and whether it waits for the lock: false when it took
+    the lock at once."""
+    child = subprocess.Popen(
+        [str(HOST_LOCK_WRAPPER), mode, sys.executable, '-c',
+         'from pathlib import Path; import sys; Path(sys.argv[1]).touch()', str(entered)],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    for line in iter(child.stdout.readline, ''):
+        if 'waiting for' in line:
+            return child, True
+        if 'host lock: took' in line:
+            return child, False
+    return child, False
 
 
 class DesktopAccountingTest(unittest.TestCase):
@@ -295,40 +328,18 @@ class DesktopRoundsTest(unittest.TestCase):
         self.assertEqual(scenario['starts']['second']['summary']['fyne'], {})
 
     def test_the_exclusive_host_lock_blocks_ci_during_a_subject_and_releases_between_subjects(self):
-        wrapper = BENCHMARK.parents[1] / 'scripts/ci/with_host_lock.sh'
         with tempfile.TemporaryDirectory(prefix='cranpose-desktop-lock-') as folder:
             root = Path(folder)
             entered = root / 'shared-entered'
-            env = {k: v for k, v in os.environ.items() if k != 'CRANPOSE_HOST_LOCK_HELD'}
-            env.update(
-                CRANPOSE_USE_SCCACHE='0',
-                CRANPOSE_HOST_LOCK_FILE=str(root / 'capacity.lock'),
-                CRANPOSE_HOST_LOCK_TURNSTILE_FILE=str(root / 'turnstile.lock'),
-                CRANPOSE_HOST_LOCK_MAX_WAIT_SECS='10',
-            )
+            env = host_lock_env(root)
             child_holder = []
             seen_by_subject = {}
 
             def measure(name, args, work, page, stage, label, earlier, profile, program=None):
                 if name == 'egui' and not child_holder:
-                    child = subprocess.Popen(
-                        [
-                            str(wrapper), '--shared', sys.executable, '-c',
-                            'from pathlib import Path; import sys; Path(sys.argv[1]).touch()',
-                            str(entered),
-                        ],
-                        env=env,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        text=True,
-                    )
+                    child, queued = queue_on_host_lock('--shared', entered, env)
                     child_holder.append(child)
-                    # Wait until the shared wrapper is actually queued on the lock.
-                    while True:
-                        line = child.stdout.readline()
-                        self.assertTrue(line, 'shared wrapper exited before queueing on the lock')
-                        if 'waiting for' in line:
-                            break
+                    self.assertTrue(queued, 'shared CI took the host lock during egui')
                     seen_by_subject['during_egui'] = entered.exists()
                 elif name == 'fyne' and 'during_fyne' not in seen_by_subject:
                     seen_by_subject['during_fyne'] = entered.exists()
@@ -362,6 +373,39 @@ class DesktopRoundsTest(unittest.TestCase):
     def test_every_frame_time_from_the_launch_is_kept_in_the_run(self):
         _, scenario = self.rounds([24.0, 26.0])
         self.assertEqual([leg['frame_ms'] for leg in scenario['legs']], [[400.0, 416.7, 433.3]] * 2)
+
+
+class FrameCountBuildTest(unittest.TestCase):
+    def test_a_framecount_build_keeps_a_concurrent_measurement_waiting(self):
+        with tempfile.TemporaryDirectory(prefix='cranpose-framecount-lock-') as folder:
+            root = Path(folder)
+            entered = root / 'measurement-entered'
+            env = host_lock_env(root)
+            builds, measurements = [], []
+
+            def build(command, **_):
+                builds.append(command[1])
+                child, queued = queue_on_host_lock('--exclusive', entered, env)
+                measurements.append(child)
+                self.assertTrue(queued, 'a measurement took the host lock during the FrameCount build')
+                self.assertFalse(entered.exists(), 'a measurement ran during the FrameCount build')
+
+            arguments = ['desktop.py', '--host-lock', '--output', str(root / 'out'), '--apps', 'fyne']
+            report = {'kind': 'frameworks', 'scenarios': [{'starts': {}}]}
+            try:
+                with patch.dict(os.environ, env, clear=True), patch.object(sys, 'argv', arguments), \
+                        patch.object(desktop, 'FRAMECOUNT', root / 'FrameCount.app'), \
+                        patch.object(desktop.subprocess, 'run', build), \
+                        patch.object(desktop, 'serve_page', return_value='page'), \
+                        patch.object(desktop, 'run', return_value=report), \
+                        patch.object(desktop, 'observe_display', return_value=({}, [])):
+                    desktop.main()
+            finally:
+                for child in measurements:
+                    output, _ = child.communicate(timeout=5)
+                    self.assertEqual(child.returncode, 0, output)
+            self.assertEqual(builds, [str(desktop.HERE / 'framecount/build.sh')])
+            self.assertTrue(entered.exists(), 'the measurement ran once the build was done')
 
 
 class FirstFrameTest(unittest.TestCase):

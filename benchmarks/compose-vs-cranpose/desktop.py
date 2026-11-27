@@ -1025,7 +1025,9 @@ def main():
         apps = [name for name in APPS if name == 'web' or Path(APPS[name][0]).exists()]
         print('not built:', ', '.join(name for name in APPS if name not in apps) or 'none', flush=True)
     args.output.mkdir(parents=True, exist_ok=True)
-    current_framecount()
+    # A FrameCount build would load the host while another measurement runs.
+    with host_lock(args.host_lock):
+        current_framecount()
     started = time.monotonic()
     server = BrowserServer(args.browser) if args.browser else serve_page()
     with tempfile.TemporaryDirectory(prefix='gauntlet-') as folder:
