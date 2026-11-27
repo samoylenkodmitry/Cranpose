@@ -15,9 +15,18 @@ impl ShapeRecorder {
     /// An empty recorder with room for `shapes` shapes in `segments`
     /// segments, so that shapes that fit grow none of its tables.
     pub fn with_capacity(shapes: usize, segments: usize) -> Self {
+        Self::with_tables(RecordTables::with_capacity(shapes, segments))
+    }
+
+    // An empty recorder over `tables`.
+    pub(super) fn with_tables(tables: RecordTables) -> Self {
         Self {
-            tables: RecordTables::with_capacity(shapes, segments),
-            ..Self::default()
+            tables,
+            gradient_lists: crate::rare_list::RareList::default(),
+            last_segment_key: NO_SEGMENT_KEY,
+            segment_waste: 0,
+            min: [f32::INFINITY; 2],
+            max: [f32::NEG_INFINITY; 2],
         }
     }
 
@@ -92,6 +101,19 @@ impl ShapeRecorder {
             .iter()
             .map(record_coverage)
             .reduce(|covered, coverage| covered.union(coverage))
+    }
+
+    /// Records the shapes in `segments` of `source` again after this
+    /// recorder's shapes, from the primitives they were recorded from.
+    pub fn push_shapes_of(&mut self, source: &ShapeRecorder, segments: &Range<u32>) {
+        for segment in source.segments_in(segments) {
+            if segment.lane != RecordLane::Shapes {
+                continue;
+            }
+            for index in segment.range() {
+                self.push_primitive(materialize_shape(source, index));
+            }
+        }
     }
 
     /// The primitive each shape in `segments` was recorded from, in order.

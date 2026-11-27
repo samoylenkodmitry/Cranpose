@@ -849,14 +849,7 @@ pub struct ShapeRecorder {
 
 impl Default for ShapeRecorder {
     fn default() -> Self {
-        Self {
-            tables: RecordTables::default(),
-            gradient_lists: crate::rare_list::RareList::default(),
-            last_segment_key: NO_SEGMENT_KEY,
-            segment_waste: 0,
-            min: [f32::INFINITY; 2],
-            max: [f32::NEG_INFINITY; 2],
-        }
+        Self::with_tables(RecordTables::default())
     }
 }
 

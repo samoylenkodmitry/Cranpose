@@ -234,9 +234,14 @@ impl ShapeChunk {
         self.shapes += shapes;
         self.owners.push(SegmentOwner(owner | LEADS));
         if segments.end - segments.start > 1 {
-            self.owners
-                .resize(segments.end as usize, SegmentOwner(owner));
+            self.take_later_segments(owner, segments.end);
         }
+    }
+
+    // Notes the item `owner` on its segments past the first, up to `end`.
+    #[cold]
+    fn take_later_segments(&mut self, owner: u32, end: u32) {
+        self.owners.resize(end as usize, SegmentOwner(owner));
     }
 
     // Notes that the item of `run` went.
@@ -342,7 +347,7 @@ impl ShapeChunks {
                 self.chunks[id.index()].reset();
                 id
             }
-            None => self.add_chunk(),
+            None => self.insert_chunk(ShapeRecorder::default(), CHUNK_SHAPES, ChunkAge::Young),
         };
         self.open = Some(id);
         id
@@ -353,24 +358,17 @@ impl ShapeChunks {
         match self.nothing {
             Some(id) => id,
             None => {
-                let id = ChunkId::at(self.chunks.insert(ShapeChunk::new(
-                    ShapeRecorder::default(),
-                    0,
-                    ChunkAge::Old,
-                )));
+                let id = self.insert_chunk(ShapeRecorder::default(), 0, ChunkAge::Old);
                 self.nothing = Some(id);
                 id
             }
         }
     }
 
+    // A new chunk of `recorder`, with room for `rows` owner entries.
     #[cold]
-    fn add_chunk(&mut self) -> ChunkId {
-        ChunkId::at(self.chunks.insert(ShapeChunk::new(
-            ShapeRecorder::default(),
-            CHUNK_SHAPES,
-            ChunkAge::Young,
-        )))
+    fn insert_chunk(&mut self, recorder: ShapeRecorder, rows: usize, age: ChunkAge) -> ChunkId {
+        ChunkId::at(self.chunks.insert(ShapeChunk::new(recorder, rows, age)))
     }
 
     // Leaves the open chunk `id`: kept for reuse when no item names it,
@@ -452,6 +450,14 @@ impl ShapeChunks {
         }
     }
 
+    // Whether the first listed chunk went sparse at least `after` updates
+    // ago.
+    fn any_due(&self, after: u32) -> bool {
+        self.sparse
+            .front()
+            .is_some_and(|&(_, listed)| self.update.since(listed) >= after)
+    }
+
     // How many of the listed chunks went sparse at least `after` updates
     // ago, the first of the list.
     fn due(&self, after: u32) -> usize {
@@ -528,11 +534,11 @@ impl ShapeChunks {
                 self.chunks[id.index()].reset();
                 id
             }
-            None => ChunkId::at(self.chunks.insert(ShapeChunk::new(
+            None => self.insert_chunk(
                 ShapeRecorder::with_capacity(room, room),
                 room,
                 ChunkAge::Old,
-            ))),
+            ),
         }
     }
 
@@ -609,9 +615,7 @@ fn move_runs(chunk: &ShapeChunk, runs: &mut Slab<ShapeRun>, home: ChunkId, old: 
         let run = &mut runs[owner];
         let recorder = Arc::get_mut(&mut old.recorder).expect("no packet holds a new home");
         let start = recorder.all_segments().end;
-        for primitive in chunk.recorder.shape_primitives_in(&run.segments) {
-            recorder.push_primitive(primitive);
-        }
+        recorder.push_shapes_of(&chunk.recorder, &run.segments);
         recorder.end_segment();
         run.segments = start..recorder.all_segments().end;
         run.chunk = home;
@@ -721,7 +725,7 @@ impl SceneStore {
     pub(super) fn begin_shapes_update(&mut self, update: SceneUpdate) {
         let chunks = &mut self.shape_chunks;
         chunks.update = update;
-        if chunks.due(MOVE_AFTER_UPDATES) > 0 {
+        if chunks.any_due(MOVE_AFTER_UPDATES) {
             chunks.move_sparse_items(&mut self.shape_runs, MOVE_AFTER_UPDATES);
         }
     }
