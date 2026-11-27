@@ -29,6 +29,13 @@ impl SurfaceRing {
     // The space of a layer whose surfaces show `meshes`, the first as the owner, with the surface
     // `index` placed by `place(index)`. `meshes` is not empty. A call allocates only while the
     // ring fills and where every kept space is still held.
+    #[cfg_attr(
+        all(not(test), dylint_lib = "guard_across_callback"),
+        expect(
+            guard_across_callback,
+            reason = "internal callers pass pure transform closures that cannot reenter SurfaceRing"
+        )
+    )]
     pub(crate) fn space(
         &self,
         meshes: &[Arc<Mesh>],

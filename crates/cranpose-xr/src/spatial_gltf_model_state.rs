@@ -131,6 +131,13 @@ impl LoadedModel {
     }
 
     // Places the nodes where the playing animations put them, and tells the draws.
+    #[cfg_attr(
+        all(not(test), dylint_lib = "guard_across_callback"),
+        expect(
+            guard_across_callback,
+            reason = "the poses iterator only reads animation clocks and cannot reenter self.poses"
+        )
+    )]
     pub(crate) fn pose(&self) {
         let poses = self
             .animations
