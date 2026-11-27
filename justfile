@@ -413,7 +413,7 @@ check-forks base="origin/main":
         echo "check-forks: forks/ unchanged against {{base}}"
         exit 0
     fi
-    for crate in wgpu/wgpu-hal wgpu/wgpu-core wgpu/wgpu opus-pure/opus-pure; do
+    for crate in wgpu/wgpu-hal wgpu/wgpu-core wgpu/wgpu opus-pure/opus-pure basisu/basisu; do
         cargo check --manifest-path "forks/$crate/Cargo.toml" --target-dir target/forks
     done
 

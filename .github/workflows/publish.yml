@@ -69,7 +69,8 @@ jobs:
             wgpu/wgpu-core-deps-windows-linux-android \
             wgpu/wgpu-core \
             wgpu/wgpu \
-            opus-pure/opus-pure; do
+            opus-pure/opus-pure \
+            basisu/basisu; do
             manifest="forks/${fork}/Cargo.toml"
             crate="cranpose-${fork#*/}"
             version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$manifest" | head -n 1)"
