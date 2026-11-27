@@ -356,7 +356,7 @@ impl PixmapMut<'_> {
             path
         };
 
-        if let Some(coverage) = treat_as_hairline(paint, stroke, transform) {
+        if let Some(coverage) = treat_as_hairline(paint.anti_alias, stroke, transform) {
             let mut paint = paint.clone();
             if coverage == 1.0 {
                 // No changes to the `paint`.
@@ -541,7 +541,7 @@ impl PixmapMut<'_> {
     }
 }
 
-fn treat_as_hairline(paint: &Paint, stroke: &Stroke, mut ts: Transform) -> Option<f32> {
+pub(crate) fn treat_as_hairline(anti_alias: bool, stroke: &Stroke, mut ts: Transform) -> Option<f32> {
     fn fast_len(p: Point) -> f32 {
         let mut x = p.x.abs();
         let mut y = p.y.abs();
@@ -558,7 +558,7 @@ fn treat_as_hairline(paint: &Paint, stroke: &Stroke, mut ts: Transform) -> Optio
         return Some(1.0);
     }
 
-    if !paint.anti_alias {
+    if !anti_alias {
         return None;
     }
 

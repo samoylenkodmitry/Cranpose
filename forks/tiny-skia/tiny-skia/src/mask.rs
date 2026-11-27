@@ -9,11 +9,11 @@ use tiny_skia_path::NoStdFloat;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use tiny_skia_path::{IntRect, IntSize, Path, Scalar, Transform};
+use tiny_skia_path::{IntRect, IntSize, LineCap, Path, PathStroker, Scalar, Stroke, Transform};
 
 use crate::geom::IntSizeExt;
-use crate::painter::DrawTiler;
-use crate::pipeline::RasterPipelineBlitter;
+use crate::mask_blitter::{Ink, MaskBlitter};
+use crate::painter::{treat_as_hairline, DrawTiler};
 use crate::pixmap::SubPixmapMut;
 use crate::scan;
 use crate::{FillRule, PixmapRef};
@@ -299,10 +299,7 @@ impl Mask {
                         None => continue, // technically unreachable
                     };
 
-                    let mut blitter = match RasterPipelineBlitter::new_mask(&mut subpix) {
-                        Some(v) => v,
-                        None => continue, // nothing to do, all good
-                    };
+                    let mut blitter = MaskBlitter::new(&mut subpix, Ink::Opaque);
 
                     // We're ignoring "errors" here, because `fill_path` will return `None`
                     // when rendering a tile that doesn't have a path on it.
@@ -322,10 +319,7 @@ impl Mask {
             } else {
                 let clip_rect = self.size().to_screen_int_rect(0, 0);
                 let mut subpix = self.as_subpixmap();
-                let mut blitter = match RasterPipelineBlitter::new_mask(&mut subpix) {
-                    Some(v) => v,
-                    None => return, // nothing to do, all good
-                };
+                let mut blitter = MaskBlitter::new(&mut subpix, Ink::Opaque);
 
                 if anti_alias {
                     scan::path_aa::fill_path(path, fill_rule, &clip_rect, &mut blitter);
@@ -343,6 +337,109 @@ impl Mask {
             };
 
             self.fill_path(&path, fill_rule, anti_alias, Transform::identity());
+        }
+    }
+
+    /// Strokes a path onto the mask.
+    ///
+    /// The mask's bytes are the alpha channel that `Pixmap::stroke_path`
+    /// draws with an opaque white paint in the `SourceOver` mode: a stroke
+    /// wider than 1px (after the transformation) is filled as its outline,
+    /// a thinner one is a hairline whose coverage the width scales. No raster
+    /// pipeline is built.
+    ///
+    /// Doesn't reset the existing mask content and draws the path on top of existing data.
+    pub fn stroke_path(
+        &mut self,
+        path: &Path,
+        stroke: &Stroke,
+        anti_alias: bool,
+        transform: Transform,
+    ) {
+        if stroke.width < 0.0 {
+            log::warn!("negative stroke width isn't allowed");
+            return;
+        }
+
+        let res_scale = PathStroker::compute_resolution_scale(&transform);
+
+        let dash_path;
+        let path = if let Some(ref dash) = stroke.dash {
+            dash_path = match path.dash(dash, res_scale) {
+                Some(v) => v,
+                None => {
+                    log::warn!("path dashing failed");
+                    return;
+                }
+            };
+            &dash_path
+        } else {
+            path
+        };
+
+        let coverage = match treat_as_hairline(anti_alias, stroke, transform) {
+            Some(v) => v,
+            None => {
+                let path = match path.stroke(stroke, res_scale) {
+                    Some(v) => v,
+                    None => {
+                        log::warn!("path stroking failed");
+                        return;
+                    }
+                };
+                self.fill_path(&path, FillRule::Winding, anti_alias, transform);
+                return;
+            }
+        };
+
+        // As `Pixmap::stroke_path` scales the paint's opacity by a hairline's
+        // coverage.
+        let ink = if coverage == 1.0 {
+            Ink::Opaque
+        } else {
+            let scale = (coverage * 256.0) as i32;
+            let new_alpha = (255 * scale) >> 8;
+            Ink::of_opacity(new_alpha as f32 / 255.0)
+        };
+
+        let transformed;
+        let path = if transform.is_identity() {
+            path
+        } else {
+            transformed = match path.clone().transform(transform) {
+                Some(v) => v,
+                None => {
+                    log::warn!("path transformation failed");
+                    return;
+                }
+            };
+            &transformed
+        };
+
+        if let Some(tiler) = DrawTiler::new(self.width(), self.height()) {
+            let mut path = path.clone();
+            for tile in tiler {
+                let ts = Transform::from_translate(-(tile.x() as f32), -(tile.y() as f32));
+                path = match path.transform(ts) {
+                    Some(v) => v,
+                    None => {
+                        log::warn!("path transformation failed");
+                        return;
+                    }
+                };
+
+                if let Some(mut subpix) = self.subpixmap(tile.to_int_rect()) {
+                    stroke_hairline(&path, stroke.line_cap, anti_alias, ink, &mut subpix);
+                }
+
+                let ts = Transform::from_translate(tile.x() as f32, tile.y() as f32);
+                path = match path.transform(ts) {
+                    Some(v) => v,
+                    None => return,
+                };
+            }
+        } else {
+            stroke_hairline(path, stroke.line_cap, anti_alias, ink, &mut self.as_subpixmap());
         }
     }
 
@@ -374,6 +471,22 @@ impl Mask {
     /// Zero-fills the internal data buffer.
     pub fn clear(&mut self) {
         self.data.fill(0);
+    }
+}
+
+fn stroke_hairline(
+    path: &Path,
+    line_cap: LineCap,
+    anti_alias: bool,
+    ink: Ink,
+    subpix: &mut SubPixmapMut,
+) {
+    let clip = subpix.size.to_screen_int_rect(0, 0);
+    let mut blitter = MaskBlitter::new(subpix, ink);
+    if anti_alias {
+        scan::hairline_aa::stroke_path(path, line_cap, &clip, &mut blitter);
+    } else {
+        scan::hairline::stroke_path(path, line_cap, &clip, &mut blitter);
     }
 }
 

@@ -45,6 +45,7 @@ mod fixed_point;
 mod geom;
 mod line_clipper;
 mod mask;
+mod mask_blitter;
 mod math;
 mod path64;
 mod path_geometry;
