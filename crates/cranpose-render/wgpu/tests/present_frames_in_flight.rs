@@ -69,7 +69,7 @@ fn hold_frames(renderer: &mut WgpuRenderer, runtime: &mut InlinePresentRuntime) 
         drain_outcomes(renderer);
         let settled = renderer
             .last_frame_stats()
-            .is_some_and(|stats| support::pipelines_settled(&stats));
+            .is_some_and(|stats| stats.pipelines_settled());
         settled_frames = if settled { settled_frames + 1 } else { 0 };
         if settled_frames >= 2 && frame % graphs.len() == 1 {
             return;
@@ -260,7 +260,7 @@ fn the_frames_after_a_stand_in_go_while_another_is_in_flight() {
     for _ in 0..80 {
         let pair = overlapping_pair(&mut renderer, &mut runtime, [&pages[0], &pages[1]]);
         let stats = renderer.last_frame_stats().expect("frame statistics");
-        let settled = support::pipelines_settled(&stats);
+        let settled = stats.pipelines_settled();
         if !settled {
             support::wait_for_background_compiler_idle();
         }
@@ -293,7 +293,7 @@ fn the_frames_after_a_stand_in_go_while_another_is_in_flight() {
             "pair {pair} after the stand-in: a frame waited, or one was refused"
         );
         let stats = renderer.last_frame_stats().expect("frame statistics");
-        if support::pipelines_settled(&stats) {
+        if stats.pipelines_settled() {
             settled += 1;
         } else {
             assert!(pair < 16, "the shader never landed: {stats:?}");

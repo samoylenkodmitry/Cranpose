@@ -74,7 +74,7 @@ fn capture(renderer: &mut support::LockedRenderer, graph: &LayerNode) -> Capture
         .expect("capture should succeed");
     let stats = renderer.last_frame_stats().expect("stats");
     assert!(
-        support::pipelines_settled(&stats),
+        stats.pipelines_settled(),
         "every draw took its own pipeline"
     );
     Capture {

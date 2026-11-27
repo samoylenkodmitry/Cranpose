@@ -131,7 +131,7 @@ fn capture_both_ways(graph: impl Fn() -> LayerNode) -> Option<(Capture, Capture)
             pixels: frame.pixels,
             interior_draws: stats.shape_interior_draws,
             depth_passes: stats.depth_passes,
-            settled: support::pipelines_settled(&stats),
+            settled: stats.pipelines_settled(),
         }
     };
     let first = capture(&mut renderer);
@@ -177,7 +177,7 @@ fn capture_levels(renderer: &mut support::LockedRenderer) -> Capture {
         pixels: frame.pixels,
         interior_draws: stats.shape_interior_draws,
         depth_passes: stats.depth_passes,
-        settled: support::pipelines_settled(&stats),
+        settled: stats.pipelines_settled(),
     }
 }
 
