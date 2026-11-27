@@ -517,11 +517,12 @@ fn changing_cards_shell(
 /// Frames that draw a varying number of surfaces again keep drawing them into
 /// the atlas texture the busiest of them needed, the avatars' frames too:
 /// none takes a texture of its own once those numbers have been seen,
-/// however long the cycle runs, and the last frame draws what a fresh
-/// renderer draws. The frame after the avatars' is left out: its cards are
-/// new layers again, and the layer cache may keep one of them at once.
+/// however long the cycle runs, and the textures held weigh no more than
+/// the first cycle's did. The last frame draws what a fresh renderer draws.
+/// The frame after the avatars' is left out: its cards are new layers again,
+/// and the layer cache may keep one of them at once.
 #[test]
-fn surfaces_drawn_again_in_varying_numbers_keep_one_atlas_texture() {
+fn surfaces_drawn_again_in_varying_numbers_take_no_new_atlas_textures() {
     let Ok((_lock, renderer)) = support::headless_renderer_parts() else {
         eprintln!("skipping (headless WGPU init failed)");
         return;
@@ -541,19 +542,33 @@ fn surfaces_drawn_again_in_varying_numbers_keep_one_atlas_texture() {
         step(&mut shell, index)
     });
     support::wait_for_background_compiler_idle();
+    let mut first_cycle_bytes = 0;
     for _ in 0..AVATAR_FRAMES {
         index += 1;
-        step(&mut shell, index);
+        let (stats, _) = step(&mut shell, index);
+        first_cycle_bytes = first_cycle_bytes.max(stats.offscreen_pool_bytes);
     }
-    let mut news = Vec::new();
+    let (mut news, mut heavier) = (Vec::new(), Vec::new());
     for _ in 0..3 * AVATAR_FRAMES {
         index += 1;
         let (stats, _) = step(&mut shell, index);
-        if stats.offscreen_news > 0 && index % AVATAR_FRAMES != 1 {
+        let allowed = if index % AVATAR_FRAMES == 1 {
+            u32::MAX
+        } else {
+            0
+        };
+        if stats.offscreen_news > allowed {
             news.push((index, stats.offscreen_news));
+        }
+        if stats.offscreen_pool_bytes > first_cycle_bytes {
+            heavier.push((index, stats.offscreen_pool_bytes));
         }
     }
     assert!(news.is_empty(), "frames that took new textures: {news:?}");
+    assert!(
+        heavier.is_empty(),
+        "frames that held more than the first cycle's {first_cycle_bytes} bytes: {heavier:?}"
+    );
 
     let (_, drawn) = support::update_and_capture(&mut shell, width, height);
     let (mut fresh, fresh_count, fresh_frame) = changing_cards_shell(
@@ -565,4 +580,97 @@ fn surfaces_drawn_again_in_varying_numbers_keep_one_atlas_texture() {
     });
     let reference = support::settle(|| support::update_and_capture(&mut fresh, width, height));
     support::assert_same_bytes("changing cards", width, &reference.pixels, &drawn.pixels);
+}
+
+/// Frames that draw two cards again after frames that drew ten keep the ten
+/// cards' atlas texture for a while, taking no texture of their own, then
+/// shrink it once to about the two cards' size: a render pass clears and
+/// stores its whole attachment, so the ten cards' atlas would cost five
+/// times the pixels the two need. The atlas's pixels are what a frame draws
+/// beyond the same frame without the cards. The last frame draws what a
+/// fresh renderer draws.
+#[test]
+fn an_atlas_whose_surfaces_stay_fewer_keeps_its_texture_a_while_then_shrinks_once() {
+    const BUSY_FRAMES: u32 = 20;
+    const HELD_FRAMES: usize = 60;
+    const MOST_FRAMES: usize = 1_000;
+    let Ok((_lock, renderer)) = support::headless_renderer_parts() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    let (width, height) = (CARDS_WIDTH * CARDS_DENSITY, CARDS_HEIGHT * CARDS_DENSITY);
+    let (mut shell, count, frame) = changing_cards_shell(renderer);
+    let step = |shell: &mut AppShell<WgpuRenderer>, cards: u32, index: &mut u32| {
+        *index += 1;
+        if index.is_multiple_of(AVATAR_FRAMES) {
+            *index += 1;
+        }
+        let at = *index;
+        shell.debug_enter_app_context(|| {
+            count.set(cards);
+            frame.set(at);
+        });
+        support::update_and_capture(shell, width, height)
+    };
+    let mut index = 0;
+    support::settle(|| step(&mut shell, 10, &mut index));
+    support::wait_for_background_compiler_idle();
+    for _ in 0..BUSY_FRAMES {
+        step(&mut shell, 10, &mut index);
+    }
+    let mut quiet = Vec::new();
+    let mut drawn = None;
+    for _ in 0..MOST_FRAMES {
+        let (stats, _) = step(&mut shell, 2, &mut index);
+        assert_eq!(stats.isolated_layer_renders, 2, "{stats:?}");
+        quiet.push((stats.offscreen_news, stats.pass_pixels));
+        if quiet.len() > HELD_FRAMES && stats.offscreen_news > 0 {
+            let (stats, captured) = step(&mut shell, 2, &mut index);
+            quiet.push((stats.offscreen_news, stats.pass_pixels));
+            drawn = Some((stats, captured, index));
+            break;
+        }
+    }
+    let held = &quiet[..HELD_FRAMES];
+    assert!(
+        held.iter()
+            .all(|&(news, pixels)| news == 0 && pixels == held[0].1),
+        "the two cards' first frames keep the texture they had: {held:?}"
+    );
+    let news: u32 = quiet.iter().map(|&(news, _)| news).sum();
+    assert_eq!(
+        news, 1,
+        "the texture shrinks once within {MOST_FRAMES} frames"
+    );
+    let (stats, drawn, drawn_at) = drawn.expect("the texture shrank");
+    let (without_cards, _) = step(&mut shell, 0, &mut index);
+    assert_eq!(
+        without_cards.isolated_layer_renders, 0,
+        "the frame without cards renders no surface"
+    );
+    assert_eq!(
+        without_cards.pass_count + 1,
+        stats.pass_count,
+        "the frame without cards draws all but the atlas"
+    );
+    let atlas_pixels = stats.pass_pixels - without_cards.pass_pixels;
+    assert!(
+        2 * atlas_pixels <= 3 * stats.isolated_layer_pixels,
+        "the shrunk atlas holds {atlas_pixels} pixels for {} of surfaces",
+        stats.isolated_layer_pixels
+    );
+    assert!(
+        stats.pass_pixels < held[0].1,
+        "the shrunk atlas draws fewer pixels than the ten cards' did"
+    );
+
+    let (mut fresh, fresh_count, fresh_frame) = changing_cards_shell(
+        support::headless_renderer_beside_locked().expect("reference renderer"),
+    );
+    fresh.debug_enter_app_context(|| {
+        fresh_count.set(2);
+        fresh_frame.set(drawn_at);
+    });
+    let reference = support::settle(|| support::update_and_capture(&mut fresh, width, height));
+    support::assert_same_bytes("two cards", width, &reference.pixels, &drawn.pixels);
 }

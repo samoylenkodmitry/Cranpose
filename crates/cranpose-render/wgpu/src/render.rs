@@ -716,8 +716,7 @@ pub(crate) struct GpuRenderer {
     /// until a scene draws.
     pub(crate) scene_pass: crate::scene_pass::ScenePass,
     pub(crate) depth_gate: crate::depth_gate::DepthGate,
-    /// The size of the atlas the layer surfaces drawn again go into.
-    pub(crate) surface_atlas_sizes: crate::frame::SurfaceAtlasSizes,
+    pub(crate) surface_atlases: crate::frame::SurfaceAtlases,
     text: TextResources,
     pub(crate) viewport_uniforms: ViewportUniforms,
     run_store: RunStore,
@@ -1000,7 +999,7 @@ impl GpuRenderer {
             sampled_targets: SampledTargets::default(),
             scene_pass: crate::scene_pass::ScenePass::default(),
             depth_gate,
-            surface_atlas_sizes: crate::frame::SurfaceAtlasSizes::for_backend(adapter_backend),
+            surface_atlases: crate::frame::SurfaceAtlases::new(composition_format),
             text: TextResources::new(text_glyph_atlas, copy_free),
             viewport_uniforms: ViewportUniforms::default(),
             run_store,
@@ -1354,8 +1353,7 @@ impl GpuRenderer {
         self.effect_renderer.max_texture_dim()
     }
 
-    /// A pooled texture that outlives the frame: layer cache entries and
-    /// cached shadow surfaces.
+    // Layer cache entries and cached shadow surfaces outlive the frame.
     pub(crate) fn acquire_retained_surface(&mut self, width: u32, height: u32) -> OffscreenTarget {
         self.effect_renderer
             .acquire_offscreen(&self.device, width, height, Some(&self.frame_stats))
@@ -1449,7 +1447,7 @@ impl GpuRenderer {
         self.depth_targets.end_frame();
         self.sampled_targets.end_frame();
         self.scene_pass.end_frame();
-        self.surface_atlas_sizes.end_frame();
+        self.surface_atlases.end_frame();
     }
 
     pub(crate) fn render(
@@ -1567,11 +1565,13 @@ impl GpuRenderer {
             self.effect_renderer
                 .retained_offscreen_count()
                 .saturating_add(executor.retained_texture_count())
+                .saturating_add(self.surface_atlases.len())
                 .saturating_add(usize::from(self.composition_target.is_some())) as u32,
         );
         self.frame_stats.offscreen_pool_bytes.set(
             (self.effect_renderer.retained_offscreen_bytes() as u64)
                 .saturating_add(executor.retained_texture_bytes())
+                .saturating_add(self.surface_atlases.bytes())
                 .saturating_add(self.composition_target.as_ref().map_or(0, |target| {
                     u64::from(target.target.width)
                         .saturating_mul(u64::from(target.target.height))
