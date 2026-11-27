@@ -312,6 +312,7 @@ define_class!(
                 // The board left its surface when it hid; the layout makes one again.
                 session.view.setNeedsLayout();
             });
+            self.hold_height();
             self.read_field();
             self.start_frames();
             with_keyboard(|keyboard| keyboard.set_visible(true));
@@ -365,6 +366,24 @@ impl KeyboardController {
         }) else {
             return;
         };
+        // The host sizes a root that follows its autoresizing mask to the
+        // system keyboard's height, whatever the root's own constraints say.
+        // A root held by constraints takes the board's height: its sides
+        // pinned to the host, its height set below.
+        if root.translatesAutoresizingMaskIntoConstraints()
+            && let Some(host) = root.superview()
+        {
+            root.setTranslatesAutoresizingMaskIntoConstraints(false);
+            root.leadingAnchor()
+                .constraintEqualToAnchor(&host.leadingAnchor())
+                .setActive(true);
+            root.trailingAnchor()
+                .constraintEqualToAnchor(&host.trailingAnchor())
+                .setActive(true);
+            root.bottomAnchor()
+                .constraintEqualToAnchor(&host.bottomAnchor())
+                .setActive(true);
+        }
         with_own_session(self, |session| {
             if let Some(old) = session.height.take() {
                 old.setActive(false);
@@ -372,8 +391,8 @@ impl KeyboardController {
             let constraint = root
                 .heightAnchor()
                 .constraintEqualToConstant(f64::from(height));
-            // UILayoutPriorityDefaultHigh.
-            constraint.setPriority(750.0);
+            // Just below required, so the host's own height gives way.
+            constraint.setPriority(999.0);
             constraint.setActive(true);
             session.height = Some(constraint);
         });
