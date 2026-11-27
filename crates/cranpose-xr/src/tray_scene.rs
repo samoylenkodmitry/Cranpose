@@ -172,7 +172,7 @@ fn PartBody(tray: TrayParts, part: Part, (size, shadows): ([f32; 2], bool)) {
                 glow,
             );
         }
-        PartShape::Dome | PartShape::Crystal | PartShape::Emblem => {
+        PartShape::Dome | PartShape::Crystal | PartShape::Emblem | PartShape::Gem => {
             let radius = rect.width.min(rect.height) / 2.0 - KEY_INSET;
             let mesh = remember(|| Arc::new(Mesh::sphere(DOME_SEGMENTS, DOME_SEGMENTS / 2)))
                 .with(Arc::clone);

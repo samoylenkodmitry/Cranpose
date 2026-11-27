@@ -178,6 +178,7 @@ mod headset_properties;
 mod hit;
 mod hit_info;
 mod hologram;
+mod hologram_gem;
 mod hologram_material;
 mod hologram_meshes;
 mod hologram_objects;
@@ -289,6 +290,7 @@ mod spatial_emblem;
 mod spatial_environment;
 mod spatial_external_surface;
 mod spatial_frame_effect;
+mod spatial_gem;
 #[cfg(feature = "gltf")]
 mod spatial_gltf_model;
 #[cfg(feature = "gltf")]
@@ -464,6 +466,7 @@ pub use spatial_emblem::SpatialEmblem;
 pub use spatial_environment::{SpatialEnvironment, local_spatial_environment};
 pub use spatial_external_surface::{SpatialExternalSurface, SpatialExternalSurfaceScope};
 pub use spatial_frame_effect::SpatialFrameEffect;
+pub use spatial_gem::{GemGlow, SpatialGem};
 #[cfg(feature = "gltf")]
 pub use spatial_gltf_model::SpatialGltfModel;
 #[cfg(feature = "gltf")]

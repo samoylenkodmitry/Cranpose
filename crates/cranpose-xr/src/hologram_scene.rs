@@ -26,6 +26,7 @@ use cranpose_core::{LaunchedEffect, State, key, rememberMutableStateOf};
 
 use crate::{
     HologramColors, HologramStage,
+    hologram_gem::GemBody,
     hologram_material::{Edges, Glow},
     hologram_meshes::{arc, arrow, capsule, cone, crystal, disc, helix, ring, rings, sheet, wave},
     hologram_objects::{ChoiceObject, STEPPER_LIFT, Stone, Track},
@@ -54,6 +55,7 @@ const ARC_TUBE: f32 = 0.02;
 pub(crate) struct Meshes {
     pub(crate) crystal: Arc<Mesh>,
     pub(crate) gem: Arc<Mesh>,
+    pub(crate) octahedron: Arc<Mesh>,
     pub(crate) stone: Arc<Mesh>,
     pub(crate) cube: Arc<Mesh>,
     pub(crate) ring: Arc<Mesh>,
@@ -82,6 +84,7 @@ impl Meshes {
         Self {
             crystal: Arc::new(crystal(6, 0.6, 0.6)),
             gem: Arc::new(crystal(8, 0.28, 0.55)),
+            octahedron: Arc::new(crystal(4, 0.5, 0.5)),
             stone: Arc::new(crystal(8, 0.42, 0.42)),
             cube: Arc::new(Mesh::cuboid()),
             ring: Arc::new(ring(0.012)),
@@ -255,6 +258,7 @@ fn PartObject(scene: Scene, part: Part) {
         PartShape::Emblem => Emblem(scene, part, rect.width.min(rect.height)),
         PartShape::Ribbon => Ribbon(scene, part, [rect.width, rect.height]),
         PartShape::Wave => Wave(scene, part, [rect.width, rect.height]),
+        PartShape::Gem => GemBody(scene, part, (rect.width.min(rect.height), face), motion),
     }
 }
 

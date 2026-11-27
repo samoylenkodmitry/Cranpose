@@ -52,6 +52,8 @@ pub(crate) enum PartShape {
     Ribbon,
     // A wave of glowing points
     Wave,
+    // A gem that turns, and whose glow swells and fades while `on`
+    Gem,
 }
 
 impl PartShape {
@@ -59,7 +61,12 @@ impl PartShape {
     pub(crate) fn moves(self) -> bool {
         matches!(
             self,
-            Self::Choice { .. } | Self::Track { .. } | Self::Crystal | Self::Emblem | Self::Wave
+            Self::Choice { .. }
+                | Self::Track { .. }
+                | Self::Crystal
+                | Self::Emblem
+                | Self::Wave
+                | Self::Gem
         )
     }
 }

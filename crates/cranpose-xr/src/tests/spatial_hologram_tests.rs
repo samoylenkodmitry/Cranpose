@@ -169,3 +169,82 @@ fn a_crystal_button_with_nothing_around_it_asks_for_no_frame_while_it_holds_stil
         "the crystal takes the press"
     );
 }
+
+// A gem at the start of `CONTROL`, as wide as the control is high, on a hologram with no stage. It
+// counts its clicks, and `checked` holds the hover that the app reads from the gem's interaction
+// source.
+fn gem_bench(enabled: bool) -> Bench {
+    bench_in(
+        Holder::Hologram(HologramStage::NONE),
+        TRAY,
+        move |controls| {
+            let [x, y, _, height] = CONTROL;
+            let source = rememberMutableInteractionSource();
+            let hovered = source.collectIsHoveredAsState().get();
+            cranpose_core::SideEffect(move || controls.checked.set(hovered));
+            crate::SpatialGem(
+                move || controls.clicks.set(controls.clicks.get_non_reactive() + 1),
+                Modifier::empty().offset(x, y).size_points(height, height),
+                enabled,
+                Color(0.2, 0.6, 1.0, 1.0),
+                crate::GemGlow::Pulse,
+                source,
+            );
+        },
+    )
+}
+
+#[test]
+fn a_ray_press_on_a_gem_clicks_it_and_the_app_reads_the_hover_from_its_source() {
+    let mut bench = gem_bench(true);
+    let middle = [CONTROL[0] + CONTROL[3] / 2.0, MIDDLE[1]];
+    bench.hold(middle, 0.0, 400);
+    assert!(
+        bench.controls.checked.get(),
+        "the app sees the ray that rests on the gem"
+    );
+    bench.hold(middle, 1.0, 150);
+    bench.hold(middle, 0.0, 150);
+    assert_eq!(bench.controls.clicks.get(), 1, "the gem takes the press");
+    // The ray leaves the gem for the empty end of the hologram
+    bench.hold([TRAY[0] - 10.0, MIDDLE[1]], 0.0, 300);
+    assert!(
+        !bench.controls.checked.get(),
+        "the hover ends when the ray leaves"
+    );
+}
+
+#[test]
+fn a_disabled_gem_takes_no_hover_and_no_press() {
+    let mut bench = gem_bench(false);
+    let middle = [CONTROL[0] + CONTROL[3] / 2.0, MIDDLE[1]];
+    press(&mut bench, middle);
+    assert_eq!(bench.controls.clicks.get(), 0, "no click");
+    assert!(!bench.controls.checked.get(), "no hover");
+}
+
+#[test]
+fn a_gem_turns_while_it_shows_and_its_clock_stops_when_it_hides() {
+    let mut bench = gem_bench(true);
+    bench.redraw();
+    assert!(
+        bench.headset.guest.shell().has_transient_frame_callbacks(),
+        "the turning gem runs the hologram's clock"
+    );
+    assert_eq!(
+        crate::volumes::scene_count(&bench.headset.space),
+        1,
+        "the gem draws in the scene"
+    );
+    bench.controls.visible.set(false);
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while !bench.headset.space.panels().is_empty() && Instant::now() < deadline {
+        bench.draw_once();
+    }
+    bench.headset.guest.shell().update();
+    assert!(
+        bench.headset.space.panels().is_empty()
+            && !bench.headset.guest.shell().has_transient_frame_callbacks(),
+        "a hidden gem holds no panel and runs no clock"
+    );
+}
