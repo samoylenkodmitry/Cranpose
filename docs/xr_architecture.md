@@ -1475,6 +1475,74 @@ fingers close is untested. The feature is off by default, and the backend has no
 The selection rules and the pointer's behavior with hand states are covered by
 `src/tests/pointer_aim_tests.rs`, `src/tests/pointer_tests.rs` and `src/tests/scripted_hand_tests.rs`.
 
+### Direct touch
+
+A tracked hand presses a panel with the tip of its index finger as well, with no pinch. Android XR
+gives its panels the same direct touch, and its Interaction Framework calls it "Hand Poke". Jetpack
+XR has no API for it: the system gives the touch to every panel. Cranpose gives it to every panel of
+an app that declared `Use::hand_tracking()`, and `PointerSettings::set_direct_touch(false)` turns it
+off.
+
+**The input.** `pointer_aim` adds the hand's `IndexTip` joint to the hand's `Aim` while the joint
+is valid and tracked. A joint that the runtime only estimates touches nothing. The tip comes with the
+aim, so the focus gate that drops the aims of an app with no input focus drops the tip too, and a
+side whose controller points has no tip. `ScriptedHand::touching` and its steps write the joint for a
+check where no hand can be tracked.
+
+**Where the finger stands.** `PanelSlot::face_place` takes a point of the room into the panel's
+frame with one turn: its place across the face in dp and its height above the face in meters. A
+curved panel measures the height from its cylinder and the place along its arc. A volume has no face
+for a finger. Its box has depth and its meshes take the ray, so a volume takes no touch. The height
+of the skin is the joint's height less the joint's radius.
+
+**The rules.** `DirectTouch` (`direct_touch.rs`) holds the tip of the frame before and the panel that
+the tip presses. In each frame one pass over the panels that the hand reaches finds:
+
+- the panel that the tip hovers over: the nearest face whose edges hold the tip, with the skin at
+  most 6 cm in front of it;
+- the panel that the tip entered: a face that the tip crossed from the front since the frame before,
+  within the face's edges. The tip must have stood at most 10 cm in front in the frame before, so a
+  jump of the tracking presses nothing. Of two faces crossed in one step, the first one crossed takes
+  the press;
+- whether the tip has pushed through a panel: it stands within the panel's edges and up to 30 cm
+  behind its face.
+
+A tip that pushed through a panel hovers over nothing, and a crossing behind such a panel presses
+nothing. A finger that pushes through a panel therefore presses nothing behind it. A tip that the
+cameras first see behind a face has no frame before, so it enters nothing. The press holds its panel
+until the skin comes back 5 mm out of the face or the tip leaves the face's edges. The 5 mm keep the
+jitter of a tracked tip from ending a press and starting another.
+
+**The pointer.** The touch drives the hand's `Pointer` with the same gestures as the ray. A tip
+near a panel moves the pointer there, so the composition sees the hover of that hand's pointer id.
+The entry presses the primary button at the crossing and ticks. The press holds its point until the
+tip slides 12 dp along the face, so a click goes through the jitter of the tip, and a slide drags or
+scrolls. The exit releases, and a press that held its point clicks and ticks again. While the tip is
+near a panel the ray's pull presses nothing, the beam hides and no handle lights. A press keeps the
+input that began it: a ray's press or carry keeps the tip from touching, and a touch keeps the pinch
+from pressing. A pinch that closed while the tip was near counts as held from before, so it presses
+only after it opened again. A touch grabs no handle. A hand has no motor, so the tick vibrates
+nothing: the cursor's dot and the `Indication` of the pressed node show the press. The dot shows the
+place that the tip hovers over before it touches.
+
+**The cost.** A hand with a tracked tip turns the tip into the frame of each panel that it reaches
+and compares the place with the face's edges: one turn of a point and a few comparisons for each
+panel in each frame. A crossing takes the frame before's tip into the same frame as well, only for a
+panel whose face the tip stands at or behind. Hidden panels are out of reach and cost nothing. The
+pass allocates nothing.
+
+**Tests.** `src/tests/direct_touch_tests.rs` plays scripted hands through `pointer_aim`, the
+pointers, a real composition's shell and the surfaces, as the frame loop does: a hover before the
+touch and a click with no pinch, the ray and the pinch of the same hand held back while the tip is
+near and working again after, a push through one panel to the panel behind it, a tip first seen
+between two panels, the other hand's ray pressing another panel at the same time, a click at the
+touched point of a surface, a slide that scrolls a list, a tip lost during a press, the touch turned
+off and a touch on a curved panel. `src/tests/spatial_hologram_tests.rs` touches a gem of a
+`SpatialChoiceGroup` and a `SpatialGem` on a hologram that the scene draws on the machine's GPU.
+
+What a real hand's tip does at a panel is unmeasured: the 6 cm, the 5 mm and the 12 dp come from the
+size of a finger and the jitter of hand tracking, not from presses of real fingers.
+
 ### The demo
 
 `apps/xr-demo` shows the tracking in its counter panel. The section lists each feature with its

@@ -1,12 +1,12 @@
-// A hologram as a headset runs it: a controller's ray presses the objects of a choice group on the
-// hologram's panel and selects their options, a hologram that hid composes nothing, draws nothing
-// and asks for no frame, and a crystal button with nothing around it asks for no frame while it
-// holds still.
+// A hologram as a headset runs it: a controller's ray and a hand's fingertip press the objects of a
+// choice group on the hologram's panel and select their options, a hologram that hid composes
+// nothing, draws nothing and asks for no frame, and a crystal button with nothing around it asks
+// for no frame while it holds still.
 
 use std::time::{Duration, Instant};
 
 use super::*;
-use crate::{ChoiceForm, HologramStage, SpatialChoiceGroup};
+use crate::{ChoiceForm, HologramStage, SpatialChoiceGroup, pointers::direct_touch_tests::touch};
 
 // A choice group of `count` options of `form` at the place of `CONTROL`, on a hologram with `stage`.
 fn group_bench(form: ChoiceForm, count: usize, stage: HologramStage) -> Bench {
@@ -59,6 +59,19 @@ fn a_ray_press_on_an_option_s_object_selects_the_option() {
             "the first of the {form:?} takes the press"
         );
     }
+}
+
+#[test]
+fn a_fingertip_s_touch_on_a_gem_of_a_choice_selects_its_option() {
+    let mut bench = group_bench(ChoiceForm::Gems, 4, HologramStage::NONE);
+    let panel = bench.panel();
+    let script = touch(&panel, option_at(1, 4), [6.0, 0.0, -1.0]);
+    bench.play(&script, (0, 1100));
+    assert_eq!(
+        bench.controls.selected.get(),
+        Some(1),
+        "the second gem takes the touch"
+    );
 }
 
 #[test]
@@ -211,6 +224,27 @@ fn a_ray_press_on_a_gem_clicks_it_and_the_app_reads_the_hover_from_its_source() 
     assert!(
         !bench.controls.checked.get(),
         "the hover ends when the ray leaves"
+    );
+}
+
+#[test]
+fn a_fingertip_shows_its_hover_on_a_gem_and_its_touch_clicks_it() {
+    let mut bench = gem_bench(true);
+    let middle = [CONTROL[0] + CONTROL[3] / 2.0, MIDDLE[1]];
+    let panel = bench.panel();
+    let script = touch(&panel, middle, [6.0, 0.0, -1.0]);
+    // The fingertip hovers 3 cm in front of the gem from 300 to 600 ms
+    bench.play(&script, (0, 550));
+    assert!(
+        bench.controls.checked.get(),
+        "the app sees the fingertip that hovers near the gem"
+    );
+    assert_eq!(bench.controls.clicks.get(), 0);
+    bench.play(&script, (550, 1100));
+    assert_eq!(bench.controls.clicks.get(), 1, "the touch clicked the gem");
+    assert!(
+        !bench.controls.checked.get(),
+        "the hover ends when the finger goes"
     );
 }
 

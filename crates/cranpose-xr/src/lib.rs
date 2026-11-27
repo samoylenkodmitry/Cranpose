@@ -106,6 +106,8 @@ mod controller_states;
 mod default_light;
 #[cfg(any(test, headset))]
 mod depth_order;
+#[cfg(any(test, headset))]
+mod direct_touch;
 mod dock;
 mod entitlement;
 mod entitlement_check;

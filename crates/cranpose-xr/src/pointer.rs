@@ -1,5 +1,6 @@
 //! One hand's pointer over the panels: its hover, its press and drag, and the other buttons and
-//! the scroll of its controller. A controller or a tracked hand drives it. The two hands have a
+//! the scroll of its controller. A controller or a tracked hand drives it. A tracked hand presses
+//! with its ray and pinch, or by the direct touch of its index fingertip. The two hands have a
 //! pointer each, so each hovers, presses, captures and drags on its own.
 
 use std::time::Duration;
@@ -14,6 +15,7 @@ use crate::{
     aim::{Aim, Buttons},
     aim_filter::angle_between,
     content_ray::ContentRay,
+    direct_touch::{Contact, DirectTouch},
     gestures::Gestures,
     handle::HandleFocus,
     hit::{Hit, Target, ray_hit},
@@ -41,35 +43,52 @@ const LET_GO: f32 = 0.15;
 // is a millimeter in the room. The value is three times Compose's touch slop of 8 dp. Each press
 // logs how far it strayed, so the value can follow the strays of real presses.
 pub(crate) const DRAG_SLOP: f32 = 24.0;
+// How far a fingertip that presses a panel slides along the face before the press drags, in dp.
+// Until then the press holds its point, so the jitter of a tracked finger does not move it off a
+// button. A dp is a millimeter in the room.
+const TOUCH_SLOP: f32 = 12.0;
 
 // What a frame gives a pointer besides its aim: the time, the time since the frame before in
-// seconds, what the aims meet and how the controller's buttons map to the pointer's.
+// seconds, what the aims meet, how the controller's buttons map to the pointer's and whether a hand
+// touches the panels.
 #[derive(Clone, Copy)]
 pub(crate) struct Frame<'a> {
     pub(crate) time: Duration,
     pub(crate) dt: f32,
     pub(crate) scene: Scene<'a>,
     pub(crate) mapping: PointerMapping,
+    pub(crate) direct_touch: bool,
 }
 
 // A press in progress.
 #[derive(Clone, Copy, Debug)]
 struct Press {
-    // Where the press's events go, also after the ray left the panel
+    // Where the press's events go, also after the ray or the finger left the panel
     target: Target,
     // The pointer button that the press holds down, as the mapping gave it at the pull, or `None`
     // for a trigger that presses nothing
     button: Option<PointerButton>,
-    start: Duration,
-    // The direction that the ray pointed in at the pull
-    direction: [f32; 3],
-    // The highest pull of the trigger since the press began
-    peak: f32,
     // The press's point while it holds; None once it drags
     held: Option<Hit>,
-    // The mesh of a volume that the press began on
-    entity: Option<MeshRef>,
-    drift: Drift,
+    by: PressBy,
+}
+
+// What holds a press down.
+#[derive(Clone, Copy, Debug)]
+enum PressBy {
+    // The trigger or the pinch, with the ray
+    Ray {
+        start: Duration,
+        // The direction that the ray pointed in at the pull
+        direction: [f32; 3],
+        // The highest pull of the trigger since the press began
+        peak: f32,
+        // The mesh of a volume that the press began on
+        entity: Option<MeshRef>,
+        drift: Drift,
+    },
+    // The fingertip on the panel's face
+    Touch,
 }
 
 // The pointer of one hand.
@@ -86,6 +105,9 @@ pub(crate) struct Pointer {
     extras: Extras,
     // The ray behind the frame's gestures on volumes
     volume_ray: Option<VolumeRay>,
+    touch: DirectTouch,
+    // Where the fingertip hovers or presses in this frame; `None` while the ray points
+    contact: Option<Hit>,
 }
 
 impl Pointer {
@@ -99,24 +121,38 @@ impl Pointer {
             over: None,
             extras: Extras::default(),
             volume_ray: None,
+            touch: DirectTouch::default(),
+            contact: None,
         }
     }
 
     // The gestures of a frame with this hand's `aim`, added to `out`.
+    //
+    // A fingertip that is near a panel takes the pointer from the ray: the ray's pull presses
+    // nothing then, and its beam hides. A press keeps the input that began it until it ends, so a
+    // ray's press or carry keeps the fingertip from touching, and a touch keeps the pinch from
+    // pressing. A pinch that closed while the fingertip was near counts as held from before.
     pub(crate) fn update(&mut self, aim: Option<Aim>, frame: &Frame<'_>, out: &mut Gestures) {
         let pull = self.reach.update(self.side, aim, frame.time, frame.scene);
         let reach = self.reach;
         self.volume_ray = self.volume_ray_of(&reach, frame);
-        match pull {
-            Pull::Pulled => match reach.press_target(self.side, frame.time, frame.scene) {
-                Some(PressTarget::Handle(handle)) => self.grab(&reach, &handle, frame, out),
-                Some(PressTarget::Panel(hit)) => self.pull(&reach, hit, frame, out),
-                None => self.hover(reach.hit, out),
-            },
-            Pull::Up if self.held.is_some() => self.put_down(&reach, frame.time, out),
-            Pull::Up if self.press.is_some() => self.release(&reach, frame.time, out),
-            _ if self.held.is_some() => self.hold(&reach, frame, out),
-            _ => self.follow(&reach, frame, out),
+        // While the ray presses or carries, the fingertip counts as lost: after the ray's press it
+        // must be seen for a frame in front of a face before it presses
+        let by_ray = self.held.is_some()
+            || self
+                .press
+                .is_some_and(|press| matches!(press.by, PressBy::Ray { .. }));
+        let tip = aim
+            .and_then(|aim| aim.tip)
+            .filter(|_| frame.direct_touch && !by_ray);
+        let contact = self.touch.update(tip, frame.scene, self.side);
+        self.contact = contact.hit();
+        match contact {
+            Contact::Down(hit) => self.touch_down(hit, out),
+            Contact::On(hit) => self.touch_on(hit, out),
+            Contact::Up { near } => self.release(near.or(reach.hit), frame.time, out),
+            Contact::Near(hit) => self.hover(Some(hit), out),
+            Contact::Away => self.point(pull, &reach, frame, out),
         }
         self.press_others(
             aim.map_or_else(Buttons::default, |aim| aim.buttons),
@@ -126,8 +162,23 @@ impl Pointer {
         self.scroll(&reach, frame, out);
     }
 
-    // The cursor to show on a panel with content: the point that a press holds, or where the ray
-    // meets the panel.
+    // What the ray and the trigger do in a frame in which the fingertip touches nothing.
+    fn point(&mut self, pull: Pull, reach: &Reach, frame: &Frame<'_>, out: &mut Gestures) {
+        match pull {
+            Pull::Pulled => match reach.press_target(self.side, frame.time, frame.scene) {
+                Some(PressTarget::Handle(handle)) => self.grab(reach, &handle, frame, out),
+                Some(PressTarget::Panel(hit)) => self.pull(reach, hit, frame, out),
+                None => self.hover(reach.hit, out),
+            },
+            Pull::Up if self.held.is_some() => self.put_down(reach, frame.time, out),
+            Pull::Up if self.press.is_some() => self.release(reach.hit, frame.time, out),
+            _ if self.held.is_some() => self.hold(reach, frame, out),
+            _ => self.follow(reach, frame, out),
+        }
+    }
+
+    // The cursor to show on a panel with content: the point that a press holds, or where the
+    // fingertip or the ray is over the panel. The dot shows a touch's press as it shows a ray's.
     pub(crate) fn cursor(&self) -> Option<Cursor> {
         match self.press {
             Some(Press {
@@ -136,7 +187,11 @@ impl Pointer {
             _ if self.held.is_some() => None,
             press => {
                 let pressed = press.is_some_and(|press| press.target == Target::Atlas);
-                self.reach.content_hit.map(|hit| hit.cursor(pressed))
+                let over = match self.contact {
+                    Some(touch) => Some(touch).filter(Hit::on_content),
+                    None => self.reach.content_hit,
+                };
+                over.map(|hit| hit.cursor(pressed))
             }
         }
     }
@@ -150,10 +205,11 @@ impl Pointer {
     }
 
     // The handle that the pointer presses, or else the one that a pull would grab. A press on a
-    // panel shows no handle: it cannot become a carry.
+    // panel shows no handle: it cannot become a carry. A fingertip near a panel grabs no handle,
+    // since its touch presses the panel.
     pub(crate) fn handle(&self) -> Option<HandleFocus> {
         self.held.map(|held| held.handle()).or_else(|| {
-            if self.press.is_some() {
+            if self.press.is_some() || self.contact.is_some() {
                 return None;
             }
             let handle = self.reach.grab()?;
@@ -165,9 +221,10 @@ impl Pointer {
         })
     }
 
-    // The ray to show, or `None` while it shows nothing.
+    // The ray to show, or `None` while it shows nothing. The fingertip hides the beam while it is
+    // near a panel.
     pub(crate) fn beam(&self) -> Option<Beam> {
-        self.reach.beam()
+        self.contact.is_none().then(|| self.reach.beam()).flatten()
     }
 
     // The panel that this hand holds by a handle, which the other hand cannot grab.
@@ -195,33 +252,67 @@ impl Pointer {
         self.press = Some(Press {
             target: hit.target(),
             button,
-            start: frame.time,
-            direction: ray.direction,
-            peak: reach.trigger,
             held: Some(hit),
-            entity: hit.pick.map(|pick| pick.mesh),
-            drift: Drift::begin(&hit.slot, &ray, frame.time),
+            by: PressBy::Ray {
+                start: frame.time,
+                direction: ray.direction,
+                peak: reach.trigger,
+                entity: hit.pick.map(|pick| pick.mesh),
+                drift: Drift::begin(&hit.slot, &ray, frame.time),
+            },
         });
         self.tick(out);
     }
 
-    // The trigger went up while a press was on: the release goes to the press's target. A press
-    // that still held its point clicks, and the controller ticks again. One that dragged ends with
-    // no tick.
-    fn release(&mut self, reach: &Reach, time: Duration, out: &mut Gestures) {
+    // The fingertip went into a panel's face at `hit`: a press of the primary button starts there,
+    // as a finger's press does on a screen, and the press ticks as a ray's does.
+    fn touch_down(&mut self, hit: Hit, out: &mut Gestures) {
+        self.move_to(hit.target(), hit.position(), out);
+        let button = PointerButton::Primary;
+        self.emit(out, hit.target(), Gesture::Press(button));
+        self.press = Some(Press {
+            target: hit.target(),
+            button: Some(button),
+            held: Some(hit),
+            by: PressBy::Touch,
+        });
+        self.tick(out);
+    }
+
+    // The fingertip stays on the panel that it pressed, over `hit`. The press holds its point
+    // until the fingertip slides TOUCH_SLOP from it, and then follows the fingertip.
+    fn touch_on(&mut self, hit: Hit, out: &mut Gestures) {
+        let Some(press) = &mut self.press else {
+            return;
+        };
+        if press
+            .held
+            .is_some_and(|held| (hit.x - held.x).hypot(hit.y - held.y) > TOUCH_SLOP)
+        {
+            press.held = None;
+        }
+        if press.held.is_none() {
+            self.move_to(hit.target(), hit.position(), out);
+        }
+    }
+
+    // The trigger went up, or the fingertip left the panel that it pressed, while a press was on:
+    // the release goes to the press's target. A press that still held its point clicks and ticks
+    // again. One that dragged ends with no tick. The pointer then hovers over `hover`.
+    fn release(&mut self, hover: Option<Hit>, time: Duration, out: &mut Gestures) {
         if let Some(press) = self.press.take() {
             if let Some(button) = press.button {
                 self.emit(out, press.target, Gesture::Release(button));
             }
             let clicked = press.held.is_some();
-            press
-                .drift
-                .report(self.side, time, if clicked { "a click" } else { "a drag" });
+            if let PressBy::Ray { drift, .. } = press.by {
+                drift.report(self.side, time, if clicked { "a click" } else { "a drag" });
+            }
             if clicked {
                 self.tick(out);
             }
         }
-        self.hover(reach.hit, out);
+        self.hover(hover, out);
     }
 
     // Asks for the light vibration that tells the hand that a press took or ended.
@@ -237,17 +328,28 @@ impl Pointer {
             self.hover(reach.hit, out);
             return;
         };
-        press.peak = press.peak.max(reach.trigger);
+        // A touch's press follows the fingertip, in `touch_on`
+        let PressBy::Ray {
+            start,
+            direction,
+            peak,
+            drift,
+            ..
+        } = &mut press.by
+        else {
+            return;
+        };
+        *peak = peak.max(reach.trigger);
         if let Some(ray) = reach.ray {
-            press.drift.note(&ray, frame.scene);
+            drift.note(&ray, frame.scene);
         }
-        let letting_go = reach.trigger < press.peak - LET_GO;
+        let letting_go = reach.trigger < *peak - LET_GO;
         if press.held.is_some()
             && !letting_go
             && let Some(ray) = reach.ray
         {
-            let turn = angle_between(press.direction, ray.direction).to_degrees();
-            let limit = if time.saturating_sub(press.start) < CLICK_TIME {
+            let turn = angle_between(*direction, ray.direction).to_degrees();
+            let limit = if time.saturating_sub(*start) < CLICK_TIME {
                 CLICK_ANGLE
             } else {
                 DRAG_ANGLE
@@ -317,7 +419,9 @@ impl Pointer {
         let hit = match self.press {
             Some(Press {
                 target: Target::Surface(volume),
-                entity: Some(mesh),
+                by: PressBy::Ray {
+                    entity: Some(mesh), ..
+                },
                 ..
             }) => {
                 let slot = frame.scene.panels.iter().find(|slot| slot.id == volume)?;

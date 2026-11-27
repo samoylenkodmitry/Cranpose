@@ -7,8 +7,8 @@ use cranpose_core::NodeId;
 
 use super::*;
 use crate::{
-    InputAction, InputEvent, InputSource, PointerMapping, Ray, aim::Aim, pointers::Pointers,
-    volume_pick::PickMeshes,
+    InputAction, InputEvent, InputSource, Ray, aim::Aim, pointer_settings::PointerChoice,
+    pointers::Pointers, volume_pick::PickMeshes,
 };
 
 // What a volume reports to the test: the nodes of its two quads, and the events of its callback.
@@ -153,7 +153,7 @@ impl Pointing {
             [None, Some(aim)],
             std::time::Duration::from_millis(10 * self.frame),
             (&panels, &self.picks),
-            (PointerMapping::default(), true),
+            PointerChoice::default(),
         );
         for gesture in self.pointer.surface_events() {
             self.headset.space.deliver_to_surface(gesture);
