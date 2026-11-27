@@ -102,6 +102,10 @@ pub(crate) struct StandIns {
     // whether one was drawn since the kept layers and blurred shadows were
     // last dropped, so they may hold it
     kept: Cell<bool>,
+    // whether this frame left a kept shader output to a later frame's fill
+    deferred: Cell<bool>,
+    // the frames that did, each counted as a landing by the frame after it
+    deferrals: Cell<u64>,
 }
 
 impl StandIns {
@@ -121,6 +125,16 @@ impl StandIns {
     // The kept layers and blurred shadows were dropped.
     pub(crate) fn drop_kept(&self) {
         self.kept.set(false);
+    }
+
+    // Whether the last frame left a kept shader output to this one, counted
+    // as a landing once read.
+    fn take_deferred(&self) -> bool {
+        let deferred = self.deferred.replace(false);
+        if deferred {
+            self.deferrals.set(self.deferrals.get() + 1);
+        }
+        deferred
     }
 }
 
@@ -212,7 +226,7 @@ impl RendererPipelines {
         let built = self.landing.as_ref().map_or(0, |landing| landing.built());
         #[cfg(target_arch = "wasm32")]
         let built = self.compiler.landings();
-        built + self.shape_pipelines.landings()
+        built + self.shape_pipelines.landings() + self.stand_ins.deferrals.get()
     }
 
     // Starts a frame's count of landings: whether a pipeline that a stand-in
@@ -224,14 +238,16 @@ impl RendererPipelines {
     pub(crate) fn take_landing_at_frame_start(&mut self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let deferred = self.stand_ins.take_deferred();
             let Some(landing) = &self.landing else {
-                return false;
+                return deferred;
             };
             self.built_at_frame_start = landing.built();
-            landing.take_landed()
+            landing.take_landed() | deferred
         }
         #[cfg(target_arch = "wasm32")]
         {
+            self.stand_ins.take_deferred();
             let landings = self.landings();
             let started = std::mem::replace(&mut self.built_at_frame_start, landings);
             started != landings && self.stand_ins.kept()
@@ -692,6 +708,13 @@ impl RendererPipelines {
         }
     }
 
+    // Notes a kept shader output left to a later frame's fill: a stand-in
+    // the next frame replaces, as if a pipeline it waited for landed.
+    pub(crate) fn note_deferred_fill(&self, stats: &FrameStats) {
+        self.note_placeholder(stats);
+        self.stand_ins.deferred.set(true);
+    }
+
     /// Notes an effect drawn as its placeholder, or a draw left out, while
     /// its pipelines compile, and waits for the next one to land.
     pub(crate) fn note_placeholder(&self, stats: &FrameStats) {
@@ -782,7 +805,9 @@ impl RendererPipelines {
     pub(super) fn placeholder_awaits_frame(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(landing) = &self.landing {
-            return landing.landed() || (self.drew_placeholder.get() && !landing.has_wake());
+            return landing.landed()
+                || self.stand_ins.deferred.get()
+                || (self.drew_placeholder.get() && !landing.has_wake());
         }
         self.drew_placeholder.get()
     }

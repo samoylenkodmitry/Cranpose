@@ -210,6 +210,8 @@ fn a_backdrop_keeps_its_capture_and_records_the_part_of_it_inside_the_effects_ou
     );
 }
 
+use cranpose_render_common::graph::CachePolicy;
+
 use super::*;
 use crate::scene::DrawOpKind;
 

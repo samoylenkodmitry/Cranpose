@@ -9,7 +9,7 @@ use std::{
 
 use cranpose_core::NodeId;
 use cranpose_render_common::{
-    graph::{CachePolicy, ProjectiveTransform, quad_bounds},
+    graph::{ProjectiveTransform, quad_bounds},
     raster_cache::{LayerRasterCacheKey, RasterScale},
 };
 use cranpose_ui_graphics::{
@@ -2317,7 +2317,7 @@ impl SurfacePlan {
     }
 
     fn cache_key(&self, child: &ChildLayer) -> Option<LayerRasterCacheKey> {
-        (!child.content.contains_backdrop() && child.cache_policy == CachePolicy::Auto).then(|| {
+        (!child.content.contains_backdrop() && child.cache_policy.keeps_pixels()).then(|| {
             LayerRasterCacheKey::source_content(
                 child.node_id,
                 child.content_hash,

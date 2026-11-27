@@ -14,6 +14,7 @@ mod device_error_sentry;
 mod draw_pass;
 mod effect_renderer;
 mod fast_cores;
+mod fill_budget;
 mod frame;
 mod geometry;
 mod idle_pool;

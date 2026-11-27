@@ -1,14 +1,25 @@
 // Layers a runtime shader draws over their content in the pass beneath,
 // and layers drawn by their shader alone.
 
-use cranpose_ui_graphics::{BlendMode, Point, RenderEffect, RuntimeShader};
+use std::rc::Rc;
+
+use cranpose_render_common::{
+    graph::CachePolicy,
+    raster_cache::{LayerRasterCacheKey, RasterScale},
+};
+use cranpose_ui_graphics::{BlendMode, Point, Rect, RenderEffect, RenderHash, RuntimeShader};
 
 use super::{
     ChildLayer, CompositeSlot, CompositeSource, DeviceRect, FrameExecutor, MAX_SURFACE_PIXELS,
     ResolvedComposite, SourceContent, SurfaceRender, TRANSPARENT_SOURCE, child_composite_support,
     child_surface_rect, draws_nothing, grid_rounded_mask, layer_pixel_rect, placeholder_mask,
 };
-use crate::frame_graph::FrameCommandRecorder;
+use crate::{
+    effect_renderer::{EffectReads, RoundedCompositeMask},
+    frame_graph::FrameCommandRecorder,
+    layer_cache::Retained,
+    offscreen::OffscreenTarget,
+};
 
 impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     // Whether a child's runtime shader can draw in the final pass over the
@@ -100,20 +111,24 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             width: surface_rect.width,
             height: surface_rect.height,
         };
-        let layer_pixel_rect = layer_pixel_rect(child, surface_rect, scale);
-        let rounded_mask = grid_rounded_mask(child, snap, scale);
+        let place = ShaderPlace {
+            z,
+            dest,
+            visible: support,
+            layer_pixel_rect: layer_pixel_rect(child, surface_rect, scale),
+            size: (width, height),
+            scale,
+            snap,
+            rounded_mask: grid_rounded_mask(child, snap, scale),
+        };
+        let (layer_pixel_rect, rounded_mask) = (place.layer_pixel_rect, place.rounded_mask);
         if !self.effect_draws_now(effect, layer_pixel_rect, (width, height)) {
-            let [x, y, width, height] = layer_pixel_rect;
-            let layer = DeviceRect {
-                x: dest.x + x,
-                y: dest.y + y,
-                width,
-                height,
-            };
-            return Some(shader.placeholder().map(|placeholder| {
-                let mask = placeholder_mask(placeholder, layer, scale).or(rounded_mask);
-                self.placeholder_fill(placeholder.color, z, layer, support, child.alpha, mask)
-            }));
+            return Some(self.shader_placeholder(child, shader, &place));
+        }
+        if child.cache_policy == CachePolicy::Offscreen
+            && let Some(kept) = self.kept_shader_output(child, effect, shader, &place)
+        {
+            return Some(kept);
         }
         let source = self
             .renderer
@@ -134,4 +149,126 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             rounded_mask,
         )))
     }
+
+    // The placeholder of a layer its shader alone draws, over the layer's
+    // place, or nothing for a shader without one.
+    fn shader_placeholder(
+        &mut self,
+        child: &ChildLayer,
+        shader: &RuntimeShader,
+        place: &ShaderPlace,
+    ) -> Option<ResolvedComposite> {
+        let placeholder = shader.placeholder()?;
+        let [x, y, width, height] = place.layer_pixel_rect;
+        let layer = DeviceRect {
+            x: place.dest.x + x,
+            y: place.dest.y + y,
+            width,
+            height,
+        };
+        let mask = placeholder_mask(placeholder, layer, place.scale).or(place.rounded_mask);
+        Some(self.placeholder_fill(
+            placeholder.color,
+            place.z,
+            layer,
+            place.visible,
+            child.alpha,
+            mask,
+        ))
+    }
+
+    // The output of a layer its shader alone draws, which the app draws
+    // offscreen: from the layer cache, or drawn into it from its first
+    // frame while the frame's fills allow. Past them the layer shows its
+    // placeholder, or nothing, until the next frame fills it. `None` when
+    // the output cannot be kept and draws over the page.
+    fn kept_shader_output(
+        &mut self,
+        child: &ChildLayer,
+        effect: &RenderEffect,
+        shader: &RuntimeShader,
+        place: &ShaderPlace,
+    ) -> Option<Option<ResolvedComposite>> {
+        let (width, height) = place.size;
+        let [x, y, w, h] = place.layer_pixel_rect;
+        // keyed by what it draws, so layers that draw the same share it
+        let key = LayerRasterCacheKey::layer_effect(
+            None,
+            NO_INPUT,
+            effect.render_hash(),
+            Rect {
+                x,
+                y,
+                width: w,
+                height: h,
+            },
+            (width, height),
+            RasterScale::from_scale(place.scale),
+        );
+        let kept_slot = |texture: Rc<OffscreenTarget>| {
+            CompositeSlot {
+                z: place.z,
+                source: CompositeSource {
+                    texture,
+                    content: SourceContent::retained(&key),
+                },
+                dest: place.dest,
+                visible: place.visible,
+            }
+            .grid_child(child, None, place.snap, place.scale)
+        };
+        if let Some(cached) = self.renderer.layer_cache.get(&key) {
+            self.renderer
+                .frame_stats
+                .record_layer_cache_hit(&key, width, height);
+            return Some(Some(kept_slot(cached.texture)));
+        }
+        if !self.renderer.layer_cache.fits(width, height) {
+            return None;
+        }
+        let pixels = u64::from(width) * u64::from(height);
+        if !self.renderer.layer_cache.fills.allows(pixels) {
+            self.renderer
+                .pipelines
+                .note_deferred_fill(&self.renderer.frame_stats);
+            return Some(self.shader_placeholder(child, shader, place));
+        }
+        self.renderer
+            .frame_stats
+            .record_layer_cache_miss(&key, width, height);
+        let kept = Rc::new(self.renderer.acquire_retained_surface(width, height));
+        let source = self
+            .renderer
+            .transparent_source(self.recorder, width, height);
+        let mark = self.renderer.stand_in_mark();
+        self.apply_effect_into(
+            &source,
+            &kept,
+            effect,
+            place.layer_pixel_rect,
+            EffectReads::default(),
+        )
+        .ok()?;
+        self.renderer.layer_cache.fills.spend(pixels);
+        let held = self.pixels_since(mark);
+        self.renderer
+            .layer_cache
+            .insert(key, Retained::surface(Rc::clone(&kept), held), None);
+        Some(Some(kept_slot(kept)))
+    }
 }
+
+// Where a layer that its shader alone draws goes.
+struct ShaderPlace {
+    z: usize,
+    dest: DeviceRect,
+    visible: DeviceRect,
+    layer_pixel_rect: [f32; 4],
+    size: (u32, u32),
+    scale: f32,
+    snap: Point,
+    rounded_mask: Option<RoundedCompositeMask>,
+}
+
+// The input of a layer its shader alone draws: nothing.
+const NO_INPUT: u64 = 0;

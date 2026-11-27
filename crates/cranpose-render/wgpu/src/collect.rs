@@ -568,7 +568,7 @@ fn push_isolated_child(
     let local_layer = local_content_layer_for(graphics);
     let content_hash = content_key(layer, context.settings.update);
     let nominal_scale = layer_uniform_scale(graphics);
-    let retained_scale = if layer.cache_policy() == CachePolicy::Auto {
+    let retained_scale = if layer.cache_policy().keeps_pixels() {
         motion.retained_scale(layer.node_id(), nominal_scale, content_hash)
     } else {
         nominal_scale
@@ -617,7 +617,7 @@ fn push_isolated_child(
     } else {
         GraphicsLayer::composite_alpha_8bit(graphics.alpha)
     };
-    let cacheable = layer.cache_policy() == CachePolicy::Auto && !content.contains_backdrop();
+    let cacheable = layer.cache_policy().keeps_pixels() && !content.contains_backdrop();
     let surface_scale = if cacheable {
         retained_scale
     } else {
