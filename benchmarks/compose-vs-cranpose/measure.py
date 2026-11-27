@@ -831,10 +831,10 @@ class PageTarget:
         return ['-a', 'android.intent.action.VIEW', '-d', url, '-n', f'{CHROME}/com.google.android.apps.chrome.Main']
 
     def check_page(self):
-        """Raises when the page logged no first frame since its launch, or a
-        GPU device error."""
+        """Raises when the page logged no first frame since its launch. A
+        page that lost its GPU device after its first frame is measured as it
+        drew; its leg's page record holds the loss."""
         self.server.wait_for('PERF first_frame', 0, self.mark)
-        self.server.check_device(self.mark)
 
     def page_record(self, started, ended):
         """What the page said of itself from its launch at `started` to the
@@ -866,6 +866,40 @@ def load_extras(scenario, args):
     return f'{preset} {args.extra}'.strip()
 
 
+class RunFailure(RuntimeError):
+    """A run that ended without what it measures, with what its page said of
+    itself (`page`, None for an app that is no page)."""
+
+    def __init__(self, failure, page):
+        super().__init__(str(failure))
+        self.page = page
+
+
+def measured_span_s(output):
+    """The seconds from the start command to the run's end in the output of
+    `perf_window.sh`, on the phone's clock; None for a run that never
+    started."""
+    marks = {fields[0]: float(fields[1]) for fields in map(str.split, output.splitlines())
+             if len(fields) > 1 and fields[0] in ('LAUNCH', 'T1')}
+    return marks['T1'] - marks['LAUNCH'] if len(marks) == 2 else None
+
+
+def checked_start(device, target, output):
+    """The launch, the processes and the layer of a run that ended as a run
+    must: the app's first process still up, its window in front and, for a
+    page, its first frame drawn. Raises otherwise."""
+    launch, pids, layer = window_start(output, target)
+    if str(pids[0]) not in device.shell('pidof', target.package, check=False).split():
+        raise RuntimeError(f'{target.package} exited or restarted during the run')
+    focused = focused_window(device)
+    splash_only = layer is None and focused in (None, f'Splash Screen {target.package}')
+    if focused != target.package and not splash_only:
+        raise RuntimeError(f'{focused or "no window"} had the focus at the end of the run, not {target.package}')
+    if isinstance(target, PageTarget):
+        target.check_page()
+    return launch, pids, layer
+
+
 def measure_run(device, app, scenario, args, destination, run_s=None):
     """One cold launch, measured from the start command for `run_s` seconds
     (`args.run` unless given), or until it presented fewer than `SLOW_FPS`
@@ -887,24 +921,23 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
                           f'{run_s:.2f}', str(args.interval), '1' if target.gfx else '0',
                           str(0 if getattr(args, 'full_run', False) else SLOW_FPS), str(SLOW_SECONDS), *target.start_args(scenario, extras.split()),
                           timeout=run_s + 60)
-    ended = time.monotonic()
+    returned = time.monotonic()
     (destination / f'{target.name}-{scenario}-{int(time.time())}.txt').write_text(output)
-    run['launch'], pids, layer = window_start(output, target)
+    # The page's lines count up to the run's end, not to the shell's return
+    # after it.
+    span = measured_span_s(output)
+    ended = sent + span if span is not None else returned
+    run['page'] = target.page_record(sent, ended) if isinstance(target, PageTarget) else None
+    try:
+        run['launch'], pids, layer = checked_start(device, target, output)
+    except RuntimeError as failure:
+        raise RunFailure(failure, run['page']) from failure
     launched = run['launch']['uptime_s']
     run['started_s'] = round(launched_host - args.started, 1)
     lines = output.splitlines()
     t1 = float(next(line for line in lines if line.startswith('T1 ')).split()[1])
     whole_index = next(i for i, line in enumerate(lines) if line == 'WHOLE')
     whole_cpu, whole_threads = parse_snap(lines[whole_index + 1:])
-    if str(pids[0]) not in device.shell('pidof', target.package, check=False).split():
-        raise RuntimeError(f'{target.package} exited or restarted during the run')
-    focused = focused_window(device)
-    splash_only = layer is None and focused in (None, f'Splash Screen {target.package}')
-    if focused != target.package and not splash_only:
-        raise RuntimeError(f'{focused or "no window"} had the focus at the end of the run, not {target.package}')
-    if isinstance(target, PageTarget):
-        target.check_page()
-        run['page'] = target.page_record(sent, ended)
     elapsed = t1 - launched
     frames, calibration, vsync_ms, poll_gaps = presents(output)
     # /proc/uptime counts suspended time and SurfaceFlinger's monotonic clock

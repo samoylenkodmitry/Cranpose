@@ -19,9 +19,9 @@ an install leaves them (`APP_STATE`; in the browser, a new Chrome profile),
 from an install of its program that macOS never ran (`fresh_install`), then
 a second time. In the browser, Chrome opens once on no app's page before the
 first round (`warm_chrome`), so no app's leg is Chrome's first launch of the
-run. A leg that fails, in
-which other processes spent more than `--max-others` cores, or whose page was
-hidden (`BrowserServer.page_record`), is measured again, up to three times; an app no attempt measured leaves its leg out. A leg
+run. A leg that fails, or in
+which other processes spent more than `--max-others` cores, is measured again,
+up to three times; an app no attempt measured leaves its leg out. A leg
 whose frame rate is more than 1.5 times off the app's earlier legs is measured
 once more, with a picture of its window kept beside the results. Every leg
 is one launch measured from its start for `--run` seconds, the same span for
@@ -30,6 +30,9 @@ seconds count as the rest of the run does, and the frames of every second
 are kept. A leg whose app presented fewer than `SLOW_FPS` frames in each of
 `SLOW_SECONDS` seconds in a row since its first frame ends there, marked
 `stopped`. A disturbed leg stays in the run, marked, out of the medians.
+A page's leg keeps what the page said of itself as `page`
+(`BrowserServer.page_record`); a page that loses its GPU device after its
+first frame is measured as it drew.
 
 Before the first leg and after the last, `FrameCount.app` reports the state of
 the main display and how often the window server composites it for a window
@@ -877,7 +880,6 @@ def measure(name, args, work, server, stage, label, earlier, profile, program=No
         log = app.log.read_text(errors='replace')
         if 'PERF first_frame' not in log:
             raise RuntimeError(f'{name} logged no first frame within its {run_s:.0f} s run')
-        server.check_device(since)
         page = server.page_record(since, launched, ended)
         mine = tree(app.pid, after, ended - app.started + 1)
         held = memory(mine, stage)
@@ -1165,8 +1167,7 @@ def undisturbed_leg(name, args, server, stage, label, earlier, failures, profile
         if checks_waited is not None:
             leg['program_checks_waited_s'] = checks_waited
         limit = disturbed_limit(current_idle, args.max_others, max_idle)
-        leg['disturbed'] = (leg['other_cores'] > limit or bool(leg.get('display_problems'))
-                            or leg.get('page', {}).get('hidden', False))
+        leg['disturbed'] = leg['other_cores'] > limit or bool(leg.get('display_problems'))
         legs.append(leg)
         print(f'{label:16} fps {leg["fps"]:6.1f} cpu/f {leg["cpu_ms_per_frame"]} first frame '
               f'{leg["first_frame_s"]} s p99 {leg["interval_p99_ms"]} others {leg["other_cores"]}', flush=True)

@@ -41,6 +41,29 @@ def chrome():
     return found
 
 
+def tied_chrome(arguments):
+    """Headless Chrome that quits once its DevTools pipe on fds 3 and 4
+    closes, as `launchChrome` in scripts/a11y/chrome.mjs starts it: this
+    process holds the pipe's other ends, so Chrome ends with it even after a
+    SIGKILL, and leaves no Chrome to move a later measure on the host."""
+    commands, to_chrome = os.pipe()
+    from_chrome, replies = os.pipe()
+
+    def wire():
+        os.dup2(commands, 3)
+        os.dup2(replies, 4)
+
+    browser = subprocess.Popen(
+        # Without the store and keychain switches Chrome on a Linux runner
+        # waits for a desktop keyring and never loads a page.
+        [chrome(), '--headless=new', '--remote-debugging-pipe', '--no-first-run', '--no-default-browser-check',
+         '--password-store=basic', '--use-mock-keychain', '--enable-unsafe-swiftshader', *arguments],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=wire, pass_fds=(3, 4))
+    os.close(commands)
+    os.close(replies)
+    return browser, (to_chrome, from_chrome)
+
+
 @unittest.skipUnless(chrome(), 'no Chrome or Chromium')
 class PageRecordInChromeTest(unittest.TestCase):
     def test_a_page_that_stops_asking_for_frames_and_loses_its_context_says_so(self):
@@ -52,10 +75,9 @@ class PageRecordInChromeTest(unittest.TestCase):
         self.addCleanup(server.server.server_close)
         self.addCleanup(server.server.shutdown)
         since, started = server.mark(), time.monotonic()
-        browser = subprocess.Popen(
-            [chrome(), '--headless=new', f'--user-data-dir={folder.name}/profile', '--no-first-run',
-             '--no-default-browser-check', '--enable-unsafe-swiftshader', f'{server.base}/app/index.html'],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        browser, pipe = tied_chrome([f'--user-data-dir={folder.name}/profile', f'{server.base}/app/index.html'])
+        for end in pipe:
+            self.addCleanup(os.close, end)
         self.addCleanup(browser.wait, 10)
         self.addCleanup(browser.kill)
         server.wait_for('PERF first_frame', 60, since)
@@ -66,6 +88,7 @@ class PageRecordInChromeTest(unittest.TestCase):
             if record and record['gpu_events'] and record['last_beat_s'] > record['gpu_events'][0][0] + 1.5:
                 break
             time.sleep(0.2)
+        self.assertIsNotNone(record, 'the page posted no line of its own')
         self.assertEqual(record['visibility'][0][1], 'visible')
         self.assertFalse(record['hidden'])
         self.assertEqual([event for _, event, _ in record['gpu_events']][:1], ['context_lost'])

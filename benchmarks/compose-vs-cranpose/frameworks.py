@@ -35,7 +35,7 @@ from android_benchmark_support import digest
 from app_size import artifact_bytes
 from browser import BrowserServer
 from measure import (APPS, CHROME, load_extras, HERE, REMOTE_WINDOW, STARTS, AppTarget, Device, PageTarget,
-                     device_lock, figure, measure_run)
+                     RunFailure, device_lock, figure, measure_run)
 from timelines import slow_rule
 import versions
 
@@ -68,7 +68,9 @@ def measure_scenario(device, name, extras, targets, args, install_errors):
                     print(f'{app:10} {start:6} failed: {failure}', flush=True)
                     # Kept, so the dashboard shows why the app has no frames.
                     failures.append({'subject': app, 'round': round_index, 'start': start,
-                                     'error': str(failure)[:300]})
+                                     'error': str(failure)[:300],
+                                     **({'page': failure.page} if isinstance(failure, RunFailure) and failure.page
+                                        else {})})
                     if args.full_run:
                         continue
                     if round_index == 0:

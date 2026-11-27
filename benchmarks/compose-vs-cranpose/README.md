@@ -935,10 +935,12 @@ The script also reports the page itself: its visibility at its start and at
 each change, each lost or restored WebGL context and each lost WebGPU device,
 and once a second a beat with the page's clock and its last frame request.
 Each leg of a page keeps them with its console errors and uncaught errors as
-`page`: the seconds after the start command at which each arrived, and when
-the page last asked for a frame. A leg whose page was hidden is `disturbed`:
-it stays in the run, out of the medians. A page that stops drawing while shown
-is measured as it drew.
+`page`: the seconds after the start command at which each arrived up to the
+leg's end, and when
+the page last asked for a frame. A leg whose page was hidden after it was
+shown is `disturbed`: it stays in the run, out of the medians. A page that
+stops drawing while shown, or loses its GPU device after its first frame, is
+measured as it drew.
 
 `desktop.py --browser DIR` opens each page in its own Chrome app window, as
 it opens the plain page, and counts frames, CPU, memory and clocks as for any

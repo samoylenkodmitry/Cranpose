@@ -77,17 +77,6 @@ class BrowserServerTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'the page failed: PERF error Uncaught RuntimeError.*shader failed'):
             self.server.wait_for('PERF ready', 5, since)
 
-    def test_a_gpu_device_error_since_the_mark_fails_the_run(self):
-        post(self.server, 'PERF console.error: [gpu-device] the WebGL context was lost')
-        since = self.server.mark()
-        self.server.check_device(since)
-        post(self.server, 'PERF ready tier=8')
-        self.server.check_device(since)
-        # wasm-logger's styled arguments, as the console script joins them.
-        post(self.server, 'PERF console.error: %cERROR%c render.rs:1068%c [gpu-device] device lost (Unknown): gone')
-        with self.assertRaisesRegex(RuntimeError, r'the page lost its GPU device: .*device lost \(Unknown\)'):
-            self.server.check_device(since)
-
     def test_what_a_page_said_of_itself_in_a_leg_is_its_record(self):
         post(self.server, 'PERF page beat 9000 8990 540')
         since = self.server.mark()
@@ -95,6 +84,8 @@ class BrowserServerTest(unittest.TestCase):
         for line in ('PERF page visibility visible 120', 'PERF first_frame', 'PERF page beat 1120 1100 31',
                      'PERF page context_lost 1500 ', 'PERF page context_restored 1700',
                      'PERF page device_lost 1800 unknown the GPU process exited',
+                     # wasm-logger's styled arguments, as the console script joins them.
+                     'PERF console.error: %cERROR%c render.rs:1068%c [gpu-device] device lost (Unknown): gone',
                      'PERF console.error: panicked at src/lib.rs:7:5: index out of bounds',
                      'PERF error Uncaught RuntimeError: unreachable', 'PERF page beat 2120 1300 40',
                      'PERF page visibility hidden 2500'):
@@ -108,9 +99,10 @@ class BrowserServerTest(unittest.TestCase):
                          [('context_lost', ''), ('context_restored', ''),
                           ('device_lost', 'unknown the GPU process exited')])
         self.assertEqual([text for _, text in record['errors']],
-                         ['console.error: panicked at src/lib.rs:7:5: index out of bounds',
+                         ['console.error: %cERROR%c render.rs:1068%c [gpu-device] device lost (Unknown): gone',
+                          'console.error: panicked at src/lib.rs:7:5: index out of bounds',
                           'error Uncaught RuntimeError: unreachable'])
-        self.assertEqual(record['error_count'], 2)
+        self.assertEqual(record['error_count'], 3)
         # The last beat in the leg came 820 ms of the page's clock after its
         # last frame request, and a beat after the leg's end is not its.
         self.assertEqual(record['frame_requests'], 40)
@@ -127,6 +119,15 @@ class BrowserServerTest(unittest.TestCase):
         self.assertFalse(record['hidden'])
         self.assertIsNone(record['last_frame_request_s'])
         self.assertEqual(record['frame_requests'], 0)
+
+    def test_a_page_that_opens_hidden_while_its_tab_comes_up_is_not_hidden(self):
+        for states, hidden in ((['hidden', 'visible'], False), (['hidden', 'visible', 'hidden'], True),
+                               (['hidden'], True)):
+            since = self.server.mark()
+            started = time.monotonic()
+            for state in states:
+                post(self.server, f'PERF page visibility {state} 50')
+            self.assertEqual(self.server.page_record(since, started, time.monotonic())['hidden'], hidden, states)
 
     def test_a_leg_whose_app_loaded_no_page_has_no_page_record(self):
         since = self.server.mark()

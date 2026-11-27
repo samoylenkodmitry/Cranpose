@@ -211,25 +211,17 @@ class BrowserServer:
         """A place in what was heard, for `wait_for` to count from."""
         return len(self.heard)
 
-    def check_device(self, since=0):
-        """Raises when a page logged a `[gpu-device]` error since `since`.
-        Cranpose logs one when it loses its GPU device or its WebGL context,
-        or when a wgpu call fails: the run measured a page without its
-        device. The script posts no other line that holds the tag."""
-        with self.condition:
-            lost = next((line for _, line in self.heard[since:] if '[gpu-device]' in line), None)
-        if lost:
-            raise RuntimeError(f'the page lost its GPU device: {lost[:300]}')
-
     def page_record(self, since, started, ended):
         """What the page of a leg said of itself in the lines heard since
         `since` that arrived between `started` and `ended` (both on
         `time.monotonic()`), each at the seconds after `started` it arrived:
         its visibility at its start and at each change, its WebGL context
         losses and restores and its WebGPU device losses, its console errors
-        and uncaught errors (a Rust panic logs one), its last beat and its
-        last frame request. `hidden` says the page was hidden at some time in
-        the leg. None when no page spoke."""
+        and uncaught errors (a Rust panic logs one; Cranpose logs a
+        `[gpu-device]` one when it loses its device), its last beat and its
+        last frame request. `hidden` says the page was hidden after it was
+        shown, or never shown: a page that opens hidden while its tab comes
+        up is not. None when no page spoke."""
         with self.condition:
             lines = [(round(at - started, 2), line) for at, line in self.heard[since:] if started <= at <= ended]
         if not any(line.startswith('PERF page ') for _, line in lines):
@@ -239,7 +231,6 @@ class BrowserServer:
         for at, line in lines:
             if found := PAGE_VISIBILITY.match(line):
                 record['visibility'].append([at, found['state']])
-                record['hidden'] |= found['state'] == 'hidden'
             elif found := PAGE_BEAT.match(line):
                 clock, request = int(found['clock']), int(found['request'])
                 record['last_beat_s'] = at
@@ -252,6 +243,9 @@ class BrowserServer:
                 record['error_count'] += 1
                 if len(record['errors']) < PAGE_ERRORS_KEPT:
                     record['errors'].append([at, line[len('PERF '):][:300]])
+        states = [state for _, state in record['visibility']]
+        shown = next((index for index, state in enumerate(states) if state == 'visible'), None)
+        record['hidden'] = bool(states) and (shown is None or 'hidden' in states[shown:])
         return record
 
     def wait_for(self, text, timeout, since=0):
