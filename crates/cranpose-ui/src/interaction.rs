@@ -186,7 +186,9 @@ impl MutableInteractionSource {
 
     /// Records `interaction` and updates the pressed and hovered state to match.
     pub fn emit(&self, interaction: Interaction) {
-        let inner = self.inner();
+        let Some(inner) = self.inner.try_get() else {
+            return;
+        };
         inner.last_interaction.set(Some(interaction));
         let (active, state, id, starts) = match interaction {
             Interaction::Press(press) => {

@@ -132,7 +132,12 @@ impl DraggableState {
     }
 
     pub(crate) fn set_dragging(&self, dragging: bool) {
-        if self.inner.dragging.get_non_reactive() != dragging {
+        if self
+            .inner
+            .dragging
+            .try_get_non_reactive()
+            .is_some_and(|current| current != dragging)
+        {
             self.inner.dragging.set(dragging);
         }
     }

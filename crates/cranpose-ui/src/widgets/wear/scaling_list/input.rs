@@ -129,7 +129,11 @@ impl Swipe {
                 0.0,
                 speed,
                 move |delta| state.dispatch_raw_delta(delta),
-                move || state.end_fling(id),
+                move || {
+                    if let Some(id) = id {
+                        state.end_fling(id);
+                    }
+                },
             );
             event.consume();
         }
