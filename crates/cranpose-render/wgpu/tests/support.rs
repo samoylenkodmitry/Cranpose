@@ -29,9 +29,9 @@ use cranpose_ui::{
     widgets::{Box, BoxSpec},
 };
 use cranpose_ui_graphics::{
-    Brush, DrawPrimitive, DrawScope, DrawScopeDefault, LiquidGlassRect, LiquidGlassSpec, Point,
-    RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect, RuntimeShader, SubstrateSpec,
-    liquid_glass_effect,
+    Brush, CornerRadii, DrawPrimitive, DrawScope, DrawScopeDefault, LiquidGlassRect,
+    LiquidGlassSpec, Point, RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect, RuntimeShader,
+    SubstrateSpec, liquid_glass_effect,
 };
 
 pub(crate) static TEST_FONT: &[u8] = DEFAULT_FONT_BYTES;
@@ -1280,6 +1280,43 @@ pub(crate) fn solid_rect(rect: Rect, color: Color) -> RenderNode {
     brush_rect(rect, Brush::solid(color))
 }
 
+// A solid round rect over `area` with corners of `radius`, under `clip`.
+pub(crate) fn round_rect_fill(
+    area: Rect,
+    color: Color,
+    radius: f32,
+    clip: Option<Rect>,
+) -> RenderNode {
+    draw_node(
+        DrawPrimitive::RoundRect {
+            rect: area,
+            brush: Brush::solid(color),
+            radii: CornerRadii::uniform(radius),
+            stroke: None,
+        },
+        clip,
+    )
+}
+
+// A transform turning `area` by `degrees` about its centre.
+pub(crate) fn turned_about_centre(area: Rect, degrees: f32) -> ProjectiveTransform {
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    let (cx, cy) = (area.x + area.width / 2.0, area.y + area.height / 2.0);
+    let turn = |x: f32, y: f32| {
+        let (dx, dy) = (x - cx, y - cy);
+        [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos]
+    };
+    ProjectiveTransform::from_rect_to_quad(
+        area,
+        [
+            turn(area.x, area.y),
+            turn(area.x + area.width, area.y),
+            turn(area.x, area.y + area.height),
+            turn(area.x + area.width, area.y + area.height),
+        ],
+    )
+}
+
 pub(crate) fn drop_shadow(rect: Rect, color: Color, blur_radius: f32) -> RenderNode {
     draw_node(
         DrawPrimitive::Shadow(cranpose_ui_graphics::ShadowPrimitive::Drop {
@@ -1353,7 +1390,7 @@ pub(crate) fn record_solid_fill_scene(scope: &mut DrawScopeDefault) {
                     height: size * 1.3,
                 },
                 brush,
-                cranpose_ui_graphics::CornerRadii::uniform(3.0 + (index % 5) as f32),
+                CornerRadii::uniform(3.0 + (index % 5) as f32),
             );
         }
     }
@@ -1391,7 +1428,7 @@ pub(crate) fn record_solid_scene(scope: &mut DrawScopeDefault) {
             height: 24.0,
         },
         Brush::solid(Color(0.8, 0.3, 0.4, 1.0)),
-        cranpose_ui_graphics::CornerRadii::uniform(8.0),
+        CornerRadii::uniform(8.0),
     );
     scope.draw_rect_at_stroked(
         Rect {
