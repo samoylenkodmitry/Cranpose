@@ -163,7 +163,7 @@ fn a_rounded_box_on_a_transparent_texture_is_a_premultiplied_circle() {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        draw_until_settled(|| {
+        draw_until_settled(&mut guest, |guest| {
             guest.draw(&texture, &view).expect("frame");
             guest.shell().needs_redraw()
         });
