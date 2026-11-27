@@ -118,6 +118,52 @@ impl WindowRects {
     }
 }
 
+/// Why each draw of a frame's render passes starts a draw of its own: the
+/// first of these reasons, in the order of the fields, that holds between it
+/// and the draw before it in its pass.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BatchBreaks {
+    /// The first draw of a pass.
+    pub first: u32,
+    /// A draw of another kind than the draw before it: shapes, images, text,
+    /// shadows, layers or stand-ins, as their z order interleaves them.
+    pub kind: u32,
+    /// A draw of the same kind with another pipeline.
+    pub pipeline: u32,
+    /// A draw that binds another bind group past the uniforms: an image, a
+    /// glyph atlas or a shape store's tables.
+    pub bind_group: u32,
+    /// A draw under another scissor.
+    pub scissor: u32,
+    /// A draw under another uniform buffer or offset.
+    pub uniform: u32,
+    /// A draw from other vertex or index buffers.
+    pub buffers: u32,
+    /// A draw under the state of the draw before it.
+    pub unchanged: u32,
+    /// A layer draw that binds its state itself.
+    pub untracked: u32,
+}
+
+impl BatchBreaks {
+    pub(crate) fn add(&mut self, other: Self) {
+        let sums = [
+            (&mut self.first, other.first),
+            (&mut self.kind, other.kind),
+            (&mut self.pipeline, other.pipeline),
+            (&mut self.bind_group, other.bind_group),
+            (&mut self.scissor, other.scissor),
+            (&mut self.uniform, other.uniform),
+            (&mut self.buffers, other.buffers),
+            (&mut self.unchanged, other.unchanged),
+            (&mut self.untracked, other.untracked),
+        ];
+        for (total, count) in sums {
+            *total = total.saturating_add(count);
+        }
+    }
+}
+
 /// The counters of one drawn frame, from `WgpuRenderer::last_frame_stats`. Pixel counts are in
 /// device pixels.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -258,6 +304,14 @@ pub struct FrameStatsSnapshot {
     /// included: they are one draw each and already counted by `blur_passes`
     /// and `effect_applies`.
     pub draw_calls: u32,
+    /// Why each draw of the frame's render passes is a draw of its own
+    /// rather than part of the draw before it. Counted only while
+    /// `CRANPOSE_GPU_STATS` is on.
+    pub batch_breaks: BatchBreaks,
+    /// The target pixels the frame's plain glyph quads cover, a glyph run
+    /// kept on the GPU left out. Counted only while `CRANPOSE_GPU_STATS` is
+    /// on.
+    pub glyph_pixels: f64,
     /// The window pixels the frame changes against the frame the
     /// renderer's composition target kept.
     pub damage: FrameDamage,

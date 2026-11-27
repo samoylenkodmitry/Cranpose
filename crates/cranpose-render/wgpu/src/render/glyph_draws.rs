@@ -94,6 +94,12 @@ pub(crate) struct GlyphInstance {
 }
 
 impl GlyphInstance {
+    // The target pixels the quad covers.
+    pub(crate) fn pixels(&self) -> f64 {
+        let [left, top, right, bottom] = self.rect;
+        f64::from((right - left).max(0.0)) * f64::from((bottom - top).max(0.0))
+    }
+
     const ATTRIBS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
         0 => Float32x4,
         1 => Float32x4,
