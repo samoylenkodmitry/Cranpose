@@ -1,4 +1,4 @@
-use cranpose::{GpuContext, embedded_view::EmbeddedView};
+use cranpose::{GpuContext, GuestView, embedded_view::EmbeddedView};
 
 pub(crate) fn fill(gpu: &GpuContext, texture: &wgpu::Texture, color: wgpu::Color) {
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -32,7 +32,7 @@ pub(crate) fn pixel(pixels: &[u8], width: u32, x: u32, y: u32) -> &[u8] {
 /// shows once those landed. Returns whether the first draw drew.
 pub(crate) fn draw_settled(view: &mut EmbeddedView, pixels: &mut Vec<u8>) -> bool {
     let drew = view.draw(pixels).expect("frame");
-    draw_until_settled(|| {
+    draw_until_settled(view, |view| {
         let more = view.shell().needs_redraw();
         if more {
             view.draw(pixels).expect("frame");
@@ -42,17 +42,58 @@ pub(crate) fn draw_settled(view: &mut EmbeddedView, pixels: &mut Vec<u8>) -> boo
     drew
 }
 
-// Calls `frame`, which draws when the view asks for a frame and says
-// whether it did, until it asks for none, a frame at a time as a display
-// asks for them. A loop that draws again at once submits a frame every few
-// microseconds; on a busy machine it starves the off-frame compile of the
-// pipelines those frames wait for, past the 30 s this allows.
-pub(crate) fn draw_until_settled(mut frame: impl FnMut() -> bool) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while frame() {
+// A view that `draw_until_settled` draws, which tells what its shell and its
+// renderer say while it keeps asking for frames.
+pub(crate) trait Settling {
+    fn state(&mut self) -> String;
+}
+
+// The shell's own reasons for a frame and the last frame's counters, which
+// count the draws that waited for a pipeline and the cache misses that ask
+// for another frame.
+macro_rules! shell_state {
+    ($shell:expr) => {{
+        let shell = $shell;
+        format!(
+            "needs update {}, pending UI {}, animations {}, frame callbacks {}, last frame {:?}",
+            shell.needs_update(),
+            shell.has_pending_ui(),
+            shell.has_active_animations(),
+            shell.has_transient_frame_callbacks(),
+            shell.renderer().last_frame_stats(),
+        )
+    }};
+}
+
+impl Settling for EmbeddedView {
+    fn state(&mut self) -> String {
+        shell_state!(self.shell())
+    }
+}
+
+impl Settling for GuestView {
+    fn state(&mut self) -> String {
+        shell_state!(self.shell())
+    }
+}
+
+// Calls `frame` on `view`, which draws when the view asks for a frame and
+// says whether it did, until it asks for none, a frame at a time as a
+// display asks for them. A loop that draws again at once submits a frame
+// every few microseconds; on a busy machine it starves the off-frame
+// compile of the pipelines those frames wait for, past the 30 s this
+// allows. A view that still asks then fails with what it says of itself.
+pub(crate) fn draw_until_settled<V: Settling>(view: &mut V, mut frame: impl FnMut(&mut V) -> bool) {
+    let started = std::time::Instant::now();
+    let deadline = started + std::time::Duration::from_secs(30);
+    let mut frames = 0_u32;
+    while frame(view) {
+        frames += 1;
         assert!(
             std::time::Instant::now() < deadline,
-            "the view kept asking for frames"
+            "the view kept asking for frames: {frames} frames in {:?}; {}",
+            started.elapsed(),
+            view.state()
         );
         std::thread::sleep(FRAME_PAUSE);
     }

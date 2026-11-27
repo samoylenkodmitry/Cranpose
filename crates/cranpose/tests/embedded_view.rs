@@ -10,7 +10,7 @@ use crate::gpu_support::draw_until_settled;
 /// whose pipeline still compiles, and the view draws again once it lands.
 fn draw_settled(view: &mut EmbeddedView, pixels: &mut Vec<u8>) {
     assert!(view.draw(pixels).expect("first frame"));
-    draw_until_settled(|| view.draw(pixels).expect("follow-up frame"));
+    draw_until_settled(view, |view| view.draw(pixels).expect("follow-up frame"));
 }
 
 #[test]
