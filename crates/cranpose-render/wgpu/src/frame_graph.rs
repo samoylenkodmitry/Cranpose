@@ -4,12 +4,15 @@ mod mapped_pool;
 pub(crate) mod pass_timing;
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) mod submit_nothing;
+mod texture_copies;
 
 use std::fmt;
 
 use buffer_uploads::{BeforePassWriter, BufferUploads};
 pub(crate) use mapped_pool::{MapRequests, MappedBuffers, MappedPool, take_largest_fitting};
 use pass_timing::{GpuPassTimingReport, PassTimer};
+use texture_copies::encode_texture_region_copy;
+pub(crate) use texture_copies::{TextureCopyStats, TextureRegionCopy, copy_compatible};
 use web_time::Instant;
 
 use crate::{
@@ -55,64 +58,6 @@ impl std::ops::AddAssign for FrameCommandStats {
         self.transient_acquires += other.transient_acquires;
         self.transient_news += other.transient_news;
     }
-}
-
-/// A region of one texture copied texel for texel into another of a
-/// copy-compatible format, outside any pass.
-#[derive(Clone, Copy)]
-pub(crate) struct TextureRegionCopy<'a> {
-    pub(crate) source: &'a OffscreenTarget,
-    pub(crate) source_origin: [u32; 2],
-    pub(crate) dest: &'a OffscreenTarget,
-    pub(crate) dest_origin: [u32; 2],
-    pub(crate) size: [u32; 2],
-}
-
-/// Whether a region can be copied between the two textures: their formats
-/// are equal up to the sRGB suffix.
-pub(crate) fn copy_compatible(a: &OffscreenTarget, b: &OffscreenTarget) -> bool {
-    a.format().remove_srgb_suffix() == b.format().remove_srgb_suffix()
-}
-
-#[derive(Clone, Copy, Default)]
-pub(crate) struct TextureCopyStats {
-    count: u32,
-    pixels: u64,
-}
-
-impl TextureCopyStats {
-    fn note(&mut self, size: [u32; 2]) {
-        self.count = self.count.saturating_add(1);
-        self.pixels = self
-            .pixels
-            .saturating_add(u64::from(size[0]) * u64::from(size[1]));
-    }
-}
-
-fn texel_copy_info(target: &OffscreenTarget, origin: [u32; 2]) -> wgpu::TexelCopyTextureInfo<'_> {
-    wgpu::TexelCopyTextureInfo {
-        texture: target.texture(),
-        mip_level: 0,
-        origin: wgpu::Origin3d {
-            x: origin[0],
-            y: origin[1],
-            z: 0,
-        },
-        aspect: wgpu::TextureAspect::All,
-    }
-}
-
-fn encode_texture_region_copy(encoder: &mut wgpu::CommandEncoder, copy: TextureRegionCopy<'_>) {
-    encoder.copy_texture_to_texture(
-        texel_copy_info(copy.source, copy.source_origin),
-        texel_copy_info(copy.dest, copy.dest_origin),
-        wgpu::Extent3d {
-            width: copy.size[0],
-            height: copy.size[1],
-            depth_or_array_layers: 1,
-        },
-    );
-    note_texture_copy(copy.size);
 }
 
 #[derive(Debug)]
