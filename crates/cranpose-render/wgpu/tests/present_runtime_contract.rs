@@ -1,7 +1,10 @@
 use std::{
     cell::RefCell,
     rc::Rc,
-    sync::{Arc, MutexGuard},
+    sync::{
+        Arc, Barrier, MutexGuard,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -452,14 +455,13 @@ fn real_thread_runtime_smoke() {
 
 /// Counts the presents it sees, and says when the runtime lets it go.
 struct CountingObserver {
-    presents: Arc<std::sync::atomic::AtomicUsize>,
+    presents: Arc<AtomicUsize>,
     dropped: std::sync::mpsc::Sender<()>,
 }
 
 impl cranpose_render_wgpu::PresentObserver for CountingObserver {
     fn before_present(&mut self, _surface: &wgpu::Surface<'static>) {
-        self.presents
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.presents.fetch_add(1, Ordering::Relaxed);
     }
 
     fn after_present(&mut self, _surface: &wgpu::Surface<'static>) {}
@@ -474,7 +476,7 @@ impl Drop for CountingObserver {
 #[test]
 fn a_present_observer_sees_only_surface_presents_and_leaves_with_the_runtime() {
     let (_lock, mut renderer, target) = inline_runtime_or_skip!("present observer");
-    let presents = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let presents = Arc::new(AtomicUsize::new(0));
     let (dropped_tx, dropped_rx) = std::sync::mpsc::channel::<()>();
     renderer
         .init_gpu_threaded(
@@ -506,7 +508,7 @@ fn a_present_observer_sees_only_surface_presents_and_leaves_with_the_runtime() {
         vec![(1, PresentOutcome::Presented)]
     );
     assert_eq!(
-        presents.load(std::sync::atomic::Ordering::Relaxed),
+        presents.load(Ordering::Relaxed),
         0,
         "a frame drawn off screen is no present for the platform to watch"
     );
@@ -774,5 +776,55 @@ fn a_new_surface_refuses_no_frame() {
             .iter()
             .all(|(_, outcome)| *outcome == PresentOutcome::Presented),
         "every frame of the new surface draws: {outcomes:?}"
+    );
+}
+
+#[test]
+fn concurrent_renderers_sharing_one_device_both_receive_device_loss() {
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let (_lock, mut first, target) =
+        threaded_parts(format).expect("concurrent device sentry test requires a GPU adapter");
+    let first_lost = Arc::new(AtomicUsize::new(0));
+    let second_lost = Arc::new(AtomicUsize::new(0));
+    let first_flag = Arc::clone(&first_lost);
+    first.set_device_lost_handler(Arc::new(move || {
+        first_flag.fetch_add(1, Ordering::SeqCst);
+    }));
+    let second_flag = Arc::clone(&second_lost);
+    let start = Barrier::new(2);
+    let ready = Barrier::new(2);
+    let done = Barrier::new(2);
+    let target_for_second = target.clone();
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(|| {
+            let mut second = WgpuRenderer::new(&[support::TEST_FONT]);
+            second.set_device_lost_handler(Arc::new(move || {
+                second_flag.fetch_add(1, Ordering::SeqCst);
+            }));
+            start.wait();
+            second.init_gpu_compiling_inline_for_tests(target_for_second);
+            ready.wait();
+            done.wait();
+            drop(second);
+        });
+        start.wait();
+        first.init_gpu_compiling_inline_for_tests(target.clone());
+        ready.wait();
+        target.device.destroy();
+        drop(target.device.poll(wgpu::PollType::wait_indefinitely()));
+        done.wait();
+        worker.join().expect("second renderer thread");
+    });
+    drop(first);
+
+    assert_eq!(
+        first_lost.load(Ordering::SeqCst),
+        1,
+        "first renderer must still receive device loss when a second renderer initializes concurrently"
+    );
+    assert_eq!(
+        second_lost.load(Ordering::SeqCst),
+        1,
+        "second renderer must also receive device loss on the shared device"
     );
 }

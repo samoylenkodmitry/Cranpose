@@ -1,15 +1,17 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, Barrier, Mutex, OnceLock, PoisonError},
+    time::Duration,
+};
 
 use cranpose_coroflow::{SavedStateError, SavedStateHandle};
 use cranpose_services::{
-    DurableSaveOutcome, MemoryPreferences, PreferencesStore, run_durable_saves,
+    DurableSaveOutcome, MemoryPreferences, PreferencesError, PreferencesStore, run_durable_saves,
     set_platform_preferences,
 };
 
 fn serial() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[test]
@@ -104,4 +106,133 @@ fn namespace_and_key_separators_cannot_alias_another_saved_value() {
     assert_eq!(SavedStateHandle::new("a/b").get::<u32>("c"), Ok(Some(1)));
     assert_eq!(SavedStateHandle::new("a").get::<u32>("b/c"), Ok(Some(2)));
     assert_eq!(SavedStateHandle::new("a%2Fb").get::<u32>("c"), Ok(Some(3)));
+}
+
+#[derive(Default)]
+struct ReentrantPreferences {
+    inner: MemoryPreferences,
+    handle: OnceLock<SavedStateHandle>,
+    nested_value: Mutex<Option<u32>>,
+}
+
+impl PreferencesStore for ReentrantPreferences {
+    fn get(&self, key: &str) -> Option<String> {
+        if key.ends_with("/primary")
+            && let Some(handle) = self.handle.get()
+        {
+            let nested = handle
+                .get::<u32>("secondary")
+                .expect("reentrant read succeeds without deadlocking");
+            *self
+                .nested_value
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = nested;
+        }
+        self.inner.get(key)
+    }
+
+    fn set(&self, key: &str, value: &str) -> Result<(), PreferencesError> {
+        self.inner.set(key, value)
+    }
+
+    fn remove(&self, key: &str) -> Result<(), PreferencesError> {
+        self.inner.remove(key)
+    }
+
+    fn keys(&self) -> Vec<String> {
+        self.inner.keys()
+    }
+
+    fn clear(&self) -> Result<(), PreferencesError> {
+        self.inner.clear()
+    }
+}
+
+#[test]
+fn preferences_store_reading_saved_state_during_restore_does_not_deadlock() {
+    let _guard = serial();
+    let store = Arc::new(ReentrantPreferences::default());
+    store
+        .inner
+        .set("reentrant/primary", "41")
+        .expect("seed primary");
+    store
+        .inner
+        .set("reentrant/secondary", "7")
+        .expect("seed secondary");
+    set_platform_preferences(Arc::<ReentrantPreferences>::clone(&store));
+
+    let handle = SavedStateHandle::new("reentrant");
+    store
+        .handle
+        .set(handle.clone())
+        .ok()
+        .expect("install handle");
+
+    let flow = handle
+        .get_mutable_state_flow("primary", 0_u32)
+        .expect("restore primary");
+    assert_eq!(flow.value(), 41, "primary restores stored value");
+    assert_eq!(
+        *store
+            .nested_value
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+        Some(7),
+        "reentrant PreferencesStore::get read secondary without deadlocking"
+    );
+}
+
+#[test]
+fn competing_saved_state_initializers_persist_only_the_winning_value() {
+    let _guard = serial();
+    let store = Arc::new(MemoryPreferences::new());
+    set_platform_preferences(Arc::<MemoryPreferences>::clone(&store));
+
+    let handle = SavedStateHandle::new("race");
+    let barrier = Arc::new(Barrier::new(2));
+    let (first, second) = std::thread::scope(|scope| {
+        let a_handle = handle.clone();
+        let a_barrier = Arc::clone(&barrier);
+        let t1 = scope.spawn(move || {
+            a_barrier.wait();
+            a_handle
+                .get_mutable_state_flow("counter", 10_u32)
+                .expect("first initializer")
+        });
+        let b_handle = handle.clone();
+        let b_barrier = Arc::clone(&barrier);
+        let t2 = scope.spawn(move || {
+            b_barrier.wait();
+            b_handle
+                .get_mutable_state_flow("counter", 20_u32)
+                .expect("second initializer")
+        });
+        (
+            t1.join().expect("first thread"),
+            t2.join().expect("second thread"),
+        )
+    });
+
+    assert_eq!(
+        first.value(),
+        second.value(),
+        "competing initializers share one winning flow"
+    );
+    first.set(99_u32);
+    assert_eq!(
+        second.value(),
+        99_u32,
+        "updates to one handle reach the other"
+    );
+    assert_eq!(
+        run_durable_saves(Duration::from_secs(5)),
+        DurableSaveOutcome::Completed,
+        "durable save flushes the winning entry"
+    );
+    assert_eq!(
+        store.get("race/counter").as_deref(),
+        Some("99"),
+        "losing initializer must not overwrite the winning flow's persisted value"
+    );
 }

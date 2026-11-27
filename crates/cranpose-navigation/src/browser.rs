@@ -65,10 +65,10 @@ struct HistorySync<R: Clone + 'static> {
     landing: Cell<Option<usize>>,
 }
 
-enum HistoryAction {
-    Push(usize, String),
+enum HistoryAction<R> {
+    Push(usize, Option<R>),
     Go(isize),
-    Replace(usize, String),
+    Replace(usize, Option<R>),
 }
 
 impl<R: Clone + PartialEq + 'static> HistorySync<R> {
@@ -102,23 +102,26 @@ impl<R: Clone + PartialEq + 'static> HistorySync<R> {
             }
             let (before, after) = (previous.len(), synced.len());
             if after == before + 1 && synced.starts_with(&previous) {
-                Some(HistoryAction::Push(after, self.fragment_of(synced.last())))
+                Some(HistoryAction::Push(after, synced.last().cloned()))
             } else if after > 0 && after < before && previous.starts_with(&synced) {
                 self.landing.set(Some(after));
                 Some(HistoryAction::Go(after as isize - before as isize))
             } else if after > 0 {
-                Some(HistoryAction::Replace(
-                    after,
-                    self.fragment_of(synced.last()),
-                ))
+                Some(HistoryAction::Replace(after, synced.last().cloned()))
             } else {
                 None
             }
         };
         match action {
-            Some(HistoryAction::Push(depth, fragment)) => self.history.push(depth, &fragment),
+            Some(HistoryAction::Push(depth, last)) => {
+                let fragment = self.fragment_of(last.as_ref());
+                self.history.push(depth, &fragment);
+            }
             Some(HistoryAction::Go(delta)) => self.history.go(delta),
-            Some(HistoryAction::Replace(depth, fragment)) => self.history.replace(depth, &fragment),
+            Some(HistoryAction::Replace(depth, last)) => {
+                let fragment = self.fragment_of(last.as_ref());
+                self.history.replace(depth, &fragment);
+            }
             None => {}
         }
     }

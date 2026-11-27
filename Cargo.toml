@@ -136,6 +136,7 @@ web-time = "1.1"
 unsafe_code = "deny"
 unreachable_pub = "warn"
 unused_qualifications = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(dylint_lib, values(any()))'] }
 
 # The one warning class `-D warnings` structurally cannot reach: `clippy`
 # stops at metadata and never links, so a message from the target linker only

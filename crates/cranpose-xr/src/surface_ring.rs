@@ -29,29 +29,26 @@ impl SurfaceRing {
     // The space of a layer whose surfaces show `meshes`, the first as the owner, with the surface
     // `index` placed by `place(index)`. `meshes` is not empty. A call allocates only while the
     // ring fills and where every kept space is still held.
+    #[cfg_attr(
+        all(not(test), dylint_lib = "guard_across_callback"),
+        expect(
+            guard_across_callback,
+            reason = "internal callers pass pure transform closures that cannot reenter SurfaceRing"
+        )
+    )]
     pub(crate) fn space(
         &self,
         meshes: &[Arc<Mesh>],
         place: impl Fn(usize) -> Mat4,
     ) -> Arc<LayerSpace> {
-        let mut reused = {
-            let mut spaces = self.spaces.borrow_mut();
-            spaces
-                .iter()
-                .position(|kept| Arc::strong_count(kept) == 1)
-                .map(|index| spaces.swap_remove(index))
-        };
-        if let Some(mut kept) = reused.take()
-            && let Some(LayerSpace::Surface(surfaces)) = Arc::get_mut(&mut kept)
-        {
-            for (index, surface) in surfaces.iter_mut().enumerate() {
-                surface.transform = place(index);
+        let mut spaces = self.spaces.borrow_mut();
+        for kept in spaces.iter_mut() {
+            if let Some(LayerSpace::Surface(surfaces)) = Arc::get_mut(kept) {
+                for (index, surface) in surfaces.iter_mut().enumerate() {
+                    surface.transform = place(index);
+                }
+                return Arc::clone(kept);
             }
-            let mut spaces = self.spaces.borrow_mut();
-            if spaces.len() < SPACES {
-                spaces.push(Arc::clone(&kept));
-            }
-            return kept;
         }
         let surface = |index: usize| MeshSurface {
             mesh: Arc::clone(&meshes[index]),
@@ -64,7 +61,6 @@ impl SurfaceRing {
             surface(0),
             (1..meshes.len()).map(surface).collect(),
         )));
-        let mut spaces = self.spaces.borrow_mut();
         if spaces.len() < SPACES {
             spaces.push(Arc::clone(&built));
         }

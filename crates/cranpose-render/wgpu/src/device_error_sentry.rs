@@ -32,21 +32,17 @@ impl DeviceErrorSentry {
             .iter()
             .find(|(known, _)| known.as_ptr() == Arc::as_ptr(device))
             .and_then(|(_, sentry)| sentry.upgrade());
-        let sentry = if let Some(sentry) = known {
-            drop(sentries);
-            sentry
+        let (sentry, register) = if let Some(sentry) = known {
+            (sentry, false)
         } else {
-            drop(sentries);
-            let sentry = Self::register(device);
-            let mut sentries = SENTRIES.lock().unwrap_or_else(PoisonError::into_inner);
-            sentries.retain(|(known, existing)| {
-                known.strong_count() > 0
-                    && existing.strong_count() > 0
-                    && known.as_ptr() != Arc::as_ptr(device)
-            });
+            let sentry = Arc::new(Self::default());
             sentries.push((Arc::downgrade(device), Arc::downgrade(&sentry)));
-            sentry
+            (sentry, true)
         };
+        drop(sentries);
+        if register {
+            sentry.install_callbacks(device);
+        }
         if let Some(on_device_lost) = on_device_lost {
             let mut handlers = sentry
                 .on_device_lost
@@ -58,17 +54,16 @@ impl DeviceErrorSentry {
         sentry
     }
 
-    fn register(device: &wgpu::Device) -> Arc<Self> {
-        let sentry = Arc::new(Self::default());
+    fn install_callbacks(self: &Arc<Self>, device: &wgpu::Device) {
         if survive_gpu_errors_enabled() {
-            let errors = Arc::downgrade(&sentry);
+            let errors = Arc::downgrade(self);
             device.on_uncaptured_error(Arc::new(move |error| {
                 if let Some(errors) = errors.upgrade() {
                     errors.record(&error);
                 }
             }));
         }
-        let loss = Arc::downgrade(&sentry);
+        let loss = Arc::downgrade(self);
         device.set_device_lost_callback(move |reason, message| {
             log::error!("[gpu-device] device lost ({reason:?}): {message}");
             let Some(loss) = loss.upgrade() else {
@@ -84,7 +79,6 @@ impl DeviceErrorSentry {
                 on_device_lost();
             }
         });
-        sentry
     }
 
     fn record(&self, error: &wgpu::Error) {
