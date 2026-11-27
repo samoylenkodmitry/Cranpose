@@ -8,6 +8,7 @@ mod draw_scope_text_raster;
 mod draw_with_content_updates;
 mod drawn_nodes;
 mod eye_walk;
+mod glyph_mask_stroker;
 mod grouped_draw_updates;
 mod inline_leaves;
 mod layer_and_raster_rules;

@@ -22,3 +22,4 @@ png = "0.18"
 
 [patch.crates-io]
 cranpose-wgpu = { path = "../../../forks/wgpu/wgpu" }
+cranpose-tiny-skia = { path = "../../../forks/tiny-skia/tiny-skia" }

@@ -228,6 +228,7 @@ multiple_inherent_impl = "deny"
 [patch.crates-io]
 cranpose-wgpu = { path = "forks/wgpu/wgpu" }
 cranpose-opus-pure = { path = "forks/opus-pure/opus-pure" }
+cranpose-tiny-skia = { path = "forks/tiny-skia/tiny-skia" }
 cranpose-basisu = { path = "forks/basisu/basisu" }
 
 # Faster local debug builds while preserving useful panic locations.

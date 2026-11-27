@@ -8,7 +8,7 @@ use ab_glyph_rasterizer::Rasterizer;
 use cranpose_core::collections::bounded_lru::BoundedLruCache;
 use cranpose_text::{GlyphId, GlyphOutline, OutlineSegment, OutlineTransform, Typeface};
 use cranpose_ui_graphics::whole;
-use tiny_skia::{LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{FillRule, LineCap, LineJoin, Mask, PathBuilder, Stroke, Transform};
 
 use crate::text_mask_gamma::unit_to_u8;
 
@@ -144,19 +144,10 @@ fn stroked_mask(outline: &GlyphOutline, width: f32, kind: StrokeKind) -> Option<
     let pad = whole::to_i32(whole::ceil(width * 0.5 * STROKE_MITER_LIMIT)).max(1) + 1;
     let raster_width = outline.width() + 2 * u32::try_from(pad).ok()?;
     let raster_height = outline.height() + 2 * u32::try_from(pad).ok()?;
-    let mut pixmap = Pixmap::new(raster_width, raster_height)?;
+    let mut mask = Mask::new(raster_width, raster_height)?;
     let path = outline_path(outline, f32_of(pad))?;
-    let mut paint = Paint::default();
-    paint.set_color_rgba8(255, 255, 255, 255);
-    paint.anti_alias = true;
     if let StrokeKind::StrokeAndFill = kind {
-        pixmap.fill_path(
-            &path,
-            &paint,
-            tiny_skia::FillRule::Winding,
-            Transform::identity(),
-            None,
-        );
+        mask.fill_path(&path, FillRule::Winding, true, Transform::identity());
     }
     let stroke = Stroke {
         width,
@@ -165,16 +156,9 @@ fn stroked_mask(outline: &GlyphOutline, width: f32, kind: StrokeKind) -> Option<
         miter_limit: STROKE_MITER_LIMIT,
         ..Stroke::default()
     };
-    pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
-    let alpha: Arc<[u8]> = pixmap
-        .data()
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|pixel| pixel[3])
-        .collect();
+    mask.stroke_path(&path, &stroke, true, Transform::identity());
     Some(GlyphMask {
-        alpha,
+        alpha: mask.take().into(),
         width: usize_of(raster_width),
         height: usize_of(raster_height),
         left: outline.left() - pad,

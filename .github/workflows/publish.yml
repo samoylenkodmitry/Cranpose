@@ -73,7 +73,8 @@ jobs:
             wgpu/wgpu-core \
             wgpu/wgpu \
             opus-pure/opus-pure \
-            basisu/basisu; do
+            basisu/basisu \
+            tiny-skia/tiny-skia; do
             manifest="forks/${fork}/Cargo.toml"
             crate="cranpose-${fork#*/}"
             version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$manifest" | head -n 1)"

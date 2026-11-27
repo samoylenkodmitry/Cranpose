@@ -610,3 +610,40 @@ Upstream `basisu` 0.1.0 depends on `ruzstd` 0.7, which is covered by
 `StreamingDecoder::new` calls in `src/transcoder.rs` and `src/xuastc/decode.rs`
 to `ruzstd::decoding::StreamingDecoder::new`. The fork goes once an upstream
 `basisu` release moves past `ruzstd` 0.7.
+
+## tiny-skia 0.12.0
+
+Upstream: <https://github.com/linebender/tiny-skia>, the crates.io package of
+0.12.0. `cranpose-tiny-skia` keeps 0.12.0 and its library name `tiny_skia`;
+`tiny-skia-path` stays upstream. `cranpose-render-common` draws stroked and
+fake-bold glyph masks with it, and `cranpose-ui` draws SVG images with it
+under its `svg` feature.
+
+| fork | upstream |
+| --- | --- |
+| `cranpose-tiny-skia` | `tiny-skia` |
+
+### The patch: a mask fills and strokes without a raster pipeline
+
+Upstream fills a path into a `Mask` through `RasterPipelineBlitter`, and
+strokes only into a `Pixmap`, through the same blitter. The blitter compiles
+a raster pipeline, whose stage tables name every stage function of both
+pipelines, so an image that fills or strokes one path links all of them.
+
+The fork's `Mask::fill_path` draws through `MaskBlitter` (`src/mask_blitter.rs`),
+which writes the mask's bytes with the integer arithmetic of the
+low-precision pipeline: a lerp toward 255 by the coverage for an opaque
+paint, and for a translucent one the paint's alpha scaled by the coverage,
+then drawn source-over. The new `Mask::stroke_path` strokes as
+`Pixmap::stroke_path` does: a stroke wider than 1 px is filled as its
+outline, a thinner one is a hairline whose width scales the paint's opacity.
+A mask holds the bytes that the alpha channel of a pixmap gets from an
+opaque white paint in the `SourceOver` mode, and an image that only fills
+and strokes masks links no pipeline. `RasterPipelineBlitter::new_mask` goes.
+
+Cranpose's stroked and fake-bold glyph masks are byte-equal to the ones the
+pixmap path drew (`crates/cranpose-render/common/tests/glyph_mask_stroker.rs`,
+`crates/cranpose-render/pixels/tests/stroked_text_pictures.rs`). The shipped
+ESP32 images went from 3,414,416 to 3,193,760 bytes on the E32R35T and from
+3,416,048 to 3,195,216 bytes on the ES3C35P. The fork goes once upstream draws
+masks without a pipeline.

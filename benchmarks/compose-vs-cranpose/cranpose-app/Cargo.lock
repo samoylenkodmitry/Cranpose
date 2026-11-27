@@ -610,7 +610,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -654,6 +654,7 @@ dependencies = [
  "objc2-io-kit",
  "objc2-quartz-core 0.3.2",
  "pollster",
+ "portable-atomic",
  "raw-window-handle",
  "thiserror 2.0.21",
  "wasm-bindgen",
@@ -669,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-animation"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-core",
  "cranpose-ui-graphics",
@@ -677,7 +678,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-app-shell"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "arboard",
  "cranpose-core",
@@ -693,14 +694,14 @@ dependencies = [
 
 [[package]]
 name = "cranpose-capabilities"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "fluent-syntax",
 ]
 
 [[package]]
 name = "cranpose-core"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "dispatch2",
  "event-listener",
@@ -720,7 +721,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-foundation"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-core",
  "cranpose-macros",
@@ -734,7 +735,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-gl-templates"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-shader-passes",
  "cranpose-ui-graphics",
@@ -743,7 +744,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-liquid"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-animation",
  "cranpose-core",
@@ -758,7 +759,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-macros"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -768,14 +769,14 @@ dependencies = [
 
 [[package]]
 name = "cranpose-platform-android"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-ui-graphics",
 ]
 
 [[package]]
 name = "cranpose-platform-desktop-winit"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-foundation",
  "cranpose-ui-graphics",
@@ -784,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-platform-web"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-foundation",
  "cranpose-ui-graphics",
@@ -792,23 +793,23 @@ dependencies = [
 
 [[package]]
 name = "cranpose-render-common"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "ab_glyph_rasterizer",
  "bytemuck",
  "cranpose-core",
  "cranpose-foundation",
  "cranpose-text",
+ "cranpose-tiny-skia",
  "cranpose-ui",
  "cranpose-ui-graphics",
  "smallvec",
  "thiserror 2.0.21",
- "tiny-skia",
 ]
 
 [[package]]
 name = "cranpose-render-pixels"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "bytemuck",
  "cranpose-core",
@@ -821,7 +822,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-render-wgpu"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "bytemuck",
  "cranpose-core",
@@ -842,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-runtime-std"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-core",
  "web-time",
@@ -850,7 +851,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-services"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-core",
  "cranpose-macros",
@@ -888,14 +889,14 @@ dependencies = [
 
 [[package]]
 name = "cranpose-shader-passes"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "naga",
 ]
 
 [[package]]
 name = "cranpose-testing"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "cranpose",
  "cranpose-app-shell",
@@ -907,7 +908,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-text"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "ab_glyph_rasterizer",
  "cranpose-ui-graphics",
@@ -922,14 +923,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "cranpose-tiny-skia"
+version = "0.12.0"
+dependencies = [
+ "arrayref",
+ "arrayvec",
+ "bytemuck",
+ "cfg-if",
+ "log",
+ "tiny-skia-path",
+]
+
+[[package]]
 name = "cranpose-ui"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-animation",
  "cranpose-core",
  "cranpose-foundation",
  "cranpose-macros",
  "cranpose-text",
+ "cranpose-tiny-skia",
  "cranpose-ui-graphics",
  "cranpose-ui-layout",
  "futures-task",
@@ -937,14 +951,13 @@ dependencies = [
  "portable-atomic",
  "smallvec",
  "thiserror 2.0.21",
- "tiny-skia",
  "unicode-segmentation",
  "web-time",
 ]
 
 [[package]]
 name = "cranpose-ui-graphics"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "arrayvec",
  "bytemuck",
@@ -956,7 +969,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-ui-layout"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "cranpose-core",
  "cranpose-ui-graphics",
