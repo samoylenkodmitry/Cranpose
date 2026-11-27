@@ -169,7 +169,8 @@ where
         }
     }
 
-    // Processes the input at the robot's frame time, which delivers no frame callback.
+    // Processes the input at the robot's frame time. It delivers the frame callbacks only when
+    // the robot's clock moved since the last update, as a drag's moves move it.
     fn update_now(&mut self) {
         self.shell.update_at_frame_time_nanos(self.frame_time_nanos);
     }
