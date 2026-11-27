@@ -234,9 +234,14 @@ impl ShapeChunk {
         self.shapes += shapes;
         self.owners.push(SegmentOwner(owner | LEADS));
         if segments.end - segments.start > 1 {
-            self.owners
-                .resize(segments.end as usize, SegmentOwner(owner));
+            self.take_later_segments(owner, segments.end);
         }
+    }
+
+    // Notes the item `owner` on its segments past the first, up to `end`.
+    #[cold]
+    fn take_later_segments(&mut self, owner: u32, end: u32) {
+        self.owners.resize(end as usize, SegmentOwner(owner));
     }
 
     // Notes that the item of `run` went.
@@ -267,14 +272,14 @@ impl ShapeChunk {
 impl ShapeChunks {
     // Records the shapes of one item, the run at index `owner`, with
     // `record`, which draw what `print` hashes, into a chunk that takes
-    // them, and returns where they went. Out of line: a background drawn
-    // again unchanged keeps its shapes.
+    // them, and returns where they went. Out of line and one body for every
+    // caller: a background drawn again unchanged keeps its shapes.
     #[inline(never)]
     fn record(
         &mut self,
         runs: &mut Slab<ShapeRun>,
         (owner, print): (usize, u64),
-        record: impl FnOnce(&mut ShapeRecorder),
+        record: &mut dyn FnMut(&mut ShapeRecorder),
     ) -> ShapeRun {
         let chunk = self.writable_chunk(runs);
         let entry = &mut self.chunks[chunk.index()];
@@ -342,7 +347,7 @@ impl ShapeChunks {
                 self.chunks[id.index()].reset();
                 id
             }
-            None => self.add_chunk(),
+            None => self.insert_chunk(0, CHUNK_SHAPES, ChunkAge::Young),
         };
         self.open = Some(id);
         id
@@ -353,24 +358,19 @@ impl ShapeChunks {
         match self.nothing {
             Some(id) => id,
             None => {
-                let id = ChunkId::at(self.chunks.insert(ShapeChunk::new(
-                    ShapeRecorder::default(),
-                    0,
-                    ChunkAge::Old,
-                )));
+                let id = self.insert_chunk(0, 0, ChunkAge::Old);
                 self.nothing = Some(id);
                 id
             }
         }
     }
 
+    // A new chunk with room for `shapes` shapes in as many segments and for
+    // `rows` owner entries.
     #[cold]
-    fn add_chunk(&mut self) -> ChunkId {
-        ChunkId::at(self.chunks.insert(ShapeChunk::new(
-            ShapeRecorder::default(),
-            CHUNK_SHAPES,
-            ChunkAge::Young,
-        )))
+    fn insert_chunk(&mut self, shapes: usize, rows: usize, age: ChunkAge) -> ChunkId {
+        let recorder = ShapeRecorder::with_capacity(shapes, shapes);
+        ChunkId::at(self.chunks.insert(ShapeChunk::new(recorder, rows, age)))
     }
 
     // Leaves the open chunk `id`: kept for reuse when no item names it,
@@ -452,13 +452,12 @@ impl ShapeChunks {
         }
     }
 
-    // How many of the listed chunks went sparse at least `after` updates
-    // ago, the first of the list.
-    fn due(&self, after: u32) -> usize {
+    // Whether the first listed chunk went sparse at least `after` updates
+    // ago.
+    fn any_due(&self, after: u32) -> bool {
         self.sparse
-            .iter()
-            .take_while(|&&(_, listed)| self.update.since(listed) >= after)
-            .count()
+            .front()
+            .is_some_and(|&(_, listed)| self.update.since(listed) >= after)
     }
 
     // The chunk `id` while it waits in the entry `listed` of the list.
@@ -473,13 +472,17 @@ impl ShapeChunks {
     // line: most updates move nothing.
     #[inline(never)]
     fn move_sparse_items(&mut self, runs: &mut Slab<ShapeRun>, after: u32) {
-        let due = self.due(after);
-        let (items, shapes) = self
+        // How many of the listed chunks went sparse at least `after` updates
+        // ago, the first of the list, and the items and shapes they hold.
+        let (due, items, shapes) = self
             .sparse
-            .range(..due)
-            .filter_map(|&(id, listed)| self.listed_chunk(id, listed))
-            .fold((0, 0), |(items, shapes), chunk| {
-                (items + chunk.items, shapes + chunk.shapes as usize)
+            .iter()
+            .take_while(|&&(_, listed)| self.update.since(listed) >= after)
+            .fold((0, 0, 0), |(due, items, shapes), &(id, listed)| match self
+                .listed_chunk(id, listed)
+            {
+                Some(chunk) => (due + 1, items + chunk.items, shapes + chunk.shapes as usize),
+                None => (due + 1, items, shapes),
             });
         let mut home = (items > 0).then(|| {
             let home = self.home(shapes);
@@ -528,11 +531,7 @@ impl ShapeChunks {
                 self.chunks[id.index()].reset();
                 id
             }
-            None => ChunkId::at(self.chunks.insert(ShapeChunk::new(
-                ShapeRecorder::with_capacity(room, room),
-                room,
-                ChunkAge::Old,
-            ))),
+            None => self.insert_chunk(room, room, ChunkAge::Old),
         }
     }
 
@@ -609,9 +608,7 @@ fn move_runs(chunk: &ShapeChunk, runs: &mut Slab<ShapeRun>, home: ChunkId, old: 
         let run = &mut runs[owner];
         let recorder = Arc::get_mut(&mut old.recorder).expect("no packet holds a new home");
         let start = recorder.all_segments().end;
-        for primitive in chunk.recorder.shape_primitives_in(&run.segments) {
-            recorder.push_primitive(primitive);
-        }
+        recorder.push_shapes_of(&chunk.recorder, &run.segments);
         recorder.end_segment();
         run.segments = start..recorder.all_segments().end;
         run.chunk = home;
@@ -661,11 +658,11 @@ impl SceneStore {
     /// Adds an item of the shapes `record` records into a chunk the store
     /// shares among its shape items. `print` is a hash of what they draw,
     /// the same for the same shapes.
-    pub fn add_shapes(&mut self, print: u64, record: impl FnOnce(&mut ShapeRecorder)) -> Item {
+    pub fn add_shapes(&mut self, print: u64, mut record: impl FnMut(&mut ShapeRecorder)) -> Item {
         let index = self.shape_runs.reserve();
         let run = self
             .shape_chunks
-            .record(&mut self.shape_runs, (index, print), record);
+            .record(&mut self.shape_runs, (index, print), &mut record);
         self.shape_runs.put(index, run);
         Item::new(ItemKind::Shape, index)
     }
@@ -677,7 +674,7 @@ impl SceneStore {
         &mut self,
         item: Item,
         print: u64,
-        record: impl FnOnce(&mut ShapeRecorder),
+        mut record: impl FnMut(&mut ShapeRecorder),
     ) {
         let index = item.index();
         let Some(old) = self.shape_runs.lend(index) else {
@@ -686,7 +683,7 @@ impl SceneStore {
         self.shape_chunks.release(&old);
         let run = self
             .shape_chunks
-            .record(&mut self.shape_runs, (index, print), record);
+            .record(&mut self.shape_runs, (index, print), &mut record);
         self.shape_runs.put(index, run);
     }
 
@@ -721,7 +718,7 @@ impl SceneStore {
     pub(super) fn begin_shapes_update(&mut self, update: SceneUpdate) {
         let chunks = &mut self.shape_chunks;
         chunks.update = update;
-        if chunks.due(MOVE_AFTER_UPDATES) > 0 {
+        if chunks.any_due(MOVE_AFTER_UPDATES) {
             chunks.move_sparse_items(&mut self.shape_runs, MOVE_AFTER_UPDATES);
         }
     }
