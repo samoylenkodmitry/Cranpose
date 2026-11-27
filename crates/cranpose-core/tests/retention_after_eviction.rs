@@ -44,7 +44,7 @@ fn retention_eviction_empties_retained_count_while_keeping_eviction_stats() {
         let seen = Rc::clone(&seen);
         composition
             .render(root_key, move || {
-                let _ = tick.get();
+                let _tick: u32 = tick.get();
                 if show.get() {
                     retained_counter(RETAINED_KEY_A, &seen);
                 }

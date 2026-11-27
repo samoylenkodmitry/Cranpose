@@ -63,7 +63,8 @@ fn main() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(2000);
     let run = std::env::var("MODE").as_deref() == Ok("run");
-    let after_eviction = std::env::var("AFTER_EVICTION").as_deref() == Ok("1");
+    let after_eviction =
+        std::env::vars().any(|(key, value)| key == "AFTER_EVICTION" && value == "1");
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let tick = MutableState::with_runtime(0usize, runtime.clone());
@@ -94,8 +95,14 @@ fn main() {
             .process_invalid_scopes()
             .expect("evict retained group");
         let stats = composition.debug_slot_table_stats();
-        assert_eq!(stats.retained_subtree_count, 0);
-        assert_eq!(stats.retained_evictions_total, 1);
+        assert_eq!(
+            stats.retained_subtree_count, 0,
+            "retained subtree must evict before measured frames"
+        );
+        assert_eq!(
+            stats.retained_evictions_total, 1,
+            "eviction count must record the evicted subtree"
+        );
         tick.set(0);
         composition
             .process_invalid_scopes()
