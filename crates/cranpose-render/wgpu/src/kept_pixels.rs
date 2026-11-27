@@ -1,0 +1,291 @@
+// The kept outputs of layers their shader alone draws, kept on disk between
+// launches beside the pipeline cache: a launch uploads the pixels an earlier
+// one drew in place of drawing them again. The file names each output by
+// what it draws, so an output whose shader or uniforms changed is drawn
+// afresh. An output no launch used for a few launches goes.
+
+use std::{
+    fs::File,
+    hash::{Hash, Hasher},
+    io::{Read, Seek, SeekFrom},
+    path::PathBuf,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+
+use cranpose_core::collections::map::{HashMap, HashSet};
+use cranpose_render_common::raster_cache::LayerRasterCacheKey;
+use cranpose_ui_graphics::FxHasher;
+
+use crate::{
+    frame_graph::texture_format_bytes_per_pixel,
+    kept_pixels_file::{Drawn, Head, Indexed, Writer, read_index},
+    offscreen::OffscreenTarget,
+};
+
+pub(crate) struct KeptPixels {
+    // none where the app gives no file
+    file: Option<KeptFile>,
+}
+
+struct KeptFile {
+    path: PathBuf,
+    launch: u32,
+    // the file as this launch found it, held open so its pixels stay
+    // readable after a write replaces it
+    earlier: Option<File>,
+    // where the pixels of earlier launches lie in `earlier`, by key
+    index: HashMap<u64, Indexed>,
+    // the keys this launch used, whose pixels stay on disk
+    used: HashSet<u64>,
+    // outputs this launch drew, waiting for the frame's submit to copy them
+    requested: Vec<(u64, Rc<OffscreenTarget>)>,
+    // copies in flight to buffers the CPU reads
+    reading: Vec<Reading>,
+    // started with the launch's first drawn output
+    writer: Option<Writer>,
+    // the pixels of the last upload
+    upload: Vec<u8>,
+}
+
+struct Reading {
+    head: Head,
+    // the bytes of a row of pixels, and of a row in the buffer
+    unpadded: u32,
+    row: u32,
+    buffer: wgpu::Buffer,
+    mapped: Arc<AtomicBool>,
+}
+
+// A layer cache key as the file names it.
+pub(crate) fn disk_key(key: &LayerRasterCacheKey) -> u64 {
+    let mut hasher = FxHasher::default();
+    key.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn format_key(format: wgpu::TextureFormat) -> u64 {
+    let mut hasher = FxHasher::default();
+    format.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn pixel_bytes(format: wgpu::TextureFormat, width: u32, height: u32) -> u64 {
+    texture_format_bytes_per_pixel(format) * u64::from(width) * u64::from(height)
+}
+
+impl KeptPixels {
+    // The index of the pixels the last launches kept, beside the pipeline
+    // cache file; nothing where the app gives no file.
+    pub(crate) fn load() -> Self {
+        let file = crate::pipeline_disk_cache::file_path().map(|path| {
+            let path = path.with_extension("pixels");
+            let (launch, earlier, index) = match File::open(&path).ok().and_then(read_index) {
+                Some((launch, earlier, index)) => (launch, Some(earlier), index),
+                None => (0, None, HashMap::default()),
+            };
+            if !index.is_empty() {
+                log::info!("[kept-pixels] found {} outputs", index.len());
+            }
+            KeptFile {
+                path,
+                launch: launch.wrapping_add(1),
+                earlier,
+                index,
+                used: HashSet::default(),
+                requested: Vec::new(),
+                reading: Vec::new(),
+                writer: None,
+                upload: Vec::new(),
+            }
+        });
+        Self { file }
+    }
+
+    // Whether an earlier launch kept the pixels of a `format` target of
+    // `size` under `key`.
+    pub(crate) fn holds(&self, key: u64, size: (u32, u32), format: wgpu::TextureFormat) -> bool {
+        self.file
+            .as_ref()
+            .and_then(|file| file.index.get(&key))
+            .is_some_and(|indexed| {
+                let head = indexed.head;
+                head.format == format_key(format)
+                    && (head.width, head.height) == size
+                    && u64::from(head.len) == pixel_bytes(format, head.width, head.height)
+            })
+    }
+
+    // Uploads the pixels an earlier launch kept under `key` into `target`;
+    // false when none fit it or the file cannot be read.
+    pub(crate) fn upload(
+        &mut self,
+        queue: &wgpu::Queue,
+        key: u64,
+        target: &OffscreenTarget,
+    ) -> bool {
+        let format = target.texture().format();
+        if !self.holds(key, (target.width, target.height), format) {
+            return false;
+        }
+        let Some(file) = self.file.as_mut() else {
+            return false;
+        };
+        let Some(indexed) = file.index.get(&key).copied() else {
+            return false;
+        };
+        let Some(earlier) = file.earlier.as_mut() else {
+            return false;
+        };
+        file.upload.resize(indexed.head.len as usize, 0);
+        let read = earlier
+            .seek(SeekFrom::Start(indexed.offset))
+            .and_then(|_| earlier.read_exact(&mut file.upload));
+        if let Err(error) = read {
+            log::warn!("[kept-pixels] read {:?}: {error}", file.path);
+            file.index.remove(&key);
+            return false;
+        }
+        queue.write_texture(
+            target.texture().as_image_copy(),
+            &file.upload,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(target.width * texture_format_bytes_per_pixel(format) as u32),
+                rows_per_image: Some(target.height),
+            },
+            target.texture().size(),
+        );
+        file.used.insert(key);
+        true
+    }
+
+    // Keeps the output this frame drew into `target` under `key`, once the
+    // frame is submitted.
+    pub(crate) fn keep(&mut self, key: u64, target: Rc<OffscreenTarget>) {
+        if let Some(file) = self.file.as_mut() {
+            file.used.insert(key);
+            file.requested.push((key, target));
+        }
+    }
+
+    // Whether copies of drawn outputs wait for a later frame to collect them.
+    pub(crate) fn awaits_frame(&self) -> bool {
+        self.file
+            .as_ref()
+            .is_some_and(|file| !file.reading.is_empty())
+    }
+
+    // Ends a frame after its submit: copies what it drew to buffers the CPU
+    // reads and hands the copies that finished to the file.
+    pub(crate) fn end_frame(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let Some(file) = self.file.as_mut() else {
+            return;
+        };
+        if !file.requested.is_empty() {
+            file.copy_requested(device, queue);
+        }
+        if !file.reading.is_empty() {
+            let _ = device.poll(wgpu::PollType::Poll);
+            file.write_finished();
+        }
+    }
+}
+
+impl KeptFile {
+    fn copy_requested(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Kept Pixels Read Back"),
+        });
+        let first = self.reading.len();
+        for (key, target) in self.requested.drain(..) {
+            let format = target.texture().format();
+            let unpadded = target.width * texture_format_bytes_per_pixel(format) as u32;
+            let row = unpadded.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Kept Pixels"),
+                size: u64::from(row) * u64::from(target.height),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            encoder.copy_texture_to_buffer(
+                target.texture().as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(row),
+                        rows_per_image: Some(target.height),
+                    },
+                },
+                target.texture().size(),
+            );
+            self.reading.push(Reading {
+                head: Head {
+                    key,
+                    format: format_key(format),
+                    width: target.width,
+                    height: target.height,
+                    last: self.launch,
+                    len: unpadded * target.height,
+                },
+                unpadded,
+                row,
+                buffer,
+                mapped: Arc::new(AtomicBool::new(false)),
+            });
+        }
+        queue.submit([encoder.finish()]);
+        for reading in &self.reading[first..] {
+            let mapped = Arc::clone(&reading.mapped);
+            reading
+                .buffer
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    mapped.store(result.is_ok(), Ordering::Release);
+                });
+        }
+    }
+
+    fn write_finished(&mut self) {
+        let finished = self
+            .reading
+            .extract_if(.., |reading| reading.mapped.load(Ordering::Acquire));
+        let drawn: Vec<Drawn> = finished.filter_map(Reading::into_drawn).collect();
+        if drawn.is_empty() {
+            return;
+        }
+        if self.writer.is_none() {
+            self.writer = Writer::spawn(self.path.clone(), self.launch);
+        }
+        if let Some(writer) = &self.writer {
+            writer.send(drawn, self.used.clone());
+        }
+    }
+}
+
+impl Reading {
+    // The pixels the buffer holds, its rows' padding left out; none when
+    // the buffer cannot be read.
+    fn into_drawn(self) -> Option<Drawn> {
+        let bytes = self.buffer.slice(..).get_mapped_range().ok().map(|view| {
+            let used = self.unpadded as usize;
+            let mut bytes = Vec::with_capacity(self.head.len as usize);
+            for line in view
+                .chunks(self.row as usize)
+                .take(self.head.height as usize)
+            {
+                bytes.extend_from_slice(&line[..used]);
+            }
+            bytes
+        });
+        self.buffer.unmap();
+        Some(Drawn {
+            head: self.head,
+            bytes: bytes?,
+        })
+    }
+}

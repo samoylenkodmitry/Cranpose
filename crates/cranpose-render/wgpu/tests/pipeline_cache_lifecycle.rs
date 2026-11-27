@@ -953,3 +953,81 @@ fn warm_up_lists_follow_presented_frames_across_process_restarts() {
         );
     }
 }
+
+// A launch keeps the outputs of its offscreen shader layers in a file beside
+// its pipeline cache. A relaunch shows those outputs from its first frame
+// with no shader drawn. A cell whose uniform changed draws its new shade,
+// which the next launch finds too, as it finds a cell drawn a second later.
+#[test]
+fn a_relaunch_shows_the_kept_shader_outputs_from_its_first_frame() {
+    use cranpose_ui_graphics::CompositingStrategy::{Auto, Offscreen};
+
+    use crate::offscreen_shader_layers::{page, shader};
+
+    // shades no other cell of the page has
+    const CHANGED: f32 = 0.53;
+    const LATER: f32 = 0.28;
+    let _lock = support::gpu_test_lock();
+    let files = CacheFiles::new();
+    let pixels = files.select("kept-outputs.bin").with_extension("pixels");
+    let shader = shader();
+    let mut reference = support::LockedRenderer::beside_locked().expect("reference renderer");
+    let expected = [0.0, CHANGED, LATER].map(|first| {
+        support::capture_graph_settled(&mut reference, &page(&shader, Auto, first), 96, 96)
+    });
+    drop(reference);
+
+    let mut launch = support::LockedRenderer::beside_locked().expect("GPU required");
+    draw_kept_settled(&mut launch, &page(&shader, Offscreen, 0.0));
+    drop(launch);
+    assert!(
+        fs::metadata(&pixels).is_ok_and(|file| file.len() > 0),
+        "the first launch keeps its outputs: {}",
+        pixels.display()
+    );
+
+    let mut relaunch = support::LockedRenderer::beside_locked().expect("GPU required");
+    assert_drawn_from_disk(&mut relaunch, &page(&shader, Offscreen, 0.0), &expected[0]);
+    let changed = page(&shader, Offscreen, CHANGED);
+    let frame = support::capture_graph(&mut relaunch, &changed, 96, 96);
+    support::assert_same_bytes(
+        "a cell whose uniform changed",
+        96,
+        &frame.pixels,
+        &expected[1].pixels,
+    );
+    draw_kept_settled(&mut relaunch, &changed);
+    // a pause past the writer's, so the next cell is a write of its own
+    std::thread::sleep(Duration::from_millis(1100));
+    draw_kept_settled(&mut relaunch, &page(&shader, Offscreen, LATER));
+    drop(relaunch);
+
+    let mut third = support::LockedRenderer::beside_locked().expect("GPU required");
+    assert_drawn_from_disk(&mut third, &page(&shader, Offscreen, CHANGED), &expected[1]);
+    assert_drawn_from_disk(&mut third, &page(&shader, Offscreen, LATER), &expected[2]);
+}
+
+fn draw_kept_settled(renderer: &mut support::LockedRenderer, page: &LayerNode) {
+    for _ in 0..64 {
+        support::capture_graph(renderer, page, 96, 96);
+        if !renderer.needs_frame_warmup() {
+            return;
+        }
+    }
+    panic!("the frames of a page of kept outputs settle");
+}
+
+fn assert_drawn_from_disk(
+    renderer: &mut support::LockedRenderer,
+    page: &LayerNode,
+    expected: &CapturedFrame,
+) {
+    let frame = support::capture_graph(renderer, page, 96, 96);
+    let stats = renderer.last_frame_stats().expect("frame statistics");
+    assert_eq!(
+        (stats.placeholder_draws, stats.effect_applies),
+        (0, 0),
+        "each output comes from the file: {stats:?}"
+    );
+    support::assert_same_bytes("kept outputs", 96, &frame.pixels, &expected.pixels);
+}

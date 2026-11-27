@@ -11,12 +11,14 @@ use cranpose_ui_graphics::{BlendMode, Point, Rect, RenderEffect, RenderHash, Run
 
 use super::{
     ChildLayer, CompositeSlot, CompositeSource, DeviceRect, FrameExecutor, MAX_SURFACE_PIXELS,
-    ResolvedComposite, SourceContent, SurfaceRender, TRANSPARENT_SOURCE, child_composite_support,
-    child_surface_rect, draws_nothing, grid_rounded_mask, layer_pixel_rect, placeholder_mask,
+    ResolvedComposite, SourceContent, StandInPixels, SurfaceRender, TRANSPARENT_SOURCE,
+    child_composite_support, child_surface_rect, draws_nothing, grid_rounded_mask,
+    layer_pixel_rect, placeholder_mask,
 };
 use crate::{
     effect_renderer::{EffectReads, RoundedCompositeMask},
     frame_graph::FrameCommandRecorder,
+    kept_pixels::disk_key,
     layer_cache::Retained,
     offscreen::OffscreenTarget,
 };
@@ -226,8 +228,16 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         if !self.renderer.layer_cache.fits(width, height) {
             return None;
         }
+        // an earlier launch's pixels upload in place of a fill
+        let stored_key = disk_key(&key);
         let pixels = u64::from(width) * u64::from(height);
-        if !self.renderer.layer_cache.fills.allows(pixels) {
+        let format = self.renderer.pipelines.composition_format;
+        let stored = self
+            .renderer
+            .layer_cache
+            .disk
+            .holds(stored_key, place.size, format);
+        if !stored && !self.renderer.layer_cache.fills.allows(pixels) {
             self.renderer
                 .pipelines
                 .note_deferred_fill(&self.renderer.frame_stats);
@@ -237,6 +247,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .frame_stats
             .record_layer_cache_miss(&key, width, height);
         let kept = Rc::new(self.renderer.acquire_retained_surface(width, height));
+        let cache = &mut self.renderer.layer_cache;
+        if stored && cache.disk.upload(&self.renderer.queue, stored_key, &kept) {
+            let retained = Retained::surface(Rc::clone(&kept), StandInPixels::Final);
+            cache.insert(key, retained, None);
+            return Some(Some(kept_slot(kept)));
+        }
         let source = self
             .renderer
             .transparent_source(self.recorder, width, height);
@@ -251,9 +267,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         .ok()?;
         self.renderer.layer_cache.fills.spend(pixels);
         let held = self.pixels_since(mark);
-        self.renderer
-            .layer_cache
-            .insert(key, Retained::surface(Rc::clone(&kept), held), None);
+        let cache = &mut self.renderer.layer_cache;
+        cache.insert(key, Retained::surface(Rc::clone(&kept), held), None);
+        if held == StandInPixels::Final {
+            cache.disk.keep(stored_key, Rc::clone(&kept));
+        }
         Some(Some(kept_slot(kept)))
     }
 }

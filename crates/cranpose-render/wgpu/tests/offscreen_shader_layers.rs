@@ -19,7 +19,7 @@ const CELL: f32 = 24.0;
 
 // A shader painting its layer in a shade of blue its uniform picks, red
 // while it compiles.
-fn shader() -> RuntimeShader {
+pub(crate) fn shader() -> RuntimeShader {
     let mut shader = RuntimeShader::new(&format!(
         "{RUNTIME_SHADER_PRELUDE_WGSL}
          // offscreen shader layers {}
@@ -37,11 +37,17 @@ fn shader() -> RuntimeShader {
 }
 
 // A page of sixteen cells, each a layer drawn by `shader` alone with a
-// shade of its own, drawn with `strategy`.
-fn page(shader: &RuntimeShader, strategy: CompositingStrategy) -> LayerNode {
+// shade of its own, drawn with `strategy`. The first cell's shade is
+// `first`.
+pub(crate) fn page(shader: &RuntimeShader, strategy: CompositingStrategy, first: f32) -> LayerNode {
     let cells = (0..16).map(|index| {
         let mut cell = shader.clone();
-        cell.set_float4(0, index as f32 / 16.0, 0.0, 0.0, 0.0);
+        let shade = if index == 0 {
+            first
+        } else {
+            index as f32 / 16.0
+        };
+        cell.set_float4(0, shade, 0.0, 0.0, 0.0);
         let layer = GraphicsLayer {
             render_effect: Some(RenderEffect::runtime_shader(cell)),
             compositing_strategy: strategy,
@@ -74,15 +80,15 @@ fn offscreen_shader_layers_past_a_frames_fills_reach_their_own_pixels() {
         let mut reference = support::LockedRenderer::beside_locked().expect("reference renderer");
         support::capture_graph_settled(
             &mut reference,
-            &page(&shader, CompositingStrategy::Auto),
+            &page(&shader, CompositingStrategy::Auto, 0.0),
             SIZE,
             SIZE,
         )
     };
-    let kept = page(&shader, CompositingStrategy::Offscreen);
+    let kept = page(&shader, CompositingStrategy::Offscreen, 0.0);
     support::capture_graph_settled(
         &mut renderer,
-        &page(&shader, CompositingStrategy::Auto),
+        &page(&shader, CompositingStrategy::Auto, 0.0),
         SIZE,
         SIZE,
     );

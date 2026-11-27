@@ -10,6 +10,7 @@ use crate::{
     frame_graph::FrameTextureDescriptor,
     geometry::offscreen_byte_size,
     idle_pool::IDLE_FRAMES,
+    kept_pixels::KeptPixels,
     offscreen::OffscreenTarget,
 };
 
@@ -161,6 +162,7 @@ pub(crate) struct LayerCache {
     // holds it too.
     interim_reads: u64,
     pub(crate) fills: FillBudget,
+    pub(crate) disk: KeptPixels,
 }
 
 impl LayerCache {
@@ -178,6 +180,7 @@ impl LayerCache {
             frame: 0,
             interim_reads: 0,
             fills: FillBudget::default(),
+            disk: KeptPixels::load(),
         }
     }
 
@@ -238,8 +241,9 @@ impl LayerCache {
 
     /// Ends a frame, releasing every raster no frame has read for
     /// [`IDLE_FRAMES`].
-    pub(crate) fn end_frame(&mut self) {
+    pub(crate) fn end_frame(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         self.fills.end_frame();
+        self.disk.end_frame(device, queue);
         self.frame += 1;
         let oldest_kept = self.frame.saturating_sub(IDLE_FRAMES);
         while self

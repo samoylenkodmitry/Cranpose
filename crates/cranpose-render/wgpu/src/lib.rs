@@ -18,6 +18,8 @@ mod fill_budget;
 mod frame;
 mod geometry;
 mod idle_pool;
+mod kept_pixels;
+mod kept_pixels_file;
 mod layer_cache;
 mod renderer_impl;
 pub use fast_cores::pin_current_thread_to_fast_cores;
