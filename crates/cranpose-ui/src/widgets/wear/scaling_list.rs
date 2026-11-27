@@ -110,8 +110,10 @@ use cranpose_ui_layout::{
     Constraints, Measurables, MeasurePolicy, MeasureResult, MeasureScope, Placement, round_to_px,
 };
 
+mod indicator;
 mod input;
 mod item_heights;
+use indicator::IndicatorState;
 use input::wear_scaling_list_input;
 use item_heights::ItemHeights;
 
@@ -121,11 +123,8 @@ use crate::{
     fling_animation::FlingAnimation,
     layout_direction::LayoutDirection,
     modifier::{GraphicsLayer, Modifier, TransformOrigin},
-    round_scaling_list::{
-        CentreAnchor, PlacedRow, ScaleAlpha, ScalingParams, leading_auto_centring_spacer,
-        place_row_with, trailing_auto_centring_spacer,
-    },
-    round_scroll_indicator::{IndicatorItem, ScalingList, ThumbLength, scaling_list_items_with},
+    round_scaling_list::{CentreAnchor, PlacedRow, ScaleAlpha, ScalingParams, place_row_with},
+    round_scroll_indicator::{ScalingList, ThumbLength},
     subcompose_layout::{
         MeasurePolicy as SubcomposeMeasurePolicy, SubcomposeChild, SubcomposeLayoutNode,
         SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
@@ -285,89 +284,6 @@ pub struct WearScalingListSummary {
 impl PartialEq for WearScalingListState {
     fn eq(&self, other: &Self) -> bool {
         self.inner == other.inner
-    }
-}
-
-/// The list as `ScalingLazyColumnStateAdapter` reads it, in device pixels.
-///
-/// Wear's indicator does not work in pixels at all: it takes the first and last
-/// visible rows as **fractional item indices** and divides by the item count.
-/// What it is handed is a `ScalingLazyListLayoutInfo` whose sizes and offsets
-/// have already landed on the pixel grid, and it divides those integers, so
-/// this is pixels throughout — points would quietly lose the halves that decide
-/// which index an end lands on.
-///
-/// It is filled by the measure pass rather than derived when the indicator
-/// draws, because the measure pass is the one place where the density, the
-/// viewport and the rows the virtualising walk kept all exist at once.
-#[derive(Debug, Default)]
-struct IndicatorState {
-    visible: Vec<IndicatorItem>,
-    total: usize,
-    viewport: f32,
-    before_padding: f32,
-    after_padding: f32,
-    thumb: ThumbLength,
-}
-
-impl IndicatorState {
-    fn clear(&mut self) {
-        self.visible.clear();
-        self.total = 0;
-        self.viewport = 0.0;
-        self.before_padding = 0.0;
-        self.after_padding = 0.0;
-    }
-
-    fn record(
-        &mut self,
-        window: &[WindowedRow],
-        spec: &WearScalingLazyColumnSpec,
-        known: &ItemHeights,
-        viewport: f32,
-        density: Density,
-    ) {
-        let count = known.len();
-        if count == 0 {
-            self.clear();
-            return;
-        }
-        let viewport_px = density.to_px(viewport).round();
-        self.total = count;
-        self.viewport = viewport_px;
-        scaling_list_items_with(
-            spec.scaling,
-            viewport,
-            density.density(),
-            window.iter().map(|row| (row.top, row.height)),
-            &mut self.visible,
-        );
-        if let Some(base) = window.first().map(|row| row.index) {
-            for item in &mut self.visible {
-                item.index += base;
-            }
-        }
-        let mut before = density.to_px(density.dp(spec.content_padding.top));
-        let mut after = density.to_px(density.dp(spec.content_padding.bottom));
-        if let Some(anchor) = spec.auto_centering {
-            let index = anchor.index.min(count - 1);
-            let spacing = density.dp(spec.item_spacing);
-            let centre = (0..index)
-                .map(|i| known.height_of(i) + spacing)
-                .sum::<f32>()
-                + known.height_of(index) * 0.5;
-            before += leading_auto_centring_spacer(
-                viewport_px,
-                density.to_px(centre).round(),
-                density.to_px(anchor.offset),
-            );
-            after += trailing_auto_centring_spacer(
-                viewport_px,
-                density.to_px(known.height_of(count - 1)).round(),
-            );
-        }
-        self.before_padding = before;
-        self.after_padding = after;
     }
 }
 
@@ -1176,11 +1092,11 @@ pub fn WearScalingLazyColumnNode(
 }
 
 /// One item's place in the column, once it has been composed and measured.
-struct WindowedRow {
-    index: usize,
+pub(super) struct WindowedRow {
+    pub(super) index: usize,
     roots: Vec<(NodeId, f32, f32)>,
-    top: f32,
-    height: f32,
+    pub(super) top: f32,
+    pub(super) height: f32,
     placed: PlacedRow,
 }
 
