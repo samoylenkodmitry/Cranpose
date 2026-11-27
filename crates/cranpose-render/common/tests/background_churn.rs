@@ -160,15 +160,11 @@ fn assert_bounded_after_settling(heap: &[usize]) {
 }
 
 #[test]
-#[ignore = "known growth (#2247): a closed shape chunk stays while one of its items lives, \
-            so the store grows about 29.5 KB for each long-lived item"]
 fn backgrounds_drawn_anew_beside_staying_ones_keep_the_store_heap_bounded() {
     assert_bounded_after_settling(&churn(0));
 }
 
 #[test]
-#[ignore = "known growth (#2247): a closed shape chunk stays while one of its items lives, \
-            so the store grows about 29.5 KB for each long-lived item"]
 fn backgrounds_drawn_anew_while_packets_hold_their_shapes_keep_the_store_heap_bounded() {
     assert_bounded_after_settling(&churn(2));
 }

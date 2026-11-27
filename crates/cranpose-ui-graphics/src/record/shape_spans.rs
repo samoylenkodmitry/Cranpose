@@ -5,13 +5,22 @@
 use std::{ops::Range, slice};
 
 use super::{
-    NO_SEGMENT_KEY, RecordLane, RecordSegment, ShapeRecorder, materialize::materialize_shape,
-    record_coverage,
+    NO_SEGMENT_KEY, RecordLane, RecordSegment, RecordTables, ShapeRecorder,
+    materialize::materialize_shape, record_coverage,
 };
 use crate::{DrawPrimitive, Rect};
 
 #[expect(clippy::multiple_inherent_impl, reason = "one file per concern")]
 impl ShapeRecorder {
+    /// An empty recorder with room for `shapes` shapes in `segments`
+    /// segments, so that shapes that fit grow none of its tables.
+    pub fn with_capacity(shapes: usize, segments: usize) -> Self {
+        Self {
+            tables: RecordTables::with_capacity(shapes, segments),
+            ..Self::default()
+        }
+    }
+
     /// Starts a segment of its own for the next shape, so that a run can
     /// name the shapes recorded after this call apart from those before.
     pub fn end_segment(&mut self) {
@@ -76,12 +85,12 @@ impl ShapeRecorder {
             .sum()
     }
 
-    /// The rect the pixels of the shapes in `segments` lie within; `None`
-    /// when the segments hold no shape.
-    pub fn coverage_in(&self, segments: &Range<u32>) -> Option<Rect> {
-        let bodies = self.tables.shapes.bodies();
-        self.shapes_in(segments)
-            .map(|index| record_coverage(&bodies[index]))
+    /// The rect the pixels of the shapes from the shape at index `first` on
+    /// lie within; `None` when the recorder holds no shape past `first`.
+    pub fn coverage_from(&self, first: usize) -> Option<Rect> {
+        self.tables.shapes.bodies()[first..]
+            .iter()
+            .map(record_coverage)
             .reduce(|covered, coverage| covered.union(coverage))
     }
 

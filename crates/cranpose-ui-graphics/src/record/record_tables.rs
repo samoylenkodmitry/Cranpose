@@ -157,17 +157,25 @@ impl RecordTables {
         trim_growth(&mut self.segments);
     }
 
+    // Empty tables with room for `shapes` shapes in `segments` segments.
+    pub(super) fn with_capacity(shapes: usize, segments: usize) -> Self {
+        Self {
+            shapes: ShapeRecords::with_capacity(shapes),
+            segments: Vec::with_capacity(segments),
+            gradients: None,
+            fingerprint: OnceLock::new(),
+        }
+    }
+
     // Empty tables with this one's capacities, so a recording that starts
     // while a scene still holds the last one grows nothing.
     pub(super) fn with_capacity_of(&self) -> Self {
         Self {
-            shapes: ShapeRecords::with_capacity(self.shapes.capacity()),
-            segments: Vec::with_capacity(self.segments.capacity()),
             gradients: self
                 .gradients
                 .as_deref()
                 .map(|tables| Box::new(tables.with_capacity_of())),
-            fingerprint: OnceLock::new(),
+            ..Self::with_capacity(self.shapes.capacity(), self.segments.capacity())
         }
     }
 
