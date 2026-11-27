@@ -10,6 +10,7 @@ menu "Cranpose"
             code takes 128 KB of internal RAM on the ESP32-S3, where IRAM and
             the heap share it, and 64 KB of the classic ESP32's IRAM, which
             its heap only lends to 32-bit allocations. Turn it off for an
-            application that needs that memory more.
+            application that needs that memory more. The sampled code keeps
+            its place at the start of the flash code either way.
 
 endmenu

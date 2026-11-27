@@ -97,7 +97,7 @@ profiles ran the dashboard slower than a list that had kept 89 KB of an
 older build's functions (26.97 against 26.75 ms).
 
 - `esp32s3.ld` comes from QEMU: `just esp32-sim-profile MODE` builds the
-  demo for QEMU's ESP32-S3 without this component and counts the misses of
+  demo for QEMU's ESP32-S3 without the IRAM list and counts the misses of
   the chip's 32 KB instruction cache with a QEMU plugin
   (`scripts/esp32/cache/`), and `scripts/esp32/sim_profile.py` writes them
   as a profile. A list by misses per byte holds the code that waits for flash
@@ -125,7 +125,11 @@ every E32R35T screen by 0.02 to 0.05 ms. A file for each chip,
 byte first, and the linker puts them at the start of the flash code
 (`--section-ordering-file`), one after another, where they evict each other
 less and code outside the list does not move them. A function of the IRAM
-list matches the IRAM section first and stays in IRAM.
+list matches the IRAM section first and stays in IRAM. The order applies
+with `CONFIG_CRANPOSE_HOT_CODE_IN_IRAM` off too: it takes no RAM, and a
+build with all code in flash (`scripts/esp32/sdkconfig.no_hot_code`, which
+`board_ab.py --no-hot-code` compares) keeps the sampled functions where a
+change of cold code does not move them.
 
 Both files come from the boards' sampled profiles, as `esp32.ld` does: an
 order by QEMU's cache misses read the ES3C35P's dashboard 24.97 -> 25.01 ms
@@ -194,9 +198,9 @@ a function of the base image and match none of the other image, and exits
 with an error when it finds one.
 
 The budget counts the functions' code; their literals take a few KB more in
-the section, 7 KB on the ES3C35P. The board profiles run without this
-component (`scripts/esp32/sdkconfig.no_hot_code`), so their samples show what
-the cache costs, and print the hottest functions and crates.
+the section, 7 KB on the ES3C35P. The board profiles run without the IRAM
+list (`scripts/esp32/sdkconfig.no_hot_code`), so their samples show what the
+cache costs, and print the hottest functions and crates.
 
 A large function of which a frame runs a small part takes as much IRAM as
 the whole of it. Bodies that a frame seldom runs stay out of line after a

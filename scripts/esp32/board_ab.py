@@ -18,11 +18,12 @@ build different code, as cargo hashes a path crate's metadata from its path.
 A build and its links stay under that worktree's target/esp32-ab, kept by
 commit, so the base of the next comparison does not build again.
 
-`--no-hot-code` builds every revision with the hot-code lists off
+`--no-hot-code` builds every revision with the IRAM lists off
 (`sdkconfig.no_hot_code`), so all code runs from flash and neither side's
-lists decide what is fast: the comparison that judges a change of the code a
-frame runs. A placement then shifts the whole of the flash code by a gap a
-seed picks.
+IRAM list decides what is fast: the comparison that judges a change of the
+code a frame runs. The flash order still puts the sampled functions first,
+where a change of cold code moves none of them, and the placements gap it
+as with the lists on.
 
 `--null REVISION` names the null leg among the revisions: the base with one
 function no code calls, which moves code and changes no behaviour. With it
@@ -105,13 +106,6 @@ def gapped(order, seed, out, largest):
     out.write_text("\n".join(text) + "\n")
 
 
-def shifted(seed, out, largest):
-    """An order file that names no code and opens one gap `seed` picks, a
-    multiple of 4 bytes below `largest`: every function moves by it."""
-    gap = 4 * (1 + random.Random(seed).randrange(largest // 4 - 1))
-    out.write_text(f".flash.text :\n{{\n  . = . + {gap};\n}}\n")
-
-
 def relink(kept, order, elf):
     saved = json.loads((kept / "args.json").read_text())
     flag = "-Wl,--section-ordering-file,"
@@ -168,10 +162,7 @@ def build(tree, board, commit, placements, hot_code):
             shutil.copy(elf, target)
             continue
         gaps = out / f"gaps{seed}.order"
-        if hot_code:
-            gapped(order, seed, gaps, LARGEST_GAP[board])
-        else:
-            shifted(seed, gaps, LARGEST_GAP[board])
+        gapped(order, seed, gaps, LARGEST_GAP[board])
         relink(out / "link", gaps, target)
     distinct_images(commit, elves)
     return out, elves
