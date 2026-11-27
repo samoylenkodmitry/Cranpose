@@ -32,12 +32,21 @@ impl DeviceErrorSentry {
             .iter()
             .find(|(known, _)| known.as_ptr() == Arc::as_ptr(device))
             .and_then(|(_, sentry)| sentry.upgrade());
-        let sentry = known.unwrap_or_else(|| {
+        let sentry = if let Some(sentry) = known {
+            drop(sentries);
+            sentry
+        } else {
+            drop(sentries);
             let sentry = Self::register(device);
+            let mut sentries = SENTRIES.lock().unwrap_or_else(PoisonError::into_inner);
+            sentries.retain(|(known, existing)| {
+                known.strong_count() > 0
+                    && existing.strong_count() > 0
+                    && known.as_ptr() != Arc::as_ptr(device)
+            });
             sentries.push((Arc::downgrade(device), Arc::downgrade(&sentry)));
             sentry
-        });
-        drop(sentries);
+        };
         if let Some(on_device_lost) = on_device_lost {
             let mut handlers = sentry
                 .on_device_lost

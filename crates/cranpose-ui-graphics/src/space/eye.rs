@@ -149,9 +149,10 @@ impl WorldSink {
             build(world);
             return;
         }
+        drop(held);
         let mut world = EyeWorld::default();
         build(&mut world);
-        *held = Arc::new(world);
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Arc::new(world);
     }
 
     /// The world the renderer left last.

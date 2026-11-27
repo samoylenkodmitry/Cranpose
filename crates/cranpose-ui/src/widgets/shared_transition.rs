@@ -118,12 +118,24 @@ impl Registry {
 
     fn flight(&self, key: &str) -> Option<Flight> {
         let instances = self.instances.borrow();
-        let of_key = || instances.iter().filter(|instance| &*instance.key == key);
-        let to = of_key().find(|instance| !instance.entry.motion.leaving.get())?;
-        let from = of_key().find(|instance| instance.entry.motion.leaving.get())?;
+        let mut to = None;
+        let mut from = None;
+        for instance in instances.iter() {
+            if &*instance.key != key {
+                continue;
+            }
+            if instance.entry.motion.leaving.get() {
+                from.get_or_insert(instance);
+            } else {
+                to.get_or_insert(instance);
+            }
+            if to.is_some() && from.is_some() {
+                break;
+            }
+        }
         Some(Flight {
-            to: Rc::clone(to),
-            from: Rc::clone(from),
+            to: Rc::clone(to?),
+            from: Rc::clone(from?),
         })
     }
 

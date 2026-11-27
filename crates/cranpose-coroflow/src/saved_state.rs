@@ -133,18 +133,29 @@ impl SavedStateHandle {
         &self,
         key: &str,
     ) -> Result<Option<T>, SavedStateError> {
+        if let Some(state) = self.existing_flow::<T>(key)? {
+            return Ok(Some(state.value()));
+        }
+        Ok(self.restored(key))
+    }
+
+    fn existing_flow<T>(&self, key: &str) -> Result<Option<MutableStateFlow<T>>, SavedStateError>
+    where
+        T: Clone + Send + Sync + 'static,
+    {
         let entries = self
             .namespace
             .entries
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if let Some(entry) = entries.get(key) {
-            return entry
-                .downcast_ref::<Entry<T>>()
-                .map(|entry| Some(entry.state.value()))
-                .ok_or_else(|| SavedStateError::TypeMismatch(self.stored_key(key)));
+        let Some(entry) = entries.get(key) else {
+            return Ok(None);
+        };
+        if let Some(entry) = entry.downcast_ref::<Entry<T>>() {
+            return Ok(Some(entry.state.clone()));
         }
-        Ok(self.restored(key))
+        drop(entries);
+        Err(SavedStateError::TypeMismatch(self.stored_key(key)))
     }
 
     /// Updates the shared value and collectors. Persistence occurs at the next
@@ -182,16 +193,8 @@ impl SavedStateHandle {
     where
         T: Display + FromStr + Clone + PartialEq + Send + Sync + 'static,
     {
-        let mut entries = self
-            .namespace
-            .entries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if let Some(entry) = entries.get(key) {
-            return entry
-                .downcast_ref::<Entry<T>>()
-                .map(|entry| (entry.state.clone(), false))
-                .ok_or_else(|| SavedStateError::TypeMismatch(self.stored_key(key)));
+        if let Some(state) = self.existing_flow::<T>(key)? {
+            return Ok((state, false));
         }
         let state = MutableStateFlow::new(initial());
         let saved = state.clone();
@@ -200,6 +203,18 @@ impl SavedStateHandle {
                 saved.value().to_string()
             })
         });
+        let mut entries = self
+            .namespace
+            .entries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(entry) = entries.get(key) {
+            if let Some(entry) = entry.downcast_ref::<Entry<T>>() {
+                return Ok((entry.state.clone(), false));
+            }
+            drop(entries);
+            return Err(SavedStateError::TypeMismatch(self.stored_key(key)));
+        }
         entries.insert(
             key.to_owned(),
             Box::new(Entry {

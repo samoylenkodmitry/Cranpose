@@ -137,15 +137,14 @@ impl LoadedModel {
             .iter()
             .enumerate()
             .filter_map(|(index, animation)| animation.pose_time().map(|time| (index, time)));
-        {
-            let mut nodes = self.poses.borrow_mut();
-            let NodePoses { locals, worlds } = &mut *nodes;
-            self.model.local_transforms(poses, locals);
-            if let Some(input) = self.input.get() {
-                self.model.parts.pose(&input, locals);
-            }
-            self.model.worlds_of(locals, worlds);
+        let mut nodes = std::mem::take(&mut *self.poses.borrow_mut());
+        let NodePoses { locals, worlds } = &mut nodes;
+        self.model.local_transforms(poses, locals);
+        if let Some(input) = self.input.get() {
+            self.model.parts.pose(&input, locals);
         }
+        self.model.worlds_of(locals, worlds);
+        *self.poses.borrow_mut() = nodes;
         self.revision
             .update(|revision| *revision = revision.wrapping_add(1));
     }
