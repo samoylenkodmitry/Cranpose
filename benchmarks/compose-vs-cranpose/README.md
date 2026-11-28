@@ -997,10 +997,12 @@ has MangoHud's count alone. The raw log of
 every leg is kept gzipped beside the run on the `perf-data` branch, under
 `mangohud/`, and the dashboard links it.
 
-Each app's home, caches and Mesa's shader cache sit in a folder of its own
-(`HOME`), removed before each first start, so a first start is the app's
-first after its install. The window is 1280 x 820 (`DESKTOP_WINDOW`); each leg
-records the window's size as the window manager left it. A display whose GPU
+Before each first start the harness removes what the apps keep in the user's
+cache, config and data folders (`APP_STATE`), and Mesa's shader cache and
+Chrome's profile, which sit in a folder of each app's own: a first start is
+the app's first after its install. The window is 1280 x 820
+(`DESKTOP_WINDOW`); each leg records the window's size as the window manager
+left it, marked `window_mismatch` when it differs. A display whose GPU
 drives no connected output scans nothing out: every leg is then marked
 `no_scanout` and `perf-publish` refuses the run. On such a screen the X server
 paces FIFO presents at one a second, while IMMEDIATE presents run at the

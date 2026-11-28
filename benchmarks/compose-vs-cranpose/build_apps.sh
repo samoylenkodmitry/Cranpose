@@ -489,6 +489,12 @@ linux)
         build "$app" "$app-app/target/release/perf-compare-$app" "${reads[@]}" -- \
             attempt "$app" cargo_app "$app-app"
     done
+    # Makepad opens its resources relative to where it runs, which linux.py
+    # makes its program's folder.
+    if [[ -e $here/makepad-app/target/release/perf-compare-makepad ]]; then
+        rm -rf "$here/makepad-app/target/release/makepad"
+        python3 "$here/makepad-app/resources.py" "$here/makepad-app/target/release/makepad"
+    fi
     build fyne fyne-app/build/perf-compare-fyne fyne-app -- \
         attempt fyne "$here/fyne-app/build.sh"
     build compose compose-desktop-app/build/compose/binaries/main/app/PerfCompose \

@@ -38,8 +38,9 @@ left at another size than 1280 x 820 is marked `window_mismatch`.
 
 Every launch is measured from its start for `--run` seconds, the same span for
 every app, in rounds of two starts as `desktop.py` measures: the first after
-the app's state is removed (its home, caches and Mesa's shader cache all sit
-in a folder of its own, `HOME`), the second after it. A leg ends early after
+what the app keeps between launches is removed (`APP_STATE`, and Mesa's
+shader cache and Chrome's profile, which sit in a folder of the app's own),
+the second after it. A leg ends early after
 `SLOW_SECONDS` seconds in a row under `SLOW_FPS` updates, marked `stopped`.
 A leg in which other processes spent more than `--max-others` cores above the
 machine's idle load is measured again, up to three times, and marked
@@ -106,6 +107,9 @@ APPS = {
 }
 # The apps that show the web page and read it from the harness's server.
 PAGE_APPS = {'web', 'tauri', 'electron'}
+# Makepad opens its resources by paths relative to where it runs:
+# `build_apps.sh linux` puts them beside its program.
+WORKING_DIRECTORY = {'makepad': HERE / 'makepad-app/target/release'}
 # Why an app that `build_apps.sh linux` did not build is missing, one
 # `NAME: REASON` a line.
 UNBUILT = HERE / 'linux-unbuilt.txt'
@@ -124,6 +128,28 @@ PRESENT = {
 # How often the harness looks for MangoHud's control socket of a new app, and
 # how long it looks.
 CONTROL_POLL_S = 0.01
+
+# What the apps keep between launches in the user's folders, as `desktop.py`'s
+# `APP_STATE` names it on a Mac: the apps' own caches, data and settings.
+# Mesa's shader cache and Chrome's profile sit in each app's state folder.
+# Removed before every first start; a fresh cache folder of the user's own
+# crashes Avalonia 12.2 on Linux, so the folders themselves stay.
+XDG_CACHE = Path(os.environ.get('XDG_CACHE_HOME') or Path.home() / '.cache')
+XDG_CONFIG = Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config')
+XDG_DATA = Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share')
+APP_STATE = [(folder, pattern) for folder in (XDG_CACHE, XDG_CONFIG, XDG_DATA)
+             for pattern in ('perf-compare*', 'dev.perfcompare.*', 'PerfElectron', 'PerfCompose', 'perf_flutter')] + \
+    [(XDG_CACHE / 'fyne', 'dev.perfcompare.*'), (XDG_CONFIG / 'fyne', 'dev.perfcompare.*')]
+
+
+def clear_app_state():
+    """Removes what the apps keep between launches in the user's folders."""
+    for root, pattern in APP_STATE:
+        for path in root.glob(pattern):
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
 CONTROL_WAIT_S = 30.0
 # A leg's presents outnumber its updates when they exceed them by more than
 # the frames the two counts' edges can split differently.
@@ -380,8 +406,7 @@ class App:
         page = f'{server.base}/index.html' if server else ''
         values = {'scenario': args.scenario, 'tier': args.tier, 'freeze': 0, 'page': page, 'profile': profile}
         command = ['mangohud', *(str(part).format(**values) for part in APPS[name])]
-        environment = {**os.environ, 'HOME': str(home), 'XDG_CACHE_HOME': str(home / '.cache'),
-                       'XDG_CONFIG_HOME': str(home / '.config'), 'XDG_DATA_HOME': str(home / '.local/share'),
+        environment = {**os.environ, 'MESA_SHADER_CACHE_DIR': str(home / 'mesa-shader-cache'),
                        'XAUTHORITY': args.xauthority, 'DISPLAY': args.display,
                        'PERF_SCENARIO': args.scenario, 'PERF_TIER': str(args.tier), 'PERF_FREEZE': '0',
                        'PERF_FONTS': str(stage / 'fonts'), 'PERF_CHAT': str(stage / 'chat-assets'),
@@ -390,7 +415,7 @@ class App:
         self.first_frame = None
         self.lines = []
         self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=environment,
-                                        cwd=home, start_new_session=True)
+                                        cwd=WORKING_DIRECTORY.get(name, home), start_new_session=True)
         self.pid = self.process.pid
         self.reader = threading.Thread(target=self.read, daemon=True)
         self.reader.start()
@@ -492,6 +517,8 @@ def measure(name, args, server, stage, label, home):
     xserver = display_server(args.display)
     server_before = tree_ticks([xserver], None) if xserver else 0
     machine_before = machine_ticks()
+    # A page says its first frame to the server, not on its program's output.
+    since = server.mark() if server else 0
     launched = time.monotonic()
     app = App(name, args, server, stage, label, home, folder)
     control = Control(app)
@@ -530,7 +557,8 @@ def measure(name, args, server, stage, label, home):
     presents = [stamp for stamp in present_times(rows, created.at) if launched <= stamp < launched + run_s] \
         if created.at else []
     updates = [(stamp, frame) for stamp, frame in app.updates if launched <= stamp < launched + run_s]
-    first = app.first_frame or (updates[0][0] if updates else None)
+    first = app.first_frame or (updates[0][0] if updates else None) or \
+        (server.heard_at('PERF first_frame', since) if server and name in PAGE_APPS else None)
     if first is None or first >= launched + run_s:
         raise RuntimeError(f'{name} logged no first frame within its {run_s:.0f} s run; {app.state()}')
     wall = ended - launched
@@ -549,6 +577,9 @@ def measure(name, args, server, stage, label, home):
         'mangohud_rows': len(rows),
         'mangohud_system': {key: system[key] for key in ('cpu', 'gpu', 'kernel', 'driver') if key in system},
     }
+    if server and name in PAGE_APPS:
+        # What the page said of itself, its frame requests among it.
+        leg['page'] = server.page_record(since, launched, ended)
     leg.update(update_counts(updates, launched, run_s))
     leg.update(present_counts(presents, launched, run_s, updates))
     rate = leg['fps'] or leg['mangohud_fps']
@@ -609,6 +640,7 @@ def undisturbed_leg(name, args, server, stage, label, start, home, idle, failure
     legs = []
     for attempt in range(3):
         if start == STARTS[0]:
+            clear_app_state()
             shutil.rmtree(home, ignore_errors=True)
             home.mkdir(parents=True)
         try:
