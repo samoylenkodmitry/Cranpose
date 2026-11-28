@@ -954,6 +954,53 @@ run goes on, as a dash in the dashboard.
 Chrome on the M3 Pro measures Gauntlet at tier 16 and Still Wall at tier 20.
 Chrome on the Mate measures Gauntlet at tiers 8 and 10. The phone reports the second tier as `gauntlet-tier-10`.
 
+### On Linux, with MangoHud
+
+`linux.py` runs every desktop app that builds on Linux on the machine's X
+display, one at a time, at the desktop's tiers, and MangoHud counts each
+present of the app from outside it. One recipe builds the apps and measures
+them on any Linux machine with MangoHud installed (the distribution's
+`mangohud` package):
+
+```bash
+just perf-linux benchmarks/compose-vs-cranpose/results/linux
+```
+
+`build_apps.sh linux` builds the apps and writes why each other app did not
+build into `linux-unbuilt.txt`; the run lists those apps with their reasons.
+Each app starts as `mangohud APP`, as MangoHud's README starts any app:
+MangoHud's Vulkan layer attaches to a Vulkan app and its OpenGL hooks to a GL
+one, and each leg records which one attached (`mangohud_attach`) and which
+graphics APIs the app's processes loaded (`graphics_api`). MangoHud takes its
+settings from `MANGOHUD_CONFIG` alone: its HUD hidden (`no_display`), a log row
+for each frame (`log_interval=0`), and one present setting for every app, which
+the run's protocol names: uncapped by default (`vsync=1`, Vulkan's IMMEDIATE,
+and `gl_vsync=0`), or `--vsync` (`vsync=3`, FIFO, and `gl_vsync=1`). MangoHud
+0.8.4 starts no log by itself while its HUD is hidden, so the harness starts
+it through MangoHud's control socket (`control=mangohud-%p`, `:logging=1;`)
+the moment the app opens it; `mangohud_from_s` says when its first row came.
+
+**What a frame is.** A present can show a picture the app showed before. Each
+app writes a line for every frame it moves on to (`PERF update K`, with
+`PERF_UPDATES` set: `perf_data::updates` in the Rust apps), and the harness
+stamps each as it reads it. `fps` and `fps_by_second` count those updates from
+the launch, as the harness on a Mac counts the pictures that changed;
+`mangohud_fps` and `mangohud_fps_by_second` count MangoHud's presents over the
+same span. Over the span both cover, a leg whose presents outnumber its
+updates by more than two frames and 1% is marked `presents_exceed_updates`,
+and the dashboard shows the rate of the updates beside it. The raw log of
+every leg is kept gzipped beside the run on the `perf-data` branch, under
+`mangohud/`, and the dashboard links it.
+
+Each app's home, caches and Mesa's shader cache sit in a folder of its own
+(`HOME`), removed before each first start, so a first start is the app's
+first after its install. The window is 1280 x 820 (`DESKTOP_WINDOW`); each leg
+records the window's size as the window manager left it. A display whose GPU
+drives no connected output scans nothing out: every leg is then marked
+`no_scanout` and `perf-publish` refuses the run. On such a screen the X server
+paces FIFO presents at one a second, while IMMEDIATE presents run at the
+app's own pace.
+
 ### A start without a window
 
 The `first_screen` bench of `cranpose-app` does what the app does between its

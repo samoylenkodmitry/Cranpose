@@ -5,7 +5,7 @@
 use std::{collections::BTreeMap, rc::Rc};
 
 use cranpose_core::{self, MutableState};
-use cranpose_services::{isSystemInDarkTheme, local_http_client, HttpClientRef};
+use cranpose_services::{isSystemInDarkTheme, local_http_client, local_uri_handler, HttpClientRef};
 use cranpose_ui::{
     composable,
     text::FontWeight,
@@ -47,6 +47,8 @@ const INDEX_URL: &str =
 const DATA_URL: &str = "https://raw.githubusercontent.com/samoylenkodmitry/Cranpose/perf-data";
 /// Where a framework's gauntlet source opens.
 const SOURCE_URL: &str = "https://github.com/samoylenkodmitry/Cranpose/blob";
+// The perf-data branch's folders, as GitHub lists them.
+const DATA_TREE_URL: &str = "https://github.com/samoylenkodmitry/Cranpose/tree/perf-data";
 
 /// Where the charts read a run's frames: the data branch, or run files at
 /// hand, by their path on the branch.
@@ -798,12 +800,7 @@ fn Frameworks(palette: Palette, run: Rc<PerfRun>, source: FrameSource) {
     let title = format!("{place} · {} · {}", run.device, run.date());
     Card(palette, title, move || {
         StartChips(palette, start);
-        let metrics: &[Metric] = if run.kind == "esp32" {
-            &[Metric::Fps, Metric::FirstFrame, Metric::AppSize]
-        } else {
-            &Metric::ALL
-        };
-        MetricChips(palette, metric, metrics);
+        MetricChips(palette, metric, Metric::of(&run));
         RunView(
             palette,
             Rc::clone(&run),
@@ -816,11 +813,42 @@ fn Frameworks(palette: Palette, run: Rc<PerfRun>, source: FrameSource) {
         Text(
             if run.kind == "esp32" && metric.get() != Metric::AppSize {
                 "The firmware counts drawn frames in each second from ESP timer startup. First frame shows milliseconds on that clock."
+            } else if run.protocol.mangohud.is_some() && metric.get() == Metric::Fps {
+                "Frames the app moved on to per second over the whole run from the launch, each \
+                 line the app wrote for one stamped by the harness as it arrived; beside each, \
+                 the presents MangoHud counted for the same launch."
             } else {
                 metric.get().about()
             },
             Modifier::empty(),
             text_style(12.0, palette.muted, None),
         );
+        MangoHudNote(palette, Rc::clone(&run));
     });
+}
+
+// What counted a Linux run's presents, the present setting every subject
+// had, and the link to MangoHud's raw log of each leg.
+#[composable]
+fn MangoHudNote(palette: Palette, run: Rc<PerfRun>) {
+    let (Some(version), Some(logs)) = (run.protocol.mangohud.clone(), run.mangohud_logs()) else {
+        return;
+    };
+    let present = run.protocol.present.clone().unwrap_or_default();
+    Text(
+        format!("Presents counted by MangoHud {version}; every subject {present}."),
+        Modifier::empty(),
+        text_style(12.0, palette.muted, None),
+    );
+    let uri_handler = local_uri_handler().current();
+    let url = format!("{DATA_TREE_URL}/{logs}");
+    Text(
+        "MangoHud's raw log of each launch",
+        Modifier::empty().clickable(move |_| {
+            if let Err(error) = uri_handler.open_uri(&url) {
+                log::error!("Could not open {url}: {error:#}");
+            }
+        }),
+        text_style(12.0, palette.text, None),
+    );
 }

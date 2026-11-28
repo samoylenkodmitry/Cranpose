@@ -74,6 +74,7 @@ fun ColumnScope.WallScreen(load: WallLoad) {
             withFrameNanos { }
             index++
             frame.intValue = index
+            perfUpdate(index)
             if (load.freeze in 1..index) {
                 perfLog("PERF frozen frame=$index")
                 break

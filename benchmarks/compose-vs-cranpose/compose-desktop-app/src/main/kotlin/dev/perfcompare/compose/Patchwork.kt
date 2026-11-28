@@ -134,6 +134,7 @@ private fun Patches(frame: androidx.compose.runtime.MutableIntState, freeze: Int
             withFrameNanos { }
             index++
             frame.intValue = index
+            perfUpdate(index)
             // The list moves by one row each frame.
             list.dispatchRawDelta(rowPx)
             chat.advance()

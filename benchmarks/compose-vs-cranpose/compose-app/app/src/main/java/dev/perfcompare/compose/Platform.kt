@@ -24,6 +24,10 @@ fun perfLog(line: String) {
     Log.i(TAG, line)
 }
 
+/** A phone counts no updates: no harness asks it to. */
+@Suppress("UNUSED_PARAMETER")
+fun perfUpdate(frame: Int) {}
+
 /** Avatar [index] as an image. */
 fun avatarBitmap(index: Int): ImageBitmap =
     Bitmap.createBitmap(avatarArgb(index), AVATAR_SIZE, AVATAR_SIZE, Bitmap.Config.ARGB_8888).asImageBitmap()

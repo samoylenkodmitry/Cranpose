@@ -112,6 +112,7 @@ class _WallState extends State<Wall> with SingleTickerProviderStateMixin {
   void _advance(Duration elapsed) {
     final index = _frame.value + 1;
     _frame.value = index;
+    perfUpdate(index);
     final freeze = widget.freeze;
     if (freeze > 0 && index >= freeze) {
       _ticker.stop();

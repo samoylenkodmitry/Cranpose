@@ -3,21 +3,34 @@
 
 use std::cmp::Ordering;
 
+use super::PerfRun;
+
 /// Where a metric's chart reads it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Curve {
     /// The frame rate, from the times of the frames the display showed.
     Frames,
+    // The present rate, from the times of the presents MangoHud counted.
+    Presents,
     /// The run's samples of the metric under this key.
     Samples(&'static str),
     /// No curve, and why.
     None(&'static str),
 }
 
+impl Curve {
+    // A rate of frames or of presents, which a chart scales and orders as a
+    // frame rate.
+    pub(super) fn is_rate(self) -> bool {
+        matches!(self, Self::Frames | Self::Presents)
+    }
+}
+
 /// What the trend and the framework bars show of each run's medians.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Metric {
     Fps,
+    MangoHudFps,
     FirstFrame,
     CpuPerFrame,
     CpuCores,
@@ -41,10 +54,36 @@ impl Metric {
         Self::AppSize,
     ];
 
+    // A run MangoHud counted presents in shows their rate beside the app's.
+    const WITH_MANGOHUD: [Self; 10] = [
+        Self::Fps,
+        Self::MangoHudFps,
+        Self::FirstFrame,
+        Self::CpuPerFrame,
+        Self::CpuCores,
+        Self::Ram,
+        Self::GpuRam,
+        Self::CpuClock,
+        Self::GpuClock,
+        Self::AppSize,
+    ];
+
+    // The metrics a run's card offers.
+    pub(super) fn of(run: &PerfRun) -> &'static [Self] {
+        if run.kind == "esp32" {
+            &[Self::Fps, Self::FirstFrame, Self::AppSize]
+        } else if run.protocol.mangohud.is_some() {
+            &Self::WITH_MANGOHUD
+        } else {
+            &Self::ALL
+        }
+    }
+
     /// The median's name in the run index.
     pub(super) fn key(self) -> &'static str {
         match self {
             Self::Fps => "fps",
+            Self::MangoHudFps => "mangohud_fps",
             Self::FirstFrame => "first_frame_s",
             Self::CpuPerFrame => "cpu_ms_per_frame",
             Self::CpuCores => "cpu_cores",
@@ -59,6 +98,7 @@ impl Metric {
     pub(super) fn name(self) -> &'static str {
         match self {
             Self::Fps => "fps",
+            Self::MangoHudFps => "MangoHud fps",
             Self::FirstFrame => "first frame ms",
             Self::CpuPerFrame => "CPU ms per frame",
             Self::CpuCores => "CPU cores",
@@ -76,6 +116,11 @@ impl Metric {
             Self::Fps => {
                 "Frames the display showed per second over the whole run from the launch, counted \
                  outside the app; 60 at most."
+            }
+            Self::MangoHudFps => {
+                "Presents per second over the whole run from the launch, counted by MangoHud in \
+                 the app's Vulkan or OpenGL calls, outside the app. A row whose presents \
+                 outnumber the frames the app moved on to says so, with the rate of those frames."
             }
             Self::FirstFrame => {
                 "Milliseconds from the launch command to the first frame the display showed."
@@ -109,7 +154,7 @@ impl Metric {
 
     pub(super) fn curve_unit(self) -> &'static str {
         match self {
-            Self::Fps | Self::FirstFrame => "fps",
+            Self::Fps | Self::MangoHudFps | Self::FirstFrame => "fps",
             Self::CpuPerFrame => "ms/frame",
             Self::CpuCores => "cores",
             Self::Ram | Self::GpuRam => "MB",
@@ -127,7 +172,7 @@ impl Metric {
 
     pub(super) fn format(self, value: f64) -> String {
         match self {
-            Self::Fps | Self::CpuPerFrame => format!("{value:.1}"),
+            Self::Fps | Self::MangoHudFps | Self::CpuPerFrame => format!("{value:.1}"),
             Self::CpuCores | Self::AppSize => format!("{value:.2}"),
             // Medians in seconds, shown in milliseconds.
             Self::FirstFrame => format!("{:.0}", value * 1000.0),
@@ -140,6 +185,7 @@ impl Metric {
     pub(super) fn curve(self) -> Curve {
         match self {
             Self::Fps | Self::FirstFrame => Curve::Frames,
+            Self::MangoHudFps => Curve::Presents,
             Self::CpuPerFrame => Curve::Samples("cpu_ms_per_frame"),
             Self::CpuCores => Curve::Samples("cores"),
             Self::Ram => Curve::Samples("ram_mb"),
@@ -157,7 +203,7 @@ impl Metric {
     /// rest, which cost time, memory or power; a value before none.
     pub(super) fn best_first(self, a: Option<f64>, b: Option<f64>) -> Ordering {
         match (a, b) {
-            (Some(a), Some(b)) if self == Self::Fps => b.total_cmp(&a),
+            (Some(a), Some(b)) if matches!(self, Self::Fps | Self::MangoHudFps) => b.total_cmp(&a),
             (Some(a), Some(b)) => a.total_cmp(&b),
             (Some(_), None) => Ordering::Less,
             (None, Some(_)) => Ordering::Greater,
@@ -165,12 +211,13 @@ impl Metric {
         }
     }
 
-    /// What a full bar stands for: the display's 60 fps for the frame rate,
-    /// the run's largest value for the rest.
+    /// What a full bar stands for: 60 fps, or a faster run's largest rate,
+    /// for a frame rate; the run's largest value for the rest.
     pub(super) fn full_scale(self, values: &[Option<f64>]) -> f64 {
+        let largest = values.iter().flatten().copied().fold(0.0, f64::max);
         match self {
-            Self::Fps => 60.0,
-            _ => values.iter().flatten().copied().fold(0.0, f64::max),
+            Self::Fps | Self::MangoHudFps => largest.max(60.0),
+            _ => largest,
         }
     }
 }

@@ -52,6 +52,13 @@ fun perfLog(line: String) {
     System.out.flush()
 }
 
+private val countsUpdates = System.getenv("PERF_UPDATES") != null
+
+/** Writes `PERF update [frame]` when the launch counts updates (`PERF_UPDATES`), as `linux.py` asks. */
+fun perfUpdate(frame: Int) {
+    if (countsUpdates) System.err.println("PERF update $frame")
+}
+
 /** Avatar [index] as an image: Skia's pixels are premultiplied BGRA, the avatar opaque ARGB. */
 fun avatarBitmap(index: Int): ImageBitmap {
     val argb = avatarArgb(index)

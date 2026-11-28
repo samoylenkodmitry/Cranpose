@@ -1122,6 +1122,53 @@ fn methodology_links_open_the_markdown_doc_and_harness_sources() {
     );
 }
 
+// A Linux run MangoHud counted: Cranpose's every present held a new frame,
+// egui presented twice as many pictures as the frames it moved on to.
+const LINUX_INDEX: &str = r#"{"runs": [{
+  "file": "runs/2026-11-28-frameworks-abc123def-Intel-Linux.json", "kind": "frameworks",
+  "started_at": "2026-11-28T02:00:00+00:00", "device": "12th Gen Intel Core i5-12400 · UHD Graphics 730 · Linux",
+  "protocol": {"run_s": 10, "starts": ["first", "second"], "mangohud": "v0.8.4",
+               "present": "uncapped: Vulkan IMMEDIATE, GL swap interval 0 (MangoHud vsync=1, gl_vsync=0)"},
+  "subjects": [{"name": "cranpose", "label": "Cranpose"}, {"name": "egui", "label": "egui 0.36.2"}],
+  "scenarios": {"gauntlet": {"legs": 4, "starts": {
+    "first": {"summary": {"cranpose": {"fps": 50.7, "mangohud_fps": 50.3, "presents_exceed_updates_legs": 0},
+                          "egui": {"fps": 20.0, "mangohud_fps": 40.0, "presents_exceed_updates_legs": 1}}},
+    "second": {"summary": {"cranpose": {"fps": 50.3, "mangohud_fps": 49.9, "presents_exceed_updates_legs": 0},
+                           "egui": {"fps": 21.0, "mangohud_fps": 42.0, "presents_exceed_updates_legs": 1}}}}}}
+}]}"#;
+
+#[test]
+fn a_linux_card_shows_each_frame_rate_beside_mangohuds_and_marks_presents_that_held_no_new_frame() {
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let handler: UriHandlerRef = Rc::new(RecordingUriHandler(Arc::clone(&opened)));
+    let index = Rc::new(PerfIndex::parse(LINUX_INDEX).expect("the fixture parses"));
+    let mut robot = create_headless_robot_test(1100, 4000, move || {
+        CompositionLocalProvider(vec![local_uri_handler().provides(Rc::clone(&handler))], {
+            let index = Rc::clone(&index);
+            move || PerformanceDashboard(Rc::clone(&index), None, FrameSource::Files(Rc::default()))
+        });
+    });
+    let texts = robot.get_all_text();
+    for shown in [
+        "50.7 · MangoHud 50.3",
+        "20.0 · MangoHud 40.0 · presents exceed updates",
+        "Presents counted by MangoHud v0.8.4; every subject uncapped: Vulkan IMMEDIATE, GL swap \
+         interval 0 (MangoHud vsync=1, gl_vsync=0).",
+    ] {
+        assert!(shows(&texts, shown), "{shown}: {texts:?}");
+    }
+    choose(&mut robot, "MangoHud fps", 0);
+    let texts = robot.get_all_text();
+    for shown in ["50.3", "40.0 · presents exceed updates, 20.0 updates/s"] {
+        assert!(shows(&texts, shown), "{shown}: {texts:?}");
+    }
+    click_on(&mut robot, "MangoHud's raw log of each launch");
+    assert_eq!(
+        opened.lock().expect("lock").clone(),
+        vec!["https://github.com/samoylenkodmitry/Cranpose/tree/perf-data/mangohud/2026-11-28-frameworks-abc123def-Intel-Linux"]
+    );
+}
+
 fn disturbed_dashboard() -> RobotTestRule<TestRenderer> {
     let index = serde_json::json!({"runs": [{
         "file": "runs/disturbed.json",

@@ -116,6 +116,7 @@ fun ColumnScope.GauntletScreen(load: GauntletLoad) {
             withFrameNanos { }
             index++
             frame.intValue = index
+            perfUpdate(index)
             state.dispatchRawDelta(scrollPx)
             if (load.freeze in 1..index) {
                 perfLog("PERF frozen frame=$index")

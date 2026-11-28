@@ -32,9 +32,16 @@ public static class Clock
     /// <summary>Raised once per frame, after the index advanced.</summary>
     public static event Action<int>? Advanced;
 
+    /// <summary>Whether the launch counts updates (`PERF_UPDATES`), as `linux.py` asks.</summary>
+    static readonly bool CountsUpdates = Environment.GetEnvironmentVariable("PERF_UPDATES") is not null;
+
     public static int Advance()
     {
         Frame += 1;
+        if (CountsUpdates)
+        {
+            Console.Error.WriteLine($"PERF update {Frame}");
+        }
         Advanced?.Invoke(Frame);
         return Frame;
     }

@@ -8,6 +8,7 @@ use std::{ops::Range, path::PathBuf, sync::OnceLock};
 pub mod chat;
 pub mod frame_index;
 pub mod patchwork;
+pub mod updates;
 pub mod wall;
 pub use chat::*;
 pub use frame_index::FrameIndex;

@@ -44,6 +44,10 @@ fun perfLog(line: String) {
     println(line)
 }
 
+/** A page counts no updates: no harness asks it to. */
+@Suppress("UNUSED_PARAMETER")
+fun perfUpdate(frame: Int) {}
+
 /** Avatar [index] as an image: Skia's pixels are premultiplied BGRA, the avatar opaque ARGB. */
 fun avatarBitmap(index: Int): ImageBitmap {
     val argb = avatarArgb(index)

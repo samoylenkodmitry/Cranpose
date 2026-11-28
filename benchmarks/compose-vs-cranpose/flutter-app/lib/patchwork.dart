@@ -65,6 +65,7 @@ class _PatchworkState extends State<Patchwork> with SingleTickerProviderStateMix
     final index = _frame.value + 1;
     _chat.advance();
     _frame.value = index;
+    perfUpdate(index);
     final freeze = widget.freeze;
     if (freeze > 0 && index >= freeze) {
       _ticker.stop();

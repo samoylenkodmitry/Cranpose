@@ -185,6 +185,35 @@ class PublishPushTest(unittest.TestCase):
             index = json.loads(git('show', 'perf-data:index.json', cwd=origin))
             self.assertEqual([entry['file'] for entry in index['runs']], ['runs/earlier.json'])
 
+    def test_a_linux_run_with_no_scanout_fails_and_publishes_nothing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            origin, repo = scratch_repo(root)
+            (root / 'run.json').write_text(json.dumps({**run(), 'display': {'scanout': False}}))
+            published = publish_run(root, repo)
+            self.assertNotEqual(published.returncode, 0)
+            self.assertIn('no_scanout', published.stderr)
+            index = json.loads(git('show', 'perf-data:index.json', cwd=origin))
+            self.assertEqual([entry['file'] for entry in index['runs']], ['runs/earlier.json'])
+
+    def test_each_legs_raw_mangohud_log_lands_beside_the_run_and_the_leg_names_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            origin, repo = scratch_repo(root)
+            (root / 'mangohud').mkdir()
+            (root / 'mangohud/gauntlet-cranpose-1-first-1.csv.gz').write_bytes(b'raw log')
+            linux = run()
+            linux['display'] = {'scanout': True}
+            linux['scenarios'][0]['legs'] = [{'subject': 'cranpose', 'start': 'first',
+                                              'mangohud_log': 'mangohud/gauntlet-cranpose-1-first-1.csv.gz'}]
+            (root / 'run.json').write_text(json.dumps(linux))
+            published = publish_run(root, repo)
+            self.assertEqual(published.returncode, 0, published.stderr)
+            kept = 'mangohud/2026-10-05-nightly-abc123def-EVR-AL00/gauntlet-cranpose-1-first-1.csv.gz'
+            self.assertEqual(git('show', f'perf-data:{kept}', cwd=origin), 'raw log')
+            stored = json.loads(git('show', 'perf-data:runs/2026-10-05-nightly-abc123def-EVR-AL00.json', cwd=origin))
+            self.assertEqual(stored['scenarios'][0]['legs'][0]['mangohud_log'], kept)
+
     def test_a_refused_push_is_made_again_on_the_latest_data_commit(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

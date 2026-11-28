@@ -7,6 +7,9 @@ bool get logsFirstFrame => true;
 /// Writes a `PERF` line to the console, where the page's shim hears it.
 void perf(String line) => debugPrint(line);
 
+/// A page counts no updates: no harness asks it to.
+void perfUpdate(int frame) {}
+
 /// The tier, the freeze frame and the screen from the page's query string:
 /// `?tier=12&freeze=120&scenario=wall`.
 (int, int, String) launchOf(List<String> args) {

@@ -44,6 +44,12 @@ pub struct PerfProtocol {
     /// dashboard leaves it out.
     #[serde(default)]
     pub starts: Vec<String>,
+    // The MangoHud that counted every present of a Linux run, as `mangohud
+    // --version` names it, and the present setting every subject had.
+    #[serde(default)]
+    pub mangohud: Option<String>,
+    #[serde(default)]
+    pub present: Option<String>,
 }
 
 /// A run's own file: every leg, with the time of each frame it presented.
@@ -77,8 +83,12 @@ pub struct PerfFramesLeg {
     #[serde(default)]
     pub start: String,
     /// When each frame was presented, in milliseconds since the launch.
+    // On Linux, when the app moved on to each frame; `present_ms` holds when
+    // MangoHud counted each present.
     #[serde(default)]
     pub frame_ms: Vec<f64>,
+    #[serde(default)]
+    pub present_ms: Vec<f64>,
     /// Another process spent more than the run allows in this leg, or the
     /// leg's page was hidden: it is shown, and left out of the medians.
     #[serde(default)]
@@ -292,6 +302,27 @@ impl PerfRun {
             .get(name)?
             .get(metric)
             .copied()
+    }
+
+    // Whether a leg of the subject presented more frames than it moved on
+    // to, by MangoHud's count against the app's own: pictures that held no
+    // new frame.
+    pub(super) fn presents_exceed_updates(
+        &self,
+        scenario: &str,
+        start: &str,
+        subject: usize,
+    ) -> bool {
+        self.median(scenario, start, subject, "presents_exceed_updates_legs")
+            .is_some_and(|legs| legs > 0.0)
+    }
+
+    // The folder on the perf-data branch that holds MangoHud's raw log of
+    // each leg of the run, beside the run's own file.
+    pub(super) fn mangohud_logs(&self) -> Option<String> {
+        self.protocol.mangohud.as_ref()?;
+        let stem = self.file.strip_prefix("runs/")?.strip_suffix(".json")?;
+        Some(format!("mangohud/{stem}"))
     }
 
     /// Whether the run kept each subject's first and second starts apart, as

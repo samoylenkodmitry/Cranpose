@@ -19,6 +19,15 @@ void perf(String line) {
   }
 }
 
+/// Whether the launch counts updates (`PERF_UPDATES`), as `linux.py` asks.
+final bool _countsUpdates = Platform.environment.containsKey('PERF_UPDATES');
+
+/// Writes `PERF update FRAME` on standard error when the launch counts
+/// updates: the screen shows frame [frame], new content, from now on.
+void perfUpdate(int frame) {
+  if (_countsUpdates) stderr.writeln('PERF update $frame');
+}
+
 /// The tier, the freeze frame and the screen: `am start`'s arguments on
 /// Android, on a desktop `PERF_TIER`, `PERF_FREEZE` and `PERF_SCENARIO`, which
 /// `desktop.py` sets.

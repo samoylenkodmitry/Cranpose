@@ -862,6 +862,7 @@ impl eframe::App for Gauntlet {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         if !self.frozen {
             self.frame += 1;
+            perf_data::updates::shown(self.frame);
         }
         let screen = ui.max_rect();
         self.screen = screen;

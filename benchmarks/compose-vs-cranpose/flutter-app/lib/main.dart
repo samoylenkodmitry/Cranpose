@@ -160,6 +160,7 @@ class _GauntletState extends State<Gauntlet> with SingleTickerProviderStateMixin
   void _advance(Duration elapsed) {
     final index = _frame.value + 1;
     _frame.value = index;
+    perfUpdate(index);
     // The warm-up frame ticks before the list's first layout.
     if (_scroll.hasClients && _scroll.position.hasContentDimensions) {
       _scroll.jumpTo(index * _scrollPerFrame);

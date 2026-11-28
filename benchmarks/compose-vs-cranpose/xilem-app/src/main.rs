@@ -137,6 +137,7 @@ impl App {
             return false;
         }
         self.frame += 1;
+        perf_data::updates::shown(self.frame);
         if self.frame == 1 {
             log::info!("PERF first_frame");
         }

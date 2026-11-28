@@ -45,6 +45,7 @@ pub fn WallScreen(load: WallLoad) {
             clock.next_frame().await;
             index += 1;
             frame.set(index);
+            perf_data::updates::shown(index);
             if freeze > 0 && index >= freeze {
                 log::info!("PERF frozen frame={index}");
                 break;

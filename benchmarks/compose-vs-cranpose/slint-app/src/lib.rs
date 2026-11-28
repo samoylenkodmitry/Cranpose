@@ -211,6 +211,7 @@ pub fn run(launch: Launch, size: Option<slint::LogicalSize>) -> Result<(), Platf
                 return;
             }
             clock.set_frame(frame + 1);
+            perf_data::updates::shown((frame + 1) as u32);
             window.set_scroll(-((frame + 1) as f32) * SCROLL_PER_FRAME);
         })
         .map_err(|error| PlatformError::Other(format!("no rendering notifier: {error}")))?;

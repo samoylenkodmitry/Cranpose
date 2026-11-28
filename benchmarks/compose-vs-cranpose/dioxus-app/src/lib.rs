@@ -123,6 +123,7 @@ fn use_frames(advance: fn(u32)) {
             }
             advance(frame);
             *FRAME.write() = frame;
+            perf_data::updates::shown(frame);
             if freeze > 0 && frame >= freeze {
                 log::info!("PERF frozen frame={frame}");
                 return;

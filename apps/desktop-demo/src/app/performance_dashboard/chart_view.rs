@@ -84,7 +84,7 @@ fn places(curves: &[LaunchCurve], kind: Curve, picked: &[usize]) -> Vec<Place> {
             })
             .collect();
     }
-    if kind == Curve::Frames || curves.len() <= LEADERS {
+    if kind.is_rate() || curves.len() <= LEADERS {
         return vec![Place::Within; curves.len()];
     }
     let reaches: Vec<f64> = curves.iter().map(|curve| reach(curve, kind)).collect();
@@ -140,7 +140,7 @@ impl ChartView {
                 .map(|(curve, _)| curve.line.subject)
                 .collect()
         };
-        let axis = if kind == Curve::Frames {
+        let axis = if kind.is_rate() {
             Axis {
                 floor: 0.0,
                 top: chart_top(peak),

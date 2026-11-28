@@ -119,7 +119,7 @@ fn build_subject_row(
             } else {
                 0.0
             }),
-            ctx.selection.metric.format(value),
+            with_mangohud(ctx, index, ctx.selection.metric.format(value)),
         ),
         None if disturbed => (None, "disturbed".to_string()),
         None if measured => (None, "–".to_string()),
@@ -141,6 +141,35 @@ fn build_subject_row(
         disturbed,
         share,
         value,
+    }
+}
+
+// On a run MangoHud counted presents in, the app's frame rate with MangoHud's
+// for the same launches beside it; where a launch presented more pictures
+// than the frames it moved on to, either rate says so, MangoHud's with the
+// app's beside it.
+fn with_mangohud(ctx: &BarContext<'_>, subject: usize, value: String) -> String {
+    let run = ctx.run;
+    if run.protocol.mangohud.is_none() {
+        return value;
+    }
+    let (scenario, start) = (ctx.selection.scenario.as_str(), ctx.selection.start);
+    let rate = |metric: Metric| {
+        run.median(scenario, start, subject, metric.key())
+            .map_or_else(|| "–".to_string(), |rate| metric.format(rate))
+    };
+    let exceed = run.presents_exceed_updates(scenario, start, subject);
+    match ctx.selection.metric {
+        Metric::Fps if exceed => format!(
+            "{value} · MangoHud {} · presents exceed updates",
+            rate(Metric::MangoHudFps)
+        ),
+        Metric::Fps => format!("{value} · MangoHud {}", rate(Metric::MangoHudFps)),
+        Metric::MangoHudFps if exceed => format!(
+            "{value} · presents exceed updates, {} updates/s",
+            rate(Metric::Fps)
+        ),
+        _ => value,
     }
 }
 
