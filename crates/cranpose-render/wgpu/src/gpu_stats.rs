@@ -195,6 +195,9 @@ pub struct FrameStatsSnapshot {
     pub retained_texture_bytes: u64,
     /// Bytes the frame uploaded to the GPU.
     pub upload_bytes: u64,
+    /// Of those, the bytes of shader outputs that earlier launches kept on
+    /// disk: a frame uploads a bounded share of them.
+    pub kept_upload_bytes: u64,
     /// Buffer writes the frame staged: uploads that reach the GPU as one
     /// write each, however many draws they carry.
     pub upload_writes: u32,
