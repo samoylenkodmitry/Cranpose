@@ -256,6 +256,17 @@ impl SurfaceRegion {
         };
         Some(self.content_to_local.map_point(content))
     }
+
+    // Where the event's pointer was at the previous event of its press, on the surface as it
+    // stands now. A ray holds no previous ray, so only a pointer on the window has such a place.
+    fn previous_drag_point(&self, event: &PointerEvent) -> Option<Point> {
+        let target = &self.target;
+        let window = event
+            .previous_global_position
+            .filter(|_| event.ray.is_none())?;
+        let content = target.pick.drag_point(window, target.index)?;
+        Some(self.content_to_local.map_point(content))
+    }
 }
 
 struct HitRegionInit<'a> {
@@ -418,16 +429,25 @@ impl HitRegion {
     }
 
     fn localize_event(&self, event: &PointerEvent) -> PointerEvent {
-        let local = match &self.surface {
-            Some(surface) => surface
-                .drag_point(event)
-                .unwrap_or_else(|| self.world_to_local.map_point(event.global_position)),
-            None => self.world_to_local.map_point(event.global_position),
+        let local = |point: Point| Point {
+            x: point.x - self.local_bounds.x,
+            y: point.y - self.local_bounds.y,
         };
-        event.copy_with_local_position(Point {
-            x: local.x - self.local_bounds.x,
-            y: local.y - self.local_bounds.y,
-        })
+        // The previous place maps as the place of now does, through the node as it stands now, so a
+        // node that moves under the pointer reads the pointer's whole travel
+        if let Some(surface) = &self.surface
+            && let Some(on_surface) = surface.drag_point(event)
+        {
+            return event.copy_with_local_positions(
+                local(on_surface),
+                surface.previous_drag_point(event).map(local),
+            );
+        }
+        let in_root = |point: Point| local(self.world_to_local.map_point(point));
+        event.copy_with_local_positions(
+            in_root(event.global_position),
+            event.previous_global_position.map(in_root),
+        )
     }
 
     fn dispatch_modifier_slices(&self, modifier_slices: &ModifierNodeSlices, event: PointerEvent) {

@@ -342,6 +342,18 @@ pub struct PointerEvent {
     pub position: Point,
     /// Where the pointer is, in logical pixels, in the coordinates of the composition root.
     pub global_position: Point,
+    /// Where the pointer was at the previous event of the press that it holds, in logical pixels,
+    /// in the coordinates of the node that receives this event as the node stands now. A node
+    /// that moves under the pointer, as a list in a sheet that its drag lowers does, finds the
+    /// pointer's travel from here to `position`. Jetpack Compose names it
+    /// `PointerInputChange.previousPosition`. `None` for a pointer that holds no button, for the
+    /// first event of a press, and where the receiving node's coordinates come from a ray rather
+    /// than from the root's.
+    pub previous_position: Option<Point>,
+    /// Where the pointer was at the previous event of the press that it holds, in logical pixels,
+    /// in the coordinates of the composition root. `None` where `previous_position` has no root
+    /// place to come from.
+    pub previous_global_position: Option<Point>,
     /// Where the pointer is on the screen, in logical pixels, when the
     /// platform told the shell where the window drawing this event's root
     /// sits. `None` on platforms without window positions and for events a
@@ -427,6 +439,8 @@ impl PointerEvent {
             },
             position,
             global_position,
+            previous_position: None,
+            previous_global_position: None,
             screen_position: None,
             scroll_delta: Point { x: 0.0, y: 0.0 },
             buttons: PointerButtons::NONE,
@@ -442,6 +456,14 @@ impl PointerEvent {
                 action: Rc::new(RefCell::new(None)),
             },
         }
+    }
+
+    /// Sets where the pointer was at its previous event, `previous`, in the coordinates of the
+    /// composition root, which a new event's `position` also uses.
+    pub fn with_previous_position(mut self, previous: Point) -> Self {
+        self.previous_position = Some(previous);
+        self.previous_global_position = Some(previous);
+        self
     }
 
     /// Set the pointer id for this event (`0` is the primary pointer).
@@ -619,14 +641,27 @@ impl PointerEvent {
         }
     }
 
-    /// Creates a copy of this event with a new local position, sharing the consumption state.
+    /// Creates a copy of this event with a new local position, sharing the consumption state. The
+    /// copy holds no `previous_position`.
     pub fn copy_with_local_position(&self, position: Point) -> Self {
+        self.copy_with_local_positions(position, None)
+    }
+
+    /// Creates a copy of this event with a new local position and the pointer's previous position
+    /// in the same coordinates, sharing the consumption state.
+    pub fn copy_with_local_positions(
+        &self,
+        position: Point,
+        previous_position: Option<Point>,
+    ) -> Self {
         Self {
             id: self.id,
             kind: self.kind,
             phase: self.phase,
             position,
             global_position: self.global_position,
+            previous_position,
+            previous_global_position: self.previous_global_position,
             screen_position: self.screen_position,
             scroll_delta: self.scroll_delta,
             buttons: self.buttons,

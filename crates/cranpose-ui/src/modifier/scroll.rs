@@ -172,7 +172,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             return false;
         };
 
-        let Some(last_pos) = gs.last_position else {
+        let Some(last_pos) = event.previous_position.or(gs.last_position) else {
             gs.last_position = Some(position);
             return false;
         };

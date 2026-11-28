@@ -162,7 +162,7 @@ where
     }
 
     fn set_cursor_inner(&mut self, x: f32, y: f32, event_time: PointerEventTime) -> bool {
-        self.surface_mut().cursor = (x, y);
+        let (from_x, from_y) = std::mem::replace(&mut self.surface_mut().cursor, (x, y));
         if self.inspector_move(x, y) {
             return true;
         }
@@ -172,14 +172,11 @@ where
                 let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
                 if !targets.is_empty() {
                     let event = self
-                        .pointer_event(
-                            PointerEventKind::Move,
-                            Point { x, y },
-                            Point { x, y },
-                            event_time,
-                        )
-                        .with_buttons(self.surface().buttons_pressed)
-                        .with_source(self.surface().pointer_source);
+                        .cursor_event(PointerEventKind::Move, event_time)
+                        .with_previous_position(Point {
+                            x: from_x,
+                            y: from_y,
+                        });
                     self.dispatch_targets(targets, event, Stop::Never);
                     return true;
                 }
