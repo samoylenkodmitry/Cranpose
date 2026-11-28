@@ -10,11 +10,13 @@ its OpenGL hooks to a GL one, and every leg records which one attached
 (`mangohud_attach`, from the libraries mapped in the app's processes).
 MangoHud's own settings, in `MANGOHUD_CONFIG` and no file: its HUD hidden
 (`no_display`), a log row for each frame (`log_interval=0`) in the leg's
-folder (`output_folder`), and one present setting for every app, written in
-the run's protocol: presents with no wait for the display by default
-(`vsync=1`, Vulkan's IMMEDIATE, and `gl_vsync=0`, swap interval 0), each
-framework still on its own frame clock, or with `--vsync` at the display's
-refresh (`vsync=3`, FIFO, and `gl_vsync=1`).
+folder (`output_folder`), and one present setting for every app on a screen,
+written in the run's protocol. Each screen runs with each of `--presents`:
+with no wait for the display (`uncapped`: `vsync=1`, Vulkan's IMMEDIATE, and
+`gl_vsync=0`, swap interval 0), each framework still on its own frame clock,
+and at the display's refresh (`vsync`: `vsync=3`, FIFO, and `gl_vsync=1`), a
+screen of the run named `NAME-vsync`. The protocol names the display's mode
+by xrandr.
 
 MangoHud 0.8.4 starts no log by itself while its HUD is hidden: its
 `autostart_log` waits for a HUD update that `no_display` skips. The harness
@@ -41,7 +43,11 @@ it moved on to frames it never showed. A leg whose window the window manager
 left at another size than 1280 x 820 is marked `window_mismatch`. A start of
 an app whose legs MangoHud logged no present of names what MangoHud did in
 its processes (`no_presents`), and an app that did not build stays a subject
-of the run with its reason as the failure of each of its starts.
+of the run with its reason as the failure of each of its starts. Each leg
+records the time the GPU's render engine worked for the app's processes
+(`gpu_render_ms`, from their DRM fdinfo); a leg with none, or whose MangoHud
+log names a software renderer as its GPU, is marked `drawn_on_cpu`, and a
+start whose legs all are names it (`cpu_drawn`).
 
 Every launch is measured from its start for `--run` seconds, the same span for
 every app, in rounds of two starts as `desktop.py` measures: the first after
@@ -59,7 +65,7 @@ run. The X server still takes each present, with no vertical blank to pace
 it.
 
   python3 linux.py --output results/linux --scenario gauntlet:16 --scenario wall:20 --scenario patchwork:17
-  python3 linux.py --output results/linux --apps cranpose,gpui --vsync
+  python3 linux.py --output results/linux --apps cranpose,gpui --presents vsync
 """
 
 import argparse
@@ -184,6 +190,46 @@ def outputs(drm=Path('/sys/class/drm')):
 def scans_out(found):
     """Whether any of `outputs` scans a picture out."""
     return any(state['status'] == 'connected' and state['enabled'] == 'enabled' for state in found.values())
+
+
+def display_mode(display, xauthority):
+    """Each output the X screen shows a picture on, as `NAME WIDTH x HEIGHT at
+    RATE Hz` by xrandr's current mode; None where xrandr is missing or no
+    output is on."""
+    if not shutil.which('xrandr'):
+        return None
+    return current_modes(subprocess.run(['xrandr', '--query'], capture_output=True, text=True,
+                                        env={**os.environ, 'DISPLAY': display, 'XAUTHORITY': xauthority}).stdout)
+
+
+def current_modes(text):
+    """The current mode of each connected output in `xrandr --query`'s text."""
+    modes, output = [], None
+    for line in text.splitlines():
+        if found := re.match(r'(\S+) connected', line):
+            output = found.group(1)
+        elif output and (size := re.match(r'\s+(\d+)x(\d+)', line)) and \
+                (rate := re.search(r'(?<![\d.])([\d.]+)\*', line)):
+            modes.append(f'{output} {size.group(1)} x {size.group(2)} at {float(rate.group(1)):g} Hz')
+            output = None
+        elif not line.startswith(' '):
+            output = None
+    return ', '.join(modes) or None
+
+
+def screen_key(name, present):
+    """A screen's name in the run: a screen at the display's refresh is
+    `NAME-vsync`, so one run holds both present settings."""
+    return name if present == 'uncapped' else f'{name}-{present}'
+
+
+def present_sentence(presents, names):
+    """What every subject presented with on each screen of the run."""
+    def listed(items):
+        return ' and '.join(items) if len(items) < 3 else f"{', '.join(items[:-1])} and {items[-1]}"
+    return 'every subject ' + '; '.join(f"{PRESENT[present]['label']}, on "
+                                        f"{listed([screen_key(name, present) for name in names])}"
+                                        for present in presents)
 
 
 def mangohud_version():
@@ -389,6 +435,42 @@ def attachments(pids):
     return sorted(hooks), sorted(apis)
 
 
+def gpu_work(pids):
+    """The milliseconds the GPU's render engine worked for the app's
+    processes, by the DRM fdinfo of each `/dev/dri` file they hold (each DRM
+    client once), and the kernel drivers of those GPUs."""
+    clients = {}
+    for pid in pids:
+        try:
+            files = list(Path(f'/proc/{pid}/fd').iterdir())
+        except OSError:
+            continue
+        for file in files:
+            try:
+                if not os.readlink(file).startswith('/dev/dri/'):
+                    continue
+                text = (Path(f'/proc/{pid}/fdinfo') / file.name).read_text()
+            except OSError:
+                continue
+            info = {key.strip(): value.strip() for key, _, value in
+                    (line.partition(':') for line in text.splitlines())}
+            if 'drm-client-id' in info:
+                clients[(info.get('drm-pdev'), info['drm-client-id'])] = \
+                    (info.get('drm-driver'), int(info.get('drm-engine-render', '0').split()[0]))
+    drivers = sorted({driver for driver, _ in clients.values() if driver})
+    return round(sum(ns for _, ns in clients.values()) / 1e6, 1), drivers
+
+
+# The renderers that draw on the CPU, as MangoHud's log names its GPU.
+CPU_RENDERERS = ('llvmpipe', 'lavapipe', 'softpipe', 'swiftshader')
+
+
+def drawn_on_cpu(render_ms, mangohud_gpu):
+    """Whether an app drew on the CPU: its processes gave the GPU's render
+    engine no work, or MangoHud's log names a software renderer as its GPU."""
+    return not render_ms or any(name in (mangohud_gpu or '').lower() for name in CPU_RENDERERS)
+
+
 def window_size(pid):
     """The size of the window of `pid`, by its `_NET_WM_PID`, where `xdotool`
     and `xwininfo` are installed; None elsewhere."""
@@ -577,6 +659,7 @@ def measure(name, args, server, stage, label, home):
         machine_after = machine_ticks()
         ram = resident_mb(mine)
         hooks, apis = attachments(mine)
+        render_ms, gpu_drivers = gpu_work(mine)
         window = window_size(app.pid)
         control.finish()
         counted = page_updates_until(server, since, deadline) if paged else app.updates
@@ -601,6 +684,8 @@ def measure(name, args, server, stage, label, home):
         'cpu_cores': round(cores, 2), 'server_cores': round(server_cpu / wall, 2),
         'other_cores': round(max(0.0, busy - cores), 2), 'ram_mb': ram,
         'mangohud_attach': hooks, 'graphics_api': apis, 'window': window,
+        'gpu_render_ms': render_ms, 'gpu_drivers': gpu_drivers,
+        'drawn_on_cpu': drawn_on_cpu(render_ms, system.get('gpu')),
         # The window manager left the window at another size than every
         # app asks for: a screen smaller than the window clamps it.
         'window_mismatch': window is not None and window != '{} x {}'.format(*desktop.DESKTOP_WINDOW),
@@ -697,12 +782,17 @@ SUMMARY = ('fps', 'mangohud_fps', 'first_frame_s', 'cpu_ms_per_frame', 'cpu_core
            'ram_mb')
 
 
+def kept_legs(legs, name, start):
+    """The undisturbed legs of `name` and `start`: what a start's summary reads."""
+    return [leg for leg in legs if leg['subject'] == name and leg['start'] == start and not leg['disturbed']]
+
+
 def summarize(legs, apps, start):
     """Per app, the medians over its undisturbed legs of `start`, and how many
     of them presented more pictures than the frames they moved on to."""
     summary = {}
     for name in apps:
-        kept = [leg for leg in legs if leg['subject'] == name and leg['start'] == start and not leg['disturbed']]
+        kept = kept_legs(legs, name, start)
         medians = {key: round(statistics.median(values), 2) for key in SUMMARY
                    if (values := [leg[key] for leg in kept if leg.get(key) is not None])}
         if kept:
@@ -717,11 +807,26 @@ def no_presents(legs, apps, start):
     MangoHud's log, what MangoHud did in its processes."""
     reasons = {}
     for name in apps:
-        kept = [leg for leg in legs if leg['subject'] == name and leg['start'] == start and not leg['disturbed']]
+        kept = kept_legs(legs, name, start)
         if kept and not any(leg['presents'] for leg in kept):
             hooks = sorted({hook for leg in kept for hook in leg['mangohud_attach']})
             reasons[name] = f"MangoHud's {' and '.join(hooks)} hook loaded and logged no present" if hooks else \
                 'MangoHud loaded into none of its processes'
+    return reasons
+
+
+def cpu_drawn(legs, apps, start):
+    """Per app whose undisturbed legs of `start` all drew on the CPU, what
+    showed it: the software renderer MangoHud's log names, or no work of the
+    GPU's render engine for its processes."""
+    reasons = {}
+    for name in apps:
+        kept = kept_legs(legs, name, start)
+        if kept and all(leg['drawn_on_cpu'] for leg in kept):
+            named = next((leg['mangohud_system']['gpu'] for leg in kept
+                          if any(cpu in leg['mangohud_system'].get('gpu', '').lower() for cpu in CPU_RENDERERS)), None)
+            reasons[name] = f'drawn on the CPU by {named}' if named else \
+                "drawn on the CPU: the GPU's render engine did no work for its processes"
     return reasons
 
 
@@ -735,7 +840,7 @@ def measure_screen(args, apps, server, stage):
                 print(f'round {round_index + 1} {name}: the machine idles at {idle:.2f} cores', flush=True)
                 home = stage / f'home-{name}-{round_index + 1}'
                 for start in STARTS:
-                    label = f'{args.scenario}-{name}-{round_index + 1}-{start}'
+                    label = f'{args.key}-{name}-{round_index + 1}-{start}'
                     measured = undisturbed_leg(name, args, server, stage, label, start, home, idle, failures)
                     if not measured:
                         # A later start needs this one: it fails for its reason.
@@ -745,11 +850,12 @@ def measure_screen(args, apps, server, stage):
                         break
                     legs += [{'subject': name, 'round': round_index, 'start': start, **leg} for leg in measured]
     width, height = desktop.DESKTOP_WINDOW
-    return {'scenario': args.scenario, 'extras': f'tier {args.tier}, {width} x {height} window, '
-                                                 f'{PRESENT[args.present]["label"]}',
+    return {'scenario': args.key, 'extras': f'tier {args.tier}, {width} x {height} window, '
+                                            f'{PRESENT[args.present]["label"]}',
             'legs': legs, 'failures': failures, 'unimplemented': [],
             'starts': {start: {'summary': summarize(legs, apps, start), 'verdicts': {},
-                               'no_presents': no_presents(legs, apps, start)} for start in STARTS}}
+                               'no_presents': no_presents(legs, apps, start),
+                               'cpu_drawn': cpu_drawn(legs, apps, start)} for start in STARTS}}
 
 
 def unbuilt():
@@ -775,8 +881,9 @@ def main():
     parser.add_argument('--tier', type=int, default=16)
     parser.add_argument('--rounds', type=int, default=1)
     parser.add_argument('--run', type=float, default=10.0, help='seconds each launch is measured for, from its start')
-    parser.add_argument('--vsync', dest='present', action='store_const', const='vsync', default='uncapped',
-                        help="present at the display's refresh instead of uncapped")
+    parser.add_argument('--presents', type=lambda text: text.split(','), default=list(PRESENT),
+                        help='the present settings each screen runs with, of ' + ', '.join(PRESENT) +
+                             '; a screen at the display\'s refresh is named NAME-vsync')
     parser.add_argument('--display', default=os.environ.get('DISPLAY', ':0'))
     parser.add_argument('--xauthority', default=os.environ.get('XAUTHORITY', str(Path.home() / '.Xauthority')))
     parser.add_argument('--main', help='the commit the Cranpose app was built at, recorded with the run')
@@ -787,6 +894,8 @@ def main():
     args = parser.parse_args()
     if not shutil.which('mangohud'):
         sys.exit('MangoHud is not installed: the distribution package `mangohud` provides it')
+    if unknown := [present for present in args.presents if present not in PRESENT]:
+        parser.error(f'unknown present setting {", ".join(unknown)}: one of {", ".join(PRESENT)}')
     screens = [(name, tier or args.tier) for name, tier in args.scenario or [('gauntlet', None)]]
     built = [name for name in APPS if Path(APPS[name][0]).exists() or shutil.which(str(APPS[name][0]))]
     apps = args.apps.split(',') if args.apps else built
@@ -794,7 +903,8 @@ def main():
     print('not built:', ', '.join(missing) or 'none', flush=True)
     args.output.mkdir(parents=True, exist_ok=True)
     started, started_at = time.monotonic(), datetime.now(timezone.utc).isoformat(timespec='seconds')
-    found = outputs()
+    found, mode = outputs(), display_mode(args.display, args.xauthority)
+    print('display:', mode, flush=True)
     if not scans_out(found):
         print('no output of the GPU is connected: every leg is marked no_scanout and the run is not published',
               flush=True)
@@ -804,9 +914,11 @@ def main():
         shutil.copytree(desktop.FONTS, stage / 'fonts')
         shutil.copytree(desktop.CHAT_ASSETS, stage / 'chat-assets')
         scenarios = []
-        for name, tier in screens:
-            screen_args = argparse.Namespace(**{**vars(args), 'scenario': name, 'tier': tier})
-            scenarios.append(measure_screen(screen_args, apps, server, stage))
+        for present in args.presents:
+            for name, tier in screens:
+                screen_args = argparse.Namespace(**{**vars(args), 'scenario': name, 'tier': tier, 'present': present,
+                                                    'key': screen_key(name, present)})
+                scenarios.append(measure_screen(screen_args, apps, server, stage))
     # An app that did not build stays a subject of the run, its reason the
     # failure of each of its starts.
     absent = {name: reason for name, reason in missing.items() if name not in apps}
@@ -822,9 +934,11 @@ def main():
         'subjects': [versions.subject(name, 'linux', built_versions, args.release) for name in [*apps, *absent]],
         'protocol': {'run_s': args.run, 'starts': list(STARTS), 'rounds': args.rounds,
                      'max_other_cores': args.max_others, 'max_idle_other_cores': args.max_idle,
-                     'present': PRESENT[args.present]['label'], 'mangohud': mangohud_version(),
-                     'mangohud_config': mangohud_config('LEG_FOLDER', args.present), **slow_rule()},
-        'display': {'name': args.display, 'outputs': found, 'scanout': scans_out(found)},
+                     'present': present_sentence(args.presents, [name for name, _ in screens]),
+                     'display': mode, 'mangohud': mangohud_version(),
+                     'mangohud_config': {present: mangohud_config('LEG_FOLDER', present) for present in args.presents},
+                     **slow_rule()},
+        'display': {'name': args.display, 'mode': mode, 'outputs': found, 'scanout': scans_out(found)},
         'scenarios': scenarios,
         'duration_s': round(time.monotonic() - started),
     }

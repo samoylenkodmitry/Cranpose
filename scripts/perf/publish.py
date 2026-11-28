@@ -114,8 +114,9 @@ def index_entry(run, file):
                         'disturbed': disturbed_subjects(scenario, start),
                         # The metrics a second run judged worse again.
                         'confirmed': run.get('confirmed_regressions', {}).get(scenario['scenario'], {}).get(start, []),
-                        # Subjects MangoHud logged no present of, with what it did.
-                        **({'no_presents': judged['no_presents']} if judged.get('no_presents') else {}),
+                        # Subjects MangoHud logged no present of, with what it did,
+                        # and subjects that drew on the CPU, with what showed it.
+                        **{key: judged[key] for key in ('no_presents', 'cpu_drawn') if judged.get(key)},
                     }
                     for start, judged in scenario['starts'].items()
                 },

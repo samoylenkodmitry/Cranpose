@@ -839,15 +839,21 @@ fn PanelNote(palette: Palette, run: Rc<PerfRun>) {
 }
 
 // What counted a Linux run's presents, the present setting every subject
-// had, and the link to MangoHud's raw log of each leg.
+// had on each screen, the display's mode, and the link to MangoHud's raw log
+// of each leg.
 #[composable]
 fn MangoHudNote(palette: Palette, run: Rc<PerfRun>) {
     let (Some(version), Some(logs)) = (run.protocol.mangohud.clone(), run.mangohud_logs()) else {
         return;
     };
     let present = run.protocol.present.clone().unwrap_or_default();
+    let display = run
+        .protocol
+        .display
+        .as_ref()
+        .map_or_else(String::new, |display| format!(" on {display}"));
     Text(
-        format!("Presents counted by MangoHud {version}; every subject {present}."),
+        format!("Presents counted by MangoHud {version}{display}; {present}."),
         Modifier::empty(),
         text_style(12.0, palette.muted, None),
     );

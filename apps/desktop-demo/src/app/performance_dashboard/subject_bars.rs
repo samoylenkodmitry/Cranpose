@@ -168,17 +168,26 @@ fn beside_other_rate(ctx: &BarContext<'_>, subject: usize, value: String) -> Str
     }
     let mismatch = run.count_mismatch(scenario, start, subject);
     let mark = mismatch.map_or_else(String::new, |mark| format!(" · {mark}"));
-    if let Some(reason) = run
-        .no_presents(scenario, start, subject)
-        .filter(|_| matches!(ctx.selection.metric, Metric::Fps | Metric::MangoHudFps))
-    {
-        return format!("{value} · {reason}");
-    }
+    // Why MangoHud logged no present, and that the subject drew on the CPU.
+    let notes = run.notes(scenario, start, subject);
+    let noted = |text: String| {
+        notes
+            .iter()
+            .fold(text, |text, note| format!("{text} · {note}"))
+    };
+    let counted = run
+        .median(scenario, start, subject, Metric::MangoHudFps.key())
+        .is_some();
     match ctx.selection.metric {
-        Metric::Fps => format!("{value} · MangoHud {}{mark}", rate(Metric::MangoHudFps)),
+        Metric::Fps | Metric::MangoHudFps if !counted => noted(value),
+        Metric::Fps => noted(format!(
+            "{value} · MangoHud {}{mark}",
+            rate(Metric::MangoHudFps)
+        )),
         Metric::MangoHudFps if mismatch.is_some() => {
-            format!("{value}{mark}, {} updates/s", rate(Metric::Fps))
+            noted(format!("{value}{mark}, {} updates/s", rate(Metric::Fps)))
         }
+        Metric::MangoHudFps => noted(value),
         _ => value,
     }
 }

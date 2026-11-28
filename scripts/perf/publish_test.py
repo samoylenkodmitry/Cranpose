@@ -106,13 +106,17 @@ class IndexEntryTest(unittest.TestCase):
         self.assertEqual(starts['first']['disturbed'], ['cranpose'])
         self.assertEqual(starts['second']['disturbed'], [])
 
-    def test_an_entry_keeps_why_mangohud_logged_no_present_of_a_subject_only_where_it_did_not(self):
+    def test_an_entry_keeps_why_mangohud_logged_no_present_or_a_subject_drew_on_the_cpu_only_where_so(self):
         measured = run()
         reason = "MangoHud's gl hook loaded and logged no present"
+        cpu = 'drawn on the CPU by llvmpipe (LLVM 21.1.6, 256 bits)'
         measured['scenarios'][0]['starts']['first']['no_presents'] = {'cranpose-release': reason}
+        measured['scenarios'][0]['starts']['first']['cpu_drawn'] = {'cranpose-release': cpu}
         starts = publish.index_entry(measured, 'runs/x.json')['scenarios']['gauntlet']['starts']
         self.assertEqual(starts['first']['no_presents'], {'cranpose-release': reason})
+        self.assertEqual(starts['first']['cpu_drawn'], {'cranpose-release': cpu})
         self.assertNotIn('no_presents', starts['second'])
+        self.assertNotIn('cpu_drawn', starts['second'])
 
 
 # The scratch repositories take nothing from the machine's git: not a hook's

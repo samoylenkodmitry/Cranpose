@@ -1154,20 +1154,24 @@ fn methodology_links_open_the_markdown_doc_and_harness_sources() {
 // A Linux run MangoHud counted: Cranpose's every present held a new frame,
 // egui presented twice as many pictures as the frames it moved on to, the
 // page wrote no frame it moved on to, MangoHud logged no present of Tauri,
-// and Flutter did not build.
+// BUI drew on the CPU with no MangoHud in its processes, and Flutter did not
+// build.
 const LINUX_INDEX: &str = r#"{"runs": [{
   "file": "runs/2026-11-28-frameworks-abc123def-Intel-Linux.json", "kind": "frameworks",
   "started_at": "2026-11-28T02:00:00+00:00", "device": "12th Gen Intel Core i5-12400 · UHD Graphics 730 · Linux",
   "protocol": {"run_s": 10, "starts": ["first", "second"], "mangohud": "v0.8.4",
-               "present": "uncapped: Vulkan IMMEDIATE, GL swap interval 0 (MangoHud vsync=1, gl_vsync=0)"},
+               "display": "DP-1 1920 x 1080 at 200 Hz",
+               "present": "every subject presents with no wait for the display, on gauntlet"},
   "subjects": [{"name": "cranpose", "label": "Cranpose"}, {"name": "egui", "label": "egui 0.36.2"},
                {"name": "web", "label": "Web Chrome 156"}, {"name": "tauri", "label": "Tauri 2.9.0"},
-               {"name": "flutter", "label": "Flutter 3.38.0"}],
-  "scenarios": {"gauntlet": {"legs": 6, "starts": {
+               {"name": "bui", "label": "BUI 0.1.0"}, {"name": "flutter", "label": "Flutter 3.38.0"}],
+  "scenarios": {"gauntlet": {"legs": 7, "starts": {
     "first": {"summary": {"cranpose": {"fps": 50.7, "mangohud_fps": 50.3, "presents_exceed_updates_legs": 0},
                           "egui": {"fps": 20.0, "mangohud_fps": 40.0, "presents_exceed_updates_legs": 1},
-                          "web": {"mangohud_fps": 30.0}, "tauri": {"fps": 12.5}},
-              "no_presents": {"tauri": "MangoHud's gl hook loaded and logged no present"},
+                          "web": {"mangohud_fps": 30.0}, "tauri": {"fps": 12.5}, "bui": {"fps": 10.4}},
+              "no_presents": {"tauri": "MangoHud's gl hook loaded and logged no present",
+                              "bui": "MangoHud loaded into none of its processes"},
+              "cpu_drawn": {"bui": "drawn on the CPU: the GPU's render engine did no work for its processes"},
               "failures": {"flutter": "the app has no Linux runner (flutter-app/linux)"}},
     "second": {"summary": {"cranpose": {"fps": 50.3, "mangohud_fps": 49.9, "presents_exceed_updates_legs": 0},
                            "egui": {"fps": 21.0, "mangohud_fps": 42.0, "presents_exceed_updates_legs": 1}}}}}}
@@ -1190,9 +1194,11 @@ fn a_linux_card_shows_each_frame_rate_beside_mangohuds_and_marks_presents_that_h
         "20.0 · MangoHud 40.0 · presents exceed updates",
         "– · MangoHud 30.0",
         "12.5 · MangoHud's gl hook loaded and logged no present",
+        "10.4 · MangoHud loaded into none of its processes · drawn on the CPU: the GPU's render \
+         engine did no work for its processes",
         "the app has no Linux runner (flutter-app/linux)",
-        "Presents counted by MangoHud v0.8.4; every subject uncapped: Vulkan IMMEDIATE, GL swap \
-         interval 0 (MangoHud vsync=1, gl_vsync=0).",
+        "Presents counted by MangoHud v0.8.4 on DP-1 1920 x 1080 at 200 Hz; every subject \
+         presents with no wait for the display, on gauntlet.",
     ] {
         assert!(shows(&texts, shown), "{shown}: {texts:?}");
     }

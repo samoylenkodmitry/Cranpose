@@ -3,6 +3,7 @@ updates, marks a leg whose presents outnumber its updates, and marks every
 leg of a display whose GPU scans nothing out."""
 import argparse
 import importlib.util
+import os
 import sys
 import tempfile
 import unittest
@@ -125,12 +126,54 @@ class SummaryTest(unittest.TestCase):
                           'bui': 'MangoHud loaded into none of its processes'})
 
 
+class DisplayTest(unittest.TestCase):
+    # samarch-1's screen on 2026-11-28, a monitor on DisplayPort at 200 Hz.
+    XRANDR = """Screen 0: minimum 320 x 200, current 1920 x 1080, maximum 16384 x 16384
+DP-1 connected 1920x1080+0+0 (normal left inverted right x axis y axis) 597mm x 336mm
+   1920x1080     60.00 + 200.00*  144.00   120.00   100.00   119.88    50.00    59.94
+   1680x1050     59.95
+HDMI-1 disconnected (normal left inverted right x axis y axis)
+DP-2 disconnected (normal left inverted right x axis y axis)
+"""
+
+    def test_the_run_names_the_mode_each_connected_output_shows(self):
+        self.assertEqual(linux.current_modes(self.XRANDR), 'DP-1 1920 x 1080 at 200 Hz')
+        self.assertIsNone(linux.current_modes('Screen 0: minimum 320 x 200, current 1024 x 768\n'
+                                              'DP-1 disconnected (normal left inverted right)\n'))
+
+    def test_each_present_setting_names_the_screens_it_ran(self):
+        self.assertEqual(linux.screen_key('wall', 'vsync'), 'wall-vsync')
+        sentence = linux.present_sentence(['uncapped', 'vsync'], ['gauntlet', 'wall', 'patchwork'])
+        self.assertTrue(sentence.startswith('every subject presents with no wait for the display'))
+        self.assertIn('on gauntlet, wall and patchwork; ', sentence)
+        self.assertTrue(sentence.endswith('on gauntlet-vsync, wall-vsync and patchwork-vsync'))
+
+
+class CpuDrawingTest(unittest.TestCase):
+    def test_an_app_with_no_render_engine_work_or_a_software_renderer_drew_on_the_cpu(self):
+        self.assertFalse(linux.drawn_on_cpu(151.0, 'Intel(R) UHD Graphics 730 (ADL-S GT1)'))
+        self.assertTrue(linux.drawn_on_cpu(0.0, None))
+        self.assertTrue(linux.drawn_on_cpu(3.0, 'llvmpipe (LLVM 21.1.6, 256 bits)'))
+        # This test's own process holds no DRM file.
+        self.assertEqual(linux.gpu_work([os.getpid()]), (0.0, []))
+
+    def test_a_start_whose_legs_all_drew_on_the_cpu_says_what_showed_it(self):
+        def leg(name, cpu, gpu=''):
+            return {'subject': name, 'start': 'first', 'disturbed': False, 'drawn_on_cpu': cpu,
+                    'mangohud_system': {'gpu': gpu} if gpu else {}}
+        legs = [leg('bui', True), leg('zgui', True, 'llvmpipe (LLVM 21.1.6, 256 bits)'),
+                leg('egui', True), leg('egui', False, 'Intel(R) UHD Graphics 730 (ADL-S GT1)')]
+        self.assertEqual(linux.cpu_drawn(legs, ['bui', 'zgui', 'egui'], 'first'), {
+            'bui': "drawn on the CPU: the GPU's render engine did no work for its processes",
+            'zgui': 'drawn on the CPU by llvmpipe (LLVM 21.1.6, 256 bits)'})
+
+
 class FailedStartTest(unittest.TestCase):
     def test_an_app_whose_first_start_fails_has_the_reason_on_its_second_start_too(self):
         def fails(*_):
             raise RuntimeError('makepad ended 0.1 s after its launch')
-        args = argparse.Namespace(rounds=1, host_lock=False, scenario='gauntlet', tier=16, present='uncapped',
-                                  max_idle=0.9, max_idle_wait=1.0, max_others=1.5)
+        args = argparse.Namespace(rounds=1, host_lock=False, scenario='gauntlet', key='gauntlet', tier=16,
+                                  present='uncapped', max_idle=0.9, max_idle_wait=1.0, max_others=1.5)
         with patch.object(linux, 'measure', fails), patch.object(linux, 'quiet_idle', lambda *_: 0.2), \
                 patch.object(linux, 'clear_app_state', lambda: None), tempfile.TemporaryDirectory() as stage:
             screen = linux.measure_screen(args, ['makepad'], None, Path(stage))

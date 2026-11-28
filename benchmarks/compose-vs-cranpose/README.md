@@ -975,11 +975,15 @@ MangoHud's Vulkan layer attaches to a Vulkan app and its OpenGL hooks to a GL
 one, and each leg records which one attached (`mangohud_attach`) and which
 graphics APIs the app's processes loaded (`graphics_api`). MangoHud takes its
 settings from `MANGOHUD_CONFIG` alone: its HUD hidden (`no_display`), a log row
-for each frame (`log_interval=0`), and one present setting for every app, which
-the run's protocol names: presents with no wait for the display by default
-(`vsync=1`, Vulkan's IMMEDIATE, and `gl_vsync=0`), or `--vsync` (`vsync=3`,
-FIFO, and `gl_vsync=1`). With no wait each framework still paces its frames by
-its own frame clock, at the display's refresh. MangoHud
+for each frame (`log_interval=0`), and one present setting for every app on a
+screen. Each screen runs with each setting of `--presents`, both by default:
+with no wait for the display (`uncapped`: `vsync=1`, Vulkan's IMMEDIATE, and
+`gl_vsync=0`), and at the display's refresh (`vsync`: `vsync=3`, FIFO, and
+`gl_vsync=1`), a screen of the run named `gauntlet-vsync`, `wall-vsync` and
+`patchwork-vsync`. The protocol names each setting's screens and the
+display's mode by xrandr, and the dashboard shows both. With no wait each
+framework still paces its frames by its own frame clock, at the display's
+refresh. MangoHud
 0.8.4 starts no log by itself while its HUD is hidden, so the harness starts
 it through MangoHud's control socket (`control=mangohud-%p`, `:logging=1;`)
 the moment the app opens it; `mangohud_from_s` says when its first row came.
@@ -1001,7 +1005,11 @@ its own by the least gap between a report's arrival and its clock, and a
 page's leg waits for the report that holds its last frame. A start whose legs
 MangoHud logged no present of says what MangoHud did in the app's processes
 (`no_presents`: a hook loaded, or none), and the dashboard shows it beside the
-app's rate. The raw log of
+app's rate. Each leg records the time the GPU's render engine worked for the
+app's processes (`gpu_render_ms`, by the DRM fdinfo of their `/dev/dri`
+files); a leg with none, or whose MangoHud log names a software renderer
+(llvmpipe, lavapipe) as its GPU, is marked `drawn_on_cpu`, and the dashboard
+says so beside the rates of a start whose legs all are. The raw log of
 every leg is kept gzipped beside the run on the `perf-data` branch, under
 `mangohud/`, and the dashboard links it.
 

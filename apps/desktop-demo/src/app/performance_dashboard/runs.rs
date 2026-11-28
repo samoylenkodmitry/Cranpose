@@ -45,11 +45,14 @@ pub struct PerfProtocol {
     #[serde(default)]
     pub starts: Vec<String>,
     // The MangoHud that counted every present of a Linux run, as `mangohud
-    // --version` names it, and the present setting every subject had.
+    // --version` names it, the present setting every subject had on each
+    // screen, and the display's mode.
     #[serde(default)]
     pub mangohud: Option<String>,
     #[serde(default)]
     pub present: Option<String>,
+    #[serde(default)]
+    pub display: Option<String>,
     // How many pictures a second a board's panel scans onto its glass: no
     // more of the frames an app draws a second show whole.
     #[serde(default)]
@@ -220,9 +223,11 @@ pub struct PerfStart {
     #[serde(default)]
     pub confirmed: Vec<String>,
     // Subjects MangoHud logged no present of, with what it did in their
-    // processes.
+    // processes, and subjects that drew on the CPU, with what showed it.
     #[serde(default)]
     pub no_presents: BTreeMap<String, String>,
+    #[serde(default)]
+    pub cpu_drawn: BTreeMap<String, String>,
 }
 
 /// The starts a run measures of every subject in each round, each with its
@@ -334,14 +339,19 @@ impl PerfRun {
         }
     }
 
-    // What MangoHud did in a subject's processes when it logged no present of
-    // the subject's launches.
-    pub(super) fn no_presents(&self, scenario: &str, start: &str, subject: usize) -> Option<&str> {
-        let name = &self.subjects.get(subject)?.name;
-        self.start(scenario, start)?
-            .no_presents
-            .get(name)
-            .map(String::as_str)
+    // What a subject's rates must say beside them: what MangoHud did in its
+    // processes when it logged no present of its launches, and that it drew
+    // on the CPU.
+    pub(super) fn notes(&self, scenario: &str, start: &str, subject: usize) -> Vec<&str> {
+        let (Some(subject), Some(start)) =
+            (self.subjects.get(subject), self.start(scenario, start))
+        else {
+            return Vec::new();
+        };
+        [&start.no_presents, &start.cpu_drawn]
+            .into_iter()
+            .filter_map(|notes| notes.get(&subject.name).map(String::as_str))
+            .collect()
     }
 
     // The folder on the perf-data branch that holds MangoHud's raw log of
