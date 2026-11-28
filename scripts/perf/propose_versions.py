@@ -60,7 +60,12 @@ def main():
     # Unsigned: the author is the bot, and a Mac that signs the user's commits
     # has no one to answer its pinentry at night.
     run('git', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', TITLE, '-m', '\n'.join(lines))
-    run('git', 'push', '-q', '-f', 'origin', BRANCH)
+    push = ['git', 'push', '-q', '-f', 'origin', BRANCH]
+    if os.environ.get('GH_TOKEN'):
+        helper = '!f() { test "$1" = get && echo username=x-access-token && echo "password=$GH_TOKEN"; }; f'
+        push = ['git', '-c', 'http.extraheader=', '-c', 'http.https://github.com/.extraheader=',
+                '-c', 'credential.helper=', '-c', f'credential.helper={helper}', 'push', '-q', '-f', 'origin', BRANCH]
+    run(*push)
     existing = run('gh', 'pr', 'list', '--head', BRANCH, '--state', 'open', '--json', 'number', '--jq', '.[0].number')
     if existing:
         run('gh', 'pr', 'edit', existing, '--body', body)

@@ -265,7 +265,7 @@ jobs:
         run: bash scripts/ci/install_android_ndk.sh 30.0.16248370
 
       - name: Install cargo-ndk
-        run: cargo install cargo-ndk
+        run: command -v cargo-ndk >/dev/null || cargo install cargo-ndk --version 4.1.2 --locked
 
       - name: Build APK
         working-directory: apps/android-demo/android

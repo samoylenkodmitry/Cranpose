@@ -79,7 +79,7 @@ flutter_ready() {
 # The latest .NET 10, its MAUI Android workload, and the WebAssembly tools
 # that compile Avalonia's browser build ahead of time.
 dotnet_ready() {
-    curl -fsSL https://dot.net/v1/dotnet-install.sh -o "$cache/dotnet-install.sh"
+    curl --proto '=https' --tlsv1.2 -fsSL https://dot.net/v1/dotnet-install.sh -o "$cache/dotnet-install.sh"
     bash "$cache/dotnet-install.sh" --channel 10.0 --install-dir "$DOTNET_ROOT"
     if dotnet workload list | grep -q maui-android; then
         dotnet workload update
@@ -284,7 +284,7 @@ desktop)
     build electron electron-app/build/PerfElectron-darwin-arm64/PerfElectron.app electron-app -- \
         attempt electron bash -c "cd '$here/electron-app' && npm ci --ignore-scripts --no-audit --no-fund && npx --no-install electron-packager . PerfElectron --platform=darwin --arch=arm64 --out=build --overwrite --app-bundle-id=dev.perfcompare.electron"
     build web web-app/www/js web-app shared-ts -- \
-        attempt web bash -c "cd '$here/web-app' && npm ci --no-audit --no-fund && npx tsc -p tsconfig.json"
+        attempt web bash -c "cd '$here/web-app' && npm ci --ignore-scripts --no-audit --no-fund && npx tsc -p tsconfig.json"
     python3 "$here/versions.py" write "$here/desktop-versions.json" --platform desktop
     step framecount
     # A rebuild of the same source would only sign it again.
@@ -310,7 +310,7 @@ android)
         bash -c "cd '$here/flutter-app' && flutter build apk --release --target-platform android-arm,android-arm64"
     cp "$here/flutter-app/build/app/outputs/flutter-apk/app-release.apk" "$out/flutter.apk"
     build rn rn-app/android/app/build/outputs/apk/release/app-release.apk rn-app shared-ts -- \
-        attempt rn bash -c "cd '$here/rn-app' && npm ci --no-audit --no-fund && cd android && ./gradlew --no-daemon -q :app:assembleRelease"
+        attempt rn bash -c "cd '$here/rn-app' && npm ci --ignore-scripts --no-audit --no-fund && cd android && ./gradlew --no-daemon -q :app:assembleRelease"
     cp "$here/rn-app/android/app/build/outputs/apk/release/app-release.apk" "$out/rn.apk"
     # NativeScript signs its release build with a keystore it is handed: the
     # Android debug key, which Gradle signs the React Native build with.
@@ -338,7 +338,7 @@ android)
     # Capacitor's Android build needs JDK 21.
     jdk21=$(/usr/libexec/java_home -v 21)
     build web-android web-app/android/app/build/outputs/apk/release/app-release.apk web-app shared-ts -- \
-        attempt web bash -c "cd '$here/web-app' && npm ci --no-audit --no-fund && npm run build && cd android && ./gradlew --no-daemon -q -Dorg.gradle.java.home='$jdk21' :app:assembleRelease"
+        attempt web bash -c "cd '$here/web-app' && npm ci --ignore-scripts --no-audit --no-fund && npm run build && cd android && ./gradlew --no-daemon -q -Dorg.gradle.java.home='$jdk21' :app:assembleRelease"
     cp "$here/web-app/android/app/build/outputs/apk/release/app-release.apk" "$out/web.apk"
     python3 "$here/versions.py" write "$out/versions.json" --platform android
     ;;
@@ -381,7 +381,7 @@ browser)
         attempt dioxus dioxus_page
     # The page, with the Roboto files its style names.
     build web-browser browser-dist/web web-app shared-ts -- \
-        attempt web bash -c "cd '$here/web-app' && npm ci --no-audit --no-fund && npx tsc -p tsconfig.json && rm -rf '$dist/web' && mkdir -p '$dist/web/fonts' && cp -R www/. '$dist/web/' && cp '$here/fonts/'*.ttf '$dist/web/fonts/'"
+        attempt web bash -c "cd '$here/web-app' && npm ci --ignore-scripts --no-audit --no-fund && npx tsc -p tsconfig.json && rm -rf '$dist/web' && mkdir -p '$dist/web/fonts' && cp -R www/. '$dist/web/' && cp '$here/fonts/'*.ttf '$dist/web/fonts/'"
     ditto "$dist" "$out"
     python3 "$here/versions.py" write "$out/versions.json" --platform browser
     ;;

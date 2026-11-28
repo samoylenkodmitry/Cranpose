@@ -23,12 +23,9 @@ on:
         type: boolean
         default: false
 
-# `decide` reads this workflow's own run history.
+# Each job grants only the permissions its publish or PR step needs.
 permissions:
-  contents: write
-  issues: write
-  pull-requests: write
-  actions: read
+  contents: read
 
 concurrency:
   group: perf-nightly
@@ -48,6 +45,9 @@ jobs:
     name: decide whether tonight's nightly already ran
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
     outputs:
       run: ${{ steps.check.outputs.run }}
     steps:
@@ -91,6 +91,7 @@ jobs:
         with:
           # Use the same triggering revision as the board jobs, with its release tags.
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Configure machine-local SDK and cache paths
         env:
@@ -181,6 +182,9 @@ jobs:
     if: needs.build.outputs.measured != 'yes'
     runs-on: [self-hosted, macOS, ARM64, recent-repo]
     timeout-minutes: 120
+    permissions:
+      contents: write
+      pull-requests: write
     defaults:
       run:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
@@ -189,6 +193,7 @@ jobs:
         with:
           # Use the same triggering revision as the board jobs, with its release tags.
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Configure machine-local SDK and cache paths
         env:
@@ -269,6 +274,8 @@ jobs:
     if: needs.decide.outputs.run == 'true'
     runs-on: [self-hosted, Linux, samarch1]
     timeout-minutes: 60
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       # The builds share the host's ESP-IDF installation.
@@ -280,6 +287,8 @@ jobs:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Configure the board toolchain
         run: |
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
@@ -314,6 +323,9 @@ jobs:
     # Mac sits idle on power.
     runs-on: [self-hosted, macOS, ARM64, idle-mac]
     timeout-minutes: 180
+    permissions:
+      contents: write
+      issues: write
     defaults:
       run:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
@@ -325,6 +337,7 @@ jobs:
         with:
           # The APKs and firmware must describe the same revision even if main advances.
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Name the run's folder
         run: echo "PERF_OUTPUT=$RUNNER_TEMP/perf-nightly-$GITHUB_RUN_ID" >> "$GITHUB_ENV"

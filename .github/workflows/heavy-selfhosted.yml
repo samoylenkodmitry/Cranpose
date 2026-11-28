@@ -1,9 +1,8 @@
 name: heavy (self-hosted)
 
 # The fleet workflow: Android builds and the robot suite on the repo's
-# own runners. Forks are DISABLED on this repository, so pull_request
-# events only ever come from the owner's branches — self-hosted execution
-# is safe for every trigger.
+# own runners. Every pull_request job explicitly rejects fork heads before
+# allocating a runner so untrusted fork code never runs on self-hosted hosts.
 #
 # The robot suite is the most expensive job on the board, and the two Linux
 # runners that carry [self-hosted, Linux, cranpose-heavy] are the whole pool
@@ -27,6 +26,9 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 # Supersede older runs of the same pull request: fleet minutes are real
 # machines. A run on main finishes, as in rust.yml, so main gets an answer while
 # merges keep coming; GitHub keeps one pending main run, the newest.
@@ -46,6 +48,7 @@ env:
 jobs:
   robot-linux:
     name: robot suite (self-hosted Linux)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # X11 suite: Linux runners only — the macOS boxes serve the Android
     # builds. The workspace persists between runs on a self-hosted runner,
     # so the robot-profile target stays warm.
@@ -59,6 +62,7 @@ jobs:
         with:
           # Both parents of the merge commit, for the diff below.
           fetch-depth: 2
+          persist-credentials: false
 
       - name: Skip work this exact tree already passed
         id: memo
@@ -139,6 +143,7 @@ jobs:
 
   ios-build:
     name: iOS build (self-hosted)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macOS, ARM64, cranpose-mac]
     timeout-minutes: 20
     defaults:
@@ -151,6 +156,7 @@ jobs:
         with:
           # Both parents of the merge commit, for the diff below.
           fetch-depth: 2
+          persist-credentials: false
 
       - name: Skip work this exact tree already passed
         id: memo
@@ -198,6 +204,7 @@ jobs:
 
   watchos-build:
     name: watchOS device and simulator
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macOS, ARM64, cranpose-mac]
     timeout-minutes: 20
     defaults:
@@ -205,6 +212,8 @@ jobs:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Provision toolchain
         run: scripts/ci/provision_toolchain.sh
       - name: Build both targets and launch the simulator
@@ -221,6 +230,7 @@ jobs:
 
   android-release:
     name: Android release build (self-hosted)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # macOS, not the shared `cranpose-heavy` label: the Android toolchain is
     # provisioned on both, but the two Linux slots are the fleet's scarce
     # resource and the robot suite cannot run anywhere else.
@@ -237,6 +247,7 @@ jobs:
         with:
           # Both parents of the merge commit, for the diff below.
           fetch-depth: 2
+          persist-credentials: false
 
       - name: Skip work this exact tree already passed
         id: memo
@@ -328,6 +339,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Skip work this exact tree already passed
         id: memo
@@ -369,6 +382,8 @@ jobs:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Skip work this exact tree already passed
         id: memo

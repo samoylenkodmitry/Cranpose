@@ -39,6 +39,9 @@ concurrency:
   group: build-one-${{ github.ref }}-${{ inputs.runner }}-${{ inputs.target }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   # The self-hosted Macs' runner user has core.fsmonitor on in ~/.gitconfig,
   # which actions/checkout copies: every checkout left a watcher daemon
@@ -61,6 +64,8 @@ jobs:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Provision the pinned toolchain and just
         run: |
@@ -110,13 +115,16 @@ jobs:
         if: inputs.target == 'robot-example'
         # run_robot_test.sh acquires the host lock itself; an outer lock deadlocks.
         shell: bash --noprofile --norc -eo pipefail {0}
+        env:
+          EXAMPLE_NAME: ${{ inputs.example }}
+          RUN_IT: ${{ inputs.run_it }}
         run: |
-          if [ -z "${{ inputs.example }}" ]; then
+          if [ -z "$EXAMPLE_NAME" ]; then
             echo "target robot-example requires an example name" >&2
             exit 1
           fi
-          if [ "${{ inputs.run_it }}" = "true" ]; then
-            xvfb-run -a -s "-screen 0 1280x800x24" just robot-one '${{ inputs.example }}'
+          if [ "$RUN_IT" = "true" ]; then
+            xvfb-run -a -s "-screen 0 1280x800x24" just robot-one "$EXAMPLE_NAME"
           else
             just robot-build
           fi

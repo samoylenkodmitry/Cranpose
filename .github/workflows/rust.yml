@@ -47,6 +47,9 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 # A pull request's newer push replaces its older run. A run on main finishes:
 # main merges come faster than a run takes, and a main run cancelled by the
 # next merge left main with no finished run from 2026-10-15 06:30 to 10-16
@@ -81,6 +84,8 @@ jobs:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Skip work this exact tree already passed
         id: memo
@@ -193,6 +198,8 @@ jobs:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Skip work this exact tree already passed
         id: memo
@@ -230,6 +237,8 @@ jobs:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Skip work this exact tree already passed
         id: memo
@@ -277,6 +286,8 @@ jobs:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Skip work this exact tree already passed
         id: memo
@@ -348,6 +359,7 @@ jobs:
         with:
           # Both parents of the merge commit, for the diff below.
           fetch-depth: 2
+          persist-credentials: false
 
       - name: Skip work this exact tree already passed
         id: memo
