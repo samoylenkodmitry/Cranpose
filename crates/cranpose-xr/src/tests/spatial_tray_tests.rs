@@ -3,7 +3,7 @@
 // measures where the meshes stand. A key sinks while pressed, a switch flips, a slider takes the
 // value that a drag gives, and a tray that hid composes nothing and draws nothing.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::*;
 use crate::{
@@ -160,22 +160,38 @@ fn bench_in(holder: Holder, size: [f32; 2], content: impl Fn(Controls) + Clone +
         frame: 0,
         controls: kept.take().expect("the content composed"),
     };
-    // The tray shows in 180 ms and a hologram in 420 ms from the first frame, which also builds the
-    // scene's pipelines and may take longer than the show. The last frame comes after the show's end.
-    bench.redraw();
-    let shown = Instant::now() + Duration::from_millis(500);
-    while Instant::now() < shown {
+    // The tray shows in 180 ms and a hologram in 420 ms of the clock. The last frame comes after
+    // the show's end.
+    for _ in 0..frames_in(500) + 1 {
         bench.redraw();
     }
-    bench.redraw();
     bench
 }
 
+// The time between two frames on a bench's own clock, which the animations and the pointer read.
+// A loaded machine can take a hundred milliseconds for one frame. The animations still advance by
+// this time for each frame, so a hold of a test lasts as many frames on every machine.
+const FRAME_MILLIS: u64 = 10;
+const FRAME: Duration = Duration::from_millis(FRAME_MILLIS);
+
+// The frames of a bench in `millis` milliseconds of its clock.
+fn frames_in(millis: u64) -> u64 {
+    millis / FRAME_MILLIS
+}
+
+// The time of the bench's clock at its frame `frame`.
+fn time_of(frame: u64) -> Duration {
+    Duration::from_millis(frame * FRAME_MILLIS)
+}
+
 impl Bench {
-    // One frame of the host: the composition's frame callbacks run, so the animations advance, and
-    // the scene draws.
+    // One frame of the host, `FRAME` after the last on the bench's clock: the composition's frame
+    // callbacks run, so the animations advance, and the scene draws.
     fn redraw(&mut self) -> bool {
-        self.headset.guest.shell().update();
+        self.headset
+            .guest
+            .shell()
+            .update_after_exact_interval(FRAME);
         draw(&mut self.headset, &mut self.pass, &eye(0.0), &self.eye)
     }
 
@@ -217,7 +233,7 @@ impl Bench {
         let panels = self.headset.space.panels();
         self.pointer.update(
             [None, Some(aim)],
-            Duration::from_millis(10 * self.frame),
+            time_of(self.frame),
             (&panels, &self.picks),
             PointerChoice::default(),
         );
@@ -225,18 +241,17 @@ impl Bench {
         self.redraw();
     }
 
-    // Frames of the hand that `script` plays, 10 ms apart on the script's clock, from `from` to
+    // Frames of the hand that `script` plays, a frame apart on the script's clock, from `from` to
     // `until` milliseconds after its start: the pointer takes the hand's aim as the frame loop does,
     // the panel takes the pointer's events and the scene draws.
     fn play(&mut self, script: &crate::scripted_hand::ScriptedHand, (from, until): (u64, u64)) {
-        for at in (from..until).step_by(10) {
+        for step in frames_in(from)..frames_in(until) {
             self.frame += 1;
-            let aims =
-                crate::pointers::direct_touch_tests::aims_at(&[script], Duration::from_millis(at));
+            let aims = crate::pointers::direct_touch_tests::aims_at(&[script], time_of(step));
             let panels = self.headset.space.panels();
             self.pointer.update(
                 aims,
-                Duration::from_millis(10 * self.frame),
+                time_of(self.frame),
                 (&panels, &self.picks),
                 PointerChoice::default(),
             );
@@ -247,24 +262,32 @@ impl Bench {
 
     // Frames at `at` for `millis` milliseconds of the clock, as the animations count them.
     fn hold(&mut self, at: [f32; 2], trigger: f32, millis: u64) {
-        let end = Instant::now() + Duration::from_millis(millis);
-        while Instant::now() < end {
+        for _ in 0..frames_in(millis) {
             self.frame(at, trigger);
         }
     }
 
-    // Draws one frame of the scene with no wait for its pixels. Returns whether it drew.
-    fn draw_once(&mut self) -> bool {
-        self.headset.guest.shell().update();
+    // Frames with no wait for their pixels until the content's panels have gone, for a second of the
+    // clock at most: a hide animates before the panels go.
+    fn draw_until_hidden(&mut self) {
         let camera = EyeCamera::of(&eye(0.0), (EYE, EYE), FirstRow::Top).expect("a camera");
-        self.pass
-            .draw(
-                &mut self.headset.guest,
-                &self.headset.space,
-                &camera,
-                &self.eye.image(),
-            )
-            .is_ok_and(|drew| drew)
+        for _ in 0..frames_in(1000) {
+            if self.headset.space.panels().is_empty() {
+                return;
+            }
+            self.headset
+                .guest
+                .shell()
+                .update_after_exact_interval(FRAME);
+            self.pass
+                .draw(
+                    &mut self.headset.guest,
+                    &self.headset.space,
+                    &camera,
+                    &self.eye.image(),
+                )
+                .expect("a frame");
+        }
     }
 
     // How far behind the panel's plane the ray through `at` meets the tray's nearest mesh, in dp.
@@ -384,10 +407,7 @@ fn a_tray_that_hid_composes_nothing_and_the_scene_draws_nothing() {
         "a panel and the volume under it"
     );
     bench.controls.visible.set(false);
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while !bench.headset.space.panels().is_empty() && Instant::now() < deadline {
-        bench.draw_once();
-    }
+    bench.draw_until_hidden();
     assert!(
         bench.headset.space.panels().is_empty(),
         "the hidden tray holds no panel and no volume"

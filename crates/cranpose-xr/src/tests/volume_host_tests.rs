@@ -287,8 +287,8 @@ impl Eye {
 // Draws the scene for `view` into `eye`, again until a frame drawn from `view` itself took its own
 // pipeline for every draw. Returns whether the pass found a scene.
 fn draw(headset: &mut Headset, pass: &mut VolumePass, view: &RenderViewpoint, eye: &Eye) -> bool {
-    draw_through(headset, pass, (view, eye), |moved| {
-        EyeCamera::of(moved, (EYE, EYE), FirstRow::Top).expect("a camera")
+    draw_through(headset, pass, (view, eye), |view| {
+        EyeCamera::of(view, (EYE, EYE), FirstRow::Top).expect("a camera")
     })
 }
 
@@ -301,19 +301,13 @@ fn draw_through(
     camera: impl Fn(&RenderViewpoint) -> EyeCamera,
 ) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let mut attempt = 0_u32;
+    // A frame that leaves its depth in the eye's image draws whole, so each call draws the scene
+    let camera = camera(view);
     loop {
-        // A head is never still: the odd frames move the eye by a hair, and an even one draws
-        // from `view` after a moved one, whatever frame the last call ended on.
-        attempt = attempt.wrapping_add(1);
-        let at_view = attempt & 1 == 0;
-        let mut moved = *view;
-        moved.pose.position[1] += if at_view { 0.0 } else { 1e-5 };
-        let camera = camera(&moved);
         let drew = pass
             .draw(&mut headset.guest, &headset.space, &camera, &eye.image())
             .expect("a frame");
-        if !drew || (at_view && pipelines_settled(&mut headset.guest, pass)) {
+        if !drew || pipelines_settled(&mut headset.guest, pass) {
             return drew;
         }
         assert!(
@@ -335,6 +329,29 @@ fn pipelines_settled(guest: &mut GuestView, pass: &VolumePass) -> bool {
         })
         .and_then(|mut surface| surface.renderer().last_frame_stats())
         .is_some_and(|stats| stats.pipelines_settled())
+}
+
+// What the renderer of the scene's window counted in its last frame: whether each draw took its own
+// pipeline, the pixels that it drew again and those that it kept from a frame drawn with stand-ins.
+fn last_frame(guest: &mut GuestView, pass: &VolumePass) -> String {
+    pass.root()
+        .and_then(|root| {
+            guest
+                .shell()
+                .surface(cranpose_app_shell::RootId::Window(root))
+        })
+        .and_then(|mut surface| surface.renderer().last_frame_stats())
+        .map_or_else(
+            || "no frame".to_owned(),
+            |stats| {
+                format!(
+                    "settled {}, repainted {} px, kept stand-ins {} px",
+                    stats.pipelines_settled(),
+                    stats.repainted_pixels,
+                    stats.kept_stand_in_pixels,
+                )
+            },
+        )
 }
 
 // Whether any pixel of `color` holds a colour or covers what lies behind it: a surface that glows
@@ -636,6 +653,7 @@ fn a_region_of_the_view_draws_what_that_part_of_the_whole_view_shows() {
     let view = eye(0.0);
     let whole = Eye::new(&headset.gpu);
     assert!(draw(&mut headset, &mut pass, &view, &whole));
+    let whole_frame = last_frame(&mut headset.guest, &pass);
     // A smaller image of the part of the view that starts 32 columns and 40 rows into the whole
     // view's image, at the same pixels for a unit of tangent: the quad lies inside it
     let full = ImageRegion::whole(&view.field_of_view, (EYE, EYE)).expect("a region");
@@ -651,8 +669,9 @@ fn a_region_of_the_view_draws_what_that_part_of_the_whole_view_shows() {
         &mut headset,
         &mut pass,
         (&view, &part),
-        |moved| { EyeCamera::of_region(moved, (region, size), (EYE, EYE), FirstRow::Top) }
+        |view| { EyeCamera::of_region(view, (region, size), (EYE, EYE), FirstRow::Top) }
     ));
+    let part_frame = last_frame(&mut headset.guest, &pass);
     let whole_pixels = read(&headset.gpu, &whole.color, 4);
     let part_pixels = read(&headset.gpu, &part.color, 4);
     let mut red = 0;
@@ -665,7 +684,10 @@ fn a_region_of_the_view_draws_what_that_part_of_the_whole_view_shows() {
                     .iter()
                     .zip(expected)
                     .all(|(shown, expected)| shown.abs_diff(*expected) <= 2),
-                "pixel ({x}, {y}) of the part is {shown:?}, the whole view's is {expected:?}"
+                "pixel ({x}, {y}) of the part is {shown:?}, the whole view's is {expected:?}; \
+                 the whole view shows {:?}; its frame: {whole_frame}; the part's frame: \
+                 {part_frame}",
+                drawn_box(&whole_pixels)
             );
             red += usize::from(shown[0] > 200);
         }
