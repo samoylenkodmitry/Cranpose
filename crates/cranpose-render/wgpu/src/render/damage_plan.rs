@@ -298,7 +298,7 @@ impl GpuRenderer {
         viewport: (u32, u32),
         image: ImageContent,
     ) -> Option<FrameDamagePlan> {
-        let frame = self.frame_window(packet, viewport);
+        let frame = self.frame_window(packet, viewport, self.pipelines.landings_at_frame_start());
         let held = frame.held();
         let swapchain_image = match image {
             ImageContent::Numbered(image) => Some(image),
@@ -414,7 +414,8 @@ impl GpuRenderer {
     // no present; the frame then closes as drawn for the renderer's warm-up.
     pub(crate) fn shows(&mut self, packet: &FramePacket, viewport: (u32, u32)) -> bool {
         self.note_damage(packet, viewport);
-        let frame = self.frame_window(packet, viewport);
+        // No frame started: what a swapchain image shows counts the landings of now
+        let frame = self.frame_window(packet, viewport, self.pipelines.landings());
         let shown = self.swapchain.shows(&frame, &self.frame_damages);
         if shown {
             self.history.skip_frame();
@@ -422,16 +423,18 @@ impl GpuRenderer {
         shown
     }
 
+    // `packet` as a frame of `viewport` that counts `landings`.
     pub(super) fn frame_window<'p>(
         &self,
         packet: &'p FramePacket,
         viewport: (u32, u32),
+        landings: u64,
     ) -> FrameWindow<'p> {
         FrameWindow {
             packet,
             viewport,
             setting: self.text.frame_setting(packet.clear, packet.debug_toggles),
-            landings: self.pipelines.landings(),
+            landings,
         }
     }
 
