@@ -66,7 +66,13 @@ impl PipelineKey {
 
 struct ShaderSource {
     text: Arc<str>,
+    // The module the source's builds share. Where pipelines let their
+    // modules go, the cache lets it go at the end of the frame that made
+    // it. The jobs queued with it keep it until they are done.
     module: LazyGpuResource<Option<RuntimeShaderModule>>,
+    // Whether the shader's output is independent of fragment positions,
+    // once a draw asked: the module goes, the answer stays.
+    position_independent: Option<bool>,
     // Whether a warm-up asked for the module to be made ahead of it.
     #[cfg(target_arch = "wasm32")]
     module_ahead: bool,
@@ -76,11 +82,21 @@ impl ShaderSource {
     fn new(text: &str) -> Self {
         Self {
             text: Arc::from(text),
-            module: LazyGpuResource::new("runtime-shader module"),
+            module: LazyGpuResource::new(MODULE_LABEL),
+            position_independent: None,
             #[cfg(target_arch = "wasm32")]
             module_ahead: false,
         }
     }
+}
+
+const MODULE_LABEL: &str = "runtime-shader module";
+
+// Whether a pipeline of `backend` lets go of its shader modules once it is
+// made (the wgpu fork's rule): there a module the cache keeps holds its
+// naga IR for nothing, a megabyte or more for a large shader.
+fn pipelines_drop_modules(backend: wgpu::Backend) -> bool {
+    matches!(backend, wgpu::Backend::Vulkan | wgpu::Backend::Metal)
 }
 
 struct RuntimeShaderModule {
@@ -190,6 +206,9 @@ pub(crate) struct ShaderPipelineCache {
     demanded: FxHashSet<PipelineKey>,
     forced: Vec<&'static str>,
     forced_hash: u64,
+    // The sources whose module a job or a draw asked for since their module
+    // was last let go.
+    modules_out: Vec<u64>,
     /// The shared stand-ins of the last launch's first screen.
     stand_ins: Vec<StandIn>,
     /// The recorded pipelines a stand-in covers, queued once the first frame
@@ -238,6 +257,7 @@ impl ShaderPipelineCache {
             demanded: FxHashSet::default(),
             forced: Vec::new(),
             forced_hash: 0,
+            modules_out: Vec::new(),
             stand_ins: Vec::new(),
             after_first_frame: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -311,7 +331,12 @@ impl ShaderPipelineCache {
 
     /// The job building `key` from its registered source with `constants`,
     /// the overrides the key's hash names.
-    fn source_job(&self, key: PipelineKey, mut constants: Vec<(&'static str, f64)>) -> PipelineJob {
+    fn source_job(
+        &mut self,
+        key: PipelineKey,
+        mut constants: Vec<(&'static str, f64)>,
+    ) -> PipelineJob {
+        self.note_module_out(key.source);
         let source = &self.sources[&key.source];
         Self::force_declared_flags(&self.forced, &source.text, &mut constants);
         PipelineJob {
@@ -332,13 +357,46 @@ impl ShaderPipelineCache {
             .sources
             .entry(hash)
             .or_insert_with(|| ShaderSource::new(shader.source()));
-        source
+        if let Some(known) = source.position_independent {
+            return known;
+        }
+        let known = source
             .module
             .for_draw(&self.recorder, self.factory.backend, || {
                 self.factory.module(&source.text, hash)
             })
             .as_ref()
-            .is_some_and(|module| module.position_independent)
+            .is_some_and(|module| module.position_independent);
+        source.position_independent = Some(known);
+        self.note_module_out(hash);
+        known
+    }
+
+    fn note_module_out(&mut self, source: u64) {
+        if pipelines_drop_modules(self.factory.backend) && !self.modules_out.contains(&source) {
+            self.modules_out.push(source);
+        }
+    }
+
+    // Ends a frame: the sources whose module is made let it go, where
+    // pipelines let theirs go. A later build parses the source again.
+    pub(crate) fn end_frame(&mut self) {
+        let sources = &mut self.sources;
+        self.modules_out.retain(|hash| {
+            let Some(source) = sources.get_mut(hash) else {
+                return false;
+            };
+            match source.module.get() {
+                // a queued job makes it
+                None => true,
+                Some(Some(_)) => {
+                    source.module = LazyGpuResource::new(MODULE_LABEL);
+                    false
+                }
+                // an invalid source holds nothing and stays known
+                Some(None) => false,
+            }
+        });
     }
 
     fn slot(&mut self, key: PipelineKey) -> LazyGpuResource<Option<wgpu::RenderPipeline>> {

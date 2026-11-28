@@ -24,8 +24,12 @@ impl EffectRenderer {
         self.offscreen_pool.release(target);
     }
 
-    pub(crate) fn end_offscreen_frame(&mut self) {
+    // Ends a frame. The pool lets go of the targets no frame took for a
+    // while. The shader cache lets go of the modules its builds are done
+    // with.
+    pub(crate) fn end_frame(&mut self) {
         self.offscreen_pool.end_frame();
+        self.shader_cache.end_frame();
     }
 
     pub(crate) fn retained_offscreen_count(&self) -> usize {

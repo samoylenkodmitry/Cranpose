@@ -178,6 +178,8 @@ stats_alloc = "0.1.10"
 # `gles_lowering` tests run on every host.
 wgpu-hal = { package = "cranpose-wgpu-hal", path = "../../../forks/wgpu/wgpu-hal" }
 cranpose-foundation = { workspace = true }
+# The tests count the shader modules a device holds.
+wgpu = { workspace = true, features = ["counters"] }
 
 [[test]]
 name = "integration"

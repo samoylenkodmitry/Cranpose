@@ -79,6 +79,22 @@ fn warm_pipeline_lookups_do_not_rebuild_constants() {
     );
 }
 
+// A shader that does not declare its independence of fragment positions is
+// asked once: the module that told goes at the frame's end, the answer
+// stays.
+#[test]
+fn a_shader_is_asked_its_position_independence_once() {
+    let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
+    let mut cache = cache(&device, PipelineCompiler::inactive());
+    let shader = RuntimeShader::new(&valid_shader());
+    let first = cache.position_independent(&shader);
+    for _ in 0..3 {
+        cache.end_frame();
+        assert_eq!(cache.position_independent(&shader), first);
+    }
+    assert_eq!(builds(&cache), (1, 0), "one module, made once");
+}
+
 /// Whether `shader` draws now; when it does not, it asks for its pipeline.
 fn ready(cache: &mut ShaderPipelineCache, shader: &RuntimeShader) -> bool {
     cache.ready_to_draw(shader, shader.draw_specialization(0))
@@ -277,6 +293,14 @@ fn an_invalid_shader_is_validated_once() {
             .get_or_create(&shader, shader.draw_specialization(0))
             .is_none()
     );
+    assert!(
+        cache
+            .get_or_create(&shader, shader.draw_specialization(0))
+            .is_none()
+    );
+    // a later frame's draw of another override knows the source is invalid
+    cache.end_frame();
+    shader.set_override("RED", 0.0);
     assert!(
         cache
             .get_or_create(&shader, shader.draw_specialization(0))
