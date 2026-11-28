@@ -583,7 +583,8 @@ fn a_board_card_ranks_by_the_frames_its_panel_shows_beside_the_frames_drawn() {
         shows(
             &labels,
             "The ES3C35P panel shows 59.90 pictures a second: shown fps counts each second's \
-             drawn frames up to that, and the bars rank by it."
+             drawn frames up to the pictures the panel shows in it from the first frame on, and \
+             the bars rank by it."
         ),
         "{labels:?}"
     );
