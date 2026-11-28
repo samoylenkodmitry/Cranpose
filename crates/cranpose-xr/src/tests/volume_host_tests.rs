@@ -301,19 +301,13 @@ fn draw_through(
     camera: impl Fn(&RenderViewpoint) -> EyeCamera,
 ) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let mut attempt = 0_u32;
+    // A frame that leaves its depth in the eye's image draws whole, so each call draws the scene
+    let camera = camera(view);
     loop {
-        // A head is never still: the odd frames move the eye by a hair, and an even one draws
-        // from `view` after a moved one, whatever frame the last call ended on.
-        attempt = attempt.wrapping_add(1);
-        let at_view = attempt & 1 == 0;
-        let mut moved = *view;
-        moved.pose.position[1] += if at_view { 0.0 } else { 1e-5 };
-        let camera = camera(&moved);
         let drew = pass
             .draw(&mut headset.guest, &headset.space, &camera, &eye.image())
             .expect("a frame");
-        if !drew || (at_view && pipelines_settled(&mut headset.guest, pass)) {
+        if !drew || pipelines_settled(&mut headset.guest, pass) {
             return drew;
         }
         assert!(
