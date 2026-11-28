@@ -13,6 +13,7 @@ use cranpose_ui::{
 };
 
 use super::{
+    figure,
     focus::{faded, Focus},
     launch_chart::LaunchLine,
     motion::{fade, settle, GONE},
@@ -156,10 +157,7 @@ fn with_mangohud(ctx: &BarContext<'_>, subject: usize, value: String) -> String 
         return value;
     }
     let (scenario, start) = (ctx.selection.scenario.as_str(), ctx.selection.start);
-    let rate = |metric: Metric| {
-        run.median(scenario, start, subject, metric.key())
-            .map_or_else(|| "–".to_string(), |rate| metric.format(rate))
-    };
+    let rate = |metric: Metric| figure(run.median(scenario, start, subject, metric.key()));
     let mismatch = run.count_mismatch(scenario, start, subject);
     let mark = mismatch.map_or_else(String::new, |mark| format!(" · {mark}"));
     match ctx.selection.metric {

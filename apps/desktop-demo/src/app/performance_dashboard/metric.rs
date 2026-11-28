@@ -110,6 +110,20 @@ impl Metric {
         }
     }
 
+    // How `run` measured it: a board's firmware counts its own frames, and a
+    // Linux run's harness the frames each app moved on to.
+    pub(super) fn about_in(self, run: &PerfRun) -> &'static str {
+        if run.kind == "esp32" && self != Self::AppSize {
+            "The firmware counts drawn frames in each second from ESP timer startup. First frame shows milliseconds on that clock."
+        } else if run.protocol.mangohud.is_some() && self == Self::Fps {
+            "Frames the app moved on to per second over the whole run from the launch, each \
+             line the app wrote for one stamped by the harness as it arrived; beside each, \
+             the presents MangoHud counted for the same launch."
+        } else {
+            self.about()
+        }
+    }
+
     /// How each platform measures it.
     pub(super) fn about(self) -> &'static str {
         match self {

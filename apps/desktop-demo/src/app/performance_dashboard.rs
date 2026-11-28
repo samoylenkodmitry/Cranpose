@@ -811,15 +811,7 @@ fn Frameworks(palette: Palette, run: Rc<PerfRun>, source: FrameSource) {
             metric.get(),
         );
         Text(
-            if run.kind == "esp32" && metric.get() != Metric::AppSize {
-                "The firmware counts drawn frames in each second from ESP timer startup. First frame shows milliseconds on that clock."
-            } else if run.protocol.mangohud.is_some() && metric.get() == Metric::Fps {
-                "Frames the app moved on to per second over the whole run from the launch, each \
-                 line the app wrote for one stamped by the harness as it arrived; beside each, \
-                 the presents MangoHud counted for the same launch."
-            } else {
-                metric.get().about()
-            },
+            metric.get().about_in(&run),
             Modifier::empty(),
             text_style(12.0, palette.muted, None),
         );
