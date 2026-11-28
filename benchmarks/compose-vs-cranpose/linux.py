@@ -108,8 +108,10 @@ APPS = {
     'electron': [HERE / 'electron-app/build/PerfElectron-linux-x64/PerfElectron', '--user-data-dir={profile}',
                  '--enable-logging=stderr', '--page={page}?tier={tier}&freeze={freeze}&scenario={scenario}'],
     'fyne': [HERE / 'fyne-app/build/perf-compare-fyne'],
+    # Without the basic password store Chrome waits for a desktop keyring and
+    # never loads the page.
     'web': [CHROME, '--user-data-dir={profile}', '--no-first-run', '--no-default-browser-check',
-            '--enable-logging=stderr', '--window-size=1280,820',
+            '--password-store=basic', '--enable-logging=stderr', '--window-size=1280,820',
             '--app={page}?tier={tier}&freeze={freeze}&scenario={scenario}'],
 }
 # The apps that show the web page and read it from the harness's server.
