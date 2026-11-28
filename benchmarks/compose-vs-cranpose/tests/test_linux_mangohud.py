@@ -1,11 +1,13 @@
 """`linux.py` counts MangoHud's presents from the launch beside the app's own
 updates, marks a leg whose presents outnumber its updates, and marks every
 leg of a display whose GPU scans nothing out."""
+import argparse
 import importlib.util
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 BENCHMARK = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BENCHMARK))
@@ -121,6 +123,21 @@ class SummaryTest(unittest.TestCase):
         self.assertEqual(linux.no_presents(legs, ['tauri', 'bui', 'egui'], 'first'),
                          {'tauri': "MangoHud's gl hook loaded and logged no present",
                           'bui': 'MangoHud loaded into none of its processes'})
+
+
+class FailedStartTest(unittest.TestCase):
+    def test_an_app_whose_first_start_fails_has_the_reason_on_its_second_start_too(self):
+        def fails(*_):
+            raise RuntimeError('makepad ended 0.1 s after its launch')
+        args = argparse.Namespace(rounds=1, host_lock=False, scenario='gauntlet', tier=16, present='uncapped',
+                                  max_idle=0.9, max_idle_wait=1.0, max_others=1.5)
+        with patch.object(linux, 'measure', fails), patch.object(linux, 'quiet_idle', lambda *_: 0.2), \
+                patch.object(linux, 'clear_app_state', lambda: None), tempfile.TemporaryDirectory() as stage:
+            screen = linux.measure_screen(args, ['makepad'], None, Path(stage))
+        reasons = {failure['start']: failure['error'] for failure in screen['failures']}
+        self.assertEqual(reasons, {'first': 'makepad ended 0.1 s after its launch',
+                                   'second': 'its first start failed: makepad ended 0.1 s after its launch'})
+        self.assertEqual(screen['legs'], [])
 
 
 class PageUpdatesTest(unittest.TestCase):

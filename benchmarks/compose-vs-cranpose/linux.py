@@ -738,6 +738,10 @@ def measure_screen(args, apps, server, stage):
                     label = f'{args.scenario}-{name}-{round_index + 1}-{start}'
                     measured = undisturbed_leg(name, args, server, stage, label, start, home, idle, failures)
                     if not measured:
+                        # A later start needs this one: it fails for its reason.
+                        reason = next(failure['error'] for failure in reversed(failures) if failure['subject'] == name)
+                        failures += [{'subject': name, 'start': later, 'error': f'its {start} start failed: {reason}'}
+                                     for later in STARTS[STARTS.index(start) + 1:]]
                         break
                     legs += [{'subject': name, 'round': round_index, 'start': start, **leg} for leg in measured]
     width, height = desktop.DESKTOP_WINDOW
