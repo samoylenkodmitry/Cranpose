@@ -10,8 +10,8 @@ use cranpose_ui::{
     widgets::{Box, BoxSpec},
 };
 use cranpose_ui_graphics::{
-    BlendMode, Color, CompositingStrategy, GraphicsLayer, Rect, RenderEffect, RuntimeShader,
-    ShaderTarget, ShaderWarmUp, Size, SubstrateSpec,
+    BlendMode, Color, CompositingStrategy, GraphicsLayer, Rect, RenderEffect, RuntimeShader, Size,
+    SubstrateSpec,
 };
 
 #[derive(Clone, Copy, PartialEq)]
@@ -61,17 +61,8 @@ fn shader(pass: InkPass) -> RuntimeShader {
 
 /// The ink shaders: the colour pass composited over the content's backdrop
 /// and the mask pass rendered into its `DstOut` layer.
-pub(super) fn shader_warm_ups() -> [ShaderWarmUp; 2] {
-    [
-        ShaderWarmUp {
-            shader: shader(InkPass::Color),
-            target: ShaderTarget::Page,
-        },
-        ShaderWarmUp {
-            shader: shader(InkPass::Mask),
-            target: ShaderTarget::Layer,
-        },
-    ]
+pub(super) fn shader_warm_ups() -> [RuntimeShader; 2] {
+    [shader(InkPass::Color), shader(InkPass::Mask)]
 }
 
 fn effect(

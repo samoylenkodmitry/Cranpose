@@ -9,12 +9,12 @@ use std::{
 
 use cranpose_core::NodeId;
 use cranpose_render_common::{
-    graph::{CachePolicy, ProjectiveTransform, quad_bounds},
+    graph::{ProjectiveTransform, quad_bounds},
     raster_cache::{LayerRasterCacheKey, RasterScale},
 };
 use cranpose_ui_graphics::{
     BlendMode, Color, FrontPolygon, MAX_SUBSTRATES, Point, Rect, RenderEffect, RenderHash,
-    RuntimeShader, ShaderPlaceholder, ShaderTarget, SubstrateSpec, TileMode, expand_rect,
+    RuntimeShader, ShaderPlaceholder, SubstrateSpec, TileMode, expand_rect,
 };
 use smallvec::SmallVec;
 
@@ -34,8 +34,7 @@ use crate::{
         SubstrateRegion, SubstrateRegions, blur_scratch_size, substrate_scratch_size,
     },
     frame_graph::{
-        FrameCommandRecorder, FrameTextureDescriptor, TextureRegionCopy, UploadMode,
-        copy_compatible,
+        FrameCommandRecorder, FrameTextureDescriptor, TextureRegionCopy, copy_compatible,
     },
     geometry::{SegmentTransform, snap_delta_for_anchor},
     layer_cache::{Retained, RetainedContent},
@@ -939,17 +938,6 @@ impl PendingBackdrop<'_> {
     /// composited over what is beneath rather than into a texture first.
     fn composites_tail(&self, shader: &RuntimeShader) -> bool {
         (self.rounded_mask.is_none() && self.alpha >= 1.0) || shader.batched_source()
-    }
-
-    /// Where the effect's last shader draws: over the page, or into a texture.
-    fn shader_target(&self) -> ShaderTarget {
-        let composites = self.batched.is_some()
-            || shader_tail(self.effect).is_some_and(|(_, shader)| self.composites_tail(shader));
-        if composites {
-            ShaderTarget::Page
-        } else {
-            ShaderTarget::Layer
-        }
     }
 
     fn layer_pixel_rect(&self) -> [f32; 4] {
@@ -1989,6 +1977,8 @@ pub(crate) struct FrameExecutor<'r, 'c, C: FrameCommandRecorder> {
     empty_scene: CompositorScene,
     depth: usize,
     prefix_admitted_pixels: u64,
+    // The stand-ins drawn before this frame began.
+    stand_ins_at_start: StandInMark,
 }
 
 // Where a frame records its commands and keeps the transients it frees at its end.
@@ -2011,6 +2001,7 @@ struct SurfaceRender {
     scale: f32,
     grid_dest: Option<DeviceRect>,
     region: Option<DeviceRect>,
+    pixels: StandInPixels,
 }
 
 #[derive(Clone, Copy)]
@@ -2326,7 +2317,7 @@ impl SurfacePlan {
     }
 
     fn cache_key(&self, child: &ChildLayer) -> Option<LayerRasterCacheKey> {
-        (!child.content.contains_backdrop() && child.cache_policy == CachePolicy::Auto).then(|| {
+        (!child.content.contains_backdrop() && child.cache_policy.keeps_pixels()).then(|| {
             LayerRasterCacheKey::source_content(
                 child.node_id,
                 child.content_hash,
@@ -2338,13 +2329,19 @@ impl SurfacePlan {
         })
     }
 
-    fn surface(&self, source: CompositeSource, region: Option<DeviceRect>) -> SurfaceRender {
+    fn surface(
+        &self,
+        source: CompositeSource,
+        region: Option<DeviceRect>,
+        pixels: StandInPixels,
+    ) -> SurfaceRender {
         SurfaceRender {
             source,
             rect: self.surface_rect,
             scale: self.surface_scale,
             grid_dest: self.grid_dest,
             region,
+            pixels,
         }
     }
 }
@@ -2413,6 +2410,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .effect_renderer
             .shader_cache
             .set_forced_flags(ablation.glass_flags.forced_flags());
+        let stand_ins_at_start = renderer.stand_in_mark();
         Self {
             renderer,
             recorder,
@@ -2420,6 +2418,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             empty_scene: CompositorScene::new(),
             depth: 0,
             prefix_admitted_pixels: 0,
+            stand_ins_at_start,
         }
     }
 
@@ -2510,41 +2509,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             )?;
         }
         Ok(())
-    }
-
-    /// Whether `effect` over a `source_size` source draws a layer at
-    /// `layer_pixel_rect` without waiting for a pipeline to compile, its
-    /// last shader `composited` over what is beneath or drawn into a
-    /// texture. When it does not, what it misses is queued and the frame
-    /// draws without it.
-    fn effect_draws_now(
-        &mut self,
-        effect: &RenderEffect,
-        layer_pixel_rect: [f32; 4],
-        source_size: (u32, u32),
-        target: ShaderTarget,
-    ) -> bool {
-        let renderer = &mut *self.renderer;
-        let ready = renderer.effect_renderer.effect_ready(
-            &renderer.device,
-            effect,
-            crate::effect_renderer::layer_pixels(layer_pixel_rect),
-            source_size,
-            target,
-        );
-        if !ready {
-            renderer.pipelines.note_placeholder(&renderer.frame_stats);
-        }
-        ready
-    }
-
-    fn backdrop_draws_now(&mut self, item: &PendingBackdrop<'_>) -> bool {
-        self.effect_draws_now(
-            item.effect,
-            item.layer_pixel_rect(),
-            item.capture_rect.pixel_size(),
-            item.shader_target(),
-        )
     }
 
     /// The backdrop's placeholder, drawn at `scale`, while its effect's
@@ -2991,6 +2955,34 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     /// the whole page, or else replays that opaque op from the layer cache
     /// or admits it there, when nothing composited or drawn in place lies
     /// beneath it.
+    // Draws the prefix `ops` into the page, and the pixels it drew.
+    fn encode_prefix(
+        &mut self,
+        pass: &LayerPass<'_>,
+        ops: &[DrawOp],
+        base: wgpu::LoadOp<wgpu::Color>,
+    ) -> Result<StandInPixels, String> {
+        let segment = PassSegment {
+            scene: &pass.layer.scene,
+            ops,
+            composites: &[],
+            offset: pass.page.offset,
+            scissor: None,
+            first_run_window: Some(0..1),
+            transform: SegmentTransform::IDENTITY,
+            scale: pass.scale,
+        };
+        let mark = self.renderer.stand_in_mark();
+        self.renderer.encode_pass(
+            self.recorder,
+            pass.page.pass_target(),
+            (std::slice::from_ref(&segment), SegmentLayout::Stacked),
+            base,
+            "Layer Pass Prefix",
+        )?;
+        Ok(self.pixels_since(mark))
+    }
+
     fn reuse_opaque_prefix(
         &mut self,
         pass: &mut LayerPass<'_>,
@@ -3067,23 +3059,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         {
             return Ok(None);
         }
-        let segment = PassSegment {
-            scene: &pass.layer.scene,
-            ops: &ops[..1],
-            composites: &[],
-            offset: pass.page.offset,
-            scissor: None,
-            first_run_window: Some(0..1),
-            transform: SegmentTransform::IDENTITY,
-            scale: pass.scale,
-        };
-        self.renderer.encode_pass(
-            self.recorder,
-            pass.page.pass_target(),
-            (std::slice::from_ref(&segment), SegmentLayout::Stacked),
-            base,
-            "Layer Pass Prefix",
-        )?;
+        let held = self.encode_prefix(pass, &ops[..1], base)?;
         let texture = Rc::new(
             self.renderer
                 .acquire_retained_surface(pixel_width, pixel_height),
@@ -3101,7 +3077,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         if self
             .renderer
             .layer_cache
-            .insert(prefix.key, Retained::surface(texture), None)
+            .insert(prefix.key, Retained::surface(texture, held), None)
         {
             self.renderer.frame_stats.record_prefix_admission();
             if let Some(gate) = self.renderer.gates.fills.get_mut(&prefix.command) {
@@ -3325,7 +3301,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let Some(descriptor) = self.transient_descriptor(&output.source) else {
             return;
         };
-        let retained = Retained::composite(Rc::clone(&output.source), output.kind.clone());
+        let retained = Retained::composite(
+            Rc::clone(&output.source),
+            output.kind.clone(),
+            self.page_pixels(),
+        );
         if !self
             .renderer
             .layer_cache
@@ -3987,9 +3967,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             layer_rect_device.height,
         ];
         let size = (width, height);
-        let waiting = effect.effect.as_ref().filter(|pending| {
-            !self.effect_draws_now(pending, layer_pixel_rect, size, ShaderTarget::Layer)
-        });
+        let waiting = effect
+            .effect
+            .as_ref()
+            .filter(|pending| !self.effect_draws_now(pending, layer_pixel_rect, size));
         let result = match &effect.effect {
             Some(render_effect) if waiting.is_none() => self.apply_effect(
                 &texture,
@@ -4232,12 +4213,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let layer_pixel_rect = layer_pixel_rect(child, surface.rect, surface.scale);
         let source = &surface.source.texture;
         let (width, height) = (source.width, source.height);
-        if !self.effect_draws_now(
-            effect,
-            layer_pixel_rect,
-            (width, height),
-            ShaderTarget::Layer,
-        ) {
+        if !self.effect_draws_now(effect, layer_pixel_rect, (width, height)) {
             return Ok(None);
         }
         let content = surface.source.content.derived(&effect.render_hash());
@@ -4280,6 +4256,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             );
             if admits && self.renderer.layer_cache.fits(width, height) {
                 let dest = Rc::new(self.renderer.acquire_retained_surface(width, height));
+                let mark = self.renderer.stand_in_mark();
                 self.apply_effect_into(
                     source,
                     &dest,
@@ -4287,11 +4264,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     layer_pixel_rect,
                     EffectReads::default(),
                 )?;
-                if self
-                    .renderer
-                    .layer_cache
-                    .insert(key, Retained::surface(Rc::clone(&dest)), None)
-                    && let Some(gate) = self.renderer.gates.node(node_id, NodeGate::Effect)
+                let pixels = surface.pixels.with(self.pixels_since(mark));
+                if self.renderer.layer_cache.insert(
+                    key,
+                    Retained::surface(Rc::clone(&dest), pixels),
+                    None,
+                ) && let Some(gate) = self.renderer.gates.node(node_id, NodeGate::Effect)
                 {
                     gate.admitted();
                 }
@@ -4309,135 +4287,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             "Layer Effect",
         )?;
         Ok(Some(CompositeSource { texture, content }))
-    }
-
-    // Whether a child's runtime shader can draw in the final pass over the
-    // child's content: the shader must apply the child's clip and alpha
-    // itself unless the child has neither.
-    fn shader_tail_composites(&mut self, child: &ChildLayer, shader: &RuntimeShader) -> bool {
-        let plain = child.alpha >= 1.0 && child.rounded_clip.is_none();
-        shader.substrates().is_empty()
-            && child.blend_mode == BlendMode::SrcOver
-            && (plain || shader.batched_source())
-            && self
-                .renderer
-                .effect_renderer
-                .shader_cache
-                .position_independent(shader)
-    }
-
-    /// The child's shader drawn in the final pass over its surface: `None`
-    /// when it does not draw that way, no composite while its pipeline
-    /// compiles.
-    fn shader_tail_over_surface(
-        &mut self,
-        child: &ChildLayer,
-        surface: &SurfaceRender,
-        snap: Point,
-        z: usize,
-        scale: f32,
-        visible: DeviceRect,
-    ) -> Option<Option<ResolvedComposite>> {
-        let effect = child.effect.as_ref()?;
-        let RenderEffect::Shader { shader } = effect else {
-            return None;
-        };
-        let dest = surface.grid_dest?;
-        let visible = dest.intersect(visible)?;
-        if !self.shader_tail_composites(child, shader) {
-            return None;
-        }
-        let layer_pixel_rect = layer_pixel_rect(child, surface.rect, surface.scale);
-        let source_size = (surface.source.texture.width, surface.source.texture.height);
-        if !self.effect_draws_now(effect, layer_pixel_rect, source_size, ShaderTarget::Page) {
-            return Some(None);
-        }
-        let slot = CompositeSlot {
-            z,
-            source: surface.source.clone(),
-            dest,
-            visible,
-        };
-        Some(Some(slot.shader_tail(
-            child,
-            shader,
-            layer_pixel_rect,
-            grid_rounded_mask(child, snap, scale),
-        )))
-    }
-
-    /// A child that draws only its shader, composited without a surface of
-    /// its own: `None` when the child is not one, and no composite while its
-    /// shader compiles without a placeholder.
-    fn shader_only_child(
-        &mut self,
-        child: &ChildLayer,
-        z: usize,
-        scale: f32,
-        visible: DeviceRect,
-        translation: Option<Point>,
-        snap: Point,
-    ) -> Option<Option<ResolvedComposite>> {
-        let translation = translation?;
-        let effect = child.effect.as_ref()?;
-        let RenderEffect::Shader { shader } = effect else {
-            return None;
-        };
-        let support =
-            child_composite_support(child, shader.output_support(), snap, scale, visible)?;
-        if !draws_nothing(&child.content) || !self.shader_tail_composites(child, shader) {
-            return None;
-        }
-        let surface_logical = child_surface_rect(child, scale)?;
-        let surface_rect = DeviceRect::from_logical(surface_logical, scale).snap_out();
-        let (width, height) = surface_rect.pixel_size();
-        if u64::from(width) * u64::from(height) > MAX_SURFACE_PIXELS {
-            return None;
-        }
-        let dest = DeviceRect {
-            x: (surface_rect.x + translation.x * scale).round(),
-            y: (surface_rect.y + translation.y * scale).round(),
-            width: surface_rect.width,
-            height: surface_rect.height,
-        };
-        let layer_pixel_rect = layer_pixel_rect(child, surface_rect, scale);
-        let rounded_mask = grid_rounded_mask(child, snap, scale);
-        if !self.effect_draws_now(
-            effect,
-            layer_pixel_rect,
-            (width, height),
-            ShaderTarget::Page,
-        ) {
-            let [x, y, width, height] = layer_pixel_rect;
-            let layer = DeviceRect {
-                x: dest.x + x,
-                y: dest.y + y,
-                width,
-                height,
-            };
-            return Some(shader.placeholder().map(|placeholder| {
-                let mask = placeholder_mask(placeholder, layer, scale).or(rounded_mask);
-                self.placeholder_fill(placeholder.color, z, layer, support, child.alpha, mask)
-            }));
-        }
-        let source = self
-            .renderer
-            .transparent_source(self.recorder, width, height);
-        let slot = CompositeSlot {
-            z,
-            source: CompositeSource {
-                texture: source,
-                content: SourceContent::retained(&TRANSPARENT_SOURCE),
-            },
-            dest,
-            visible: support,
-        };
-        Some(Some(slot.shader_tail(
-            child,
-            shader,
-            layer_pixel_rect,
-            rounded_mask,
-        )))
     }
 
     /// Renders the child's content into its own texture. A child that reads
@@ -4491,6 +4340,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     content: SourceContent::retained(&key),
                 },
                 retained.region,
+                retained.pixels,
             ));
         }
         SourceDecision::Render(
@@ -4526,6 +4376,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             child.node_id,
             plan.surface_logical,
         );
+        let mark = self.renderer.stand_in_mark();
         self.render_layer(
             &child.content,
             child_page,
@@ -4533,11 +4384,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             beneath,
         )?;
+        let pixels = self.pixels_since(mark);
         let retained = retain.filter(|key| {
             self.retain_source(
                 child.node_id,
                 *key,
-                Retained::surface(Rc::clone(&texture)),
+                Retained::surface(Rc::clone(&texture), pixels),
                 None,
             )
         });
@@ -4549,351 +4401,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 }),
             },
             None,
+            pixels,
         ))
-    }
-
-    /// Whether a child that can draw in place does this frame: unless its
-    /// surface is cached or retained this frame, which it then resolves into
-    /// the pass for `resolve_child`. Content that holds still costs less to
-    /// composite from its cached surface than to draw again, and content that
-    /// changes every frame, whose surface the cache stops keeping, would be
-    /// drawn afresh into a surface it throws away.
-    fn draws_in_place(
-        &mut self,
-        pass: &mut LayerPass<'_>,
-        index: usize,
-        child: &ChildLayer,
-    ) -> Result<bool, String> {
-        let scale = pass.scale;
-        let target = pass.window();
-        let frame = ChildFrame::of(child, scale, &target);
-        let Some(visible) = frame.visible else {
-            return Ok(true);
-        };
-        let shown = child_surface_bound(child, frame.snap, scale, &target).unwrap_or(visible);
-        let Some(plan) = SurfacePlan::of(child, scale, frame.grid, shown) else {
-            return Ok(true);
-        };
-        let surface = match self.source_decision(child, &plan, AdmissionGate::drawn_in_place) {
-            SourceDecision::Cached(surface) => surface,
-            SourceDecision::Render(None) => return Ok(true),
-            SourceDecision::Render(retain) => {
-                let cleared = Beneath::over(wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT));
-                self.render_planned_surface(child, &plan, retain, &cleared)?
-            }
-        };
-        pass.resolve(index, Resolved::Surface(Some(surface)));
-        Ok(false)
-    }
-
-    /// Resolves every flat child ahead of its z: from the cache, drawn in
-    /// place, or rendered with the others into atlases, so a frame that
-    /// renders many flat surfaces -- a grid laid out again, or one whose cells
-    /// just held still long enough to be kept -- renders them in a few passes.
-    fn resolve_flat_children(&mut self, pass: &mut LayerPass<'_>) -> Result<(), String> {
-        let layer = pass.layer;
-        if !layer.children.iter().any(renders_flat) {
-            return Ok(());
-        }
-        let scale = pass.scale;
-        let target = pass.window();
-        let mut resolved: Vec<Option<Resolved>> = std::iter::repeat_with(|| None)
-            .take(layer.children.len())
-            .collect();
-        let mut batch: Vec<BatchMember> = Vec::new();
-        for (index, child) in layer.children.iter().enumerate() {
-            if !renders_flat(child) || !child.mesh.is_empty() {
-                continue;
-            }
-            let frame = ChildFrame::of(child, scale, &target);
-            let Some(visible) = frame.visible else {
-                continue;
-            };
-            if composites_nothing(child) {
-                continue;
-            }
-            let in_place = pass.can_draw_in_place(child);
-            let shown = child_surface_bound(child, frame.snap, scale, &target).unwrap_or(visible);
-            let Some(plan) = SurfacePlan::of(child, scale, frame.grid, shown) else {
-                resolved[index] = Some(if in_place {
-                    Resolved::InPlace
-                } else {
-                    Resolved::Surface(None)
-                });
-                continue;
-            };
-            // A member rendered with the others lands in an atlas: a kept
-            // one is read there in place copy-free, else copied out of it.
-            let gate = if in_place {
-                AdmissionGate::drawn_in_place
-            } else if self.renderer.copy_free == UploadMode::Mapped {
-                AdmissionGate::rendered
-            } else {
-                AdmissionGate::copied_out_of_atlas
-            };
-            resolved[index] = match self.source_decision(child, &plan, gate) {
-                SourceDecision::Cached(surface) => Some(Resolved::Surface(Some(surface))),
-                SourceDecision::Render(None) if in_place => Some(Resolved::InPlace),
-                SourceDecision::Render(retain) => {
-                    batch.push(BatchMember {
-                        index,
-                        plan,
-                        retain,
-                    });
-                    None
-                }
-            };
-        }
-        for (index, surface) in self.render_surface_batch(layer, batch)? {
-            resolved[index] = Some(Resolved::Surface(Some(surface)));
-        }
-        pass.resolved = resolved;
-        Ok(())
-    }
-
-    /// Renders the batch's members together. Copy-free, those the cache
-    /// keeps go into an atlas of their own, which the cache keeps while it
-    /// keeps any of them and reads in place, and the others into one the
-    /// frame lets go; otherwise all share one atlas the kept ones are
-    /// copied out of. See [`UploadMode::copy_free`].
-    fn render_surface_batch(
-        &mut self,
-        layer: &LayerScene,
-        mut batch: Vec<BatchMember>,
-    ) -> Result<Vec<(usize, SurfaceRender)>, String> {
-        let mut surfaces = Vec::with_capacity(batch.len());
-        let kept = if self.renderer.copy_free == UploadMode::Mapped {
-            batch.sort_by_key(|member| member.retain.is_none());
-            batch.partition_point(|member| member.retain.is_some())
-        } else {
-            0
-        };
-        let (kept, drawn) = batch.split_at(kept);
-        for (group, keeps) in [(kept, true), (drawn, false)] {
-            match group {
-                [] => {}
-                [member] => {
-                    surfaces.push((member.index, self.render_member_alone(layer, member)?));
-                }
-                group => self.render_surface_atlas(layer, group, keeps, &mut surfaces)?,
-            }
-        }
-        Ok(surfaces)
-    }
-
-    fn render_member_alone(
-        &mut self,
-        layer: &LayerScene,
-        member: &BatchMember,
-    ) -> Result<SurfaceRender, String> {
-        let cleared = Beneath::over(wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT));
-        self.render_planned_surface(
-            &layer.children[member.index],
-            &member.plan,
-            member.retain,
-            &cleared,
-        )
-    }
-
-    fn render_surface_atlas(
-        &mut self,
-        layer: &LayerScene,
-        group: &[BatchMember],
-        keeps: bool,
-        surfaces: &mut Vec<(usize, SurfaceRender)>,
-    ) -> Result<(), String> {
-        let limit = self.renderer.max_texture_dim();
-        let shelf_width = if keeps {
-            square_width(group, limit)
-        } else {
-            self.renderer.surface_atlases.shelf_width(group, limit)
-        };
-        let mut packer = AtlasPacker::new(limit).with_shelf_width(shelf_width);
-        // A kept surface is read in place or copied out, so where it lands
-        // costs nothing later: the tallest go first, into an atlas near
-        // square.
-        let mut tallest_first: Vec<usize> = (0..group.len()).collect();
-        tallest_first.sort_by_key(|&index| std::cmp::Reverse(group[index].plan.height));
-        let mut placements: Vec<Option<AtlasPlacement>> = vec![None; group.len()];
-        for index in tallest_first {
-            let plan = &group[index].plan;
-            placements[index] = packer.place(plan.width, plan.height);
-        }
-        // A kept atlas stays in the cache for as long as its members do: it
-        // takes its own size from the retained surfaces' pool, as the kept
-        // surfaces did. A pooled size that serves later frames' atlases
-        // held a kept one at up to four times the area its members need.
-        let atlases: Vec<Rc<OffscreenTarget>> = packer
-            .atlases
-            .iter()
-            .map(|atlas| {
-                let renderer = &mut *self.renderer;
-                if keeps {
-                    let size = atlas.padded_size(limit);
-                    Rc::new(renderer.acquire_retained_surface(size.0, size.1))
-                } else {
-                    let stats = &renderer.frame_stats;
-                    let atlases = &mut renderer.surface_atlases;
-                    atlases.acquire(&renderer.device, atlas, limit, stats)
-                }
-            })
-            .collect();
-        let ops: Vec<Cow<'_, [DrawOp]>> = group
-            .iter()
-            .map(|member| z_ordered_ops(&layer.children[member.index].content.scene.draw_ops))
-            .collect();
-        for (atlas_index, atlas) in atlases.iter().enumerate() {
-            let segments: Vec<PassSegment<'_>> = group
-                .iter()
-                .zip(&placements)
-                .zip(&ops)
-                .filter_map(|((member, placement), ops)| {
-                    let placement = placement.filter(|placement| placement.atlas == atlas_index)?;
-                    let plan = &member.plan;
-                    Some(PassSegment {
-                        scene: &layer.children[member.index].content.scene,
-                        ops,
-                        composites: &[],
-                        offset: [
-                            plan.surface_rect.x - placement.x as f32,
-                            plan.surface_rect.y - placement.y as f32,
-                        ],
-                        scissor: Some((placement.x, placement.y, plan.width, plan.height)),
-                        first_run_window: None,
-                        transform: SegmentTransform::IDENTITY,
-                        scale: plan.surface_scale,
-                    })
-                })
-                .collect();
-            let target = PassTarget {
-                view: &atlas.view,
-                width: atlas.width,
-                height: atlas.height,
-            };
-            self.renderer.encode_pass(
-                self.recorder,
-                target,
-                (&segments, SegmentLayout::SideBySide),
-                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                "Layer Surface Atlas Pass",
-            )?;
-        }
-        for (member, placement) in group.iter().zip(placements) {
-            let child = &layer.children[member.index];
-            let surface = match placement {
-                Some(placement) => {
-                    self.renderer.frame_stats.record_isolated_layer_render(
-                        member.plan.width,
-                        member.plan.height,
-                        child.node_id,
-                        member.plan.surface_logical,
-                    );
-                    self.retain_from_atlas(
-                        child,
-                        member,
-                        &atlases[placement.atlas],
-                        (placement, keeps),
-                    )
-                }
-                None => self.render_member_alone(layer, member)?,
-            };
-            surfaces.push((member.index, surface));
-        }
-        Ok(())
-    }
-
-    /// The member's surface in `atlas`, kept by the cache when it admits
-    /// it: in place when the atlas holds kept members alone, else copied
-    /// out into a texture of its own.
-    fn retain_from_atlas(
-        &mut self,
-        child: &ChildLayer,
-        member: &BatchMember,
-        atlas: &Rc<OffscreenTarget>,
-        (placement, in_place): (AtlasPlacement, bool),
-    ) -> SurfaceRender {
-        let plan = &member.plan;
-        let in_atlas = plan.surface(
-            CompositeSource {
-                texture: Rc::clone(atlas),
-                content: SourceContent::Transient,
-            },
-            Some(DeviceRect {
-                x: placement.x as f32,
-                y: placement.y as f32,
-                width: plan.width as f32,
-                height: plan.height as f32,
-            }),
-        );
-        let Some(key) = member.retain else {
-            return in_atlas;
-        };
-        if !in_place {
-            return self.copy_out_of_atlas(child, member, atlas, placement, key, in_atlas);
-        }
-        let region = DeviceRect {
-            x: placement.x as f32,
-            y: placement.y as f32,
-            width: plan.width as f32,
-            height: plan.height as f32,
-        };
-        let transient = self.transient_descriptor(atlas);
-        if !self.retain_source(
-            child.node_id,
-            key,
-            Retained::surface_in(Rc::clone(atlas), region),
-            transient,
-        ) {
-            return in_atlas;
-        }
-        plan.surface(
-            CompositeSource {
-                texture: Rc::clone(atlas),
-                content: SourceContent::retained(&key),
-            },
-            Some(region),
-        )
-    }
-
-    fn copy_out_of_atlas(
-        &mut self,
-        child: &ChildLayer,
-        member: &BatchMember,
-        atlas: &Rc<OffscreenTarget>,
-        placement: AtlasPlacement,
-        key: LayerRasterCacheKey,
-        in_atlas: SurfaceRender,
-    ) -> SurfaceRender {
-        let plan = &member.plan;
-        let retained = Rc::new(
-            self.renderer
-                .acquire_retained_surface(plan.width, plan.height),
-        );
-        if !copy_compatible(atlas, &retained) {
-            return in_atlas;
-        }
-        self.recorder.copy_texture_region(TextureRegionCopy {
-            source: atlas,
-            source_origin: [placement.x, placement.y],
-            dest: &retained,
-            dest_origin: [0, 0],
-            size: [plan.width, plan.height],
-        });
-        if !self.retain_source(
-            child.node_id,
-            key,
-            Retained::surface(Rc::clone(&retained)),
-            None,
-        ) {
-            return in_atlas;
-        }
-        plan.surface(
-            CompositeSource {
-                texture: retained,
-                content: SourceContent::retained(&key),
-            },
-            None,
-        )
     }
 
     /// The child's retained surface under `key`. A surface kept in place in
@@ -5393,13 +4902,23 @@ use composites::{composites_nothing, draws_nothing};
 #[path = "frame_scene.rs"]
 mod scene_surfaces;
 
+#[path = "frame_flat_children.rs"]
+mod flat_children;
+
+#[path = "frame_stand_ins.rs"]
+mod stand_ins;
+
+#[path = "frame_shader_layers.rs"]
+mod shader_layers;
+
 #[path = "window_damage.rs"]
 mod window_damage;
 
 pub(crate) use window_damage::{
     Capture, ClearedImages, Damage, DamageBuilder, DamageRects, FrameDamages, FrameWindow, Held,
     ImageContent, MAX_DAMAGE_RECTS, OwnSake, PacketDamage, PresentedImage, Repaint, Since,
-    StandInPixels, SwapchainHistory, collect_captures, keeps_copy, whole_when_lighter, widen,
+    StandInMark, StandInPixels, SwapchainHistory, collect_captures, keeps_copy, whole_when_lighter,
+    widen,
 };
 
 #[cfg(test)]

@@ -253,6 +253,8 @@ pub(crate) fn install_process(context: &'static AndroidContext) {
         activity: None,
     });
     set_host_controller(Arc::new(host.clone()));
+    // A process started for a service draws too, such as a keyboard's.
+    crate::pipeline_cache_file::publish();
 }
 
 /// Gives the process host the activity `app` runs.
@@ -267,7 +269,6 @@ pub(crate) fn install_activity(app: android_activity::AndroidApp) {
         activity: Some(app),
         ..process.clone()
     }));
-    crate::pipeline_cache_file::publish();
     #[cfg(feature = "video")]
     crate::install_player();
 }

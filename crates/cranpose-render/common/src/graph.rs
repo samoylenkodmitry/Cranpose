@@ -75,6 +75,17 @@ pub enum CachePolicy {
     None,
     /// The layer is a candidate for a raster cache because it is isolated, scaled or rotated.
     Auto,
+    /// The app draws the layer offscreen (`CompositingStrategy::Offscreen`):
+    /// a layer that its render effect's shader alone draws keeps that
+    /// output from its first frame, and draws it again only when it changes.
+    Offscreen,
+}
+
+impl CachePolicy {
+    /// Whether a renderer may keep the layer's pixels between frames.
+    pub fn keeps_pixels(self) -> bool {
+        self != Self::None
+    }
 }
 
 /// Pointer handling attached to a layer.

@@ -80,6 +80,11 @@ fn register(context: &'static AndroidContext) {
     super::decoder_capabilities::register(context);
 }
 
+// The application context the process started with.
+pub(crate) fn context() -> Option<&'static AndroidContext> {
+    CONTEXT.get()
+}
+
 /// Starts the process for the activity `app` runs, if no service started it.
 pub(crate) fn start_for_activity(app: &android_activity::AndroidApp, settings: &AppSettings) {
     start(settings, || AndroidContext::of_activity(app));

@@ -35,7 +35,7 @@ fn texture(device: &wgpu::Device, width: u32) -> Rc<OffscreenTarget> {
 fn pin(cache: &mut LayerCache, index: u64, atlas: &Rc<OffscreenTarget>) {
     assert!(cache.insert(
         key(index),
-        Retained::composite(Rc::clone(atlas), blit()),
+        Retained::composite(Rc::clone(atlas), blit(), StandInPixels::Final),
         Some(descriptor(64)),
     ));
 }
@@ -121,10 +121,18 @@ fn entries_replaying_one_stage_texture_pay_for_it_once_and_retire_it_once() {
     pin(&mut cache, 2, &atlas);
     assert_eq!(cache.len(), 2);
     assert_eq!(cache.bytes(), atlas_bytes);
-    cache.insert(key(1), Retained::surface(texture(&device, 8)), None);
+    cache.insert(
+        key(1),
+        Retained::surface(texture(&device, 8), StandInPixels::Final),
+        None,
+    );
     assert!(cache.take_released().next().is_none());
     assert_eq!(cache.bytes(), atlas_bytes + offscreen_byte_size(8, 1));
-    cache.insert(key(2), Retained::surface(texture(&device, 8)), None);
+    cache.insert(
+        key(2),
+        Retained::surface(texture(&device, 8), StandInPixels::Final),
+        None,
+    );
     assert_eq!(cache.bytes(), 2 * offscreen_byte_size(8, 1));
     assert!(
         cache.take_released().next().is_none(),
@@ -143,7 +151,11 @@ fn the_budget_evicts_the_least_recently_used_entry_and_returns_its_surface() {
     let bytes = offscreen_byte_size(64, 1);
     let mut cache = LayerCache::with_budget(2 * bytes);
     for index in 1..=3 {
-        cache.insert(key(index), Retained::surface(texture(&device, 64)), None);
+        cache.insert(
+            key(index),
+            Retained::surface(texture(&device, 64), StandInPixels::Final),
+            None,
+        );
     }
     assert_eq!(cache.len(), 2);
     assert_eq!(cache.bytes(), 2 * bytes);
@@ -152,7 +164,11 @@ fn the_budget_evicts_the_least_recently_used_entry_and_returns_its_surface() {
     assert_eq!(released.len(), 1);
     assert_eq!(released[0].0, None);
     assert!(cache.get(&key(2)).is_some());
-    cache.insert(key(4), Retained::surface(texture(&device, 64)), None);
+    cache.insert(
+        key(4),
+        Retained::surface(texture(&device, 64), StandInPixels::Final),
+        None,
+    );
     assert!(
         cache.get(&key(3)).is_none(),
         "the untouched entry leaves first"
@@ -165,8 +181,16 @@ fn the_budget_evicts_the_least_recently_used_entry_and_returns_its_surface() {
 fn a_raster_no_frame_reads_for_the_idle_frames_is_released() {
     let (_lock, device, _queue) = upload_test_device();
     let mut cache = LayerCache::new();
-    cache.insert(key(1), Retained::surface(texture(&device, 8)), None);
-    cache.insert(key(2), Retained::surface(texture(&device, 8)), None);
+    cache.insert(
+        key(1),
+        Retained::surface(texture(&device, 8), StandInPixels::Final),
+        None,
+    );
+    cache.insert(
+        key(2),
+        Retained::surface(texture(&device, 8), StandInPixels::Final),
+        None,
+    );
     for _ in 0..IDLE_FRAMES {
         assert!(cache.get(&key(1)).is_some());
         cache.end_frame();
@@ -192,9 +216,17 @@ fn a_texture_over_the_budget_is_refused_without_evicting_anything() {
     let (_lock, device, _queue) = upload_test_device();
     let bytes = offscreen_byte_size(64, 1);
     let mut cache = LayerCache::with_budget(bytes);
-    assert!(cache.insert(key(1), Retained::surface(texture(&device, 64)), None));
+    assert!(cache.insert(
+        key(1),
+        Retained::surface(texture(&device, 64), StandInPixels::Final),
+        None
+    ));
     assert!(!cache.fits(65, 1));
-    assert!(!cache.insert(key(2), Retained::surface(texture(&device, 65)), None));
+    assert!(!cache.insert(
+        key(2),
+        Retained::surface(texture(&device, 65), StandInPixels::Final),
+        None
+    ));
     assert_eq!(cache.len(), 1);
     assert_eq!(cache.bytes(), bytes);
     assert!(cache.get(&key(1)).is_some());
@@ -208,7 +240,11 @@ fn a_texture_retained_again_while_pending_retirement_is_pending_no_more() {
     let atlas = texture(&device, 64);
     let atlas_bytes = offscreen_byte_size(64, 1);
     pin(&mut cache, 1, &atlas);
-    assert!(cache.insert(key(1), Retained::surface(texture(&device, 8)), None));
+    assert!(cache.insert(
+        key(1),
+        Retained::surface(texture(&device, 8), StandInPixels::Final),
+        None
+    ));
     assert_eq!(cache.bytes(), offscreen_byte_size(8, 1));
     pin(&mut cache, 2, &atlas);
     assert_eq!(cache.bytes(), atlas_bytes + offscreen_byte_size(8, 1));
@@ -217,7 +253,11 @@ fn a_texture_retained_again_while_pending_retirement_is_pending_no_more() {
         cache.take_released().next().is_none(),
         "the revived texture is held by its entry, not by the pending list"
     );
-    assert!(cache.insert(key(2), Retained::surface(texture(&device, 8)), None));
+    assert!(cache.insert(
+        key(2),
+        Retained::surface(texture(&device, 8), StandInPixels::Final),
+        None
+    ));
     let released: Vec<_> = cache.take_released().collect();
     assert_eq!(released.len(), 1, "one retirement, one alias");
     assert_eq!(released[0].0, Some(descriptor(64)));
@@ -230,7 +270,11 @@ fn many_small_surfaces_stay_cached_within_the_byte_budget() {
     let mut cache = LayerCache::new();
     let surfaces = 1000;
     for index in 0..surfaces {
-        assert!(cache.insert(key(index), Retained::surface(texture(&device, 1)), None));
+        assert!(cache.insert(
+            key(index),
+            Retained::surface(texture(&device, 1), StandInPixels::Final),
+            None
+        ));
     }
     assert_eq!(
         cache.len(),
@@ -255,7 +299,7 @@ fn an_atlas_whose_kept_surfaces_mostly_left_goes_back_to_its_pool() {
         };
         assert!(cache.insert(
             key(index),
-            Retained::surface_in(Rc::clone(&atlas), region),
+            Retained::surface_in(Rc::clone(&atlas), region, StandInPixels::Final),
             Some(descriptor(80)),
         ));
     }

@@ -10,9 +10,8 @@ fn the_warm_up_names_the_pipeline_the_effect_draws() {
     let Some(RenderEffect::Shader { shader }) = effect(size, (1.0, 2.0), 0.5, 0.25) else {
         panic!("tab lighting is a runtime shader effect");
     };
-    assert_eq!(warm_up.shader.source_hash(), shader.source_hash());
-    assert_eq!(warm_up.shader.overrides_hash(), shader.overrides_hash());
-    assert_eq!(warm_up.target, ShaderTarget::Page);
+    assert_eq!(warm_up.source_hash(), shader.source_hash());
+    assert_eq!(warm_up.overrides_hash(), shader.overrides_hash());
 }
 
 #[test]

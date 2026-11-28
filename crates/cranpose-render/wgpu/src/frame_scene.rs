@@ -15,7 +15,7 @@ use cranpose_ui_graphics::{
 };
 
 use super::{
-    CompositeSource, DeviceRect, Event, FrameExecutor, LayerPass, SurfaceRender,
+    CompositeSource, DeviceRect, Event, FrameExecutor, LayerPass, StandInPixels, SurfaceRender,
     composites_nothing, draws_nothing,
 };
 use crate::{
@@ -233,6 +233,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             scale: 1.0,
             grid_dest: None,
             region: None,
+            pixels: StandInPixels::Final,
         }
     }
 

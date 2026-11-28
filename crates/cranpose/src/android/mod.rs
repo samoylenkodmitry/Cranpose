@@ -40,6 +40,8 @@ pub(crate) mod device_motion;
 pub(crate) mod device_motion_wire;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod display_timing;
+#[cfg(any(test, all(feature = "renderer-wgpu", target_os = "android")))]
+pub(crate) mod editor_info_wire;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod event_loop;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
@@ -75,6 +77,8 @@ pub(crate) mod host_text_input;
 mod host_window_requests;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 mod input;
+#[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
+pub(crate) mod input_method;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]
 pub(crate) mod jni;
 #[cfg(all(feature = "renderer-wgpu", target_os = "android"))]

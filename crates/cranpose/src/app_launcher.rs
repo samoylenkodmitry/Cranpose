@@ -8,22 +8,25 @@ use cranpose_render_common::{
     font_source::{
         ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS, FontLoadError, FontRegistry,
     },
-    text_fonts::{TextFonts, default_typeface},
+    text_fonts::TextFonts,
 };
 use cranpose_text::{FontBytes, Typeface};
 use cranpose_ui::{
-    ImageBitmap,
+    ImageBitmap, Size,
     text::{FontFamily, FontStyle, FontWeight},
 };
 
 mod android_gpu_backend;
+mod android_overlay_window_options;
 #[cfg(all(
     feature = "renderer-wgpu",
     any(feature = "desktop-shell", feature = "ios")
 ))]
 mod launch_error;
+mod launcher_fonts;
 
 pub use android_gpu_backend::AndroidGpuBackend;
+pub use android_overlay_window_options::AndroidOverlayWindowOptions;
 #[cfg(all(
     feature = "renderer-wgpu",
     any(feature = "desktop-shell", all(feature = "ios", target_os = "ios"))
@@ -34,6 +37,7 @@ pub use launch_error::LaunchError;
     any(feature = "desktop-shell", feature = "ios")
 ))]
 pub(crate) use launch_error::exit_after_launch_error;
+pub use launcher_fonts::{AppFonts, DefaultFont, LauncherFonts};
 
 #[cfg(test)]
 #[path = "tests/inspector_settings.rs"]
@@ -154,6 +158,8 @@ pub struct AppSettings {
     pub process_start: Option<fn()>,
     /// Optional Android overlay surface configuration.
     pub android_overlay_window: Option<AndroidOverlayWindowOptions>,
+    /// The board of the system keyboard. See [`AppLauncher::with_input_method`].
+    pub input_method: Option<crate::input_method::InputMethod>,
     /// Run in headless mode (window hidden, for robot testing)
     ///
     /// When enabled, the window is created but not shown. This allows
@@ -221,6 +227,7 @@ impl Default for AppSettings {
             android_gpu_backend: AndroidGpuBackend::default(),
             log_tag: None,
             process_start: None,
+            input_method: None,
             android_overlay_window: None,
             headless: false,
             developer_inspector: None,
@@ -312,89 +319,6 @@ impl AppSettings {
                 .join(", ")
         );
         TextFonts::new(faces)
-    }
-}
-
-/// Android floating overlay window configuration.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct AndroidOverlayWindowOptions {
-    /// Requested overlay width in logical pixels.
-    pub width: u32,
-    /// Requested overlay height in logical pixels.
-    pub height: u32,
-    /// Requested screen X position in logical pixels.
-    pub x: i32,
-    /// Requested screen Y position in logical pixels.
-    pub y: i32,
-    /// Whether the overlay can receive keyboard focus.
-    pub focusable: bool,
-}
-
-impl AndroidOverlayWindowOptions {
-    /// Creates an overlay window request with top-left origin and touch-only focus behavior.
-    pub fn new(width: u32, height: u32) -> Self {
-        Self {
-            width,
-            height,
-            x: 0,
-            y: 0,
-            focusable: false,
-        }
-    }
-
-    /// Sets the initial overlay position in logical pixels.
-    pub fn with_position(mut self, x: i32, y: i32) -> Self {
-        self.x = x;
-        self.y = y;
-        self
-    }
-
-    /// Sets whether the overlay should receive keyboard focus.
-    pub fn with_focusable(mut self, focusable: bool) -> Self {
-        self.focusable = focusable;
-        self
-    }
-
-    /// Returns whether this request can create a non-empty overlay surface.
-    pub fn is_valid(self) -> bool {
-        self.width > 0 && self.height > 0
-    }
-}
-
-/// Where an [`AppLauncher`]'s text faces come from.
-///
-/// A launcher starts as [`DefaultFont`] and becomes [`AppFonts`] as soon as a
-/// font method runs. The state is a type rather than a flag because only a
-/// type keeps the embedded face out of the binary: a flag checked at run time
-/// still references the bytes, and the linker keeps what is referenced.
-pub trait LauncherFonts: launcher_fonts::Sealed {
-    /// The face text draws in when the app supplied none.
-    fn default_face() -> Option<Typeface>;
-}
-
-mod launcher_fonts {
-    pub trait Sealed {}
-    impl Sealed for super::DefaultFont {}
-    impl Sealed for super::AppFonts {}
-}
-
-/// The app has supplied no fonts, so text draws in the framework's embedded
-/// face (the `embedded-default-font` feature, on by default).
-pub struct DefaultFont;
-
-impl LauncherFonts for DefaultFont {
-    fn default_face() -> Option<Typeface> {
-        default_typeface()
-    }
-}
-
-/// The app supplied its own fonts. Text draws only in them, and the embedded
-/// face is left out of the binary.
-pub struct AppFonts;
-
-impl LauncherFonts for AppFonts {
-    fn default_face() -> Option<Typeface> {
-        None
     }
 }
 
@@ -974,6 +898,18 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
         self
     }
 
+    /// Makes the application a system keyboard whose board is `content`,
+    /// `height` logical pixels tall on a screen of the given logical size.
+    ///
+    /// On Android the Gradle plugin's `input-method` service adds the
+    /// keyboard to the system's list; the person enables it in the system's
+    /// keyboard settings. The board types through
+    /// [`local_input_connection`](crate::input_method::local_input_connection).
+    pub fn with_input_method(mut self, content: fn(), height: fn(Size) -> f32) -> Self {
+        self.settings.input_method = Some(crate::input_method::InputMethod { content, height });
+        self
+    }
+
     /// Desktop only: the picture every window the application opens carries,
     /// in the title bar, taskbar and task switcher of Windows and Linux.
     ///
@@ -1351,6 +1287,13 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
         std::process::exit(0)
     }
 
+    /// iOS only: runs the board named by [`with_input_method`](Self::with_input_method)
+    /// as the system keyboard. A keyboard extension's main function calls it.
+    #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+    pub fn run_keyboard_extension(self) -> ! {
+        crate::ios::input_method::run(self.into_settings())
+    }
+
     /// Run the application (Android platform).
     ///
     /// # Arguments
@@ -1387,13 +1330,9 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
         context: jni::objects::JObject<'_>,
         share: jni::sys::jboolean,
     ) {
-        crate::android::process::start_for_service(
-            env,
-            class,
-            context,
-            share,
-            &self.into_settings(),
-        );
+        let settings = self.into_settings();
+        crate::android::process::start_for_service(env, class, context, share, &settings);
+        crate::android::input_method::install(settings);
     }
 
     /// Run the application (Web platform).

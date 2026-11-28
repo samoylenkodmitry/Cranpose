@@ -4,7 +4,7 @@ use cranpose_core::collections::bounded_lru::BoundedLruCache;
 use cranpose_render_common::geometry::{BLUR_TAP_PAIRS, BlurKernel};
 use cranpose_ui::Axis;
 use cranpose_ui_graphics::{
-    BlendMode, MAX_SUBSTRATES, RenderEffect, RuntimeShader, ShaderTarget, SubstrateSpec, TileMode,
+    BlendMode, MAX_SUBSTRATES, RenderEffect, RuntimeShader, SubstrateSpec, TileMode,
 };
 
 use crate::{
@@ -20,10 +20,7 @@ use crate::{
     pipeline_recorder::PipelineRecorder,
     render::PassDepth,
     scissor::{read_scissor, scaled_scissor, widened_scissor},
-    shader_cache::{
-        RuntimeShaderPipelineMode, ShaderPipelineCache, ShaderPipelineFit,
-        shader_specialization_enabled,
-    },
+    shader_cache::{ShaderPipelineCache, ShaderPipelineFit, shader_specialization_enabled},
     shaders,
     shared_shader::SharedShader,
 };
@@ -126,6 +123,14 @@ enum MeanOutput<'a> {
     Clear(&'a OffscreenTarget),
 }
 
+// How many composites were left out while their pipeline compiles, and
+// the count the last `take_skipped_draw` saw.
+#[derive(Default)]
+struct SkippedDraws {
+    count: Cell<u64>,
+    seen: Cell<u64>,
+}
+
 pub(crate) struct EffectRenderer {
     offscreen_pool: OffscreenPool,
     pub shader_cache: ShaderPipelineCache,
@@ -133,9 +138,7 @@ pub(crate) struct EffectRenderer {
 
     blurs: BlurPipelines,
     recorder: PipelineRecorder,
-    /// Whether a composite was left out this frame while its pipeline
-    /// compiles (see [`Self::take_skipped_draw`]).
-    skipped_draw: Cell<bool>,
+    skipped: SkippedDraws,
     compiler: PipelineCompiler,
     blur_uniform_bind_group_layout: wgpu::BindGroupLayout,
     blur_prepared_draws: Vec<PreparedBlurDraw>,
@@ -320,7 +323,6 @@ impl CompositeVariant {
 struct ShaderPassOptions {
     load_op: wgpu::LoadOp<wgpu::Color>,
     scissor: Option<(u32, u32, u32, u32)>,
-    pipeline_mode: RuntimeShaderPipelineMode,
     source_logical_size: Option<(f32, f32)>,
     source_region: Option<(f32, f32, f32, f32)>,
     substrate_regions: SubstrateRegions,
@@ -996,7 +998,7 @@ impl EffectRenderer {
             surface_format,
             adapter_backend,
             debug_command_stats: Cell::new(FrameCommandStats::default()),
-            skipped_draw: Cell::new(false),
+            skipped: SkippedDraws::default(),
             debug_blurs: Cell::new(0),
             debug_substrates: Cell::new(0),
             debug_composites: Cell::new(0),
@@ -1041,15 +1043,11 @@ impl EffectRenderer {
         effect: &RenderEffect,
         layer_pixels: u64,
         source_size: (u32, u32),
-        target: ShaderTarget,
     ) -> bool {
         match effect {
             RenderEffect::Shader { shader } => {
                 let specialization = shader.draw_specialization(layer_pixels);
-                let mode = RuntimeShaderPipelineMode::for_target(target);
-                let mut ready = self
-                    .shader_cache
-                    .ready_to_draw(shader, specialization, mode);
+                let mut ready = self.shader_cache.ready_to_draw(shader, specialization);
                 for &substrate in shader.substrates() {
                     ready &= self.substrate_ready(device, substrate, source_size);
                 }
@@ -1067,9 +1065,8 @@ impl EffectRenderer {
                     })
             }
             RenderEffect::Chain { first, second } => {
-                let layer = ShaderTarget::Layer;
-                let first = self.effect_ready(device, first, layer_pixels, source_size, layer);
-                let second = self.effect_ready(device, second, layer_pixels, source_size, target);
+                let first = self.effect_ready(device, first, layer_pixels, source_size);
+                let second = self.effect_ready(device, second, layer_pixels, source_size);
                 first & second
             }
         }
@@ -1203,12 +1200,9 @@ impl EffectRenderer {
         &self.compiler
     }
 
-    pub(crate) fn warm_shaders(&mut self, warm_ups: &[cranpose_ui_graphics::ShaderWarmUp]) {
-        for warm_up in warm_ups {
-            self.shader_cache.warm(
-                &warm_up.shader,
-                RuntimeShaderPipelineMode::for_target(warm_up.target),
-            );
+    pub(crate) fn warm_shaders(&mut self, shaders: &[RuntimeShader]) {
+        for shader in shaders {
+            self.shader_cache.warm(shader);
         }
     }
 
@@ -1333,14 +1327,22 @@ impl EffectRenderer {
     }
 
     fn note_skipped(&self, skipped: bool) {
-        self.skipped_draw.set(self.skipped_draw.get() | skipped);
+        let count = &self.skipped.count;
+        count.set(count.get() + u64::from(skipped));
     }
 
     /// Whether a composite was left out since the last call because its
     /// pipeline compiles: the renderer then asks for the frame after the
     /// pipeline lands.
     pub(crate) fn take_skipped_draw(&self) -> bool {
-        self.skipped_draw.replace(false)
+        let skipped = self.skipped.count.get();
+        self.skipped.seen.replace(skipped) != skipped
+    }
+
+    // How many composites were left out so far while their pipeline
+    // compiles.
+    pub(crate) fn skipped_draws(&self) -> u64 {
+        self.skipped.count.get()
     }
 
     fn projective_pipeline_target(
@@ -2171,7 +2173,6 @@ impl EffectRenderer {
             ShaderPassOptions {
                 load_op: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                 scissor,
-                pipeline_mode: RuntimeShaderPipelineMode::Replace,
                 source_logical_size: None,
                 source_region: None,
                 substrate_regions: [None; MAX_SUBSTRATES],
@@ -2188,11 +2189,9 @@ impl EffectRenderer {
         let specialization = item
             .shader
             .draw_specialization(layer_pixels(item.layer_pixel_rect));
-        let (pipeline, fit) = self.shader_cache.get_or_create(
-            item.shader,
-            specialization,
-            RuntimeShaderPipelineMode::PremultipliedSrcOver,
-        )?;
+        let (pipeline, fit) = self
+            .shader_cache
+            .get_or_create(item.shader, specialization)?;
         let pipeline = pipeline.clone();
         self.record_shader_pipeline_fit(fit);
         let mut padded = item.shader.uniforms_padded();
@@ -2295,10 +2294,7 @@ impl EffectRenderer {
         );
 
         let specialization = shader.draw_specialization(layer_pixels(target.layer_pixel_rect));
-        let Some((pipeline, fit)) =
-            self.shader_cache
-                .get_or_create(shader, specialization, options.pipeline_mode)
-        else {
+        let Some((pipeline, fit)) = self.shader_cache.get_or_create(shader, specialization) else {
             return false;
         };
         let pipeline = pipeline.clone();
@@ -2390,7 +2386,6 @@ impl EffectRenderer {
             ShaderPassOptions {
                 load_op: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                 scissor: reads.output,
-                pipeline_mode: RuntimeShaderPipelineMode::Replace,
                 source_logical_size: Some((source.width as f32, source.height as f32)),
                 source_region: Some((0.0, 0.0, source.width as f32, source.height as f32)),
                 substrate_regions: layout.regions,

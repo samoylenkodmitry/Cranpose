@@ -710,7 +710,7 @@ fn safe_area_insets(window: &Arc<dyn Window>) -> EdgeInsets {
 }
 
 /// The device the iOS app opens on `adapter`, at launch and after a loss.
-fn ios_device_descriptor(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'static> {
+pub(crate) fn ios_device_descriptor(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'static> {
     wgpu::DeviceDescriptor {
         label: Some("Cranpose iOS Device"),
         required_features: cranpose_render_wgpu::optional_device_features(adapter),
@@ -721,7 +721,7 @@ fn ios_device_descriptor(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'sta
     }
 }
 
-fn ios_surface_config(
+pub(crate) fn ios_surface_config(
     surface: &wgpu::Surface<'static>,
     adapter: &wgpu::Adapter,
     width: u32,

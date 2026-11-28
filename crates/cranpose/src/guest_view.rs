@@ -151,14 +151,7 @@ impl GuestView {
         texture: &wgpu::Texture,
         view: &wgpu::TextureView,
     ) -> Result<bool, GuestViewError> {
-        if !self.visible {
-            return Ok(false);
-        }
-        // The update runs for the whole composition. What it changed in a window root owes that
-        // window a frame, and the primary root owes one only for what it changed itself.
-        self.shell.update();
-        let owed = self.shell.take_frame_owed();
-        if !(self.dirty || owed || self.shell.needs_redraw()) {
+        if !self.update() {
             return Ok(false);
         }
         let (width, height) = self.size;
@@ -168,6 +161,41 @@ impl GuestView {
             .map_err(|error| GuestViewError::Render(format!("{error:?}")))?;
         self.dirty = false;
         Ok(true)
+    }
+
+    /// Draws the composition, as the last [`update`](Self::update) left it,
+    /// into the surface image `frame` and presents it. The image has
+    /// [`pixel_size`](Self::pixel_size) and a format whose display view is the
+    /// view's format. A surface that keeps its presented images lets the view
+    /// redraw only what changed in each.
+    pub fn draw_surface(&mut self, frame: wgpu::SurfaceTexture) -> Result<(), GuestViewError> {
+        let (width, height) = self.size;
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(self.format),
+            ..Default::default()
+        });
+        let renderer = self.shell.renderer();
+        renderer
+            .render_surface_texture(&frame, &view, width, height)
+            .map_err(|error| GuestViewError::Render(format!("{error:?}")))?;
+        renderer.present(frame);
+        self.dirty = false;
+        Ok(())
+    }
+
+    /// Advances the composition. Returns whether the view looks different
+    /// from the frame it drew last, so the host takes a surface image for
+    /// [`draw_surface`](Self::draw_surface). A hidden view does not update.
+    pub fn update(&mut self) -> bool {
+        if !self.visible {
+            return false;
+        }
+        // The update runs for the whole composition. What it changed in a window root owes that
+        // window a frame, and the primary root owes one only for what it changed itself.
+        self.shell.update();
+        let owed = self.shell.take_frame_owed();
+        self.dirty |= owed || self.shell.needs_redraw();
+        self.dirty
     }
 
     /// Physical dimensions of the textures [`Self::draw`] draws into.

@@ -1,7 +1,7 @@
 use std::sync::{Mutex, PoisonError};
 
 use cranpose_ui::{Color, Size};
-use cranpose_ui_graphics::{RenderEffect, ShaderTarget, ShaderWarmUp};
+use cranpose_ui_graphics::{RenderEffect, RuntimeShader};
 
 use super::tab_bar::{BAR_HEIGHT, BLOB_HEIGHT, TAB_WIDTH};
 use crate::{
@@ -221,57 +221,20 @@ pub(super) fn request_touch_warm_ups(colors: &LiquidColors, accessory_center: Op
         // The lens's nodes hold no content, so their render effects never draw.
         for layer in layers(density, tab_flight_dynamics(geometry, node)) {
             if let Some(effect) = &layer.backdrop_effect {
-                push_effect_warm_ups(effect, backdrop_target(effect), &mut warm_ups);
+                push_effect_warm_ups(effect, &mut warm_ups);
             }
         }
     }
     cranpose_ui_graphics::request_shader_warm_ups(warm_ups);
 }
 
-// Where the renderer draws a backdrop's last shader over a layer at full
-// alpha with no rounded clip (`PendingBackdrop::shader_target`): over the
-// page when it batches or reads no substrate, else into a texture.
-fn backdrop_target(effect: &RenderEffect) -> ShaderTarget {
-    let composites = match effect {
-        RenderEffect::Shader { shader } => {
-            shader.batched_source() || shader.substrates().is_empty()
-        }
-        RenderEffect::Chain { first, second } => match second.as_ref() {
-            RenderEffect::Shader { shader } => {
-                let blurred = match first.as_ref() {
-                    RenderEffect::Blur {
-                        radius_x, radius_y, ..
-                    } => *radius_x > 0.0 || *radius_y > 0.0,
-                    _ => false,
-                };
-                shader.substrates().is_empty() || (blurred && shader.batched_source())
-            }
-            _ => false,
-        },
-        _ => false,
-    };
-    if composites {
-        ShaderTarget::Page
-    } else {
-        ShaderTarget::Layer
-    }
-}
-
-// Each shader of `effect` at the target it draws to, as the renderer's
-// readiness walk asks for them: a chain's first effect into a texture.
-fn push_effect_warm_ups(
-    effect: &RenderEffect,
-    target: ShaderTarget,
-    warm_ups: &mut Vec<ShaderWarmUp>,
-) {
+// Each shader of `effect`, as the renderer's readiness walk asks for them.
+fn push_effect_warm_ups(effect: &RenderEffect, warm_ups: &mut Vec<RuntimeShader>) {
     match effect {
-        RenderEffect::Shader { shader } => warm_ups.push(ShaderWarmUp {
-            shader: shader.as_ref().clone(),
-            target,
-        }),
+        RenderEffect::Shader { shader } => warm_ups.push(shader.as_ref().clone()),
         RenderEffect::Chain { first, second } => {
-            push_effect_warm_ups(first, ShaderTarget::Layer, warm_ups);
-            push_effect_warm_ups(second, target, warm_ups);
+            push_effect_warm_ups(first, warm_ups);
+            push_effect_warm_ups(second, warm_ups);
         }
         RenderEffect::Blur { .. } | RenderEffect::Offset { .. } => {}
     }

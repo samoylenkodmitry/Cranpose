@@ -99,7 +99,8 @@ fn a_launcher_given_no_fonts_draws_in_the_embedded_face() {
         .with_title("no fonts")
         .into_settings()
         .resolve_fonts();
-    let embedded = default_typeface().expect("the embedded face parses");
+    let embedded =
+        cranpose_render_common::text_fonts::default_typeface().expect("the embedded face parses");
     assert_eq!(fonts.typefaces().len(), 1);
     assert_eq!(fonts.typefaces()[0].content_hash(), embedded.content_hash());
 }

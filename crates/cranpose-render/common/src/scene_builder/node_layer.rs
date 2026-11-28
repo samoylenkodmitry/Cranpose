@@ -679,7 +679,9 @@ pub(super) fn modifier_slices_have_origin_sinks(slices: &ModifierNodeSlices) -> 
 }
 
 fn layer_cache_policy(layer: &GraphicsLayer, isolation: IsolationReasons) -> CachePolicy {
-    if isolation.has_any() || layer_scales_or_rotates(layer) {
+    if isolation.explicit_offscreen {
+        CachePolicy::Offscreen
+    } else if isolation.has_any() || layer_scales_or_rotates(layer) {
         CachePolicy::Auto
     } else {
         CachePolicy::None

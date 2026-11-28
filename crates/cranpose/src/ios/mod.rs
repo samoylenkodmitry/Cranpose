@@ -36,6 +36,8 @@ pub(crate) mod host;
 #[cfg(feature = "renderer-wgpu")]
 pub(crate) mod image_picker;
 #[cfg(feature = "renderer-wgpu")]
+pub(crate) mod input_method;
+#[cfg(feature = "renderer-wgpu")]
 pub(crate) mod keyboard;
 #[cfg(feature = "renderer-wgpu")]
 pub(crate) mod media;

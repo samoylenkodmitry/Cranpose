@@ -93,6 +93,7 @@ ignores:
   - crates/cranpose/src/android/device_auth.rs
   - crates/cranpose/src/android/device_motion.rs
   - crates/cranpose/src/android/host.rs
+  - crates/cranpose/src/android/input_method.rs
   - crates/cranpose/src/android/jni.rs
   - crates/cranpose/src/android/media.rs
   - crates/cranpose/src/android/microphone_standby.rs
@@ -140,6 +141,7 @@ ignores:
   - crates/cranpose/src/ios/file_picker.rs
   - crates/cranpose/src/ios/host.rs
   - crates/cranpose/src/ios/image_picker.rs
+  - crates/cranpose/src/ios/input_method.rs
   - crates/cranpose/src/ios/keyboard.rs
   - crates/cranpose/src/ios/media.rs
   - crates/cranpose/src/ios/media_artwork.rs

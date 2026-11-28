@@ -38,7 +38,6 @@ use crate::{
         DevicePixelBounds, SegmentTransform, anchored_device_rect, canonicalize_device_coordinate,
         snap_delta_for_anchor, translate_quad, translation_stable_anchored_device_pixel_bounds,
     },
-    glyph_run_arena::GlyphRunArena,
     gpu_stats::{self, gpu_stats_enabled},
     layer_cache::LayerCache,
     lazy_resource::Pending,
@@ -972,7 +971,7 @@ impl GpuRenderer {
                 compiler: pipeline_compiler,
                 built_at_frame_start: 0,
                 drew_placeholder: Cell::new(false),
-                stand_ins_kept: Cell::new(false),
+                stand_ins: StandIns::default(),
                 shape_pipelines,
                 image_pipeline: IMAGE_SRC_OVER_PIPELINES.map(FixedPipeline::new),
                 image_pipeline_dst_out: IMAGE_DST_OUT_PIPELINES.map(FixedPipeline::new),
@@ -1626,47 +1625,6 @@ impl GpuRenderer {
         self.history.last()
     }
 
-    pub(crate) fn needs_frame_warmup(&self) -> bool {
-        self.history.warming_up() || self.pipelines.placeholder_awaits_frame()
-    }
-
-    /// Starts a frame: once a pipeline a placeholder waited for has landed,
-    /// the retained layers, which may hold that placeholder, are dropped.
-    fn begin_placeholder_frame(&mut self) {
-        self.pipelines.drew_placeholder.set(false);
-        if self.pipelines.take_landing_at_frame_start() {
-            self.drop_kept_drawing();
-        }
-    }
-
-    /// Counts the landing of pipelines the browser compiled in the
-    /// background, whose draws earlier frames left out: the next frame drops
-    /// what those frames drew and kept, the layers and the blurred shadows.
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn background_pipelines_landed(&mut self) {
-        self.pipelines.compiler.note_landing();
-    }
-
-    // Drops the layers and the blurred shadows earlier frames drew and
-    // kept, which may hold stand-ins, as pipelines landed.
-    fn drop_kept_drawing(&mut self) {
-        self.layer_cache.clear();
-        self.shadow_surfaces.clear();
-        self.pipelines.stand_ins_kept.set(false);
-    }
-
-    /// Queues every pipeline the cache file records, as the first frame of
-    /// an updated build does, and returns whether any is left to build: for
-    /// a renderer that prepares an app's pipelines without drawing.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn prepare_recorded(&mut self) -> bool {
-        self.effect_renderer.warm_after_first_frame();
-        if let Some(records) = self.pipelines.recent_after_update.take() {
-            self.warm_recent(&records);
-        }
-        self.pipelines.compiling()
-    }
-
     pub(crate) fn debug_cpu_allocation_stats(&self) -> DebugCpuAllocationStats {
         DebugCpuAllocationStats {
             text_renderer_pool_len: self.text.image_cache.len(),
@@ -1899,9 +1857,7 @@ impl GpuRenderer {
             }
         }
         if !submitted {
-            self.run_store.invalidate_uploads();
-            self.text.glyph_gpu_run_cache.clear();
-            self.text.glyph_run_arena = GlyphRunArena::new(self.copy_free);
+            self.drop_unsubmitted_frame();
         }
         returns.scene = Some(FrameSceneStorage { root, overlay });
         result.map(|()| submitted)
@@ -3040,12 +2996,13 @@ pub(crate) use stage_telemetry::{instant_ms, should_log_wgpu_render_stage};
 use text_resources::TextResources;
 pub(crate) mod admission_gate;
 mod glyph_atlas;
+mod landings;
 mod renderer_pipelines;
 #[cfg(not(target_arch = "wasm32"))]
 use renderer_pipelines::MESH_FALLBACK_PIPELINES;
 use renderer_pipelines::{
     FixedDraw, GLYPH_ATLAS_PIPELINES, IMAGE_DST_OUT_PIPELINES, IMAGE_SRC_OVER_PIPELINES,
-    RRECT_SHADOW_PIPELINES, RendererPipelines,
+    RRECT_SHADOW_PIPELINES, RendererPipelines, StandIns,
 };
 mod draw_space;
 mod interior_run_draws;

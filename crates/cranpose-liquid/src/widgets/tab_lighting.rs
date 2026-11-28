@@ -5,9 +5,7 @@ use cranpose_ui::{
     Modifier,
     widgets::{Box, BoxSpec},
 };
-use cranpose_ui_graphics::{
-    GraphicsLayer, RenderEffect, RuntimeShader, ShaderTarget, ShaderWarmUp, Size,
-};
+use cranpose_ui_graphics::{GraphicsLayer, RenderEffect, RuntimeShader, Size};
 
 fn shader() -> RuntimeShader {
     static SHADER: OnceLock<RuntimeShader> = OnceLock::new();
@@ -23,11 +21,8 @@ fn shader() -> RuntimeShader {
 }
 
 /// The lighting shader, composited over a tab bar's backdrop.
-pub(super) fn shader_warm_ups() -> [ShaderWarmUp; 1] {
-    [ShaderWarmUp {
-        shader: shader(),
-        target: ShaderTarget::Page,
-    }]
+pub(super) fn shader_warm_ups() -> [RuntimeShader; 1] {
+    [shader()]
 }
 
 /// The lighting over a bar's backdrop, or nothing while neither glow is

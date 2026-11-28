@@ -4,8 +4,14 @@ use cranpose_core::collections::{bounded_lru::BoundedLruCache, map::HashMap};
 use cranpose_render_common::raster_cache::LayerRasterCacheKey;
 
 use crate::{
-    draw_pass::ResolvedCompositeKind, frame::DeviceRect, frame_graph::FrameTextureDescriptor,
-    geometry::offscreen_byte_size, idle_pool::IDLE_FRAMES, offscreen::OffscreenTarget,
+    draw_pass::ResolvedCompositeKind,
+    fill_budget::FillBudget,
+    frame::{DeviceRect, StandInPixels},
+    frame_graph::FrameTextureDescriptor,
+    geometry::offscreen_byte_size,
+    idle_pool::IDLE_FRAMES,
+    kept_pixels::KeptPixels,
+    offscreen::OffscreenTarget,
 };
 
 const MAX_ENTRIES: usize = 4096;
@@ -24,31 +30,45 @@ pub(crate) struct Retained {
     /// member's place when the texture is an atlas other entries share.
     pub(crate) region: Option<DeviceRect>,
     pub(crate) content: RetainedContent,
+    // Whether the pixels may hold a stand-in drawn while a pipeline
+    // compiled, which the next landing drops.
+    pub(crate) pixels: StandInPixels,
 }
 
 impl Retained {
-    pub(crate) fn surface(texture: Rc<OffscreenTarget>) -> Self {
+    pub(crate) fn surface(texture: Rc<OffscreenTarget>, pixels: StandInPixels) -> Self {
         Self {
             texture,
             region: None,
             content: RetainedContent::Surface,
+            pixels,
         }
     }
 
     /// The surface at `region` of an atlas.
-    pub(crate) fn surface_in(texture: Rc<OffscreenTarget>, region: DeviceRect) -> Self {
+    pub(crate) fn surface_in(
+        texture: Rc<OffscreenTarget>,
+        region: DeviceRect,
+        pixels: StandInPixels,
+    ) -> Self {
         Self {
             texture,
             region: Some(region),
             content: RetainedContent::Surface,
+            pixels,
         }
     }
 
-    pub(crate) fn composite(texture: Rc<OffscreenTarget>, kind: ResolvedCompositeKind) -> Self {
+    pub(crate) fn composite(
+        texture: Rc<OffscreenTarget>,
+        kind: ResolvedCompositeKind,
+        pixels: StandInPixels,
+    ) -> Self {
         Self {
             texture,
             region: None,
             content: RetainedContent::Composite(kind),
+            pixels,
         }
     }
 
@@ -138,6 +158,11 @@ pub(crate) struct LayerCache {
     sparse: Vec<usize>,
     max_bytes: u64,
     frame: u64,
+    // Reads of entries that may hold a stand-in: a layer drawn from one
+    // holds it too.
+    interim_reads: u64,
+    pub(crate) fills: FillBudget,
+    pub(crate) disk: KeptPixels,
 }
 
 impl LayerCache {
@@ -153,15 +178,25 @@ impl LayerCache {
             sparse: Vec::new(),
             max_bytes,
             frame: 0,
+            interim_reads: 0,
+            fills: FillBudget::default(),
+            disk: KeptPixels::load(),
         }
     }
 
     pub(crate) fn get(&mut self, key: &LayerRasterCacheKey) -> Option<Retained> {
         let frame = self.frame;
-        self.entries.get_mut(key).map(|entry| {
-            entry.used = frame;
-            entry.retained.clone()
-        })
+        let entry = self.entries.get_mut(key)?;
+        entry.used = frame;
+        if entry.retained.pixels == StandInPixels::Interim {
+            self.interim_reads += 1;
+        }
+        Some(entry.retained.clone())
+    }
+
+    // How many reads so far returned an entry that may hold a stand-in.
+    pub(crate) fn interim_reads(&self) -> u64 {
+        self.interim_reads
     }
 
     pub(crate) fn fits(&self, width: u32, height: u32) -> bool {
@@ -207,6 +242,8 @@ impl LayerCache {
     /// Ends a frame, releasing every raster no frame has read for
     /// [`IDLE_FRAMES`].
     pub(crate) fn end_frame(&mut self) {
+        self.fills.end_frame();
+        self.disk.end_frame();
         self.frame += 1;
         let oldest_kept = self.frame.saturating_sub(IDLE_FRAMES);
         while self
@@ -242,11 +279,17 @@ impl LayerCache {
         }
     }
 
-    /// Releases every raster: they may hold a placeholder drawn while a
-    /// pipeline compiled.
-    pub(crate) fn clear(&mut self) {
-        while let Some((_, entry)) = self.entries.pop_lru() {
-            self.release(entry.retained);
+    // Releases every raster that may hold a stand-in drawn while a
+    // pipeline compiled.
+    pub(crate) fn drop_interim(&mut self) {
+        let interim: Vec<LayerRasterCacheKey> = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| entry.retained.pixels == StandInPixels::Interim)
+            .map(|(key, _)| *key)
+            .collect();
+        for key in interim {
+            self.remove(&key);
         }
     }
 
