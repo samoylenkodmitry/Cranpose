@@ -8,8 +8,8 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 use cranpose_core::collections::map::HashMap;
-use cranpose_render_common::{geometry::blur_reach, graph::quad_bounds, scene_store::SceneVersion};
-use cranpose_ui_graphics::{BlendMode, ImageSampling, Rect, TileMode};
+use cranpose_render_common::{graph::quad_bounds, scene_store::SceneVersion};
+use cranpose_ui_graphics::{BlendMode, ImageSampling, Rect};
 use web_time::Instant;
 
 use crate::{
@@ -18,15 +18,12 @@ use crate::{
     arc_trig_fill::ArcTrigFill,
     collect::LayerScene,
     device_error_sentry::DeviceErrorSentry,
-    draw_pass::{
-        PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, RunCalls, SegmentLayout,
-        SourceContent, TrackedPass,
-    },
-    effect_renderer::{BlurDest, BlurSpec, CompositeSampleMode, EffectRenderer},
+    draw_pass::{RunCalls, TrackedPass},
+    effect_renderer::EffectRenderer,
     fixed_pipeline::{FixedPipeline, FixedPipelineJob},
     frame::{
-        ClearedImages, DeviceRect, FrameDamages, FrameExecutor, FrameRecording, Held, ImageContent,
-        Repaint, StageSideScratch, SwapchainHistory, Window,
+        ClearedImages, FrameDamages, FrameExecutor, Held, ImageContent, Repaint, StageSideScratch,
+        SwapchainHistory,
     },
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
@@ -35,8 +32,8 @@ use crate::{
     },
     frame_packet::{CancelReason, FramePacket, FrameSceneStorage, PresentOutcome, RenderReturns},
     geometry::{
-        DevicePixelBounds, SegmentTransform, anchored_device_rect, canonicalize_device_coordinate,
-        snap_delta_for_anchor, translate_quad, translation_stable_anchored_device_pixel_bounds,
+        SegmentTransform, anchored_device_rect, canonicalize_device_coordinate,
+        snap_delta_for_anchor, translate_quad,
     },
     gpu_stats::{self, gpu_stats_enabled},
     layer_cache::LayerCache,
@@ -46,7 +43,7 @@ use crate::{
     pipeline_compiler::{CompileLane, CompilerSend, PipelineCompilation, PipelineCompiler},
     rrect_shadow::{SHADOW_QUAD_CORNERS, ShadowInstance},
     run_store::{ArenaBinding, PlacementData, RunBufferMode, RunDrawCall, RunStore, StoredTables},
-    scene::{ImageDraw, RunDraw, ShadowDraw, SnapAnchor, TextDraw},
+    scene::{ImageDraw, RunDraw, SnapAnchor, TextDraw},
     scissor::{intersect_target_rects, target_rect_between},
     shape_pipelines::{PipelineDemand, ShapePipelineFactory, ShapePipelines},
     shared_shader::SharedShader,
@@ -1976,348 +1973,6 @@ impl GpuRenderer {
         self.run_store.fill_arena_trig(&self.device, recorder);
         self.frame_stats.record_command_stats(upload);
     }
-    /// Resolves a blurred shadow at `z` into a texture and queues its
-    /// composites. The shadow's shapes and texts render into a source the
-    /// size of their blur footprint, blur in place and take the post-blur
-    /// cutouts; the source is then blitted over the rect the shadow covers.
-    /// Shape-only shadows live in the shadow cache, keyed by their content
-    /// and device placement, so a scrolling card re-blits its cached blur.
-    /// The blurred shadow texture and whether the cache held it: a
-    /// shape-only shadow is cached by content and placement, a shadow with
-    /// text renders every frame.
-    fn blurred_shadow_source<C: FrameCommandRecorder>(
-        &mut self,
-        frame: &mut FrameRecording<'_, C>,
-        shadow: &ShadowDraw,
-        source_device: DevicePixelBounds,
-        pixel_radius: f32,
-        root_scale: f32,
-    ) -> Option<(Rc<OffscreenTarget>, bool, SourceContent)> {
-        let shape_only = shadow.texts.is_empty();
-        let key = if shape_only {
-            shape_shadow_surface_cache_key(shadow, source_device, pixel_radius, root_scale)
-        } else {
-            None
-        };
-        let content = key.map_or(SourceContent::Transient, |key| {
-            SourceContent::retained(&key)
-        });
-        if let Some(target) = key.and_then(|key| self.shadow_surfaces.get(&key)) {
-            return Some((Rc::clone(target), true, content));
-        }
-        // A shadow whose blur compiles is left out until the blur lands.
-        if !self.effect_renderer.blur_draws_now(
-            &self.device,
-            TileMode::Decal,
-            (source_device.width, source_device.height),
-            pixel_radius,
-            pixel_radius,
-        ) {
-            self.pipelines.note_placeholder(&self.frame_stats);
-            return None;
-        }
-        if !shape_only {
-            self.frame_stats.record_shadow_text_blur_fallback();
-        }
-        let source = self.render_shadow_source(
-            frame,
-            shadow,
-            source_device,
-            pixel_radius,
-            root_scale,
-            key.is_some(),
-        )?;
-        if let Some(key) = key {
-            self.frame_stats
-                .record_shadow_shape_cache_miss(source_device.width, source_device.height);
-            self.frame_stats.maybe_print_shadow_shape_cache_miss(
-                source_device,
-                key.content_hash,
-                pixel_radius,
-                shadow.shapes.as_ref().map_or(0, RunDraw::record_count) as usize,
-                shadow.clip,
-            );
-            self.shadow_surfaces.insert(key, Rc::clone(&source));
-        }
-        Some((source, false, content))
-    }
-
-    pub(crate) fn resolve_blurred_shadow<C: FrameCommandRecorder>(
-        &mut self,
-        frame: &mut FrameRecording<'_, C>,
-        shadow: &ShadowDraw,
-        z: usize,
-        root_scale: f32,
-        window: &Window,
-        resolved: &mut Vec<ResolvedComposite>,
-    ) {
-        if !shadow.requires_surface()
-            || skip_shadow_draws()
-            || !root_scale.is_finite()
-            || root_scale <= 0.0
-        {
-            return;
-        }
-        let Some(bounds) = shadow_draw_bounds(shadow) else {
-            return;
-        };
-        let margin = blur_reach(shadow.blur_radius, root_scale);
-        let source_bounds = expand_rect(bounds, margin, margin);
-        let mut visible = source_bounds;
-        if let Some(clip) = shadow.clip {
-            let Some(clipped) = visible.intersect(expand_rect(clip, margin, margin)) else {
-                return;
-            };
-            visible = clipped;
-        }
-        let Some(drawn) = window.cut_near(
-            DeviceRect::from_logical(visible, root_scale),
-            margin * root_scale,
-        ) else {
-            return;
-        };
-        let visible = Rect {
-            x: drawn.x / root_scale,
-            y: drawn.y / root_scale,
-            width: drawn.width / root_scale,
-            height: drawn.height / root_scale,
-        };
-        let max_texture_dim = self.max_texture_dim();
-        let shape_only = shadow.texts.is_empty();
-        let anchor = shadow
-            .shapes
-            .as_ref()
-            .and_then(|run| run.placement.snap_anchor);
-        let source_device = shape_only
-            .then(|| {
-                translation_stable_anchored_device_pixel_bounds(
-                    source_bounds,
-                    anchor,
-                    root_scale,
-                    max_texture_dim,
-                )
-            })
-            .flatten()
-            .or_else(|| device_pixel_bounds(visible, root_scale, max_texture_dim));
-        let Some(source_device) = source_device else {
-            return;
-        };
-        let pixel_radius = shadow.blur_radius * root_scale;
-        let Some((source, hit, content)) =
-            self.blurred_shadow_source(frame, shadow, source_device, pixel_radius, root_scale)
-        else {
-            return;
-        };
-        let dest = (
-            source_device.x,
-            source_device.y,
-            source_device.width as f32,
-            source_device.height as f32,
-        );
-        let mut coverage = window
-            .cut(DeviceRect {
-                x: dest.0,
-                y: dest.1,
-                width: dest.2,
-                height: dest.3,
-            })
-            .map(|cut| (cut.x, cut.y, cut.width, cut.height));
-        if let Some(clip) = shadow.clip {
-            coverage = coverage.and_then(|coverage| {
-                intersect_device_rects(coverage, anchored_rect_to_device(clip, anchor, root_scale))
-            });
-        }
-        let Some(coverage) = coverage else {
-            return;
-        };
-        if hit {
-            self.frame_stats.record_shadow_shape_cache_hit(
-                (coverage.2 as u64).saturating_mul(coverage.3 as u64),
-            );
-        }
-        let rounded_mask = shadow_composite_mask(shadow, anchor, root_scale);
-        let downscaled =
-            (source.width, source.height) != (source_device.width, source_device.height);
-        let (sample_mode, source_viewport) = if downscaled {
-            (
-                CompositeSampleMode::Linear,
-                Some((0.0, 0.0, source.width as f32, source.height as f32)),
-            )
-        } else {
-            (CompositeSampleMode::Nearest, None)
-        };
-        resolved.push(ResolvedComposite {
-            z_index: z,
-            source,
-            content,
-            dest,
-            scissor: Some(coverage),
-            kind: ResolvedCompositeKind::Blit {
-                alpha: 1.0,
-                blend_mode: BlendMode::SrcOver,
-                rounded_mask,
-                sample_mode,
-                source_viewport,
-            },
-        });
-    }
-
-    /// Draws a shadow's shapes and texts into a surface covering `bounds`
-    /// and blurs it. A wide blur runs at its scratch size and its result
-    /// stays there, read bilinearly by the composite; a post-blur cutout
-    /// needs the surface's full size, so the blurred result is interpolated
-    /// back into it first and the cutout drawn at that size. A retained
-    /// result feeds the shadow cache; a transient one is registered with
-    /// the frame's transients and released with them. `None` when the
-    /// shadow draws nothing.
-    fn render_shadow_source<C: FrameCommandRecorder>(
-        &mut self,
-        frame: &mut FrameRecording<'_, C>,
-        shadow: &ShadowDraw,
-        bounds: DevicePixelBounds,
-        pixel_radius: f32,
-        root_scale: f32,
-        retained: bool,
-    ) -> Option<Rc<OffscreenTarget>> {
-        let (width, height) = (bounds.width, bounds.height);
-        let (scratch_width, scratch_height) =
-            crate::effect_renderer::blur_scratch_size(pixel_radius, pixel_radius, width, height);
-        let full_size_result = shadow.post_blur_cutouts.is_some()
-            || (scratch_width, scratch_height) == (width, height);
-        let (result_width, result_height) = if full_size_result {
-            (width, height)
-        } else {
-            (scratch_width, scratch_height)
-        };
-        let result = if retained {
-            Rc::new(self.acquire_retained_surface(result_width, result_height))
-        } else {
-            self.shadow_transient(frame, "Shadow Result", result_width, result_height)
-        };
-        let source = if full_size_result {
-            Rc::clone(&result)
-        } else {
-            self.shadow_transient(frame, "Shadow Source", width, height)
-        };
-        let offset = [bounds.x, bounds.y];
-        let target = PassTarget {
-            view: &source.view,
-            width,
-            height,
-        };
-        let scene = shadow_scene(
-            shadow.shapes.as_ref(),
-            &shadow.texts,
-            blur_reach(shadow.blur_radius, root_scale),
-        );
-        let segment = PassSegment::plain(&scene, offset, root_scale);
-        let drew = self.encode_pass(
-            frame.recorder,
-            target,
-            (std::slice::from_ref(&segment), SegmentLayout::Stacked),
-            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            "Shadow Source Pass",
-        );
-        match drew {
-            Ok(true) => {}
-            Ok(false) => {
-                drop(source);
-                if retained && let Ok(target) = Rc::try_unwrap(result) {
-                    self.defer_offscreen_release(target);
-                }
-                return None;
-            }
-            Err(error) => {
-                log::error!("shadow source pass failed: {error}");
-                return None;
-            }
-        }
-        if pixel_radius > 0.0 {
-            let scratch_descriptor = self.transient_offscreen_descriptor(
-                "Shadow Blur Scratch",
-                scratch_width,
-                scratch_height,
-            );
-            let scratch = frame
-                .recorder
-                .acquire_transient_offscreen(&self.device, scratch_descriptor);
-            let blurred = if full_size_result && (scratch_width, scratch_height) != (width, height)
-            {
-                Some(self.shadow_transient(
-                    frame,
-                    "Shadow Blur Result",
-                    scratch_width,
-                    scratch_height,
-                ))
-            } else {
-                None
-            };
-            let (view, size) = match &blurred {
-                Some(blurred) => (&blurred.view, (scratch_width, scratch_height)),
-                None => (&result.view, (result_width, result_height)),
-            };
-            let passes = self.effect_renderer.encode_blur_scissored_ping_pong_passes(
-                frame.recorder,
-                &self.device,
-                &source,
-                &scratch,
-                BlurDest {
-                    view,
-                    size,
-                    scissor: None,
-                },
-                BlurSpec::uniform(pixel_radius, TileMode::Decal),
-            );
-            frame.recorder.record_passes(passes);
-            self.effect_renderer.record_blur_pass();
-            frame
-                .recorder
-                .release_transient_offscreen(scratch_descriptor, scratch);
-            if let Some(blurred) = &blurred {
-                self.effect_renderer.encode_upscale_pass(
-                    frame.recorder,
-                    &self.device,
-                    blurred,
-                    &result.view,
-                );
-                frame.recorder.record_pass();
-            }
-        }
-        if let Some(cutout_run) = &shadow.post_blur_cutouts {
-            let cutouts = shadow_scene(Some(cutout_run), &[], 0.0);
-            let segment = PassSegment::plain(&cutouts, offset, root_scale);
-            if let Err(error) = self.encode_pass(
-                frame.recorder,
-                target,
-                (std::slice::from_ref(&segment), SegmentLayout::Stacked),
-                wgpu::LoadOp::Load,
-                "Shadow Cutout Pass",
-            ) {
-                log::error!("shadow cutout pass failed: {error}");
-            }
-        }
-        Some(result)
-    }
-
-    /// A transient surface of a shadow's frame, released with the frame's
-    /// transients.
-    fn shadow_transient<C: FrameCommandRecorder>(
-        &self,
-        frame: &mut FrameRecording<'_, C>,
-        label: &'static str,
-        width: u32,
-        height: u32,
-    ) -> Rc<OffscreenTarget> {
-        let descriptor = self.transient_offscreen_descriptor(label, width, height);
-        let target = Rc::new(
-            frame
-                .recorder
-                .acquire_transient_offscreen(&self.device, descriptor),
-        );
-        frame.transients.push((descriptor, Rc::clone(&target)));
-        target
-    }
-
     /// Whether `run` draws from retained buffers keyed by its command.
     pub(crate) fn run_is_stored(&self, run: &RunDraw) -> bool {
         self.run_store.is_stored(run)
@@ -3034,6 +2689,7 @@ use frame_history::FrameHistory;
 pub use frame_history::frames_presented;
 pub(crate) use frame_submit::FrameSubmit;
 pub(crate) use frame_uploads::{DrawParts, FrameUploads};
+mod blurred_shadow;
 mod shadow_cache;
 pub(crate) use shadow_cache::{shadow_composite_mask, shadow_draw_bounds};
 mod shape_pipeline;
@@ -3050,10 +2706,7 @@ use image_draws::{
     ImageBindGroups, ImageBinding, ImageUvRect, ImageVariant, create_image_pipeline,
     image_sampler_descriptor, sampling_under,
 };
-use shadow_cache::{
-    ShadowSurfaces, device_pixel_bounds, shadow_scene, shape_shadow_surface_cache_key,
-    skip_shadow_draws,
-};
+use shadow_cache::ShadowSurfaces;
 #[cfg(test)]
 pub(crate) use shape_pipeline::ShapeVariant;
 use shape_pipeline::shape_shader_code;
