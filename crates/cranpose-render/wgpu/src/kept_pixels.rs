@@ -55,7 +55,8 @@ struct KeptFile {
     reading: Vec<Reading>,
     // started with the launch's first drawn output
     writer: Option<Writer>,
-    // the pixels of the last upload
+    // the pixels of this frame's uploads, released at its end: a frame
+    // that uploads usually uploads many, and later frames seldom do
     upload: Vec<u8>,
 }
 
@@ -244,6 +245,7 @@ impl KeptPixels {
         };
         std::mem::swap(&mut file.last_drawn, &mut file.drawn);
         file.drawn.clear();
+        file.upload = Vec::new();
         let Some((device, queue)) = file.gpu.clone() else {
             return;
         };
