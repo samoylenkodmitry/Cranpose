@@ -998,6 +998,10 @@ fn a_relaunch_shows_the_kept_shader_outputs_from_its_first_frame() {
     );
     draw_kept_settled(&mut relaunch, &changed);
     // a pause past the writer's, so the next cell is a write of its own
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the writer writes after 1 s of quiet"
+    )]
     std::thread::sleep(Duration::from_millis(1100));
     draw_kept_settled(&mut relaunch, &page(&shader, Offscreen, LATER));
     drop(relaunch);
@@ -1038,6 +1042,7 @@ fn an_output_drawn_anew_every_frame_stays_off_the_disk() {
     let moving = page(&shader, Offscreen, MOVING[1]);
     let frame = support::capture_graph(&mut relaunch, &moving, 96, 96);
     let stats = relaunch.last_frame_stats().expect("frame statistics");
+    drop(relaunch);
     assert_eq!(
         (stats.placeholder_draws, stats.effect_applies),
         (0, 1),

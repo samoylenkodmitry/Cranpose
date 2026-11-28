@@ -122,6 +122,7 @@ fn offscreen_shader_layers_past_a_frames_fills_reach_their_own_pixels() {
     );
     support::capture_graph(&mut renderer, &kept, SIZE, SIZE);
     let still = renderer.last_frame_stats().expect("frame statistics");
+    drop(renderer);
     assert_eq!(
         still.layer_cache_hits, 16,
         "each cell draws from its kept output: {still:?}"

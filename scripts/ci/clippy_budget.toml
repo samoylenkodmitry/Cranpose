@@ -17,7 +17,7 @@
 "clippy::ref_option" = 16
 "clippy::significant_drop_tightening" = 195
 "clippy::string_slice" = 219
-"clippy::too_many_lines" = 91
+"clippy::too_many_lines" = 90
 "clippy::trivially_copy_pass_by_ref" = 29
 "clippy::unused_result_ok" = 31
 "clippy::wildcard_imports" = 33

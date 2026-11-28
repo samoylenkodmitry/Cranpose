@@ -216,6 +216,7 @@ fn a_kept_layer_drawn_with_its_own_pipelines_stays_kept_when_another_pipeline_la
     support::wait_for_background_compiler_idle();
     let landed = support::capture_graph(&mut renderer, &beside, WIDTH, HEIGHT);
     let stats = renderer.last_frame_stats().expect("frame statistics");
+    drop(renderer);
     assert_eq!(stats.placeholder_draws, 0, "the pane's shader landed");
     assert!(
         stats.layer_cache_hits > 0,

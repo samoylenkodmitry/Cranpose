@@ -86,6 +86,13 @@ fn format_key(format: wgpu::TextureFormat) -> u64 {
     hasher.finish()
 }
 
+// The bytes of a row of `width` pixels of `format`; none past u32.
+fn row_bytes(format: wgpu::TextureFormat, width: u32) -> Option<u32> {
+    u32::try_from(texture_format_bytes_per_pixel(format))
+        .ok()?
+        .checked_mul(width)
+}
+
 fn pixel_bytes(format: wgpu::TextureFormat, width: u32, height: u32) -> u64 {
     texture_format_bytes_per_pixel(format) * u64::from(width) * u64::from(height)
 }
@@ -169,7 +176,7 @@ impl KeptPixels {
             &file.upload,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(target.width * texture_format_bytes_per_pixel(format) as u32),
+                bytes_per_row: Some(row_bytes(format, target.width)?),
                 rows_per_image: Some(target.height),
             },
             target.texture().size(),
@@ -244,7 +251,9 @@ impl KeptPixels {
             file.read_back(&device, &queue);
         }
         if !file.reading.is_empty() {
-            let _ = device.poll(wgpu::PollType::Poll);
+            if let Err(error) = device.poll(wgpu::PollType::Poll) {
+                log::warn!("[kept-pixels] poll: {error}");
+            }
             file.write_finished();
         }
     }
@@ -256,9 +265,9 @@ impl KeptFile {
         let copies: Vec<(Rc<OffscreenTarget>, Reading)> = self
             .requested
             .drain(..)
-            .map(|Requested { key, target }| {
-                let reading = Reading::new(device, key, &target, launch);
-                (target, reading)
+            .filter_map(|Requested { key, target }| {
+                let reading = Reading::new(device, key, &target, launch)?;
+                Some((target, reading))
             })
             .collect();
         read_back_textures(
@@ -293,10 +302,11 @@ impl KeptFile {
 }
 
 impl Reading {
-    // A buffer to copy `target`, drawn this launch, into.
-    fn new(device: &wgpu::Device, key: u64, target: &OffscreenTarget, launch: u32) -> Self {
+    // A buffer to copy `target`, drawn this launch, into; none when a row
+    // of its pixels passes u32.
+    fn new(device: &wgpu::Device, key: u64, target: &OffscreenTarget, launch: u32) -> Option<Self> {
         let format = target.texture().format();
-        let unpadded = target.width * texture_format_bytes_per_pixel(format) as u32;
+        let unpadded = row_bytes(format, target.width)?;
         let row = unpadded.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Kept Pixels"),
@@ -304,7 +314,7 @@ impl Reading {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        Self {
+        Some(Self {
             head: Head {
                 key,
                 format: format_key(format),
@@ -317,7 +327,7 @@ impl Reading {
             row,
             buffer,
             state: ReadBackState::default(),
-        }
+        })
     }
 
     // The pixels the buffer holds, its rows' padding left out; none when

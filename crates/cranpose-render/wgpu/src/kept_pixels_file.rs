@@ -23,8 +23,8 @@ use cranpose_core::collections::map::{HashMap, HashSet};
 use cranpose_ui_graphics::FxHasher;
 
 const MAGIC: &[u8; 4] = b"CKP2";
-const HEADER_BYTES: u64 = 4 + 8 + 4;
-const HEAD_BYTES: u64 = 8 + 8 + 4 + 4 + 4 + 4;
+const HEADER_BYTES: usize = 4 + 8 + 4;
+const HEAD_BYTES: usize = 8 + 8 + 4 + 4 + 4 + 4;
 // How many launches an output stays on disk after the last that used it.
 const KEPT_LAUNCHES: u32 = 4;
 // The most bytes of pixels the file keeps.
@@ -87,9 +87,9 @@ pub(crate) fn read_index(file: File) -> Option<(u32, File, HashMap<u64, Indexed>
     let mut reader = BufReader::new(file);
     let launch = read_header(&mut reader)?;
     let mut index = HashMap::default();
-    let mut offset = HEADER_BYTES;
+    let mut offset = HEADER_BYTES as u64;
     while let Some(head) = read_head(&mut reader) {
-        offset += HEAD_BYTES;
+        offset += HEAD_BYTES as u64;
         let len = u64::from(head.len);
         if offset + len > end || reader.seek_relative(i64::from(head.len)).is_err() {
             break;
@@ -101,7 +101,7 @@ pub(crate) fn read_index(file: File) -> Option<(u32, File, HashMap<u64, Indexed>
 }
 
 fn read_header(reader: &mut impl Read) -> Option<u32> {
-    let mut header = [0; HEADER_BYTES as usize];
+    let mut header = [0; HEADER_BYTES];
     reader.read_exact(&mut header).ok()?;
     let (magic, rest) = header.split_first_chunk::<4>()?;
     let (key, launch) = rest.split_first_chunk::<8>()?;
@@ -112,7 +112,7 @@ fn read_header(reader: &mut impl Read) -> Option<u32> {
 }
 
 fn read_head(reader: &mut impl Read) -> Option<Head> {
-    let mut bytes = [0; HEAD_BYTES as usize];
+    let mut bytes = [0; HEAD_BYTES];
     reader.read_exact(&mut bytes).ok()?;
     let word =
         |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
@@ -158,8 +158,10 @@ impl Writer {
 
     // Hands `drawn` to the file, with every key the launch `used` so far.
     pub(crate) fn send(&self, drawn: Vec<Drawn>, used: HashSet<u64>) {
-        if let Some(batches) = &self.batches {
-            let _ = batches.send(Batch { drawn, used });
+        if let Some(batches) = &self.batches
+            && batches.send(Batch { drawn, used }).is_err()
+        {
+            log::warn!("[kept-pixels] the writer stopped");
         }
     }
 }
@@ -169,8 +171,10 @@ impl Drop for Writer {
     // finds it.
     fn drop(&mut self) {
         self.batches = None;
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        if let Some(thread) = self.thread.take()
+            && thread.join().is_err()
+        {
+            log::warn!("[kept-pixels] the writer panicked");
         }
     }
 }
