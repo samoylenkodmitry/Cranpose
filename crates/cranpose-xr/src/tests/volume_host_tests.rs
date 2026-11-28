@@ -210,10 +210,16 @@ fn quad_volume(
 // An eye `x` meters to the right of the head's middle, that looks straight ahead with a view of 90
 // degrees each way.
 fn eye(x: f32) -> RenderViewpoint {
+    eye_at([x, 0.0, 0.0])
+}
+
+// An eye at `position`, in meters from the head's middle, that looks straight ahead with a view of
+// 90 degrees each way.
+fn eye_at(position: [f32; 3]) -> RenderViewpoint {
     let quarter = std::f32::consts::FRAC_PI_4;
     RenderViewpoint {
-        pose: Pose::at([x, 0.0, 0.0]),
-        local_pose: Pose::at([x, 0.0, 0.0]),
+        pose: Pose::at(position),
+        local_pose: Pose::at(position),
         field_of_view: FieldOfView {
             angle_left: -quarter,
             angle_right: quarter,
@@ -295,20 +301,13 @@ fn draw_through(
     camera: impl Fn(&RenderViewpoint) -> EyeCamera,
 ) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let mut attempt = 0_u32;
+    // A frame that leaves its depth in the eye's image draws whole, so each call draws the scene
+    let camera = camera(view);
     loop {
-        // A head is never still, and a frame that changes nothing draws nothing into a new image:
-        // the odd frames move the eye by a hair, and an even one draws from `view` after a moved
-        // one, whatever frame the last call ended on.
-        attempt = attempt.wrapping_add(1);
-        let at_view = attempt & 1 == 0;
-        let mut moved = *view;
-        moved.pose.position[1] += if at_view { 0.0 } else { 1e-5 };
-        let camera = camera(&moved);
         let drew = pass
             .draw(&mut headset.guest, &headset.space, &camera, &eye.image())
             .expect("a frame");
-        if !drew || (at_view && pipelines_settled(&mut headset.guest, pass)) {
+        if !drew || pipelines_settled(&mut headset.guest, pass) {
             return drew;
         }
         assert!(
@@ -534,20 +533,94 @@ fn one_composition_draws_the_volumes_for_each_eye_from_that_eyes_view_with_depth
     );
     // The scene composed the content once, and drawing it twice composed nothing
     assert_eq!(headset.compositions.get(), 1);
-    // The depth is 1 - near / z at the quad, which is a meter from both eyes, and 1 elsewhere
-    let near = EyeCamera::of(&eye(0.0), (EYE, EYE), FirstRow::Top)
+    assert_quad_depth(&headset.gpu, &left, &eye(-0.032), "the left eye");
+}
+
+// Checks that `image` holds the depth that the quad leaves as `view` sees it. The middle holds
+// 1 - near / z, where `z` is the quad's distance along the eye's axis. A corner, where no scene
+// drew, holds 1.
+fn assert_quad_depth(gpu: &GpuContext, image: &Eye, view: &RenderViewpoint, what: &str) {
+    let near = EyeCamera::of(view, (EYE, EYE), FirstRow::Top)
         .expect("a camera")
         .camera
         .near();
-    let expected = 1.0 - near / 1000.0;
-    let depth = read_depth(&headset.gpu, &left.depth);
+    // The quad stands a meter ahead of the head's middle, and a dp is a millimeter
+    let expected = 1.0 - near / ((1.0 + view.pose.position[2]) * 1000.0);
+    let depth = read_depth(gpu, &image.depth);
     let at = |x: u32, y: u32| depth[(y * EYE + x) as usize];
+    let middle = at(EYE / 2, EYE / 2);
     assert!(
-        (at(EYE / 2, EYE / 2) - expected).abs() < 1e-4,
-        "{}",
-        at(EYE / 2, EYE / 2)
+        (middle - expected).abs() < 1e-4,
+        "{what}: the middle holds the depth {middle}, the quad's is {expected}"
     );
-    assert!((at(2, 2) - 1.0).abs() < 1e-6);
+    assert!(
+        (at(2, 2) - 1.0).abs() < 1e-6,
+        "{what}: a corner holds the depth {}",
+        at(2, 2)
+    );
+}
+
+// Draws the scene for `view` into `image` as `draw` does, again until the middle of its depth shows
+// the quad: the pass that leaves the depth of a scene of four samples has a pipeline of its own,
+// which may land after the colour's.
+fn draw_with_depth(
+    headset: &mut Headset,
+    pass: &mut VolumePass,
+    view: &RenderViewpoint,
+    image: &Eye,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        assert!(draw(headset, pass, view, image));
+        if read_depth(&headset.gpu, &image.depth)[(EYE * EYE / 2 + EYE / 2) as usize] < 1.0 {
+            return;
+        }
+        assert!(std::time::Instant::now() < deadline, "no depth was written");
+    }
+}
+
+// A runtime's depth swapchain hands out an image whose depth the renderer did not write, while the
+// head holds still. The frame changes nothing in the scene. The image must still hold the scene's
+// depth.
+#[test]
+fn a_frame_that_changes_nothing_leaves_the_scenes_depth_in_a_new_depth_image() {
+    for samples in [Multisample::Off, Multisample::X4] {
+        let mut headset = headset();
+        headset.space.volumes().samples().set(samples);
+        let mut pass = VolumePass::default();
+        let (first, next) = (Eye::new(&headset.gpu), Eye::new(&headset.gpu));
+        let view = eye(0.0);
+        draw_with_depth(&mut headset, &mut pass, &view, &first);
+        assert!(draw_once_from(&mut headset, &mut pass, &view, &next));
+        assert_quad_depth(
+            &headset.gpu,
+            &next,
+            &view,
+            &format!("{samples:?}, the next image"),
+        );
+    }
+}
+
+// The swapchain hands out an image that holds the depth of an older frame, from another place of
+// the head, while the head holds still at its new place.
+#[test]
+fn a_frame_that_changes_nothing_writes_its_depth_over_an_image_of_an_older_frame() {
+    for samples in [Multisample::Off, Multisample::X4] {
+        let mut headset = headset();
+        headset.space.volumes().samples().set(samples);
+        let mut pass = VolumePass::default();
+        let (older, newer) = (Eye::new(&headset.gpu), Eye::new(&headset.gpu));
+        let (back, ahead) = (eye_at([0.0, 0.0, 0.25]), eye_at([0.0, 0.0, -0.25]));
+        draw_with_depth(&mut headset, &mut pass, &back, &older);
+        draw_with_depth(&mut headset, &mut pass, &ahead, &newer);
+        assert!(draw_once_from(&mut headset, &mut pass, &ahead, &older));
+        assert_quad_depth(
+            &headset.gpu,
+            &older,
+            &ahead,
+            &format!("{samples:?}, the older image"),
+        );
+    }
 }
 
 #[test]
@@ -676,7 +749,17 @@ fn settle_volumes(headset: &mut Headset, count: usize) {
 
 // Draws the scene once from the middle of the head. Returns whether the pass found a scene.
 fn draw_once(headset: &mut Headset, pass: &mut VolumePass, image: &Eye) -> bool {
-    let camera = EyeCamera::of(&eye(0.0), (EYE, EYE), FirstRow::Top).expect("a camera");
+    draw_once_from(headset, pass, &eye(0.0), image)
+}
+
+// Draws the scene once for `view`. Returns whether the pass found a scene.
+fn draw_once_from(
+    headset: &mut Headset,
+    pass: &mut VolumePass,
+    view: &RenderViewpoint,
+    image: &Eye,
+) -> bool {
+    let camera = EyeCamera::of(view, (EYE, EYE), FirstRow::Top).expect("a camera");
     pass.draw(&mut headset.guest, &headset.space, &camera, &image.image())
         .expect("a frame")
 }

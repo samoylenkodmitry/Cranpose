@@ -1,4 +1,4 @@
-use super::DEPTH_FORMAT;
+use super::{DEPTH_FORMAT, damage_plan::FrameDamagePlan};
 use crate::{idle_pool::IdlePool, scene_pass::SCENE_DEPTH_FORMAT};
 
 const KEPT_INTERIOR_TARGETS: usize = 4;
@@ -44,6 +44,17 @@ impl DepthTargets {
     // own, which the passes drop.
     pub(crate) fn host_scene(&mut self, hosted: Option<((u32, u32), wgpu::TextureView)>) {
         self.hosted_scene = hosted;
+    }
+
+    // The plan of a frame that draws `plan`, drawn whole while the host gave a depth. A scene's pass
+    // clears the whole depth and writes it only where the frame draws. The host's view may hold the
+    // depth of any frame, as the images of a swapchain do.
+    pub(super) fn host_plan(&self, plan: FrameDamagePlan) -> FrameDamagePlan {
+        if self.hosted_scene.is_some() {
+            plan.whole()
+        } else {
+            plan
+        }
     }
 
     // The depth and stencil a scene's pass draws against at `size`, and whether the pass keeps its

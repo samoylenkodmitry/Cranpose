@@ -64,13 +64,7 @@ fn picture(samples: Multisample) -> (Picture, f32) {
     headset.space.volumes().samples().set(samples);
     let mut pass = VolumePass::default();
     let eye_image = Eye::new(&headset.gpu);
-    assert!(draw(&mut headset, &mut pass, &eye(0.0), &eye_image));
-    // The depth pass has its own pipeline, which may still compile when the colour shows
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while read_depth(&headset.gpu, &eye_image.depth)[(EYE * EYE / 2 + EYE / 2) as usize] >= 1.0 {
-        assert!(std::time::Instant::now() < deadline, "no depth was written");
-        assert!(draw(&mut headset, &mut pass, &eye(0.0), &eye_image));
-    }
+    draw_with_depth(&mut headset, &mut pass, &eye(0.0), &eye_image);
     let near = EyeCamera::of(&eye(0.0), (EYE, EYE), FirstRow::Top)
         .expect("a camera")
         .camera

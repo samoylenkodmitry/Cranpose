@@ -274,8 +274,23 @@ impl GpuRenderer {
     // image whose pixels the renderer does not know, one that comes cleared
     // or one a swapchain hands out before it holds a frame, takes the frame
     // from the composition target while the frames change a small part of a
-    // heavy window.
+    // heavy window. A frame whose scenes leave their depth with the host
+    // draws whole.
     pub(super) fn damage_of(
+        &mut self,
+        packet: &FramePacket,
+        frame_root: &mut FrameRoot,
+        output_mode: OutputMode,
+        viewport: (u32, u32),
+        image: ImageContent,
+    ) -> Option<FrameDamagePlan> {
+        let plan = self.kept_damage(packet, frame_root, output_mode, viewport, image)?;
+        Some(self.depth_targets.host_plan(plan))
+    }
+
+    // What `packet` changes against the frame `frame_root` kept, as
+    // `damage_of` says, whatever the host's depth.
+    fn kept_damage(
         &mut self,
         packet: &FramePacket,
         frame_root: &mut FrameRoot,
