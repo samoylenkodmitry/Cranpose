@@ -215,6 +215,8 @@ static void boot_frame(int64_t now)
         if (!first_us) first_us = now;
         counts[second]++;
     } else {
+        // The refresh timer's period: LVGL draws at most once in it.
+        ESP_LOGI(TAG, "BENCH frame_period_us %d", LV_DEF_REFR_PERIOD * 1000);
         if (first_us) ESP_LOGI(TAG, "BENCH first_ms %lld", first_us / 1000);
         for (size_t i = 0; i < sizeof(counts) / sizeof(counts[0]); i++) {
             ESP_LOGI(TAG, "BENCH second %u frames %u", (unsigned)i, (unsigned)counts[i]);

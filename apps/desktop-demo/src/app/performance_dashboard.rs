@@ -816,7 +816,26 @@ fn Frameworks(palette: Palette, run: Rc<PerfRun>, source: FrameSource) {
             text_style(12.0, palette.muted, None),
         );
         MangoHudNote(palette, Rc::clone(&run));
+        PanelNote(palette, Rc::clone(&run));
     });
+}
+
+// The refresh rate of a board's panel, which caps the frames a second that
+// it shows.
+#[composable]
+fn PanelNote(palette: Palette, run: Rc<PerfRun>) {
+    let Some(hz) = run.protocol.panel_hz else {
+        return;
+    };
+    Text(
+        format!(
+            "The {} panel shows {hz:.2} pictures a second: shown fps counts each second's drawn \
+             frames up to that, and the bars rank by it.",
+            run.device
+        ),
+        Modifier::empty(),
+        text_style(12.0, palette.muted, None),
+    );
 }
 
 // What counted a Linux run's presents, the present setting every subject

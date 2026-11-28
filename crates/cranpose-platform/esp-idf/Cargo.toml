@@ -53,6 +53,11 @@ component_dirs = ["components/cranpose_fast_fdiv"]
 [[package.metadata.esp-idf-sys.extra_components]]
 component_dirs = ["components/cranpose_fast_fsqrt"]
 
+# Console lines that never wait on the console: see
+# components/cranpose_console/console.c.
+[[package.metadata.esp-idf-sys.extra_components]]
+component_dirs = ["components/cranpose_console"]
+
 # Small blocks from per-task lists: see
 # components/cranpose_small_alloc/small_alloc.c.
 [[package.metadata.esp-idf-sys.extra_components]]

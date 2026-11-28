@@ -21,10 +21,20 @@ PSRAM, ST7796 panel on SPI), both 320 by 480.
 Every app runs with the same wiring, bus clock (40 MHz), panel start-up
 bytes (`init_sequences.py` reads them from the demo's board modules), strip
 of 24 rows (ES3C35P) or 8 rows (E32R35T), ESP-IDF 5.5 settings (the LVGL and
-Slint builds list the demo's sdkconfig files), C code at `-O2` and 60 Hz
-frame pacing woken by an `esp_timer`. The LVGL and Slint apps draw through
+Slint builds list the demo's sdkconfig files), C code at `-O2` and frame
+pacing woken by an `esp_timer`: a frame at most every 16,667 us for Cranpose
+and Slint, and every 16 ms for LVGL (`CONFIG_LV_DEF_REFR_PERIOD`, whole
+milliseconds). The LVGL and Slint apps draw through
 the same panel driver (`panel`, on ESP-IDF's `esp_lcd`); the Cranpose
 platform has its own.
+
+Both panels show about 60 pictures a second, as their start-up bytes set
+their controllers: the ES3C35P's ST77922 59.90 Hz and the E32R35T's ST7796S
+60.06 Hz (`scripts/esp32/board_run.py`, from the datasheets). A frame drawn
+past that never reaches the glass whole, so each run keeps every app's frame
+period and the panel's rate, and beside the frames drawn a second the page
+counts the frames shown: each second's frames up to what the panel scans in
+it.
 
 - LVGL uses its default fonts and options, plus the two it offers for
   speed: cached style lookups and its drawing functions in IRAM. The
@@ -74,7 +84,11 @@ build installed it.
 
 The nightly runs `just perf-esp32 BOARD OUTPUT` on the two boards attached to
 samarch-1. Each screen has its own application image. The JSON report keeps its
-byte size and the frame count of every second for both boots. The Performance
+byte size and the frame count of every second for both boots, the frames
+shown of each and the app's frame period. The first boot is read from its
+start by `espflash flash --monitor`; the second is reset by `espflash
+monitor`, which reads nothing for its first half second, so an app that
+waits on its console loses frames there. The Performance
 tab reads the published report. The browser runs each layout on a virtual ESP32-S3.
 [Benchmark layouts](https://samoylenkodmitry.github.io/cranpose-esp32/benchmarks/) · [Measurement details](../../docs/performance_methodology.md)
 

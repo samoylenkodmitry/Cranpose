@@ -364,6 +364,7 @@ fn main() {
     #[cfg(feature = "bench-frames")]
     let mut boot_frames = boot_frames::BootFrames::new(
         esp_idf_svc::timer::EspTaskTimerService::new().expect("ESP timer service"),
+        FRAME,
     );
     loop {
         let frame_start = Instant::now();
@@ -387,7 +388,10 @@ fn main() {
         let now = Instant::now();
         if drew {
             #[cfg(feature = "bench-frames")]
-            boot_frames.present();
+            boot_frames.present(|text| {
+                log::info!("{text}");
+                true
+            });
             let was_first = stats.is_none();
             Stats::record(
                 &mut stats,

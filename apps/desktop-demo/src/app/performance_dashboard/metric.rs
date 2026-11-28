@@ -114,7 +114,8 @@ impl Metric {
     // Linux run's harness the frames each app moved on to.
     pub(super) fn about_in(self, run: &PerfRun) -> &'static str {
         if run.kind == "esp32" && self != Self::AppSize {
-            "The firmware counts drawn frames in each second from ESP timer startup. First frame shows milliseconds on that clock."
+            "The firmware counts drawn frames in each second from ESP timer startup, and the \
+             run keeps each app's frame period. First frame shows milliseconds on that clock."
         } else if run.protocol.mangohud.is_some() && self == Self::Fps {
             "Frames the app moved on to per second over the whole run from the launch, each \
              line the app wrote for one stamped by the harness as it arrived, a page's at \

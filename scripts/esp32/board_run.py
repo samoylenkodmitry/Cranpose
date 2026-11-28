@@ -38,11 +38,20 @@ SLINT = ROOT / "benchmarks/esp32/slint-app"
 ESPRESSIF = pathlib.Path.home() / ".espressif"
 IDF_VERSION = "v5.5.5"
 
+# `panel_hz`: how often the panel's controller scans its frame memory onto
+# the glass, as the board's start-up bytes set it; a frame drawn faster never
+# shows whole. ES3C35P: the ST77922's TIMCTRL (70h) of the board's init, RTN
+# 0x1A0 and 480 + 17 + 105 lines, at the 15 MHz the datasheet's table gives
+# (V0.1, page 247: RTN 0x20B at 478 lines is 60.00 Hz), 59.90 Hz. E32R35T:
+# the ST7796S keeps its reset FRMCTR1 (B1h: A0h 10h) and porches (B5h: 2
+# and 2), 10^7 / ((168 + 16 + 32 * 5) * 484) = 60.06 Hz (V1.0, page 213).
 BOARDS = {
     "es3c35p": {"mcu": "esp32s3", "console": "usb", "port": "/dev/cu.usbmodem*",
-                "baud": 921600, "flash_size": "8mb", "partitions": "partitions.csv"},
+                "baud": 921600, "flash_size": "8mb", "partitions": "partitions.csv",
+                "panel_hz": 59.90},
     "e32r35t": {"mcu": "esp32", "console": "uart", "port": "/dev/cu.usbserial-*",
-                "baud": 2000000, "flash_size": "4mb", "partitions": "partitions_4mb.csv"},
+                "baud": 2000000, "flash_size": "4mb", "partitions": "partitions_4mb.csv",
+                "panel_hz": 60.06},
 }
 SUMMARY = re.compile(r"first frame|frames in|PERF|HEAP|SAMPLER total|panic|abort\(\)|memory allocation")
 

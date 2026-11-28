@@ -88,16 +88,20 @@ fn ranked_value(
         .find(|line| line.subject == subject)
         .is_some_and(|line| line.disturbed);
     if disturbed && selection.metric != Metric::AppSize {
-        None
-    } else {
-        run.median(
-            &selection.scenario,
-            selection.start,
-            subject,
-            selection.metric.key(),
-        )
+        return None;
     }
+    // A board's bars rank by the frames its panel can show.
+    let key = if run.protocol.panel_hz.is_some() && selection.metric == Metric::Fps {
+        SHOWN_FPS
+    } else {
+        selection.metric.key()
+    };
+    run.median(&selection.scenario, selection.start, subject, key)
 }
+
+// A board run's frames a second that its panel can show: each second's drawn
+// frames up to the panel's rate.
+const SHOWN_FPS: &str = "shown_fps";
 
 fn build_subject_row(
     ctx: &BarContext<'_>,
@@ -122,10 +126,10 @@ fn build_subject_row(
             } else {
                 0.0
             }),
-            with_mangohud(ctx, index, ctx.selection.metric.format(value)),
+            beside_other_rate(ctx, index, ctx.selection.metric.format(value)),
         ),
         None if disturbed => (None, "disturbed".to_string()),
-        None if measured => (None, with_mangohud(ctx, index, "–".to_string())),
+        None if measured => (None, beside_other_rate(ctx, index, "–".to_string())),
         None => (
             None,
             line.and_then(|line| line.failure.clone())
@@ -147,17 +151,21 @@ fn build_subject_row(
     }
 }
 
-// On a run MangoHud counted presents in, the app's frame rate with MangoHud's
-// for the same launches beside it; where a launch's presents and the frames
-// it moved on to disagree, either rate says so, MangoHud's with the app's
-// beside it.
-fn with_mangohud(ctx: &BarContext<'_>, subject: usize, value: String) -> String {
+// On a board run, the frames drawn a second beside the frames shown, the
+// rate the bar stands for. On a run MangoHud counted presents in, the app's
+// frame rate with MangoHud's for the same launches beside it; where a
+// launch's presents and the frames it moved on to disagree, either rate says
+// so, MangoHud's with the app's beside it.
+fn beside_other_rate(ctx: &BarContext<'_>, subject: usize, value: String) -> String {
     let run = ctx.run;
+    let (scenario, start) = (ctx.selection.scenario.as_str(), ctx.selection.start);
+    let rate = |metric: Metric| figure(run.median(scenario, start, subject, metric.key()));
+    if run.protocol.panel_hz.is_some() && ctx.selection.metric == Metric::Fps {
+        return format!("{} drawn · {value} shown", rate(Metric::Fps));
+    }
     if run.protocol.mangohud.is_none() {
         return value;
     }
-    let (scenario, start) = (ctx.selection.scenario.as_str(), ctx.selection.start);
-    let rate = |metric: Metric| figure(run.median(scenario, start, subject, metric.key()));
     let mismatch = run.count_mismatch(scenario, start, subject);
     let mark = mismatch.map_or_else(String::new, |mark| format!(" · {mark}"));
     if let Some(reason) = run

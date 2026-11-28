@@ -560,6 +560,35 @@ fn a_board_card_shows_the_firmware_size_for_its_selected_layout() {
     assert!(shows(&texts, "0.75") && shows(&texts, "1.00"), "{texts:?}");
 }
 
+// LVGL draws more frames a second than the ES3C35P's panel shows; Cranpose
+// shows a few more of its frames.
+const BOARD_INDEX: &str = r#"{"runs":[{"kind":"esp32","device":"ES3C35P","started_at":"2026-11-28",
+    "protocol":{"run_s":5,"starts":["first","second"],"panel_hz":59.9},
+    "subjects":[{"name":"cranpose","label":"Cranpose"},{"name":"lvgl","label":"LVGL 9.3.0"}],
+    "scenarios":{"demo":{"legs":4,"starts":{
+    "first":{"summary":{"cranpose":{"fps":56.6,"shown_fps":56.5,"frame_period_ms":16.667},
+                        "lvgl":{"fps":58.8,"shown_fps":56.47,"frame_period_ms":16.0}}},
+    "second":{"summary":{"cranpose":{"fps":55.6,"shown_fps":55.6},"lvgl":{"fps":58.0,"shown_fps":55.9}}}}}}}]}"#;
+
+#[test]
+fn a_board_card_ranks_by_the_frames_its_panel_shows_beside_the_frames_drawn() {
+    let labels = labels_of(BOARD_INDEX, FrameSource::Files(Rc::default()));
+    let card = "Frameworks · ES3C35P · 2026-11-28";
+    let cranpose = after(&labels, card, "Cranpose");
+    let lvgl = after(&labels, card, "LVGL 9.3.0");
+    assert!(cranpose < lvgl, "the most frames shown first: {labels:?}");
+    assert!(shows(&labels, "56.6 drawn · 56.5 shown"), "{labels:?}");
+    assert!(shows(&labels, "58.8 drawn · 56.5 shown"), "{labels:?}");
+    assert!(
+        shows(
+            &labels,
+            "The ES3C35P panel shows 59.90 pictures a second: shown fps counts each second's \
+             drawn frames up to that, and the bars rank by it."
+        ),
+        "{labels:?}"
+    );
+}
+
 #[test]
 fn a_framework_card_explains_an_unimplemented_layout() {
     let index = r#"{"runs":[{"kind":"frameworks","device":"Apple M3 Pro","started_at":"2026-11-25",
