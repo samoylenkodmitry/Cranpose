@@ -17,7 +17,9 @@ impl WgpuRenderer {
     /// [`Camera::near`](cranpose_ui_graphics::space::Camera::near): 0 at the near plane, 1 at
     /// infinity, and 1 where no scene drew. Each scene pass clears it again, so a frame that draws
     /// several scenes leaves the depth of the last one. A scene drawn into an intermediate layer,
-    /// such as one under a blur, uses depth of the renderer's own.
+    /// such as one under a blur, uses depth of the renderer's own. The frame draws whole, so `depth`
+    /// takes the scenes' depth whatever the frame changed. It does so whatever `depth` held before,
+    /// such as an older frame in the image of a depth swapchain.
     ///
     /// A scene with [`Multisample::Off`](cranpose_ui_graphics::space::Multisample::Off) stores its
     /// depth in its own pass. A scene with four samples cannot, because a render pass holds one
