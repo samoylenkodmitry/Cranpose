@@ -138,9 +138,22 @@ RGB565 buffers the panel reads by DMA. The default, 8 rows, takes 25 KB on a
 
 The calling task becomes the UI thread. Composition and layout run on its
 stack, so give it at least 28 KB (`CONFIG_ESP_MAIN_TASK_STACK_SIZE` for the
-main task). The stats line the loop logs every `stats_window` (5 s by default) tells the bytes of it that
+main task). The stats lines the loop logs every `stats_window` (5 s by default) tell the bytes of it that
 the run never used. An `esp_timer` wakes the task at each frame or timed
 event, so frame timing does not depend on `CONFIG_FREERTOS_HZ`.
+
+The loop never waits on the console. ESP-IDF's console write waits on a full
+FIFO: on the USB Serial/JTAG up to 50 ms a line while a connected host reads
+nothing (`TX_FLUSH_TIMEOUT_US`, a constant of ESP-IDF 5.5 with no Kconfig),
+as `espflash monitor` while it opens the port after a reset; on a UART until
+its bytes go out. The loop's lines (`components/cranpose_console`) go into
+the console's FIFO only when it takes the whole line at once, in ESP-IDF's
+log format, each under 64 bytes, the USB Serial/JTAG's packet. A line the
+console cannot take waits for a later frame (the first frame's times, the
+statistics) or is dropped (the touch panel's), and the statistics count the
+dropped lines. On the ES3C35P at main 77934eaca the first frame's line held
+the second start's first second for 50 ms: 37 frames where 40 fit, and 40
+since.
 
 While frames take longer than the frame interval the loop has nothing to wait
 for. A loop that never blocks starves the idle task of its core, and ESP-IDF's
