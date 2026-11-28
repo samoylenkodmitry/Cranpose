@@ -330,17 +330,28 @@ fn hash_rrect_shadow<H: Hasher>(
     );
 }
 
-fn hash_shadow<H: Hasher>(shadow: &ShadowDraw, window: CaptureWindow, scale: f32, state: &mut H) {
-    let anchor = shadow
-        .shapes
-        .as_ref()
-        .and_then(|run| run.placement.snap_anchor);
+// Hashes what `shadow` casts, its shapes, cutouts and texts, by everything
+// their pixels depend on, their geometry taken from the window's origin.
+pub(crate) fn hash_shadow_casters<H: Hasher>(
+    shadow: &ShadowDraw,
+    window: CaptureWindow,
+    scale: f32,
+    state: &mut H,
+) {
     for run in shadow.shapes.iter().chain(&shadow.post_blur_cutouts) {
         hash_run_item_with_clip(run, run.placement.clip, window.x, window.y, scale, state);
     }
     for text in &shadow.texts {
         hash_text(text, window, scale, state);
     }
+}
+
+fn hash_shadow<H: Hasher>(shadow: &ShadowDraw, window: CaptureWindow, scale: f32, state: &mut H) {
+    let anchor = shadow
+        .shapes
+        .as_ref()
+        .and_then(|run| run.placement.snap_anchor);
+    hash_shadow_casters(shadow, window, scale, state);
     hash_f32_for_cache(shadow.blur_radius, state);
     hash_optional_tuple(
         shadow_draw_bounds(shadow)

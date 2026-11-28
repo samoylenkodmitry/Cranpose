@@ -9,6 +9,7 @@ use cranpose_ui_graphics::{Color, Point};
 
 use super::*;
 use crate::{
+    draw_pass::{PassSegment, PassTarget, SegmentLayout},
     glyph_run::{RunGlyphScratch, RunGlyphs},
     render::{
         text_glyph_cache::{

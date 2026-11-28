@@ -668,7 +668,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
                 node_id,
                 rect: apply_layer_to_rect(shadow_rect, rect, content_layer),
                 snap_anchor: None,
-                text: DrawnText::of(shadow_text, &shadow_text_style, node.paint().spread),
+                text: DrawnText::of_laid_out(shadow_text, &shadow_text_style, layout),
                 layout: layout.clone(),
                 color: shadow_color,
                 layer_paint: LayerPaint::NONE,
