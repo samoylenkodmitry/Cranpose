@@ -50,16 +50,24 @@ pub(crate) trait Settling {
 
 // The shell's own reasons for a frame and the last frame's counters, which
 // count the draws that waited for a pipeline and the cache misses that ask
-// for another frame.
+// for another frame. The renderer asks for a frame of its own while a
+// stand-in waits for a pipeline to land, and says whether a compile is still
+// in flight for it.
 macro_rules! shell_state {
     ($shell:expr) => {{
+        use cranpose_render_common::Renderer as _;
         let shell = $shell;
         format!(
-            "needs update {}, pending UI {}, animations {}, frame callbacks {}, last frame {:?}",
+            "needs update {}, needs update without a frame {}, pending UI {}, animations {}, \
+             frame callbacks {}, renderer asks for a frame {}, renderer awaits a compile {}, \
+             last frame {:?}",
             shell.needs_update(),
+            shell.needs_update_without_frame(),
             shell.has_pending_ui(),
             shell.has_active_animations(),
             shell.has_transient_frame_callbacks(),
+            shell.renderer().needs_frame_warmup(),
+            shell.renderer().awaits_pipelines(),
             shell.renderer().last_frame_stats(),
         )
     }};

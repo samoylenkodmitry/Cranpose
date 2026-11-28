@@ -270,29 +270,24 @@ impl Bench {
     // Frames with no wait for their pixels until the content's panels have gone, for a second of the
     // clock at most: a hide animates before the panels go.
     fn draw_until_hidden(&mut self) {
+        let camera = EyeCamera::of(&eye(0.0), (EYE, EYE), FirstRow::Top).expect("a camera");
         for _ in 0..frames_in(1000) {
             if self.headset.space.panels().is_empty() {
                 return;
             }
-            self.draw_once();
+            self.headset
+                .guest
+                .shell()
+                .update_after_exact_interval(FRAME);
+            self.pass
+                .draw(
+                    &mut self.headset.guest,
+                    &self.headset.space,
+                    &camera,
+                    &self.eye.image(),
+                )
+                .expect("a frame");
         }
-    }
-
-    // Draws one frame of the scene with no wait for its pixels. Returns whether it drew.
-    fn draw_once(&mut self) -> bool {
-        self.headset
-            .guest
-            .shell()
-            .update_after_exact_interval(FRAME);
-        let camera = EyeCamera::of(&eye(0.0), (EYE, EYE), FirstRow::Top).expect("a camera");
-        self.pass
-            .draw(
-                &mut self.headset.guest,
-                &self.headset.space,
-                &camera,
-                &self.eye.image(),
-            )
-            .is_ok_and(|drew| drew)
     }
 
     // How far behind the panel's plane the ray through `at` meets the tray's nearest mesh, in dp.
