@@ -70,18 +70,28 @@ def monitor(command, log):
     raise RuntimeError(f'no complete firmware trace in {log}')
 
 
-def read_leg(path, name, start):
+def read_leg(path, name, start, panel_hz):
+    """A boot's leg. `fps` counts the frames the app drew; `shown_fps`
+    counts each second's frames up to what the panel scans in that second
+    from the first frame on, `panel_hz` pictures a whole second, as no more
+    of them reach the glass whole."""
     text = path.read_text(errors='replace')
     first = re.findall(r'BENCH first_ms (\d+)', text)
     bins = re.findall(r'BENCH second (\d+) frames (\d+)', text)
-    if len(first) != 1 or [int(index) for index, _ in bins] != list(range(SECONDS)):
+    period = re.findall(r'BENCH frame_period_us (\d+)', text)
+    if len(first) != 1 or len(period) > 1 or [int(index) for index, _ in bins] != list(range(SECONDS)):
         raise ValueError(f'incomplete or repeated boot in {path}')
     counts = [int(frames) for _, frames in bins]
     first_ms = int(first[0])
     if not sum(counts) or first_ms // 1000 != next(i for i, count in enumerate(counts) if count):
         raise ValueError(f'first frame disagrees with frame counts in {path}')
+    first_s = first_ms / 1000
+    shown = [min(count, panel_hz * min(1.0, max(0.0, second + 1 - first_s)))
+             for second, count in enumerate(counts)]
     return {'subject': name, 'start': start, 'run_s': SECONDS, 'frames': sum(counts),
-            'fps': sum(counts) / SECONDS, 'first_frame_s': first_ms / 1000, 'fps_by_second': counts,
+            'fps': sum(counts) / SECONDS, 'shown_fps': round(sum(shown) / SECONDS, 3),
+            'frame_period_ms': int(period[0]) / 1000 if period else None, 'first_frame_s': first_ms / 1000,
+            'fps_by_second': counts,
             'samples': {'t_ms': list(range(1000, 1000 * SECONDS + 1, 1000)), 'fps': counts}}
 
 
@@ -108,7 +118,7 @@ def measure(model, device, name, stem):
         for start, command in zip(STARTS, commands):
             log = stem.with_suffix(f'.{start}.log')
             monitor(command, log)
-            legs.append(read_leg(log, name, start))
+            legs.append(read_leg(log, name, start, board.BOARDS[model]['panel_hz']))
     return legs, stem.with_suffix('.bin').stat().st_size
 
 
@@ -133,7 +143,8 @@ def main():
     report = {'kind': 'esp32', 'started_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
               'device': {'ro.product.model': args.board.upper()}, 'main': revision,
               'subjects': [{'name': key, 'label': label, 'source': SOURCES[key]} for key, label in labels.items()],
-              'protocol': {'run_s': SECONDS, 'starts': STARTS}, 'scenarios': []}
+              'protocol': {'run_s': SECONDS, 'starts': STARTS, 'panel_hz': board.BOARDS[args.board]['panel_hz']},
+              'scenarios': []}
     for screen in ('demo', 'dashboard'):
         names = ['cranpose', 'lvgl'] if screen == 'demo' else ['lvgl', 'slint']
         # The classic board has no PSRAM for the Cranpose dashboard.
@@ -152,7 +163,8 @@ def main():
             scenario['legs'].extend(legs)
             for leg in legs:
                 scenario['starts'][leg['start']]['summary'][name] = {
-                    metric: leg[metric] for metric in ('fps', 'first_frame_s')}
+                    metric: leg[metric] for metric in ('fps', 'shown_fps', 'frame_period_ms', 'first_frame_s')
+                    if leg[metric] is not None}
         report['scenarios'].append(scenario)
     if args.phase == 'measure':
         (args.output / 'report.json').write_text(json.dumps(report, indent=1) + '\n')

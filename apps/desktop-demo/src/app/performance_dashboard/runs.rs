@@ -50,6 +50,10 @@ pub struct PerfProtocol {
     pub mangohud: Option<String>,
     #[serde(default)]
     pub present: Option<String>,
+    // How many pictures a second a board's panel scans onto its glass: no
+    // more of the frames an app draws a second show whole.
+    #[serde(default)]
+    pub panel_hz: Option<f64>,
 }
 
 /// A run's own file: every leg, with the time of each frame it presented.
