@@ -10,8 +10,8 @@ use cranpose_ui_graphics::{BlendMode, Rect, TileMode};
 use super::{
     GpuRenderer, anchored_rect_to_device, expand_rect, intersect_device_rects,
     shadow_cache::{
-        device_pixel_bounds, shadow_composite_mask, shadow_draw_bounds, shadow_scene,
-        shape_shadow_surface_cache_key, skip_shadow_draws,
+        device_pixel_bounds, shadow_composite_mask, shadow_draw_bounds, shadow_owner, shadow_scene,
+        shadow_surface_cache_key, skip_shadow_draws,
     },
 };
 use crate::{
@@ -36,29 +36,27 @@ impl GpuRenderer {
     /// composites. The shadow's shapes and texts render into a source the
     /// size of their blur footprint, blur in place and take the post-blur
     /// cutouts; the source is then blitted over the rect the shadow covers.
-    /// Shape-only shadows live in the shadow cache, keyed by their content
-    /// and device placement, so a scrolling card re-blits its cached blur.
-    /// The blurred shadow texture and whether the cache held it: a
-    /// shape-only shadow is cached by content and placement, a shadow with
-    /// text renders every frame.
+    /// A surface over the whole footprint lives in the shadow cache, keyed
+    /// by its content and device placement, so a still label or a card
+    /// scrolled by whole pixels re-blits its cached blur.
+    /// The blurred shadow texture and whether the cache held it; a cut
+    /// surface renders every frame.
     fn blurred_shadow_source<C: FrameCommandRecorder>(
         &mut self,
         frame: &mut FrameRecording<'_, C>,
         shadow: &ShadowDraw,
-        source_device: DevicePixelBounds,
+        surface: SurfaceBounds,
         pixel_radius: f32,
         root_scale: f32,
     ) -> Option<(Rc<OffscreenTarget>, bool, SourceContent)> {
-        let shape_only = shadow.texts.is_empty();
-        let key = if shape_only {
-            shape_shadow_surface_cache_key(shadow, source_device, pixel_radius, root_scale)
-        } else {
-            None
-        };
+        let source_device = surface.bounds();
+        let key = matches!(surface, SurfaceBounds::Whole(_))
+            .then(|| shadow_surface_cache_key(shadow, source_device, pixel_radius, root_scale));
+        let owner = shadow_owner(shadow);
         let content = key.map_or(SourceContent::Transient, |key| {
             SourceContent::retained(&key)
         });
-        if let Some(target) = key.and_then(|key| self.shadow_surfaces.get(&key)) {
+        if let Some(target) = key.and_then(|key| self.shadow_surfaces.get(&key, owner)) {
             return Some((Rc::clone(target), true, content));
         }
         // A shadow whose blur compiles is left out until the blur lands.
@@ -72,6 +70,7 @@ impl GpuRenderer {
             self.pipelines.note_placeholder(&self.frame_stats);
             return None;
         }
+        let shape_only = shadow.texts.is_empty();
         if !shape_only {
             self.frame_stats.record_shadow_text_blur_fallback();
         }
@@ -83,7 +82,10 @@ impl GpuRenderer {
             root_scale,
             key.is_some(),
         )?;
-        if let Some(key) = key {
+        let Some(key) = key else {
+            return Some((source, false, content));
+        };
+        if shape_only {
             self.frame_stats
                 .record_shadow_shape_cache_miss(source_device.width, source_device.height);
             self.frame_stats.maybe_print_shadow_shape_cache_miss(
@@ -93,7 +95,11 @@ impl GpuRenderer {
                 shadow.shapes.as_ref().map_or(0, RunDraw::record_count) as usize,
                 shadow.clip,
             );
-            self.shadow_surfaces.insert(key, Rc::clone(&source));
+        }
+        if let Some(replaced) = self.shadow_surfaces.insert(key, Rc::clone(&source), owner)
+            && let Ok(target) = Rc::try_unwrap(replaced)
+        {
+            self.defer_offscreen_release(target);
         }
         Some((source, false, content))
     }
@@ -114,18 +120,19 @@ impl GpuRenderer {
         {
             return;
         }
-        let Some(source_device) =
+        let Some(surface) =
             shadow_surface_bounds(shadow, root_scale, window, self.max_texture_dim())
         else {
             return;
         };
+        let source_device = surface.bounds();
         let anchor = shadow
             .shapes
             .as_ref()
             .and_then(|run| run.placement.snap_anchor);
         let pixel_radius = shadow.blur_radius * root_scale;
         let Some((source, hit, content)) =
-            self.blurred_shadow_source(frame, shadow, source_device, pixel_radius, root_scale)
+            self.blurred_shadow_source(frame, shadow, surface, pixel_radius, root_scale)
         else {
             return;
         };
@@ -151,7 +158,7 @@ impl GpuRenderer {
         let Some(coverage) = coverage else {
             return;
         };
-        if hit {
+        if hit && shadow.texts.is_empty() {
             self.frame_stats.record_shadow_shape_cache_hit(
                 (coverage.2 as u64).saturating_mul(coverage.3 as u64),
             );
@@ -352,47 +359,68 @@ impl GpuRenderer {
     }
 }
 
-// The device pixels the surface of `shadow` covers: a shape-only shadow's
-// whole footprint, placed so that a translation by whole pixels keeps it,
-// and otherwise the part of the footprint near what the frame draws. `None`
-// when the frame draws none of it.
+// The device pixels a shadow's surface covers.
+#[derive(Clone, Copy)]
+enum SurfaceBounds {
+    // The shadow's whole footprint, which frames keep: it stays the same
+    // while the shadow draws the same casters in the same place, whatever
+    // part of the page a frame draws.
+    Whole(DevicePixelBounds),
+    // The part near what the frame draws of a footprint no texture holds,
+    // drawn for this frame alone.
+    Cut(DevicePixelBounds),
+}
+
+impl SurfaceBounds {
+    fn bounds(self) -> DevicePixelBounds {
+        match self {
+            Self::Whole(bounds) | Self::Cut(bounds) => bounds,
+        }
+    }
+}
+
+// The surface of `shadow`: its whole footprint within its clip when a
+// texture holds it, a shape-only one placed so that a translation by whole
+// pixels keeps it, and otherwise the part of the footprint near what the
+// frame draws. `None` when the frame draws none of it.
 fn shadow_surface_bounds(
     shadow: &ShadowDraw,
     root_scale: f32,
     window: &Window,
     max_texture_dim: u32,
-) -> Option<DevicePixelBounds> {
-    let bounds = shadow_draw_bounds(shadow)?;
+) -> Option<SurfaceBounds> {
     let margin = blur_reach(shadow.blur_radius, root_scale);
-    let source_bounds = expand_rect(bounds, margin, margin);
-    let mut visible = source_bounds;
-    if let Some(clip) = shadow.clip {
-        visible = visible.intersect(expand_rect(clip, margin, margin))?;
-    }
+    let footprint = expand_rect(shadow_draw_bounds(shadow)?, margin, margin);
+    let visible = match shadow.clip {
+        Some(clip) => footprint.intersect(expand_rect(clip, margin, margin))?,
+        None => footprint,
+    };
     let drawn = window.cut_near(
         DeviceRect::from_logical(visible, root_scale),
         margin * root_scale,
     )?;
-    let visible = Rect {
+    let whole = if shadow.texts.is_empty() {
+        let anchor = shadow
+            .shapes
+            .as_ref()
+            .and_then(|run| run.placement.snap_anchor);
+        translation_stable_anchored_device_pixel_bounds(
+            footprint,
+            anchor,
+            root_scale,
+            max_texture_dim,
+        )
+    } else {
+        device_pixel_bounds(visible, root_scale, max_texture_dim)
+    };
+    if let Some(whole) = whole {
+        return Some(SurfaceBounds::Whole(whole));
+    }
+    let drawn = Rect {
         x: drawn.x / root_scale,
         y: drawn.y / root_scale,
         width: drawn.width / root_scale,
         height: drawn.height / root_scale,
     };
-    let shape_only = shadow.texts.is_empty();
-    let anchor = shadow
-        .shapes
-        .as_ref()
-        .and_then(|run| run.placement.snap_anchor);
-    shape_only
-        .then(|| {
-            translation_stable_anchored_device_pixel_bounds(
-                source_bounds,
-                anchor,
-                root_scale,
-                max_texture_dim,
-            )
-        })
-        .flatten()
-        .or_else(|| device_pixel_bounds(visible, root_scale, max_texture_dim))
+    device_pixel_bounds(drawn, root_scale, max_texture_dim).map(SurfaceBounds::Cut)
 }

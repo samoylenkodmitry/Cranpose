@@ -3,14 +3,18 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::collections::bounded_lru::BoundedLruCache;
+use cranpose_core::{
+    NodeId,
+    collections::{bounded_lru::BoundedLruCache, map::HashMap},
+};
 use cranpose_ui_graphics::{BlendMode, FxHasher, Rect};
 
 use super::{expand_rect, mask_rect};
 use crate::{
-    capture_hash::hash_run_item_with_clip,
+    capture_hash::{CaptureWindow, hash_shadow_casters},
     effect_renderer::RoundedCompositeMask,
     geometry::{DevicePixelBounds, anchored_device_rect, offscreen_byte_size},
+    idle_pool::IDLE_FRAMES,
     offscreen::OffscreenTarget,
     scene::{CompositorScene, DrawOp, DrawOpKind, RunDraw, ShadowDraw, SnapAnchor, TextDraw},
 };
@@ -34,30 +38,61 @@ pub(super) struct ShadowSurfaceCacheKey {
 struct CachedShadowSurface {
     target: Rc<OffscreenTarget>,
     byte_size: u64,
+    // The last frame that drew the surface.
+    used: u64,
 }
 
-// The blurred shadow surfaces of shapes, kept for the frames that draw them
-// again, bounded by count and by bytes.
+// The blurred shadow surfaces, kept for the frames that draw them again,
+// bounded by count and by bytes. A surface no frame has drawn for
+// [`IDLE_FRAMES`] goes, and so does the surface of a text that an earlier
+// frame drew once the text draws a new one: an edited or animated text
+// keeps one surface, not one for each frame it changed in.
 pub(super) struct ShadowSurfaces {
     cache: BoundedLruCache<ShadowSurfaceCacheKey, CachedShadowSurface>,
+    // The surface each text's shadow drew last.
+    owners: HashMap<NodeId, ShadowSurfaceCacheKey>,
     bytes: u64,
+    frame: u64,
 }
 
 impl ShadowSurfaces {
     pub(super) fn new() -> Self {
         Self {
             cache: BoundedLruCache::with_capacity_at_least_one(MAX_SHADOW_SURFACE_CACHE_ITEMS),
+            owners: HashMap::default(),
             bytes: 0,
+            frame: 0,
         }
     }
 
-    pub(super) fn get(&mut self, key: &ShadowSurfaceCacheKey) -> Option<&Rc<OffscreenTarget>> {
-        self.cache.get(key).map(|cached| &cached.target)
+    pub(super) fn get(
+        &mut self,
+        key: &ShadowSurfaceCacheKey,
+        owner: Option<NodeId>,
+    ) -> Option<&Rc<OffscreenTarget>> {
+        let frame = self.frame;
+        let cached = self.cache.get_mut(key)?;
+        cached.used = frame;
+        if let Some(owner) = owner {
+            self.owners.insert(owner, *key);
+        }
+        Some(&cached.target)
     }
 
     // Keeps `target` for `key`, evicting the least recently drawn surfaces
-    // until the bytes fit.
-    pub(super) fn insert(&mut self, key: ShadowSurfaceCacheKey, target: Rc<OffscreenTarget>) {
+    // until the bytes fit. Returns the surface `owner` drew before, which
+    // goes unless this frame drew it: a label of the same text elsewhere
+    // shares it.
+    pub(super) fn insert(
+        &mut self,
+        key: ShadowSurfaceCacheKey,
+        target: Rc<OffscreenTarget>,
+        owner: Option<NodeId>,
+    ) -> Option<Rc<OffscreenTarget>> {
+        let replaced = owner
+            .and_then(|owner| self.owners.insert(owner, key))
+            .filter(|earlier| *earlier != key)
+            .and_then(|earlier| self.remove_undrawn(&earlier));
         let byte_size = offscreen_byte_size(target.width, target.height);
         while self.bytes + byte_size > MAX_SHADOW_SURFACE_CACHE_BYTES {
             let Some((_, evicted)) = self.cache.pop_lru() else {
@@ -65,76 +100,102 @@ impl ShadowSurfaces {
             };
             self.bytes = self.bytes.saturating_sub(evicted.byte_size);
         }
-        let cached = CachedShadowSurface { target, byte_size };
+        let cached = CachedShadowSurface {
+            target,
+            byte_size,
+            used: self.frame,
+        };
         if let Some((_, replaced)) = self.cache.push(key, cached) {
             self.bytes = self.bytes.saturating_sub(replaced.byte_size);
         }
         self.bytes = self.bytes.saturating_add(byte_size);
+        replaced
+    }
+
+    // Drops the surface under `key` unless this frame drew it.
+    fn remove_undrawn(&mut self, key: &ShadowSurfaceCacheKey) -> Option<Rc<OffscreenTarget>> {
+        if self.cache.peek(key)?.used == self.frame {
+            return None;
+        }
+        let removed = self.cache.pop(key)?;
+        self.bytes = self.bytes.saturating_sub(removed.byte_size);
+        Some(removed.target)
+    }
+
+    // Ends a frame, dropping every surface no frame has drawn for
+    // [`IDLE_FRAMES`].
+    pub(super) fn end_frame(&mut self) {
+        self.frame += 1;
+        let oldest_kept = self.frame.saturating_sub(IDLE_FRAMES);
+        while self
+            .cache
+            .peek_lru()
+            .is_some_and(|(_, cached)| cached.used < oldest_kept)
+        {
+            let Some((_, idle)) = self.cache.pop_lru() else {
+                break;
+            };
+            self.bytes = self.bytes.saturating_sub(idle.byte_size);
+        }
+        let cache = &self.cache;
+        self.owners.retain(|_, key| cache.contains(key));
     }
 
     pub(super) fn clear(&mut self) {
         self.cache.clear();
+        self.owners.clear();
         self.bytes = 0;
     }
 }
 
-pub(crate) fn shadow_content_hash(shadow: &ShadowDraw, root_scale: f32) -> u64 {
-    let mut hasher = FxHasher::default();
-    let origin = shape_shadow_bounds(shadow).unwrap_or(Rect {
-        x: 0.0,
-        y: 0.0,
-        width: 0.0,
-        height: 0.0,
-    });
-    let device = anchored_device_rect(
-        origin,
-        shadow
-            .shapes
-            .as_ref()
-            .and_then(|run| run.placement.snap_anchor),
-        root_scale,
-    );
-    for run in shadow.shapes.iter().chain(&shadow.post_blur_cutouts) {
-        hash_run_item_with_clip(
-            run,
-            run.placement.clip,
-            device.x.floor(),
-            device.y.floor(),
-            root_scale,
-            &mut hasher,
-        );
+// The text whose shadow `shadow` is: the one owner of its kept surface.
+pub(super) fn shadow_owner(shadow: &ShadowDraw) -> Option<NodeId> {
+    match (&shadow.shapes, shadow.texts.as_slice()) {
+        (None, [text]) => Some(text.node_id),
+        _ => None,
     }
-    hasher.finish()
 }
 
-pub(super) fn shape_shadow_surface_cache_key(
+// The key of the surface of `shadow` that covers `device_bounds`: its
+// casters by everything their pixels depend on, placed from the surface's
+// corner, so a shadow moved by whole pixels finds its blur.
+pub(super) fn shadow_surface_cache_key(
     shadow: &ShadowDraw,
     device_bounds: DevicePixelBounds,
     pixel_radius: f32,
     root_scale: f32,
-) -> Option<ShadowSurfaceCacheKey> {
-    (root_scale.is_finite() && root_scale > 0.0).then(|| ShadowSurfaceCacheKey {
-        content_hash: shadow_content_hash(shadow, root_scale),
+) -> ShadowSurfaceCacheKey {
+    let mut hasher = FxHasher::default();
+    let surface = CaptureWindow {
+        x: device_bounds.x,
+        y: device_bounds.y,
+        width: device_bounds.width as f32,
+        height: device_bounds.height as f32,
+    };
+    hash_shadow_casters(shadow, surface, root_scale, &mut hasher);
+    ShadowSurfaceCacheKey {
+        content_hash: hasher.finish(),
         pixel_size: [device_bounds.width, device_bounds.height],
         root_scale_bits: root_scale.to_bits(),
         blur_radius_bits: pixel_radius.to_bits(),
-    })
+    }
 }
 
-fn shape_shadow_bounds(shadow: &ShadowDraw) -> Option<Rect> {
-    shadow.shapes.as_ref().map(|run| run.bounds)
-}
-
+// Where a shadow's casters draw: its shapes' bounds and the parts of its
+// texts' boxes where their glyphs put ink.
 pub(crate) fn shadow_draw_bounds(shadow: &ShadowDraw) -> Option<Rect> {
-    shape_shadow_bounds(shadow)
+    shadow
+        .shapes
+        .as_ref()
+        .map(|run| run.bounds)
         .into_iter()
-        .chain(shadow.texts.iter().map(|text| text.rect))
-        .reduce(|a, b| Rect {
-            x: a.x.min(b.x),
-            y: a.y.min(b.y),
-            width: (a.x + a.width).max(b.x + b.width) - a.x.min(b.x),
-            height: (a.y + a.height).max(b.y + b.height) - a.y.min(b.y),
-        })
+        .chain(
+            shadow
+                .texts
+                .iter()
+                .map(|text| text.glyph_reach(text.rect, text.scale)),
+        )
+        .reduce(|a, b| a.union(b))
 }
 
 /// The rounded mask a shadow's composite applies, in the scene's device

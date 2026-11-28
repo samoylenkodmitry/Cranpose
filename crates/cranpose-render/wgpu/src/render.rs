@@ -739,7 +739,7 @@ pub(crate) struct GpuRenderer {
     pub(crate) window_fill: Option<(wgpu::Color, Rc<OffscreenTarget>)>,
     pub(crate) gates: admission_gate::AdmissionGates,
     transparent_sources: HashMap<(u32, u32), Rc<OffscreenTarget>>,
-    shadow_surfaces: ShadowSurfaces,
+    shadow_surfaces: shadow_cache::ShadowSurfaces,
     pub(crate) frame_stats: gpu_stats::FrameStats,
     history: FrameHistory,
     /// Whether the pipeline cache file holds the last launch's first screen,
@@ -1015,7 +1015,7 @@ impl GpuRenderer {
             window_fill: None,
             gates: admission_gate::AdmissionGates::default(),
             transparent_sources: HashMap::default(),
-            shadow_surfaces: ShadowSurfaces::new(),
+            shadow_surfaces: shadow_cache::ShadowSurfaces::new(),
             frame_stats: gpu_stats::FrameStats::default(),
             history: FrameHistory::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -1432,6 +1432,7 @@ impl GpuRenderer {
             self.effect_renderer.release_offscreen(target);
         }
         self.layer_cache.end_frame();
+        self.shadow_surfaces.end_frame();
         for (transient, target) in self.layer_cache.take_released() {
             match transient {
                 Some(descriptor) => executor.return_cached_transient(descriptor, target),
@@ -2706,7 +2707,6 @@ use image_draws::{
     ImageBindGroups, ImageBinding, ImageUvRect, ImageVariant, create_image_pipeline,
     image_sampler_descriptor, sampling_under,
 };
-use shadow_cache::ShadowSurfaces;
 #[cfg(test)]
 pub(crate) use shape_pipeline::ShapeVariant;
 use shape_pipeline::shape_shader_code;
