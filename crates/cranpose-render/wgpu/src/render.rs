@@ -1441,7 +1441,7 @@ impl GpuRenderer {
                 None => self.effect_renderer.release_offscreen(target),
             }
         }
-        self.effect_renderer.end_offscreen_frame();
+        self.effect_renderer.end_frame();
         executor.end_transient_frame();
         self.depth_targets.end_frame();
         self.sampled_targets.end_frame();

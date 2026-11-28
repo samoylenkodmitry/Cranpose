@@ -5095,11 +5095,11 @@ impl Device {
                 flags |= pipeline::PipelineFlags::WRITES_STENCIL;
             }
         }
-        // A Vulkan pipeline needs none of its shader modules once it is
-        // made, and a module made from naga IR keeps that IR in memory, so
-        // on Vulkan the pipeline lets its modules go and the caller's
-        // handles alone keep them.
-        let shader_modules = if self.backend() == wgt::Backend::Vulkan {
+        // A Vulkan or Metal pipeline needs none of its shader modules once
+        // it is made. A module made from naga IR keeps that IR in memory.
+        // There the pipeline lets its modules go. The caller's handles
+        // alone keep them.
+        let shader_modules = if matches!(self.backend(), wgt::Backend::Vulkan | wgt::Backend::Metal) {
             ArrayVec::new()
         } else {
             let mut shader_modules = ArrayVec::new();
