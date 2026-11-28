@@ -282,6 +282,9 @@ jobs:
     # on samarch, which takes `cranpose-linux` jobs, has no GPU.
     runs-on: [self-hosted, Linux, samarch1]
     timeout-minutes: 60
+    # The publish step pushes the run to the perf-data branch.
+    permissions:
+      contents: write
     defaults:
       run:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
@@ -293,6 +296,7 @@ jobs:
         with:
           # The release tags name the run's Cranpose version.
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Build the Linux apps
         run: |
@@ -301,12 +305,13 @@ jobs:
           benchmarks/compose-vs-cranpose/build_apps.sh linux
 
       - name: Measure the apps with MangoHud
-        # The whole measure holds the exclusive host lock, so no build of
-        # another job runs beside it.
+        # Outside the job's shared lock: linux.py takes the exclusive host
+        # lock around each subject and releases it between subjects, so
+        # 20-minute CI jobs pass between measurements (#2417).
         shell: bash --noprofile --norc -eo pipefail {0}
         run: |
           export XAUTHORITY="$HOME/.Xauthority"
-          scripts/ci/with_host_lock.sh --exclusive just perf-linux-measure "$RUNNER_TEMP/linux" --no-host-lock
+          just perf-linux-measure "$RUNNER_TEMP/linux"
 
       - name: Publish the Linux run
         env:
