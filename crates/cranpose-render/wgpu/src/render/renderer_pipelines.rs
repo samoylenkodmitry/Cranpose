@@ -229,6 +229,23 @@ impl RendererPipelines {
         built + self.shape_pipelines.landings() + self.stand_ins.deferrals.get()
     }
 
+    // `landings` as the frame's start counted them. A frame holds its pixels at this count: a
+    // build that lands later in the frame counts in the next frame, which also takes its landing
+    // and drops what may hold the stand-in that the build replaces. Counted later, the frame
+    // would hold a stand-in at a count that no landing moves again.
+    pub(crate) fn landings_at_frame_start(&self) -> u64 {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.built_at_frame_start
+                + self.shape_pipelines.landings()
+                + self.stand_ins.deferrals.get()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.built_at_frame_start
+        }
+    }
+
     // Starts a frame's count of landings: whether a pipeline that a stand-in
     // waited for landed, so the kept layers and blurred shadows, which may
     // hold that stand-in, go. On native the compiler's threads tell it. On
