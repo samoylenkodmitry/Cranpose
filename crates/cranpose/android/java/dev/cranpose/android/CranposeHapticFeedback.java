@@ -27,9 +27,9 @@ final class CranposeHapticFeedback {
                         ? HapticFeedbackConstants.REJECT
                         : HapticFeedbackConstants.LONG_PRESS;
             default:
-                return Build.VERSION.SDK_INT >= 27
-                        ? HapticFeedbackConstants.TEXT_HANDLE_MOVE
-                        : HapticFeedbackConstants.KEYBOARD_TAP;
+                // TEXT_HANDLE_MOVE plays only where the system configuration
+                // enables it. CLOCK_TICK plays on every device.
+                return HapticFeedbackConstants.CLOCK_TICK;
         }
     }
 }
