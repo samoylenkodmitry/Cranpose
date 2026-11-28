@@ -15,7 +15,7 @@ use cranpose_ui_graphics::{
 use crate::{shared_test_support, support};
 
 const SIZE: u32 = 96;
-const CELL: f32 = 24.0;
+const CELL: u32 = 24;
 
 // A shader painting its layer in a shade of blue its uniform picks, red
 // while it compiles.
@@ -40,12 +40,48 @@ pub(crate) fn shader() -> RuntimeShader {
 // shade of its own, drawn with `strategy`. The first cell's shade is
 // `first`.
 pub(crate) fn page(shader: &RuntimeShader, strategy: CompositingStrategy, first: f32) -> LayerNode {
-    let cells = (0..16).map(|index| {
+    grid(
+        shader,
+        strategy,
+        first,
+        Grid {
+            cell: CELL,
+            columns: 4,
+            rows: 4,
+        },
+    )
+}
+
+// A page of `columns` by `rows` square cells of `cell` pixels.
+#[derive(Clone, Copy)]
+pub(crate) struct Grid {
+    pub(crate) cell: u32,
+    pub(crate) columns: u32,
+    pub(crate) rows: u32,
+}
+
+impl Grid {
+    pub(crate) fn size(self) -> (u32, u32) {
+        (self.cell * self.columns, self.cell * self.rows)
+    }
+}
+
+// The cells of `grid`, each a layer drawn by `shader` alone with a shade of
+// its own, drawn with `strategy`. The first cell's shade is `first`.
+pub(crate) fn grid(
+    shader: &RuntimeShader,
+    strategy: CompositingStrategy,
+    first: f32,
+    grid: Grid,
+) -> LayerNode {
+    let count = grid.columns * grid.rows;
+    let side = grid.cell as f32;
+    let cells = (0..count).map(|index| {
         let mut cell = shader.clone();
         let shade = if index == 0 {
             first
         } else {
-            index as f32 / 16.0
+            index as f32 / count as f32
         };
         cell.set_float4(0, shade, 0.0, 0.0, 0.0);
         let layer = GraphicsLayer {
@@ -53,10 +89,10 @@ pub(crate) fn page(shader: &RuntimeShader, strategy: CompositingStrategy, first:
             compositing_strategy: strategy,
             ..GraphicsLayer::default()
         };
-        let (column, row) = ((index % 4) as f32, (index / 4) as f32);
+        let (column, row) = ((index % grid.columns) as f32, (index / grid.columns) as f32);
         let mut node = shared_test_support::layer_node(
-            Rect::from_size(cranpose_ui_graphics::Size::new(CELL, CELL)),
-            ProjectiveTransform::translation(column * CELL, row * CELL),
+            Rect::from_size(cranpose_ui_graphics::Size::new(side, side)),
+            ProjectiveTransform::translation(column * side, row * side),
             layer,
             Vec::new(),
         );
@@ -69,7 +105,8 @@ pub(crate) fn page(shader: &RuntimeShader, strategy: CompositingStrategy, first:
         };
         RenderNode::Layer(Box::new(node))
     });
-    support::page_graph(SIZE, SIZE, cells.collect())
+    let (width, height) = grid.size();
+    support::page_graph(width, height, cells.collect())
 }
 
 #[test]

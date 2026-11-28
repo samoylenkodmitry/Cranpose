@@ -236,12 +236,14 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         let stored_key = disk_key(&key);
         let pixels = u64::from(width) * u64::from(height);
         let format = self.renderer.pipelines.composition_format;
-        let stored = self
-            .renderer
-            .layer_cache
-            .disk
-            .holds(stored_key, place.size, format);
-        if !stored && !self.renderer.layer_cache.fills.allows(pixels) {
+        let cache = &self.renderer.layer_cache;
+        let stored = cache.disk.holds(stored_key, place.size, format);
+        let waits = if stored {
+            cache.disk.upload_waits(stored_key)
+        } else {
+            !cache.fills.allows(pixels)
+        };
+        if waits {
             self.renderer
                 .pipelines
                 .note_deferred_fill(&self.renderer.frame_stats);
@@ -253,7 +255,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         let kept = Rc::new(self.renderer.acquire_retained_surface(width, height));
         let cache = &mut self.renderer.layer_cache;
         if stored && let Some(stats) = cache.disk.upload(&self.renderer.queue, stored_key, &kept) {
-            self.renderer.frame_stats.record_command_stats(stats);
+            self.renderer.frame_stats.record_kept_upload(stats);
             let retained = Retained::surface(Rc::clone(&kept), StandInPixels::Final);
             cache.insert(key, retained, None);
             return Some(Some(kept_slot(kept)));
