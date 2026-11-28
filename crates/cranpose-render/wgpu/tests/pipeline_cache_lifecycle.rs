@@ -1051,9 +1051,120 @@ fn an_output_drawn_anew_every_frame_stays_off_the_disk() {
     support::assert_same_bytes("a moving cell", 96, &frame.pixels, &expected.pixels);
 }
 
+// The bytes of kept pixels a frame uploads past its first output, as the
+// renderer's kept_pixels.rs sets them.
+const FRAME_UPLOAD_SHARE: u64 = 4 << 20;
+
+// A relaunch that finds 8 MiB of kept outputs uploads them over two frames,
+// a share of 4 MiB each, so the staging copies of all of them never sit in
+// one frame. The cells past a frame's share show their placeholder until
+// the next frame. Every output still comes from the file. The page draws
+// the pixels of the launch that kept them.
+#[test]
+fn a_relaunch_uploads_its_kept_outputs_a_share_a_frame() {
+    use cranpose_ui_graphics::CompositingStrategy::{Auto, Offscreen};
+
+    use crate::offscreen_shader_layers::{Grid, grid, shader};
+
+    // 32 outputs of 256 KiB
+    const GRID: Grid = Grid {
+        cell: 256,
+        columns: 8,
+        rows: 4,
+    };
+    let (width, height) = GRID.size();
+    let _lock = support::gpu_test_lock();
+    let files = CacheFiles::new();
+    files.select("kept-uploads.bin");
+    let shader = shader();
+    let mut reference = support::LockedRenderer::beside_locked().expect("reference renderer");
+    let expected = support::capture_graph_settled(
+        &mut reference,
+        &grid(&shader, Auto, 0.0, GRID),
+        width,
+        height,
+    );
+    drop(reference);
+    let page = grid(&shader, Offscreen, 0.0, GRID);
+    let mut launch = support::LockedRenderer::beside_locked().expect("GPU required");
+    settle_kept(&mut launch, &page, GRID.size());
+    drop(launch);
+
+    let mut relaunch = support::LockedRenderer::beside_locked().expect("GPU required");
+    let mut uploads = Vec::new();
+    let mut frame = None;
+    for _ in 0..8 {
+        frame = Some(support::capture_graph(&mut relaunch, &page, width, height));
+        let stats = relaunch.last_frame_stats().expect("frame statistics");
+        assert_eq!(stats.effect_applies, 0, "no output is drawn: {stats:?}");
+        uploads.push(stats.kept_upload_bytes);
+        if !relaunch.needs_frame_warmup() {
+            break;
+        }
+    }
+    drop(relaunch);
+    assert!(
+        uploads.iter().all(|&bytes| bytes <= FRAME_UPLOAD_SHARE),
+        "a frame uploads at most its share: {uploads:?}"
+    );
+    assert_eq!(
+        uploads.iter().sum::<u64>(),
+        32 * 256 * 256 * 4,
+        "every output comes from the file: {uploads:?}"
+    );
+    assert!(
+        uploads.iter().filter(|&&bytes| bytes > 0).count() >= 2,
+        "the outputs take more than one frame: {uploads:?}"
+    );
+    let frame = frame.expect("a frame");
+    support::assert_same_bytes("kept outputs", width, &frame.pixels, &expected.pixels);
+}
+
+// A kept output larger than a frame's share still uploads, alone, in the
+// relaunch's first frame.
+#[test]
+fn a_kept_output_past_a_frames_share_uploads_in_the_first_frame() {
+    use cranpose_ui_graphics::CompositingStrategy::Offscreen;
+
+    use crate::offscreen_shader_layers::{Grid, grid, shader};
+
+    // one output of 4.4 MiB
+    const GRID: Grid = Grid {
+        cell: 1080,
+        columns: 1,
+        rows: 1,
+    };
+    let (width, height) = GRID.size();
+    let _lock = support::gpu_test_lock();
+    let files = CacheFiles::new();
+    files.select("kept-large-upload.bin");
+    let page = grid(&shader(), Offscreen, 0.25, GRID);
+    let mut launch = support::LockedRenderer::beside_locked().expect("GPU required");
+    settle_kept(&mut launch, &page, GRID.size());
+    drop(launch);
+
+    let mut relaunch = support::LockedRenderer::beside_locked().expect("GPU required");
+    support::capture_graph(&mut relaunch, &page, width, height);
+    let stats = relaunch.last_frame_stats().expect("frame statistics");
+    drop(relaunch);
+    assert_eq!(
+        (stats.kept_upload_bytes, stats.placeholder_draws),
+        (1080 * 1080 * 4, 0),
+        "the output comes from the file in the first frame: {stats:?}"
+    );
+}
+
 fn draw_kept_settled(renderer: &mut support::LockedRenderer, page: &LayerNode) {
+    settle_kept(renderer, page, (96, 96));
+}
+
+fn settle_kept(
+    renderer: &mut support::LockedRenderer,
+    page: &LayerNode,
+    (width, height): (u32, u32),
+) {
     for _ in 0..64 {
-        support::capture_graph(renderer, page, 96, 96);
+        support::capture_graph(renderer, page, width, height);
         if !renderer.needs_frame_warmup() {
             return;
         }

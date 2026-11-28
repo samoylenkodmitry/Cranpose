@@ -4,7 +4,11 @@
 // what it draws, so an output whose shader or uniforms changed is drawn
 // afresh. An output goes to the file when the frame after its fill shows it
 // again, so a layer drawn anew every frame never does. An output no launch
-// used for a few launches goes.
+// used for a few launches goes. A frame uploads at most FRAME_UPLOAD_BYTES of
+// pixels past its first output. Each upload holds a staging copy of its
+// pixels until the GPU is done with the frame. A start that shows many
+// outputs at once would hold all of those copies. The outputs past the share
+// show their placeholder until a later frame uploads them.
 
 use std::{
     fs::File,
@@ -58,6 +62,8 @@ struct KeptFile {
     // the pixels of this frame's uploads, released at its end: a frame
     // that uploads usually uploads many, and later frames seldom do
     upload: Vec<u8>,
+    // the bytes this frame uploaded
+    uploaded: u64,
 }
 
 struct Requested {
@@ -80,6 +86,11 @@ pub(crate) fn disk_key(key: &LayerRasterCacheKey) -> u64 {
     key.hash(&mut hasher);
     hasher.finish()
 }
+
+// The bytes of kept pixels a frame uploads past its first output. With two
+// frames in flight, the staging copies of about three of these frames are
+// alive at once.
+const FRAME_UPLOAD_BYTES: u64 = 4 << 20;
 
 fn format_key(format: wgpu::TextureFormat) -> u64 {
     let mut hasher = FxHasher::default();
@@ -128,6 +139,7 @@ impl KeptPixels {
                 reading: Vec::new(),
                 writer: None,
                 upload: Vec::new(),
+                uploaded: 0,
             }
         });
         Self { file }
@@ -145,6 +157,17 @@ impl KeptPixels {
                     && (head.width, head.height) == size
                     && u64::from(head.len) == pixel_bytes(format, head.width, head.height)
             })
+    }
+
+    // Whether the output an earlier launch kept under `key` waits for a
+    // later frame: this frame uploaded its share already.
+    pub(crate) fn upload_waits(&self, key: u64) -> bool {
+        self.file.as_ref().is_some_and(|file| {
+            file.uploaded > 0
+                && file.index.get(&key).is_some_and(|indexed| {
+                    file.uploaded + u64::from(indexed.head.len) > FRAME_UPLOAD_BYTES
+                })
+        })
     }
 
     // Uploads the pixels an earlier launch kept under `key` into `target`;
@@ -183,6 +206,7 @@ impl KeptPixels {
             target.texture().size(),
         );
         file.used.insert(key);
+        file.uploaded += stats.upload_bytes;
         Some(stats)
     }
 
@@ -246,6 +270,7 @@ impl KeptPixels {
         std::mem::swap(&mut file.last_drawn, &mut file.drawn);
         file.drawn.clear();
         file.upload = Vec::new();
+        file.uploaded = 0;
         let Some((device, queue)) = file.gpu.clone() else {
             return;
         };

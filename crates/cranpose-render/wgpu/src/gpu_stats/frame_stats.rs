@@ -21,6 +21,7 @@ pub(crate) struct FrameStats {
     pub command_copy_pixels: Cell<u64>,
     pub command_transient_texture_bytes: Cell<u64>,
     pub command_upload_bytes: Cell<u64>,
+    pub kept_upload_bytes: Cell<u64>,
     pub offscreen_acquires: Cell<u32>,
     pub offscreen_news: Cell<u32>,
     pub offscreen_total_bytes: Cell<u64>,
@@ -117,6 +118,16 @@ impl FrameStats {
     pub(crate) fn record_prefix_admission(&self) {
         self.prefix_admissions
             .set(self.prefix_admissions.get().saturating_add(1));
+    }
+
+    // Records the upload of a kept output from the file of earlier launches.
+    pub(crate) fn record_kept_upload(&self, stats: FrameCommandStats) {
+        self.kept_upload_bytes.set(
+            self.kept_upload_bytes
+                .get()
+                .saturating_add(stats.upload_bytes),
+        );
+        self.record_command_stats(stats);
     }
 
     pub(crate) fn record_command_stats(&self, stats: FrameCommandStats) {
@@ -433,6 +444,7 @@ impl FrameStats {
                 .saturating_add(self.command_transient_texture_bytes.get()),
             retained_texture_bytes,
             upload_bytes: self.command_upload_bytes.get(),
+            kept_upload_bytes: self.kept_upload_bytes.get(),
             upload_writes: self.upload_writes.get(),
             isolated_layer_renders: self.isolated_layer_renders.get(),
             isolated_layer_pixels: self.isolated_layer_pixels.get(),
@@ -512,6 +524,7 @@ impl FrameStats {
         self.command_copy_pixels.set(0);
         self.command_transient_texture_bytes.set(0);
         self.command_upload_bytes.set(0);
+        self.kept_upload_bytes.set(0);
         self.upload_writes.set(0);
         self.offscreen_acquires.set(0);
         self.offscreen_news.set(0);
