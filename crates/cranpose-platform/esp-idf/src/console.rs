@@ -56,11 +56,20 @@ pub(crate) enum Level {
     Warn,
 }
 
+// What became of a line.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Sent {
+    // It went out, or it is longer than `LINE_BYTES` and was dropped and
+    // counted, as no console would ever take it.
+    Done,
+    // The console cannot take it now: the caller may keep it for later.
+    Busy,
+}
+
 // Writes `I (STAMP) cranpose: TEXT` when the console takes the whole line
-// now, and returns whether it did. A line longer than `LINE_BYTES` never
-// goes out. Out of line: one copy serves every line.
+// now. Out of line: one copy serves every line.
 #[inline(never)]
-pub(crate) fn write(stamp: Stamp, level: Level, text: fmt::Arguments<'_>) -> bool {
+pub(crate) fn write(stamp: Stamp, level: Level, text: fmt::Arguments<'_>) -> Sent {
     let mut line = Line {
         bytes: [0; LINE_BYTES],
         len: 0,
@@ -70,16 +79,21 @@ pub(crate) fn write(stamp: Stamp, level: Level, text: fmt::Arguments<'_>) -> boo
         Level::Warn => 'W',
     };
     if write!(line, "{letter} ({}) cranpose: {text}\r\n", stamp.0).is_err() {
-        return false;
+        count_dropped(1);
+        return Sent::Done;
     }
     // SAFETY: the writer reads `len` bytes of the buffer and keeps no
     // pointer to it.
-    unsafe { cranpose_console_write_line(line.bytes.as_ptr(), line.len) }
+    if unsafe { cranpose_console_write_line(line.bytes.as_ptr(), line.len) } {
+        Sent::Done
+    } else {
+        Sent::Busy
+    }
 }
 
 // Writes the line now, or drops it and counts the drop.
 pub(crate) fn write_or_drop(level: Level, text: fmt::Arguments<'_>) {
-    if !write(Stamp::now(), level, text) {
+    if write(Stamp::now(), level, text) == Sent::Busy {
         count_dropped(1);
     }
 }

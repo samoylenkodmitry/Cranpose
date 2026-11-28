@@ -328,8 +328,9 @@ impl Screen<'_, '_> {
         let sent = self.presenter.present(self.framebuffer, &mut self.panel)?;
         let presented = Instant::now();
         #[cfg(feature = "bench-frames")]
-        self.boot_frames
-            .present(|text| console::write(console::Stamp::now(), Level::Info, text));
+        self.boot_frames.present(|text| {
+            console::write(console::Stamp::now(), Level::Info, text) == console::Sent::Done
+        });
         let phases = FramePhases {
             update: updated.duration_since(now),
             present: presented.duration_since(updated),

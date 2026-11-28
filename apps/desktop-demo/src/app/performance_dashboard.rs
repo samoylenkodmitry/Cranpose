@@ -830,7 +830,8 @@ fn PanelNote(palette: Palette, run: Rc<PerfRun>) {
     Text(
         format!(
             "The {} panel shows {hz:.2} pictures a second: shown fps counts each second's drawn \
-             frames up to that, and the bars rank by it.",
+             frames up to the pictures the panel shows in it from the first frame on, and the \
+             bars rank by it.",
             run.device
         ),
         Modifier::empty(),

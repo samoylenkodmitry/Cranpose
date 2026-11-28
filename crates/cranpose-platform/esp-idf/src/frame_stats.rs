@@ -7,7 +7,7 @@
 use std::time::{Duration, Instant};
 
 use crate::{
-    console::{self, Hundredths, Level, Stamp, Tenths},
+    console::{self, Hundredths, Level, Sent, Stamp, Tenths},
     memory::MemoryReport,
 };
 
@@ -66,13 +66,13 @@ trait LineText {
     const LINES: u8;
 
     // Writes line `index` when the console takes it now.
-    fn write(&self, stamp: Stamp, index: u8) -> bool;
+    fn write(&self, stamp: Stamp, index: u8) -> Sent;
 }
 
 impl LineText for FirstFrame {
     const LINES: u8 = 2;
 
-    fn write(&self, stamp: Stamp, index: u8) -> bool {
+    fn write(&self, stamp: Stamp, index: u8) -> Sent {
         match index {
             0 => console::write(
                 stamp,
@@ -94,7 +94,7 @@ impl LineText for FirstFrame {
 impl LineText for Report {
     const LINES: u8 = 6;
 
-    fn write(&self, stamp: Stamp, index: u8) -> bool {
+    fn write(&self, stamp: Stamp, index: u8) -> Sent {
         let memory = &self.memory;
         match index {
             0 => console::write(
@@ -161,10 +161,10 @@ impl<T: LineText> Lines<T> {
     }
 
     // Writes the lines the console takes now, and returns whether all are
-    // written.
+    // done.
     fn write(&mut self) -> bool {
         while self.next < T::LINES {
-            if !self.text.write(self.stamp, self.next) {
+            if self.text.write(self.stamp, self.next) == Sent::Busy {
                 return false;
             }
             self.next += 1;

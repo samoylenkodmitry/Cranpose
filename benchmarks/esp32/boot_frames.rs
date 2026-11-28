@@ -30,7 +30,7 @@ impl BootFrames {
     }
 
     // Counts a presented frame. After the last second it writes the lines
-    // of the report through `write`, which returns whether a line went out.
+    // of the report through `write`, which returns whether it is done with a line.
     pub(crate) fn present(&mut self, write: impl FnMut(fmt::Arguments<'_>) -> bool) {
         if self.written == LINES {
             return;
