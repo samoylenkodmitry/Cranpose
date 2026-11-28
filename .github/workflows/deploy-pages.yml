@@ -40,6 +40,7 @@ jobs:
           # commit. Resolve the selected ref at job start so queued deployments
           # do not reject that intentional move as a stale event SHA.
           ref: ${{ github.ref_name }}
+          persist-credentials: false
 
       - name: Provision the pinned toolchain and the wasm target
         run: |
@@ -63,10 +64,14 @@ jobs:
             wasm-opt --version
           else
             binaryen_root="$RUNNER_TEMP/binaryen-120"
+            binaryen_tar="$RUNNER_TEMP/binaryen-version_120-arm64-macos.tar.gz"
+            binaryen_sha256="65f4163853897ff86897c067010aba37507a5ba34e1c2cba25593f0a67909510"
             mkdir -p "$binaryen_root"
-            curl -fL --retry 3 \
-              https://github.com/WebAssembly/binaryen/releases/download/version_120/binaryen-version_120-arm64-macos.tar.gz \
-              | tar xz -C "$binaryen_root" --strip-components=1
+            curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "$binaryen_tar" \
+              https://github.com/WebAssembly/binaryen/releases/download/version_120/binaryen-version_120-arm64-macos.tar.gz
+            echo "$binaryen_sha256  $binaryen_tar" | shasum -a 256 --check --quiet
+            tar xzf "$binaryen_tar" -C "$binaryen_root" --strip-components=1
+            rm -f "$binaryen_tar"
             echo "$binaryen_root/bin" >> "$GITHUB_PATH"
             "$binaryen_root/bin/wasm-opt" --version
           fi

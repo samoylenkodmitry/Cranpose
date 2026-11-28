@@ -68,14 +68,37 @@ else
   done
 
   if [[ "$installed" -ne 1 ]]; then
-    # Fallback: fetch the NDK zip directly from Google (retried), avoiding
-    # sdkmanager's flaky archive handling entirely.
-    major="${ndk_version%%.*}"
-    url="https://dl.google.com/android/repository/android-ndk-r${major}-linux.zip"
+    # Fallback: fetch the pinned NDK zip directly from Google (retried) and
+    # verify its SHA-256 before unpacking, avoiding sdkmanager's flaky archive
+    # handling.
+    case "$(uname -s):$ndk_version" in
+      Linux:30.0.16248370)
+        archive="android-ndk-r30-linux.zip"
+        expected_sha256="753611f410d002cfcd3f3dc2ef49aad532089d3180b436c060a90bf0fcb64df2"
+        ;;
+      Darwin:30.0.16248370)
+        archive="android-ndk-r30-darwin.zip"
+        expected_sha256="d125634de97b26deb1e1bb1a562f9d839aa5803d1784a1e414485f5ccbe6739f"
+        ;;
+      *)
+        echo "No pinned direct NDK fallback checksum for $(uname -s) NDK $ndk_version" >&2
+        exit 1
+        ;;
+    esac
+    verify_sha256() {
+      local expected="$1" file="$2"
+      if command -v sha256sum >/dev/null 2>&1; then
+        echo "$expected  $file" | sha256sum --check --quiet
+      else
+        echo "$expected  $file" | shasum -a 256 --check --quiet
+      fi
+    }
+    url="https://dl.google.com/android/repository/$archive"
     echo "Falling back to direct NDK download: $url" >&2
     tmp="$(mktemp -d)"
     for attempt in 1 2 3; do
-      if curl -fL --retry 5 --retry-delay 5 -o "$tmp/ndk.zip" "$url" \
+      if curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 5 -o "$tmp/ndk.zip" "$url" \
+        && verify_sha256 "$expected_sha256" "$tmp/ndk.zip" \
         && unzip -q -o "$tmp/ndk.zip" -d "$tmp"; then
         extracted="$(find "$tmp" -maxdepth 1 -type d -name 'android-ndk-*' | head -n1)"
         if [[ -n "$extracted" ]]; then

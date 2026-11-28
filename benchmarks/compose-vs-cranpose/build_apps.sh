@@ -79,7 +79,10 @@ flutter_ready() {
 # The latest .NET 10, its MAUI Android workload, and the WebAssembly tools
 # that compile Avalonia's browser build ahead of time.
 dotnet_ready() {
-    curl --proto '=https' --tlsv1.2 -fsSL https://dot.net/v1/dotnet-install.sh -o "$cache/dotnet-install.sh"
+    local installer_url="https://raw.githubusercontent.com/dotnet/install-scripts/ee83f9c42135205be4e0503bd472b6f99c9b7d51/src/dotnet-install.sh"
+    local installer_sha256="082f7685e156738a1b2e2ed8381a621870d4ce8e8c59278034556f05c186eb2e"
+    curl --proto '=https' --tlsv1.2 -fsSL "$installer_url" -o "$cache/dotnet-install.sh"
+    echo "$installer_sha256  $cache/dotnet-install.sh" | shasum -a 256 --check --quiet
     bash "$cache/dotnet-install.sh" --channel 10.0 --install-dir "$DOTNET_ROOT"
     if dotnet workload list | grep -q maui-android; then
         dotnet workload update

@@ -15,13 +15,6 @@ on:
   schedule:
     - cron: '30 1 * * *'
   workflow_dispatch:
-    inputs:
-      git_pins:
-        description: >-
-          Also move the frameworks that publish no release (Rune, zgui) to
-          their repository's latest commit, in the same pull request
-        type: boolean
-        default: false
 
 # Each job grants only the permissions its publish or PR step needs.
 permissions:
@@ -101,8 +94,6 @@ jobs:
 
       - name: Skip a main already measured on the desktop and both Android devices
         id: published
-        # A night asked to move the commit pins measures again.
-        if: ${{ !inputs.git_pins }}
         run: |
           chip="$(sysctl -n machdep.cpu.brand_string)"
           chrome="$(defaults read '/Applications/Google Chrome.app/Contents/Info' CFBundleShortVersionString | cut -d. -f1)"
@@ -124,19 +115,11 @@ jobs:
           # Fyne's apps build with Go.
           command -v go >/dev/null || brew install go
 
-      - name: Move every framework to its latest release
-        if: steps.published.outputs.measured != 'yes'
-        env:
-          GIT_PINS: ${{ inputs.git_pins && '--git-pins' || '' }}
-        run: python3 benchmarks/compose-vs-cranpose/versions.py bump $GIT_PINS --record "$RUNNER_TEMP/bumps.json"
-
       - name: Build the Android and browser apps
         if: steps.published.outputs.measured != 'yes'
         run: |
-          # The build caches sit beside the runner's other caches; a moved
-          # pin that does not build is put back.
+          # Build only the pinned dependency versions reviewed and checked into main.
           export PERF_BUILD_CACHE="$(dirname "$SCCACHE_DIR")/gauntlet"
-          export PERF_BUMPS="$RUNNER_TEMP/bumps.json"
           benchmarks/compose-vs-cranpose/build_apps.sh android "$RUNNER_TEMP/gauntlet-apks"
           benchmarks/compose-vs-cranpose/build_apps.sh browser "$RUNNER_TEMP/gauntlet-browser"
 
@@ -162,20 +145,6 @@ jobs:
           retention-days: 2
           if-no-files-found: error
 
-      - name: Save the dependency versions used for the builds
-        if: steps.published.outputs.measured != 'yes'
-        run: |
-          mkdir -p "$RUNNER_TEMP/gauntlet-pins"
-          cp "$RUNNER_TEMP/bumps.json" "$RUNNER_TEMP/gauntlet-pins/"
-          git diff --binary HEAD -- benchmarks/compose-vs-cranpose > "$RUNNER_TEMP/gauntlet-pins/versions.patch"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: steps.published.outputs.measured != 'yes'
-        with:
-          name: gauntlet-pins
-          path: ${{ runner.temp }}/gauntlet-pins/
-          retention-days: 2
-          if-no-files-found: error
-
   desktop:
     name: frameworks on a Mac desktop (macm3)
     needs: build
@@ -184,7 +153,6 @@ jobs:
     timeout-minutes: 120
     permissions:
       contents: write
-      pull-requests: write
     defaults:
       run:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
@@ -203,19 +171,11 @@ jobs:
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: gauntlet-pins
-          path: ${{ runner.temp }}/gauntlet-pins
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
           name: gauntlet-browser
           path: ${{ runner.temp }}/gauntlet-browser
-      - name: Build the desktop apps with the same pins
+      - name: Build the desktop apps
         run: |
           export PERF_BUILD_CACHE="$(dirname "$SCCACHE_DIR")/gauntlet"
-          export PERF_BUMPS="$RUNNER_TEMP/gauntlet-pins/bumps.json"
-          if [[ -s "$RUNNER_TEMP/gauntlet-pins/versions.patch" ]]; then
-            git apply "$RUNNER_TEMP/gauntlet-pins/versions.patch"
-          fi
           command -v macmon >/dev/null || brew install macmon
           benchmarks/compose-vs-cranpose/build_apps.sh desktop
           benchmarks/compose-vs-cranpose/build_apps.sh release "$(git describe --tags --abbrev=0 --match 'v*')"
@@ -251,11 +211,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: just perf-publish "$RUNNER_TEMP/desktop-browser/report.json"
-
-      - name: Propose the pins that moved
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/perf/propose_versions.py --record "$RUNNER_TEMP/gauntlet-pins/bumps.json"
 
       - name: Keep the run
         if: ${{ !cancelled() }}

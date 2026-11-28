@@ -16,7 +16,7 @@ fi
 if [[ ! -f "$layer/usr/lib/libVkLayer_khronos_validation.so" ]]; then
     download="$(mktemp -d)"
     trap 'rm -rf "$download"' EXIT
-    curl -fsSL -o "$download/$package" \
+    curl --proto '=https' --tlsv1.2 -fsSL -o "$download/$package" \
         "https://archive.archlinux.org/packages/v/vulkan-validation-layers/$package"
     echo "$sha256  $download/$package" | sha256sum --check --quiet
     mkdir -p "$download/root"

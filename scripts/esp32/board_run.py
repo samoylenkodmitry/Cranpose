@@ -14,6 +14,8 @@ build takes ESP-IDF from ~/.espressif, where the demo's first build put it.
 import argparse
 import fcntl
 import glob
+import hashlib
+import io
 import os
 import pathlib
 import pty
@@ -23,9 +25,11 @@ import shutil
 import signal
 import subprocess
 import sys
+import tarfile
 import tempfile
 import termios
 import time
+import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DEMO = ROOT / "apps/esp32-demo"
@@ -84,6 +88,7 @@ def build_rust(app, binary, board, components, extra_sdkconfig, features, log, d
 
 
 SLINT_CORE = "i-slint-core-1.18.1"
+SLINT_CORE_SHA256 = "ed2ea15059d70bc31b1a8b1eb4c34f2c5df04cb7e53f36179b43c0261231d646"
 
 
 def unpack_slint_core():
@@ -95,8 +100,14 @@ def unpack_slint_core():
         return
     copy.parent.mkdir(parents=True, exist_ok=True)
     url = f"https://static.crates.io/crates/i-slint-core/{SLINT_CORE}.crate"
+    with urllib.request.urlopen(url, timeout=60) as response:
+        archive = response.read()
+    digest = hashlib.sha256(archive).hexdigest()
+    if digest != SLINT_CORE_SHA256:
+        sys.exit(f"{SLINT_CORE}: SHA-256 mismatch ({digest} != {SLINT_CORE_SHA256})")
     with tempfile.TemporaryDirectory() as unpacked:
-        subprocess.run(f"curl -sSfL {url} | tar -xz -C {unpacked}", shell=True, check=True)
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
+            tar.extractall(unpacked, filter="data")
         source = pathlib.Path(unpacked) / SLINT_CORE / "graphics/path.rs"
         text = source.read_text()
         call = "let mut rem = t.rem_euclid(1.);"
