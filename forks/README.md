@@ -33,11 +33,11 @@ extensions, the GL varying minimum, the presentable image identities, the
 WebGL frames drawn into the canvas, the GL bindings a link already
 sets, the NUL after each GL debug string and WebGL `VideoFrame` uploads
 without `web_sys_unstable_apis` below. `cranpose-wgpu-core` is at
-30.0.28 to require those, to make
+30.0.29 to require those, to make
 template modules, to configure a surface while another thread submits, to
-let Vulkan pipelines drop their shader modules, to hand presented
+let Vulkan and Metal pipelines drop their shader modules, to hand presented
 images back as they presented and to encode a buffer copy without a heap
-list. `cranpose-wgpu` is at 30.0.32 for
+list. `cranpose-wgpu` is at 30.0.33 for
 the background compiles, the pipeline readiness and the kept swapchain
 images below and to require them.
 
@@ -462,22 +462,27 @@ game drew nothing in Brave on a Mate 20 X on github.io, while the same page on
 localhost, where the noise left 60, drew it. The GL adapter now takes at least
 60 components.
 
-### Vulkan pipelines let their shader modules go
+### Vulkan and Metal pipelines let their shader modules go
 
 `wgpu-core` keeps every shader module a render pipeline was made from for
-as long as the pipeline lives, and a `wgpu-hal` module made from WGSL or
-naga IR keeps that IR, from which it writes SPIR-V when each pipeline is
+as long as the pipeline lives. A `wgpu-hal` module made from WGSL or naga
+IR keeps that IR, from which it writes SPIR-V or MSL when each pipeline is
 made. Cranpose specializes and folds each stage of a pipeline into a
-module of its own, so every pipeline it kept held the IR of both its
+module of its own. Every pipeline it kept thus held the IR of both its
 stages. A Vulkan pipeline needs none of its modules once it is made: the
-`VkShaderModule`s written for it are destroyed at once. On Vulkan the
-pipeline now lets its modules go, and the caller's handles alone keep
-them.
+`VkShaderModule`s written for it are destroyed at once. A Metal pipeline
+holds its `MTLRenderPipelineState` and the library of each stage. It holds
+no module. On Vulkan and Metal the pipeline now lets its modules go. The
+caller's handles alone keep them.
 
 On a Mate 20 X the gauntlet at tier 12 held 78.0 to 78.2 MB of native heap
 on a second start instead of 81.4 to 82.2 (PSS 149.8 instead of 153.3 MB),
 and 1.8 to 2.0 MB less on a first start (three launches each, paired).
-Other backends keep the modules: their pipelines may need them.
+On an iPhone 17 Pro Max, Cranboard's keyboard extension, whose 37 shader
+sources weigh 2.75 MB of WGSL, held about 52 MB of heap in the IR of its
+modules. The renderer's shader cache now lets its own handles go on these
+backends too. Other backends keep the modules: their pipelines
+may need them.
 
 ### Swapchain images come back as they presented
 
