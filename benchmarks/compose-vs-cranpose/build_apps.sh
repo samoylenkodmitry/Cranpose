@@ -9,6 +9,10 @@
 #                                desktop.py runs it as `cranpose-release`
 #   build_apps.sh browser DIR    every app that targets the browser, as DIR/APP/index.html
 #                                with DIR/versions.json naming their versions
+#   build_apps.sh linux          on Linux, every desktop app that builds there, where
+#                                linux.py runs them, with linux-versions.json naming
+#                                their versions and linux-unbuilt.txt why each other
+#                                did not build
 #
 # Cranpose's Android apps are not here: the nightly builds them on the Mac the
 # phone is attached to, signed by the key its earlier builds carry.
@@ -26,7 +30,7 @@ set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 cache=${PERF_BUILD_CACHE:-$HOME/ci-cache/gauntlet}
-mode=${1:?usage: build_apps.sh desktop | android DIR | release TAG | browser DIR}
+mode=${1:?usage: build_apps.sh desktop | android DIR | release TAG | browser DIR | linux}
 mkdir -p "$cache"
 
 export PATH="$cache/flutter/bin:/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
@@ -36,11 +40,34 @@ export DOTNET_NOLOGO=1 DOTNET_CLI_TELEMETRY_OPTOUT=1
 export NUGET_PACKAGES=$cache/nuget
 export npm_config_cache=$cache/npm
 export GOMODCACHE=$cache/go/mod GOCACHE=$cache/go/build
-# The Android SDK the apps' platforms are installed in.
+# The Android SDK the apps' platforms are installed in; the Linux apps need
+# none.
 if [[ -d $HOME/Library/Android/sdk/platforms ]]; then
     export ANDROID_HOME=$HOME/Library/Android/sdk
 fi
-export ANDROID_SDK_ROOT=${ANDROID_HOME:?}
+if [[ $mode != linux ]]; then
+    export ANDROID_SDK_ROOT=${ANDROID_HOME:?}
+fi
+
+# A copy of a build in place of another: `ditto` on a Mac, which keeps a
+# bundle's signature, `cp -a` elsewhere.
+copy() {
+    if command -v ditto >/dev/null; then
+        ditto "$1" "$2"
+    else
+        rm -rf "$2"
+        mkdir -p "$(dirname "$2")"
+        cp -a "$1" "$2"
+    fi
+}
+
+sha256() {
+    if command -v shasum >/dev/null; then
+        shasum -a 256 "$@"
+    else
+        sha256sum "$@"
+    fi
+}
 
 step() {
     echo "== $1"
@@ -76,14 +103,19 @@ flutter_ready() {
     flutter --version
 }
 
-# The latest .NET 10, its MAUI Android workload, and the WebAssembly tools
-# that compile Avalonia's browser build ahead of time.
-dotnet_ready() {
+# The latest .NET 10 in the cache.
+dotnet_sdk() {
     local installer_url="https://raw.githubusercontent.com/dotnet/install-scripts/ee83f9c42135205be4e0503bd472b6f99c9b7d51/src/dotnet-install.sh"
     local installer_sha256="082f7685e156738a1b2e2ed8381a621870d4ce8e8c59278034556f05c186eb2e"
     curl --proto '=https' --tlsv1.2 -fsSL "$installer_url" -o "$cache/dotnet-install.sh"
-    echo "$installer_sha256  $cache/dotnet-install.sh" | shasum -a 256 --check --quiet
+    echo "$installer_sha256  $cache/dotnet-install.sh" | sha256 --check --quiet
     bash "$cache/dotnet-install.sh" --channel 10.0 --install-dir "$DOTNET_ROOT"
+}
+
+# The latest .NET 10, its MAUI Android workload, and the WebAssembly tools
+# that compile Avalonia's browser build ahead of time.
+dotnet_ready() {
+    dotnet_sdk
     if dotnet workload list | grep -q maui-android; then
         dotnet workload update
     else
@@ -164,6 +196,8 @@ dioxus_page() {
 # and the JDKs. A change to any of them builds every app again.
 toolchains() {
     {
+        # A tool the machine lacks, Xcode on Linux, stamps its error.
+        set +e
         (cd "$here" && rustc -V)
         flutter --version --machine
         dotnet --version
@@ -172,14 +206,18 @@ toolchains() {
         node -v
         go version
         /usr/libexec/java_home -V
-    } 2>&1 | shasum -a 256 | cut -c1-16
+        true
+    } 2>&1 | sha256 | cut -c1-16
 }
 
 # The stamp of the PATHS a build reads, as the checkout has them now (moved
 # pins included), and of the toolchains.
 stamp() {
-    (cd "$here" && git ls-files -s -- "$@" && git diff HEAD -- "$@" && echo "$tools") | shasum -a 256 | cut -c1-16
+    (cd "$here" && git ls-files -s -- "$@" && git diff HEAD -- "$@" && echo "$tools") | sha256 | cut -c1-16
 }
+
+# Where `linux` mode writes why each app it could not build is missing.
+unbuilt_file=$here/linux-unbuilt.txt
 
 # usage: build NAME OUTPUT PATHS... -- COMMAND...
 # Runs COMMAND, which makes OUTPUT (a file or a folder, from this folder),
@@ -201,18 +239,22 @@ build() {
     if [[ -e $kept && $(cat "$kept.stamp" 2>/dev/null) == "$(stamp "${paths[@]}")" ]]; then
         echo "== $name: unchanged since its last build"
         mkdir -p "$(dirname "$output")"
-        ditto "$kept" "$output"
+        copy "$kept" "$output"
         return
     fi
     step "$name"
-    if ! "$@"; then
+    mkdir -p "$cache/logs"
+    if ! "$@" 2>&1 | tee "$cache/logs/$name.log"; then
         echo "::warning title=$name did not build::$name did not build, so the night measures the other apps without it"
         rm -rf "$output"
+        if [[ $mode == linux ]]; then
+            echo "$name: did not build: $(grep -E -i 'error' "$cache/logs/$name.log" | head -1 | cut -c1-200)" >> "$unbuilt_file"
+        fi
         return
     fi
     mkdir -p "$cache/built"
     rm -rf "$kept"
-    ditto "$output" "$kept"
+    copy "$output" "$kept"
     stamp "${paths[@]}" > "$kept.stamp"
 }
 
@@ -427,8 +469,51 @@ release)
     } > "$cache/targets/cranpose-release/screens.txt"
     ln -sfn "$cache/targets/cranpose-release" "$here/cranpose-app/target-release"
     ;;
+linux)
+    # Avalonia's desktop build needs .NET alone, no workload.
+    dotnet_sdk
+    tools=$(toolchains)
+    : > "$unbuilt_file"
+    # Cranpose's app reads the whole workspace, which moves every night.
+    step cranpose
+    rust_target cranpose-app
+    cargo_app cranpose-app
+    for app in gpui egui slint iced dioxus xilem rune bui ferro zgui floem freya vizia makepad tauri; do
+        rust_target "$app-app"
+        reads=("$app-app" perf-data chat-assets)
+        case "$app" in
+            freya) reads+=(wall-canvas fonts) ;;
+            vizia|makepad) reads+=(wall-canvas native-canvas fonts) ;;
+            dioxus) reads+=(web-app/www/style.css) ;;
+        esac
+        build "$app" "$app-app/target/release/perf-compare-$app" "${reads[@]}" -- \
+            attempt "$app" cargo_app "$app-app"
+    done
+    # Makepad opens its resources relative to where it runs, which linux.py
+    # makes its program's folder.
+    if [[ -e $here/makepad-app/target/release/perf-compare-makepad ]]; then
+        rm -rf "$here/makepad-app/target/release/makepad"
+        python3 "$here/makepad-app/resources.py" "$here/makepad-app/target/release/makepad"
+    fi
+    build fyne fyne-app/build/perf-compare-fyne fyne-app -- \
+        attempt fyne "$here/fyne-app/build.sh"
+    build compose compose-desktop-app/build/compose/binaries/main/app/PerfCompose \
+        compose-desktop-app shared-compose shared-kotlin -- \
+        attempt compose-desktop bash -c "cd '$here/compose-desktop-app' && ./gradlew --no-daemon -q createDistributable"
+    build avalonia avalonia-app/bin/Release/net10.0/linux-x64/publish avalonia-app shared-cs -- \
+        attempt avalonia bash -c "cd '$here/avalonia-app' && dotnet publish -c Release -f net10.0 -p:TargetFrameworks=net10.0 -r linux-x64"
+    build web web-app/www/js web-app shared-ts -- \
+        attempt web bash -c "cd '$here/web-app' && npm ci --no-audit --no-fund && npx tsc -p tsconfig.json"
+    build electron electron-app/build/PerfElectron-linux-x64 electron-app -- \
+        attempt electron bash -c "cd '$here/electron-app' && npm ci --no-audit --no-fund && npx --no-install electron-packager . PerfElectron --platform=linux --arch=x64 --out=build --overwrite"
+    # Flutter's app has no Linux runner (flutter-app/linux) to build.
+    if [[ ! -d $here/flutter-app/linux ]]; then
+        echo "flutter: the app has no Linux runner (flutter-app/linux)" >> "$unbuilt_file"
+    fi
+    python3 "$here/versions.py" write "$here/linux-versions.json" --platform linux
+    ;;
 *)
-    echo "usage: build_apps.sh desktop | android DIR | release TAG | browser DIR" >&2
+    echo "usage: build_apps.sh desktop | android DIR | release TAG | browser DIR | linux" >&2
     exit 2
     ;;
 esac

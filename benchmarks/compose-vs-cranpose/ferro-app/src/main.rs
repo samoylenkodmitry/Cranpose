@@ -789,6 +789,7 @@ fn tick<R: Fn(Box<dyn FnOnce()>) + Clone + 'static>(request: R, shared: Shared, 
             }
         }
         shared.frame.set(frame);
+        perf_data::updates::shown(frame);
         if load.freeze > 0 && frame >= load.freeze {
             log::info!("PERF frozen frame={frame}");
             return;

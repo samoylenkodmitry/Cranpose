@@ -5,5 +5,7 @@ results/
 **/.kotlin/
 **/local.properties
 desktop-versions.json
+linux-versions.json
+linux-unbuilt.txt
 browser-dist/
 **/pkg/

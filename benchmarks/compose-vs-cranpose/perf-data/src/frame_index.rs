@@ -33,6 +33,7 @@ impl FrameIndex {
             return false;
         }
         self.frame += 1;
+        crate::updates::shown(self.frame);
         if self.freeze > 0 && self.frame >= self.freeze {
             self.frozen = true;
             log::info!("PERF frozen frame={}", self.frame);

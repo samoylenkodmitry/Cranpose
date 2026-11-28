@@ -98,6 +98,7 @@ fn Patches(frame: MutableState<u32>, load: PatchworkLoad, grid: Grid) {
                 clock.next_frame().await;
                 index += 1;
                 frame.set(index);
+                perf_data::updates::shown(index);
                 list_state.scroll_to_item(
                     data::patchwork_scroll_first(index, scroll_rows, grid.tiles.rows),
                     0.0,

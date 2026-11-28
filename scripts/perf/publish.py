@@ -21,8 +21,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 DATA_BRANCH = 'perf-data'
-SUMMARY_METRICS = ['fps', 'first_frame_s', 'cpu_ms_per_frame', 'cpu_cores', 'desired_to_present_p50_ms',
-                   'janky_pct', 'ram_mb', 'gpu_ram_mb', 'cpu_mhz', 'gpu_mhz']
+SUMMARY_METRICS = ['fps', 'mangohud_fps', 'presents_exceed_updates_legs', 'updates_exceed_presents_legs',
+                   'first_frame_s', 'cpu_ms_per_frame', 'cpu_cores', 'desired_to_present_p50_ms', 'janky_pct', 'ram_mb',
+                   'gpu_ram_mb', 'cpu_mhz', 'gpu_mhz']
 
 
 # Attempts at a push GitHub refuses, and the seconds between them, times the
@@ -112,6 +113,8 @@ def index_entry(run, file):
                         'disturbed': disturbed_subjects(scenario, start),
                         # The metrics a second run judged worse again.
                         'confirmed': run.get('confirmed_regressions', {}).get(scenario['scenario'], {}).get(start, []),
+                        # Subjects MangoHud logged no present of, with what it did.
+                        **({'no_presents': judged['no_presents']} if judged.get('no_presents') else {}),
                     }
                     for start, judged in scenario['starts'].items()
                 },
@@ -189,6 +192,10 @@ def main():
     if run.get('skipped'):
         print('nothing to publish:', run['skipped'])
         return
+    # A Linux run on a GPU that drove no connected output: its presents
+    # reached no display.
+    if run.get('display', {}).get('scanout') is False:
+        raise SystemExit('nothing to publish: no output of the GPU scanned the run out (no_scanout)')
     # Every launch failed: the phone's browser run of 2026-10-27, after a
     # restart of the adb server took the page server's port from the phone.
     if not any(scenario['legs'] for scenario in run['scenarios']):
@@ -198,9 +205,10 @@ def main():
     file = f"runs/{stamp}-{run['kind']}-{(run.get('main') or 'manual')[:9]}-{device}.json"
     # A refused push commits again on the branch's latest commit and tries
     # once more.
+    logs = raw_logs(run, file, args.run.parent)
     for attempt in range(1, PUSH_ATTEMPTS + 1):
         tree = data_tree(args.tree)
-        commit_run(tree, run, file, stamp, device)
+        commit_run(tree, run, file, stamp, device, logs)
         if args.no_push:
             break
         try:
@@ -214,8 +222,27 @@ def main():
     print('published', file)
 
 
-def commit_run(tree, run, file, stamp, device):
-    """Adds `run` as `file` and to the index, and commits both."""
+def raw_logs(run, file, source):
+    """The raw log of each leg that names one, MangoHud's in the run's folder
+    `source`, with its place beside the run on the branch, under `mangohud/`
+    and the run's name; each leg then names that place."""
+    folder = Path('mangohud') / Path(file).stem
+    logs = []
+    for scenario in run['scenarios']:
+        for leg in scenario['legs']:
+            if leg.get('mangohud_log'):
+                kept = str(folder / Path(leg['mangohud_log']).name)
+                logs.append((source / leg['mangohud_log'], kept))
+                leg['mangohud_log'] = kept
+    return logs
+
+
+def commit_run(tree, run, file, stamp, device, logs):
+    """Adds `run` as `file`, the raw `logs` of its legs, and the run to the
+    index, and commits them."""
+    for found, kept in logs:
+        (tree / kept).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(found, tree / kept)
     (tree / file).parent.mkdir(parents=True, exist_ok=True)
     # Compact: every leg keeps the time of each of its frames since the launch.
     (tree / file).write_text(json.dumps(run, separators=(',', ':')) + '\n')
@@ -224,7 +251,7 @@ def commit_run(tree, run, file, stamp, device):
     index['runs'].append(index_entry(run, file))
     index['runs'].sort(key=lambda entry: entry['started_at'])
     (tree / 'index.json').write_text(json.dumps(index, indent=1) + '\n')
-    git('add', 'index.json', file, cwd=tree)
+    git('add', 'index.json', file, *(kept for _, kept in logs), cwd=tree)
     if run.get('release'):
         what = f"{run['release']} against main {(run.get('main') or '')[:9]}"
     else:

@@ -143,6 +143,7 @@ impl Gauntlet {
                     return Task::none();
                 }
                 self.frame += 1;
+                perf_data::updates::shown(self.frame);
                 if self.load.freeze > 0 && self.frame >= self.load.freeze {
                     self.frozen = true;
                     log::info!("PERF frozen frame={}", self.frame);

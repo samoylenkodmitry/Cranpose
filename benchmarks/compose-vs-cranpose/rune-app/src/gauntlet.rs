@@ -97,6 +97,7 @@ pub(crate) fn poll(app: &mut App, _seconds: f64, tx: &mut Tx) -> bool {
         return false;
     }
     app.frame += 1;
+    perf_data::updates::shown(app.frame);
     if app.frame == 1 {
         log::info!("PERF first_frame");
     }

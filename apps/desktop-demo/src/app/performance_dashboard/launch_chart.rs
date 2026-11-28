@@ -148,6 +148,9 @@ fn leg_trace(leg: &PerfFramesLeg, curve: Curve, run_ms: f64) -> Option<Vec<f64>>
         Curve::Frames => {
             Some(leg.samples.every("fps", run_ms, CHART_STEP_MS)).filter(|trace| !trace.is_empty())
         }
+        Curve::Presents => {
+            (!leg.present_ms.is_empty()).then(|| launch_fps(&leg.present_ms, run_ms, CHART_STEP_MS))
+        }
         Curve::Samples(key) => Some(leg.samples.every(key, run_ms, CHART_STEP_MS))
             .filter(|trace| trace.iter().any(|value| value.is_finite())),
         Curve::None(_) => None,
@@ -247,6 +250,8 @@ pub(super) fn LaunchChart(
                 "Every launch of this start was disturbed."
             } else if curve == Curve::Frames {
                 "No launch of this start kept its frames."
+            } else if curve == Curve::Presents {
+                "MangoHud logged no present of a launch of this start."
             } else {
                 "No launch of this start kept samples of it: runs before the sampler have none."
             }

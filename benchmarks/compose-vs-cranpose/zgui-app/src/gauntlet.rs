@@ -97,6 +97,7 @@ impl Shared {
             self.window.set(needed);
         }
         self.frame.set(frame);
+        perf_data::updates::shown(frame);
         if freeze > 0 && frame >= freeze {
             log::info!("PERF frozen frame={frame}");
             return false;

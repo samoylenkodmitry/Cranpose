@@ -378,6 +378,7 @@ export function patchwork(tier: number, freeze: number, log: (message: string) =
   new ResizeObserver(lay).observe(area);
   const tick = () => {
     frame += 1;
+    window.__perfUpdate?.(frame);
     show();
     if (freeze > 0 && frame >= freeze) {
       log(`PERF frozen frame=${frame}`);

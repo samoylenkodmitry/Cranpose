@@ -44,6 +44,12 @@ pub struct PerfProtocol {
     /// dashboard leaves it out.
     #[serde(default)]
     pub starts: Vec<String>,
+    // The MangoHud that counted every present of a Linux run, as `mangohud
+    // --version` names it, and the present setting every subject had.
+    #[serde(default)]
+    pub mangohud: Option<String>,
+    #[serde(default)]
+    pub present: Option<String>,
 }
 
 /// A run's own file: every leg, with the time of each frame it presented.
@@ -77,8 +83,12 @@ pub struct PerfFramesLeg {
     #[serde(default)]
     pub start: String,
     /// When each frame was presented, in milliseconds since the launch.
+    // On Linux, when the app moved on to each frame; `present_ms` holds when
+    // MangoHud counted each present.
     #[serde(default)]
     pub frame_ms: Vec<f64>,
+    #[serde(default)]
+    pub present_ms: Vec<f64>,
     /// Another process spent more than the run allows in this leg, or the
     /// leg's page was hidden: it is shown, and left out of the medians.
     #[serde(default)]
@@ -205,6 +215,10 @@ pub struct PerfStart {
     /// The metrics a second run judged worse again.
     #[serde(default)]
     pub confirmed: Vec<String>,
+    // Subjects MangoHud logged no present of, with what it did in their
+    // processes.
+    #[serde(default)]
+    pub no_presents: BTreeMap<String, String>,
 }
 
 /// The starts a run measures of every subject in each round, each with its
@@ -292,6 +306,46 @@ impl PerfRun {
             .get(name)?
             .get(metric)
             .copied()
+    }
+
+    // Where a leg of the subject presented more pictures than the frames it
+    // moved on to, by MangoHud's count against the app's own, or moved on to
+    // frames it never presented: what the subject's rates must say.
+    pub(super) fn count_mismatch(
+        &self,
+        scenario: &str,
+        start: &str,
+        subject: usize,
+    ) -> Option<&'static str> {
+        let marked = |key| {
+            self.median(scenario, start, subject, key)
+                .is_some_and(|legs| legs > 0.0)
+        };
+        if marked("presents_exceed_updates_legs") {
+            Some("presents exceed updates")
+        } else if marked("updates_exceed_presents_legs") {
+            Some("updates exceed presents")
+        } else {
+            None
+        }
+    }
+
+    // What MangoHud did in a subject's processes when it logged no present of
+    // the subject's launches.
+    pub(super) fn no_presents(&self, scenario: &str, start: &str, subject: usize) -> Option<&str> {
+        let name = &self.subjects.get(subject)?.name;
+        self.start(scenario, start)?
+            .no_presents
+            .get(name)
+            .map(String::as_str)
+    }
+
+    // The folder on the perf-data branch that holds MangoHud's raw log of
+    // each leg of the run, beside the run's own file.
+    pub(super) fn mangohud_logs(&self) -> Option<String> {
+        self.protocol.mangohud.as_ref()?;
+        let stem = self.file.strip_prefix("runs/")?.strip_suffix(".json")?;
+        Some(format!("mangohud/{stem}"))
     }
 
     /// Whether the run kept each subject's first and second starts apart, as

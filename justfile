@@ -791,6 +791,7 @@ test-shell-helpers: _benchmark-python ci-contract-gates
     python3 benchmarks/compose-vs-cranpose/tests/test_run_samples.py
     python3 benchmarks/compose-vs-cranpose/tests/test_ab_decisions.py
     python3 benchmarks/compose-vs-cranpose/tests/test_desktop_accounting.py
+    python3 benchmarks/compose-vs-cranpose/tests/test_linux_mangohud.py
     python3 scripts/esp32/board_ab_test.py
     python3 scripts/esp32/hot_code_test.py
     python3 benchmarks/compose-vs-cranpose/tests/test_display_state.py
@@ -1537,6 +1538,20 @@ perf-measure-frameworks-at output apks tier serial:
 # `pages` (from `build_apps.sh browser`), at the browser's tiers on the phone.
 perf-browser serial output pages:
     python3 benchmarks/compose-vs-cranpose/frameworks.py --serial {{serial}} --output {{output}} --browser {{pages}} --main "$(git rev-parse HEAD)"
+
+# Every desktop app that builds on Linux, on this machine's X display, with
+# MangoHud counting each app's presents from outside it beside the frames the
+# app moved on to: the three screens at the desktop's tiers, every app at the
+# same present setting. Needs MangoHud (the distribution's `mangohud` package).
+# A run on a GPU that drives no connected output is kept, marked no_scanout,
+# and `perf-publish` refuses it.
+perf-linux output *args:
+    benchmarks/compose-vs-cranpose/build_apps.sh linux
+    just perf-linux-measure {{quote(output)}} {{args}}
+
+# Measures the apps `build_apps.sh linux` built, as `perf-linux` does.
+perf-linux-measure output *args:
+    python3 benchmarks/compose-vs-cranpose/linux.py --output {{quote(output)}} --scenario gauntlet:16 --scenario wall:20 --scenario patchwork:17 --main "$(git rev-parse HEAD)" {{args}}
 
 # Adds a comparison run to the perf-data branch the performance dashboard reads.
 perf-publish run:

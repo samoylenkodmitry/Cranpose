@@ -130,6 +130,7 @@ pub(super) fn app() -> impl IntoElement {
                 advance(shared, frame);
                 let mut current = shared.frame;
                 current.set(frame);
+                perf_data::updates::shown(frame);
                 if freeze > 0 && frame >= freeze {
                     println!("PERF frozen frame={frame}");
                     break;

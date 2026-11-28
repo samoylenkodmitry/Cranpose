@@ -780,6 +780,7 @@ impl Render for Gauntlet {
         }
         if !self.frozen {
             self.frame += 1;
+            perf_data::updates::shown(self.frame);
             // The list scrolls to the frame's offset from the top: rows the
             // last frame laid out above it move the anchor down.
             let offset = px(self.frame as f32 * SCROLL_PER_FRAME);

@@ -18,7 +18,7 @@ use super::{
     launch_chart::LaunchCurve,
     motion::{fade, settle, GONE},
     plot::{Axis, Plot, CHART_HEIGHT},
-    text_style, Curve, Dot, Palette, CHART_STEP_MS,
+    text_style, Dot, Palette, CHART_STEP_MS,
 };
 
 // The opacity of a curve's band, and of the lifted curve's.
@@ -94,7 +94,7 @@ fn readings(plotted: &Plotted, view: &ChartView, at: &ChartHover) -> Vec<Reading
         })
         .collect();
     readings.sort_by(|a, b| {
-        if metric.curve() == Curve::Frames {
+        if metric.curve().is_rate() {
             b.value.total_cmp(&a.value)
         } else {
             a.value.total_cmp(&b.value)

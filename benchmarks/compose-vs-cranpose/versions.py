@@ -24,6 +24,7 @@ import argparse
 import json
 import re
 import subprocess
+import sys
 import urllib.request
 from pathlib import Path
 
@@ -74,6 +75,9 @@ PLATFORM_APPS = {
                 'slint', 'web'],
     'desktop': ['compose', 'egui', 'slint', 'iced', 'gpui', 'avalonia', 'swiftui', 'appkit', 'flutter', 'web',
                 'tauri', 'dioxus', 'xilem', 'rune', 'bui', 'ferro', 'zgui', 'floem', 'fyne', 'freya', 'vizia', 'makepad', 'electron'],
+    # The desktop apps that build on Linux: all but Apple's two.
+    'linux': ['gpui', 'compose', 'egui', 'slint', 'iced', 'avalonia', 'flutter', 'web', 'tauri', 'dioxus', 'xilem',
+              'rune', 'bui', 'ferro', 'zgui', 'floem', 'fyne', 'freya', 'vizia', 'makepad', 'electron'],
     'browser': BROWSER_APPS[1:],
 }
 
@@ -297,8 +301,15 @@ RUST_CRATES = {
 WEBKIT = {'tauri', 'dioxus'}
 
 def chrome_version():
+    if sys.platform != 'darwin':
+        return run('google-chrome-stable', '--version').split()[-1]
     plist = Path('/Applications/Google Chrome.app/Contents/Info.plist')
     return run('defaults', 'read', str(plist.with_suffix('')), 'CFBundleShortVersionString')
+
+
+def webkitgtk_version():
+    """The WebKitGTK Tauri and Dioxus draw in on Linux."""
+    return run('pkg-config', '--modversion', 'webkit2gtk-4.1')
 
 
 def safari_version():
@@ -335,6 +346,8 @@ def version(app, platform, release=None):
                 else f'Multiplatform {PINS["compose-desktop"].current()}')
     if app in RUST_CRATES:
         found = locked(*RUST_CRATES[app])
+        if app in WEBKIT and platform == 'linux':
+            return f'{found}, WebKitGTK {webkitgtk_version()}'
         return f'{found}, WKWebView {safari_version()}' if app in WEBKIT and platform == 'desktop' else found
     if app in PINS and PINS[app].git:
         return PINS[app].current()[:9]
@@ -346,7 +359,7 @@ def version(app, platform, release=None):
         return f'macOS {run("sw_vers", "-productVersion")}'
     if app == 'web':
         capacitor = PINS['web'].current()
-        return f'Chrome {chrome_version()}' if platform in ('desktop', 'browser') else f'Capacitor {capacitor}'
+        return f'Chrome {chrome_version()}' if platform in ('desktop', 'browser', 'linux') else f'Capacitor {capacitor}'
     return PINS[app].current()
 
 
@@ -371,12 +384,13 @@ def main():
     parser.add_argument('--record', type=Path)
     parser.add_argument('--git-pins', action='store_true',
                         help='bump also the pins that name a commit of a repository')
-    parser.add_argument('--platform', choices=['android', 'desktop', 'browser'])
+    parser.add_argument('--platform', choices=['android', 'desktop', 'browser', 'linux'])
     args = parser.parse_args()
 
     if args.command == 'write':
         apps = PLATFORM_APPS[args.platform]
-        Path(args.target).write_text(json.dumps({app: version(app, args.platform) for app in apps}, indent=1))
+        Path(args.target).write_text(json.dumps({app: subject(app, args.platform)['version'] for app in apps},
+                                                indent=1))
         return
 
     record = json.loads(args.record.read_text()) if args.record and args.record.exists() else {}

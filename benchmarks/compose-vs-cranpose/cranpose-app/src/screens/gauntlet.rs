@@ -105,6 +105,7 @@ pub fn GauntletScreen(load: GauntletLoad) {
             clock.next_frame().await;
             index += 1;
             frame.set(index);
+            perf_data::updates::shown(index);
             list_state.dispatch_scroll_delta(-SCROLL_PER_FRAME);
             if freeze > 0 && index >= freeze {
                 log::info!("PERF frozen frame={index}");

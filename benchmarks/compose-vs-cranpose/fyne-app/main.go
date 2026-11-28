@@ -869,8 +869,11 @@ func newTopBar(title string) (*canvas.Rectangle, *canvas.Text) {
 }
 
 // animate advances `frame` once per frame Fyne draws and calls `onFrame`
-// after each step, up to the launch's freeze frame.
+// after each step, up to the launch's freeze frame. With PERF_UPDATES set it
+// writes each frame it moves on to, for linux.py to count beside MangoHud's
+// presents.
 func animate(l launch, frame *int, onFrame func()) {
+	updates := os.Getenv("PERF_UPDATES") != ""
 	ticks := fyne.NewAnimation(time.Hour, func(float32) {
 		if l.freeze > 0 && *frame >= l.freeze {
 			return
@@ -879,6 +882,9 @@ func animate(l launch, frame *int, onFrame func()) {
 			fmt.Println("PERF first_frame")
 		}
 		*frame++
+		if updates {
+			fmt.Fprintf(os.Stderr, "PERF update %d\n", *frame)
+		}
 		onFrame()
 		if l.freeze > 0 && *frame >= l.freeze {
 			fmt.Printf("PERF frozen frame=%d\n", *frame)
