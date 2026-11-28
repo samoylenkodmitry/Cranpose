@@ -104,6 +104,51 @@ fn warmed_up_runtime_shaders_keep_no_shader_module() {
     );
 }
 
+// A pipeline a later frame needs from a source whose module went, as a
+// page change or a theme asks for a body's other look: the source is
+// parsed again and the new pipeline draws its own pixels.
+#[test]
+fn a_later_pipeline_of_a_released_source_draws() {
+    let _lock = support::gpu_test_lock();
+    let mut renderer = support::LockedRenderer::beside_locked().expect("GPU required");
+    let blue = modules_after(&mut renderer, &look(false));
+    let frame = support::capture_graph_settled(&mut renderer, &look(true), SIZE, SIZE);
+    let red = modules_after(&mut renderer, &look(true));
+    drop(renderer);
+    assert!(
+        frame.pixels.as_chunks::<4>().0.contains(&[255, 0, 0, 255]),
+        "the later pipeline draws red"
+    );
+    assert_eq!(red, blue, "its module goes too");
+}
+
+// A page of one cell whose shader draws red where its override asks and
+// blue otherwise, each a pipeline of its own from one source.
+fn look(red: bool) -> LayerNode {
+    let mut shader = RuntimeShader::new(&format!(
+        "{RUNTIME_SHADER_PRELUDE_WGSL}
+         // runtime shader modules look {}
+         override RED: bool = false;
+         @fragment fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
+             return select(vec4<f32>(0.0, 0.0, 1.0, 1.0), vec4<f32>(1.0, 0.0, 0.0, 1.0), RED);
+         }}",
+        std::process::id()
+    ));
+    shader.set_override("RED", if red { 1.0 } else { 0.0 });
+    shader.set_specialization_exact(true);
+    let layer = GraphicsLayer {
+        render_effect: Some(RenderEffect::runtime_shader(shader)),
+        ..GraphicsLayer::default()
+    };
+    let cell = shared_test_support::layer_node(
+        Rect::from_size(Size::new(CELL, CELL)),
+        ProjectiveTransform::identity(),
+        layer,
+        Vec::new(),
+    );
+    support::page_graph(SIZE, SIZE, vec![RenderNode::Layer(Box::new(cell))])
+}
+
 // Whether `renderer`'s pipelines let their shader modules go: on Vulkan and
 // Metal.
 fn keeps_no_modules(renderer: &support::LockedRenderer) -> bool {
