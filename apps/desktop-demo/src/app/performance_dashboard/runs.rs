@@ -215,6 +215,10 @@ pub struct PerfStart {
     /// The metrics a second run judged worse again.
     #[serde(default)]
     pub confirmed: Vec<String>,
+    // Subjects MangoHud logged no present of, with what it did in their
+    // processes.
+    #[serde(default)]
+    pub no_presents: BTreeMap<String, String>,
 }
 
 /// The starts a run measures of every subject in each round, each with its
@@ -324,6 +328,16 @@ impl PerfRun {
         } else {
             None
         }
+    }
+
+    // What MangoHud did in a subject's processes when it logged no present of
+    // the subject's launches.
+    pub(super) fn no_presents(&self, scenario: &str, start: &str, subject: usize) -> Option<&str> {
+        let name = &self.subjects.get(subject)?.name;
+        self.start(scenario, start)?
+            .no_presents
+            .get(name)
+            .map(String::as_str)
     }
 
     // The folder on the perf-data branch that holds MangoHud's raw log of

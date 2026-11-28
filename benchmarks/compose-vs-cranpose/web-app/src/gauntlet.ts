@@ -57,6 +57,9 @@ declare global {
     Capacitor?: { Plugins: { Launch?: LaunchPlugin } };
     /** The Tauri app's commands: the same two. */
     __TAURI__?: { core: { invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> } };
+    /** Where each frame the page moves on to goes when the benchmark's server
+     * (`browser.py`) serves the page: its script sends them once a second. */
+    __perfUpdate?: (frame: number) => void;
   }
 }
 
@@ -425,6 +428,7 @@ async function main() {
   let frame = 0;
   const tick = () => {
     frame += 1;
+    window.__perfUpdate?.(frame);
     // The width follows the frame, in whole pixels.
     content.style.width = `${Math.round(innerWidth * devicePixelRatio * widthFraction(frame)) / devicePixelRatio}px`;
     tiles.forEach(tile => tile.update(frame));

@@ -967,7 +967,9 @@ just perf-linux benchmarks/compose-vs-cranpose/results/linux
 ```
 
 `build_apps.sh linux` builds the apps and writes why each other app did not
-build into `linux-unbuilt.txt`; the run lists those apps with their reasons.
+build into `linux-unbuilt.txt`; each such app stays a subject of the run, its
+reason the failure of each of its starts, and the dashboard shows the reason
+in its row.
 Each app starts as `mangohud APP`, as MangoHud's README starts any app:
 MangoHud's Vulkan layer attaches to a Vulkan app and its OpenGL hooks to a GL
 one, and each leg records which one attached (`mangohud_attach`) and which
@@ -992,8 +994,14 @@ same span. Over the span both cover, a leg whose presents outnumber its
 updates by more than two frames and 1% is marked `presents_exceed_updates`,
 one whose updates outnumber its presents so is marked
 `updates_exceed_presents`, and the dashboard shows the mark with the rate of
-the updates beside MangoHud's. A page writes no update lines, so a page's leg
-has MangoHud's count alone. The raw log of
+the updates beside MangoHud's. A page (Chrome, Electron, Tauri) gives each
+frame to `window.__perfUpdate`; the script the harness's server adds to the
+page sends them once a second at the page's clock, which the harness puts on
+its own by the least gap between a report's arrival and its clock, and a
+page's leg waits for the report that holds its last frame. A start whose legs
+MangoHud logged no present of says what MangoHud did in the app's processes
+(`no_presents`: a hook loaded, or none), and the dashboard shows it beside the
+app's rate. The raw log of
 every leg is kept gzipped beside the run on the `perf-data` branch, under
 `mangohud/`, and the dashboard links it.
 

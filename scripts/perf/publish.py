@@ -113,6 +113,8 @@ def index_entry(run, file):
                         'disturbed': disturbed_subjects(scenario, start),
                         # The metrics a second run judged worse again.
                         'confirmed': run.get('confirmed_regressions', {}).get(scenario['scenario'], {}).get(start, []),
+                        # Subjects MangoHud logged no present of, with what it did.
+                        **({'no_presents': judged['no_presents']} if judged.get('no_presents') else {}),
                     }
                     for start, judged in scenario['starts'].items()
                 },

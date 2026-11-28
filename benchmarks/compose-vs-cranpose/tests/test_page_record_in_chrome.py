@@ -1,6 +1,7 @@
 """The console script in a real Chrome: a page served by `BrowserServer` that
 asks for frames for a while, then stops, loses its WebGL context and logs an
-error, leaves all of it in its leg's record. Needs Chrome or Chromium (`CHROME`,
+error, leaves all of it in its leg's record, and every frame it moved on to in
+its reports. Needs Chrome or Chromium (`CHROME`,
 or one on the path); skipped without one."""
 
 import os
@@ -22,8 +23,13 @@ MAC_CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 PAGE = """<!doctype html>
 <html><head><meta charset="utf-8"></head><body><canvas id="c" width="8" height="8"></canvas><script>
 var gl = document.getElementById('c').getContext('webgl');
-var until = performance.now() + 500;
-var frame = function () { if (performance.now() < until) requestAnimationFrame(frame); };
+var until = performance.now() + 500, moved = 0;
+var frame = function () {
+  if (performance.now() < until) {
+    window.__perfUpdate(++moved);
+    requestAnimationFrame(frame);
+  }
+};
 requestAnimationFrame(frame);
 setTimeout(function () {
   console.error('the page failed on purpose');
@@ -97,6 +103,15 @@ class PageRecordInChromeTest(unittest.TestCase):
         # its last request came well before its last beat.
         self.assertGreater(record['frame_requests'], 5)
         self.assertGreater(record['last_beat_s'] - record['last_frame_request_s'], 1.0)
+        # Every frame the page moved on to came in its reports, each on the
+        # host's clock inside the leg, and the reports went on after the last.
+        updates, covered = server.page_updates(since)
+        self.assertGreater(len(updates), 5)
+        self.assertEqual([frame for _, frame in updates], list(range(1, len(updates) + 1)))
+        self.assertEqual([when for when, _ in updates], sorted(when for when, _ in updates))
+        self.assertGreater(updates[0][0], started)
+        self.assertLess(updates[-1][0], time.monotonic())
+        self.assertGreater(covered - updates[-1][0], 1.0)
 
 
 if __name__ == '__main__':

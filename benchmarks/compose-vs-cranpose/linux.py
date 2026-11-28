@@ -26,7 +26,11 @@ which the harness sees through inotify.
 
 Beside the presents, each app writes a line for each frame it moves on to,
 `PERF update K` (`perf_data::updates`, with `PERF_UPDATES` set), which the
-harness stamps as it reads it: the content updates. `fps` and
+harness stamps as it reads it: the content updates. A page (Chrome, Electron,
+Tauri) gives its frames to `window.__perfUpdate`, and the script the harness's
+server adds to it sends them once a second, each at the page's clock
+(`BrowserServer.page_updates`); a leg of a page waits for the report that holds
+its last frame. `fps` and
 `fps_by_second` count the updates from the launch, warm-up included, as
 `desktop.py` counts the pictures that changed; `mangohud_fps` and
 `mangohud_fps_by_second` count MangoHud's presents over the same span. Over
@@ -34,7 +38,10 @@ the span both cover, a leg whose presents outnumber its updates is marked
 `presents_exceed_updates`: it presented pictures that held no new frame; one
 whose updates outnumber its presents is marked `updates_exceed_presents`:
 it moved on to frames it never showed. A leg whose window the window manager
-left at another size than 1280 x 820 is marked `window_mismatch`.
+left at another size than 1280 x 820 is marked `window_mismatch`. A start of
+an app whose legs MangoHud logged no present of names what MangoHud did in
+its processes (`no_presents`), and an app that did not build stays a subject
+of the run with its reason as the failure of each of its starts.
 
 Every launch is measured from its start for `--run` seconds, the same span for
 every app, in rounds of two starts as `desktop.py` measures: the first after
@@ -506,6 +513,21 @@ def slow(updates, first, now):
     return all(count < SLOW_FPS for count in counts[-SLOW_SECONDS:])
 
 
+# How long past its run a page's report may come: a page reports once a
+# second, each report holding the frames before it.
+PAGE_REPORT_WAIT_S = 2.0
+
+
+def page_updates_until(server, since, deadline):
+    """A page's updates once its reports hold every frame before `deadline`,
+    or those they hold `PAGE_REPORT_WAIT_S` after it."""
+    while True:
+        updates, covered = server.page_updates(since)
+        if (covered is not None and covered >= deadline) or time.monotonic() >= deadline + PAGE_REPORT_WAIT_S:
+            return updates
+        time.sleep(0.05)
+
+
 def measure(name, args, server, stage, label, home):
     """One launch measured from its start for `--run` seconds: its updates,
     MangoHud's presents, the CPU the app, its children and the X server spent,
@@ -522,6 +544,8 @@ def measure(name, args, server, stage, label, home):
     launched = time.monotonic()
     app = App(name, args, server, stage, label, home, folder)
     control = Control(app)
+    # A page tells its frames to the server, a program on its output.
+    paged = server is not None and name in PAGE_APPS
     try:
         deadline, stopped, judged = launched + args.run, False, launched
         while (now := time.monotonic()) < deadline:
@@ -530,11 +554,21 @@ def measure(name, args, server, stage, label, home):
             # The slow rule speaks of whole seconds: it is read once a second.
             if now - judged >= 1.0:
                 judged = now
-                if app.updates and slow(app.updates, app.updates[0][0], now):
+                counted = server.page_updates(since)[0] if paged else app.updates
+                if counted and slow(counted, counted[0][0], now):
                     deadline, stopped = now, True
                     break
             time.sleep(0.05)
         ended = time.monotonic()
+        run_s = deadline - launched
+        first = app.first_frame or (app.updates[0][0] if app.updates else None) or \
+            (server.heard_at('PERF first_frame', since) if paged else None)
+        # The app's state is read before the harness stops it.
+        if first is None:
+            raise RuntimeError(f'{name} logged no first frame within its {run_s:.0f} s run; {app.state()}')
+        if first >= launched + run_s:
+            raise RuntimeError(f'{name} logged its first frame {first - launched:.1f} s after its launch, after its '
+                               f'{run_s:.0f} s run; {app.state()}')
         mine = tree(app.pid)
         cpu = tree_ticks(mine, app.pid) / TICKS
         server_cpu = (tree_ticks([xserver], None) - server_before) / TICKS if xserver else 0.0
@@ -543,11 +577,11 @@ def measure(name, args, server, stage, label, home):
         hooks, apis = attachments(mine)
         window = window_size(app.pid)
         control.finish()
+        counted = page_updates_until(server, since, deadline) if paged else app.updates
     finally:
         control.stopped.set()
         app.stop(work)
         created.close()
-    run_s = deadline - launched
     logs = sorted(path for path in folder.glob('*.csv') if not path.name.endswith('_summary.csv'))
     system, rows = read_log(logs[0].read_text()) if logs else ({}, [])
     if logs:
@@ -556,11 +590,7 @@ def measure(name, args, server, stage, label, home):
         kept.write_bytes(gzip.compress(logs[0].read_bytes(), mtime=0))
     presents = [stamp for stamp in present_times(rows, created.at) if launched <= stamp < launched + run_s] \
         if created.at else []
-    updates = [(stamp, frame) for stamp, frame in app.updates if launched <= stamp < launched + run_s]
-    first = app.first_frame or (updates[0][0] if updates else None) or \
-        (server.heard_at('PERF first_frame', since) if server and name in PAGE_APPS else None)
-    if first is None or first >= launched + run_s:
-        raise RuntimeError(f'{name} logged no first frame within its {run_s:.0f} s run; {app.state()}')
+    updates = [(stamp, frame) for stamp, frame in counted if launched <= stamp < launched + run_s]
     wall = ended - launched
     busy = (machine_after[0] - machine_before[0]) / TICKS / wall
     cores = cpu / wall + server_cpu / wall
@@ -680,6 +710,19 @@ def summarize(legs, apps, start):
     return summary
 
 
+def no_presents(legs, apps, start):
+    """Per app whose undisturbed legs of `start` all ran with no present in
+    MangoHud's log, what MangoHud did in its processes."""
+    reasons = {}
+    for name in apps:
+        kept = [leg for leg in legs if leg['subject'] == name and leg['start'] == start and not leg['disturbed']]
+        if kept and not any(leg['presents'] for leg in kept):
+            hooks = sorted({hook for leg in kept for hook in leg['mangohud_attach']})
+            reasons[name] = f"MangoHud's {' and '.join(hooks)} hook loaded and logged no present" if hooks else \
+                'MangoHud loaded into none of its processes'
+    return reasons
+
+
 def measure_screen(args, apps, server, stage):
     """Every app's rounds on the screen `args` names."""
     legs, failures = [], []
@@ -699,7 +742,8 @@ def measure_screen(args, apps, server, stage):
     return {'scenario': args.scenario, 'extras': f'tier {args.tier}, {width} x {height} window, '
                                                  f'{PRESENT[args.present]["label"]}',
             'legs': legs, 'failures': failures, 'unimplemented': [],
-            'starts': {start: {'summary': summarize(legs, apps, start), 'verdicts': {}} for start in STARTS}}
+            'starts': {start: {'summary': summarize(legs, apps, start), 'verdicts': {},
+                               'no_presents': no_presents(legs, apps, start)} for start in STARTS}}
 
 
 def unbuilt():
@@ -757,14 +801,19 @@ def main():
         for name, tier in screens:
             screen_args = argparse.Namespace(**{**vars(args), 'scenario': name, 'tier': tier})
             scenarios.append(measure_screen(screen_args, apps, server, stage))
+    # An app that did not build stays a subject of the run, its reason the
+    # failure of each of its starts.
+    absent = {name: reason for name, reason in missing.items() if name not in apps}
+    for scenario in scenarios:
+        scenario['failures'] += [{'subject': name, 'start': start, 'error': reason}
+                                 for name, reason in absent.items() for start in STARTS]
     built_versions = json.loads(BUILT_VERSIONS.read_text()) if BUILT_VERSIONS.exists() else {}
     legs = [leg for scenario in scenarios for leg in scenario['legs']]
     report = {
         'kind': 'frameworks', 'platform': 'linux', 'started_at': started_at, 'main': args.main,
         'release': args.release,
         'device': {'ro.product.model': device_name(legs)},
-        'subjects': [versions.subject(name, 'linux', built_versions, args.release) for name in apps],
-        'unbuilt': {name: reason for name, reason in missing.items() if name not in apps},
+        'subjects': [versions.subject(name, 'linux', built_versions, args.release) for name in [*apps, *absent]],
         'protocol': {'run_s': args.run, 'starts': list(STARTS), 'rounds': args.rounds,
                      'max_other_cores': args.max_others, 'max_idle_other_cores': args.max_idle,
                      'present': PRESENT[args.present]['label'], 'mangohud': mangohud_version(),

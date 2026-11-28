@@ -160,6 +160,12 @@ fn with_mangohud(ctx: &BarContext<'_>, subject: usize, value: String) -> String 
     let rate = |metric: Metric| figure(run.median(scenario, start, subject, metric.key()));
     let mismatch = run.count_mismatch(scenario, start, subject);
     let mark = mismatch.map_or_else(String::new, |mark| format!(" · {mark}"));
+    if let Some(reason) = run
+        .no_presents(scenario, start, subject)
+        .filter(|_| matches!(ctx.selection.metric, Metric::Fps | Metric::MangoHudFps))
+    {
+        return format!("{value} · {reason}");
+    }
     match ctx.selection.metric {
         Metric::Fps => format!("{value} · MangoHud {}{mark}", rate(Metric::MangoHudFps)),
         Metric::MangoHudFps if mismatch.is_some() => {

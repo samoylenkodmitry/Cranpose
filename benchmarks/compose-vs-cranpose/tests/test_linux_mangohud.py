@@ -113,6 +113,30 @@ class SummaryTest(unittest.TestCase):
                                            'updates_exceed_presents_legs': 0})
         self.assertEqual(summary['cranpose']['presents_exceed_updates_legs'], 0)
 
+    def test_a_start_with_no_present_in_mangohuds_log_says_what_mangohud_did(self):
+        legs = [{'subject': 'tauri', 'start': 'first', 'disturbed': False, 'presents': 0, 'mangohud_attach': ['gl']},
+                {'subject': 'bui', 'start': 'first', 'disturbed': False, 'presents': 0, 'mangohud_attach': []},
+                {'subject': 'egui', 'start': 'first', 'disturbed': False, 'presents': 0, 'mangohud_attach': ['gl']},
+                {'subject': 'egui', 'start': 'first', 'disturbed': False, 'presents': 400, 'mangohud_attach': ['gl']}]
+        self.assertEqual(linux.no_presents(legs, ['tauri', 'bui', 'egui'], 'first'),
+                         {'tauri': "MangoHud's gl hook loaded and logged no present",
+                          'bui': 'MangoHud loaded into none of its processes'})
+
+
+class PageUpdatesTest(unittest.TestCase):
+    def test_a_pages_frames_go_onto_the_hosts_clock_and_cover_until_its_last_report(self):
+        server = linux.desktop.BrowserServer(BENCHMARK)
+        server.hear('PERF page updates 1000 900.0:1 950.5:2')
+        server.hear('PERF page beat 1000 950 2')
+        # A second with no frame still says how far the reports reach.
+        server.hear('PERF page updates 2000')
+        updates, covered = server.page_updates(0)
+        self.assertEqual([frame for _, frame in updates], [1, 2])
+        self.assertAlmostEqual(updates[1][0] - updates[0][0], 0.0505, places=6)
+        # Each report holds the frames before its own clock.
+        self.assertAlmostEqual(covered - updates[0][0], 1.1, places=6)
+        self.assertEqual(server.page_updates(server.mark()), ([], None))
+
 
 if __name__ == '__main__':
     unittest.main()

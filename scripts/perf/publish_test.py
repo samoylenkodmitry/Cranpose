@@ -106,6 +106,14 @@ class IndexEntryTest(unittest.TestCase):
         self.assertEqual(starts['first']['disturbed'], ['cranpose'])
         self.assertEqual(starts['second']['disturbed'], [])
 
+    def test_an_entry_keeps_why_mangohud_logged_no_present_of_a_subject_only_where_it_did_not(self):
+        measured = run()
+        reason = "MangoHud's gl hook loaded and logged no present"
+        measured['scenarios'][0]['starts']['first']['no_presents'] = {'cranpose-release': reason}
+        starts = publish.index_entry(measured, 'runs/x.json')['scenarios']['gauntlet']['starts']
+        self.assertEqual(starts['first']['no_presents'], {'cranpose-release': reason})
+        self.assertNotIn('no_presents', starts['second'])
+
 
 # The scratch repositories take nothing from the machine's git: not a hook's
 # repository a test run inherits, nor global signing or hooks.

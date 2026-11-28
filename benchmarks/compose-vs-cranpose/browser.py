@@ -59,8 +59,20 @@ PERF_SCRIPT = """\
     requests++;
     return requestFrame.call(window, callback);
   };
+  // The frames the page's app moved on to, each `TIME:FRAME` on the page's
+  // clock, go with the beat: one report a second, not one a frame. Once an
+  // app has counted one, every beat reports them, none included, so the
+  // reports say until when they hold every frame.
+  var updates = null;
+  window.__perfUpdate = function (frame) {
+    (updates = updates || []).push(performance.now().toFixed(1) + ':' + frame);
+  };
   setInterval(function () {
     report('PERF page beat ' + now() + ' ' + Math.round(lastRequest) + ' ' + requests);
+    if (updates) {
+      report(('PERF page updates ' + now() + ' ' + updates.join(' ')).trim());
+      updates = [];
+    }
   }, 1000);
   var watched = new WeakSet();
   [window.HTMLCanvasElement, window.OffscreenCanvas].forEach(function (type) {
@@ -95,6 +107,7 @@ SCRIPT_TAG = b'<script src="/__perf.js"></script>'
 # milliseconds; a beat's request is -1 before the page's first.
 PAGE_VISIBILITY = re.compile(r'PERF page visibility (?P<state>\w+) \d+$')
 PAGE_BEAT = re.compile(r'PERF page beat (?P<clock>\d+) (?P<request>-?\d+) (?P<requests>\d+)$')
+PAGE_UPDATES = re.compile(r'PERF page updates (?P<clock>\d+)(?P<frames>( [\d.]+:\d+)*)$')
 PAGE_GPU_EVENT = re.compile(r'PERF page (?P<event>context_lost|context_restored|device_lost) \d+ ?(?P<detail>.*)$',
                             re.DOTALL)
 # A page that logs an error each frame would fill its leg's record.
@@ -247,6 +260,21 @@ class BrowserServer:
         shown = next((index for index, state in enumerate(states) if state == 'visible'), None)
         record['hidden'] = bool(states) and (shown is None or 'hidden' in states[shown:])
         return record
+
+    def page_updates(self, since):
+        """The frames a page's app moved on to, as its reports heard since
+        `since` list them: each `(when, frame)` on `time.monotonic()`, and the
+        time until which the reports hold every frame, None before the first.
+        The page's clock goes onto the host's by the least gap between a
+        report's arrival and its own clock: a report arrives after it is sent."""
+        with self.condition:
+            reports = [(at, found) for at, line in self.heard[since:] if (found := PAGE_UPDATES.match(line))]
+        if not reports:
+            return [], None
+        offset = min(at - int(found['clock']) / 1000 for at, found in reports)
+        updates = [(offset + float(time) / 1000, int(frame)) for _, found in reports
+                   for time, frame in (entry.split(':') for entry in found['frames'].split())]
+        return updates, offset + max(int(found['clock']) for _, found in reports) / 1000
 
     def wait_for(self, text, timeout, since=0):
         """Waits until a page has reported a line holding `text`; the page's
