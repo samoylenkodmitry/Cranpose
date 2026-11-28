@@ -2,7 +2,7 @@
 // from the bytes that the backend copied out of the runtime, and the model that the app sets.
 
 use super::*;
-use crate::SpatialGltfModelSource;
+use crate::{SpatialGltfModelSource, controller_look::Look};
 
 // A glTF file of one meter, facing the user, which stands where a runtime's model would. At half a
 // meter from the eyes it fills the whole view.
@@ -84,7 +84,10 @@ fn a_runtime_model_that_fails_to_load_ends_at_the_plain_model() {
     let states = headset.space.volumes().controllers();
     states.set_offer(Hand::Left, Offer::Bytes(Arc::from(&b"not a glTF file"[..])));
     states.track([&held([0.0, 0.0, -0.5]), &Controller::default()]);
-    settle(&mut headset, |headset| scene_count(&headset.space) == 1);
+    // While the worker reads the bytes the hand shows nothing: the picture waits for its failure
+    settle(&mut headset, |headset| {
+        headset.space.volumes().controllers().look(Hand::Left) == Look::Plain
+    });
     let image = Eye::new(&headset.gpu);
     let bounds = shown_in(&mut headset, &eye(0.0), &image).expect("the plain model shows");
     assert!(width(bounds) < 30, "the plain model covers {bounds:?}");
