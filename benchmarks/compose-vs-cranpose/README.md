@@ -974,8 +974,10 @@ one, and each leg records which one attached (`mangohud_attach`) and which
 graphics APIs the app's processes loaded (`graphics_api`). MangoHud takes its
 settings from `MANGOHUD_CONFIG` alone: its HUD hidden (`no_display`), a log row
 for each frame (`log_interval=0`), and one present setting for every app, which
-the run's protocol names: uncapped by default (`vsync=1`, Vulkan's IMMEDIATE,
-and `gl_vsync=0`), or `--vsync` (`vsync=3`, FIFO, and `gl_vsync=1`). MangoHud
+the run's protocol names: presents with no wait for the display by default
+(`vsync=1`, Vulkan's IMMEDIATE, and `gl_vsync=0`), or `--vsync` (`vsync=3`,
+FIFO, and `gl_vsync=1`). With no wait each framework still paces its frames by
+its own frame clock, at the display's refresh. MangoHud
 0.8.4 starts no log by itself while its HUD is hidden, so the harness starts
 it through MangoHud's control socket (`control=mangohud-%p`, `:logging=1;`)
 the moment the app opens it; `mangohud_from_s` says when its first row came.
@@ -988,7 +990,10 @@ the launch, as the harness on a Mac counts the pictures that changed;
 `mangohud_fps` and `mangohud_fps_by_second` count MangoHud's presents over the
 same span. Over the span both cover, a leg whose presents outnumber its
 updates by more than two frames and 1% is marked `presents_exceed_updates`,
-and the dashboard shows the rate of the updates beside it. The raw log of
+one whose updates outnumber its presents so is marked
+`updates_exceed_presents`, and the dashboard shows the mark with the rate of
+the updates beside MangoHud's. A page writes no update lines, so a page's leg
+has MangoHud's count alone. The raw log of
 every leg is kept gzipped beside the run on the `perf-data` branch, under
 `mangohud/`, and the dashboard links it.
 

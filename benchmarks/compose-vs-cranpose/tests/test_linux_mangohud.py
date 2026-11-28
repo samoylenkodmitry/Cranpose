@@ -60,6 +60,13 @@ class PresentsAgainstUpdatesTest(unittest.TestCase):
         self.assertEqual(linux.update_counts(updates, launched, run_s)['fps'], 30.0)
         self.assertEqual(counted['mangohud_fps'], 60.0)
 
+    def test_a_leg_that_moves_on_to_frames_it_never_presents_is_marked(self):
+        updates = [(index / 60, index + 1) for index in range(120)]
+        presents = [stamp + 0.001 for stamp, _ in updates[::2]]
+        counted = linux.present_counts(presents, 0.0, 2.0, updates)
+        self.assertFalse(counted['presents_exceed_updates'])
+        self.assertTrue(counted['updates_exceed_presents'])
+
     def test_two_frames_the_edges_split_differently_are_no_excess(self):
         self.assertFalse(linux.exceeds(102, 100))
         self.assertTrue(linux.exceeds(104, 100))
@@ -102,7 +109,8 @@ class SummaryTest(unittest.TestCase):
                 {'subject': 'cranpose', 'start': 'first', 'disturbed': False, 'fps': 50.0, 'mangohud_fps': 50.0,
                  'presents_exceed_updates': False}]
         summary = linux.summarize(legs, ['egui', 'cranpose'], 'first')
-        self.assertEqual(summary['egui'], {'fps': 20.0, 'mangohud_fps': 40.0, 'presents_exceed_updates_legs': 1})
+        self.assertEqual(summary['egui'], {'fps': 20.0, 'mangohud_fps': 40.0, 'presents_exceed_updates_legs': 1,
+                                           'updates_exceed_presents_legs': 0})
         self.assertEqual(summary['cranpose']['presents_exceed_updates_legs'], 0)
 
 

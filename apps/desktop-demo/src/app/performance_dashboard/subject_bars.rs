@@ -107,11 +107,13 @@ fn build_subject_row(
     let disturbed = line.is_some_and(|line| line.disturbed);
     // A subject with legs but without this metric gets a dash;
     // one that stayed disturbed shows its mark; one with no legs says why.
+    // A subject that wrote no frame it moved on to has MangoHud's count alone.
     let measured = !disturbed
-        && ctx
-            .run
-            .median(&ctx.selection.scenario, ctx.selection.start, index, "fps")
-            .is_some();
+        && ["fps", "mangohud_fps"].iter().any(|key| {
+            ctx.run
+                .median(&ctx.selection.scenario, ctx.selection.start, index, key)
+                .is_some()
+        });
     let (share, value) = match metric_value {
         Some(value) => (
             Some(if ctx.full > 0.0 {
@@ -122,7 +124,7 @@ fn build_subject_row(
             with_mangohud(ctx, index, ctx.selection.metric.format(value)),
         ),
         None if disturbed => (None, "disturbed".to_string()),
-        None if measured => (None, "–".to_string()),
+        None if measured => (None, with_mangohud(ctx, index, "–".to_string())),
         None => (
             None,
             line.and_then(|line| line.failure.clone())
@@ -145,9 +147,9 @@ fn build_subject_row(
 }
 
 // On a run MangoHud counted presents in, the app's frame rate with MangoHud's
-// for the same launches beside it; where a launch presented more pictures
-// than the frames it moved on to, either rate says so, MangoHud's with the
-// app's beside it.
+// for the same launches beside it; where a launch's presents and the frames
+// it moved on to disagree, either rate says so, MangoHud's with the app's
+// beside it.
 fn with_mangohud(ctx: &BarContext<'_>, subject: usize, value: String) -> String {
     let run = ctx.run;
     if run.protocol.mangohud.is_none() {
@@ -158,17 +160,13 @@ fn with_mangohud(ctx: &BarContext<'_>, subject: usize, value: String) -> String 
         run.median(scenario, start, subject, metric.key())
             .map_or_else(|| "–".to_string(), |rate| metric.format(rate))
     };
-    let exceed = run.presents_exceed_updates(scenario, start, subject);
+    let mismatch = run.count_mismatch(scenario, start, subject);
+    let mark = mismatch.map_or_else(String::new, |mark| format!(" · {mark}"));
     match ctx.selection.metric {
-        Metric::Fps if exceed => format!(
-            "{value} · MangoHud {} · presents exceed updates",
-            rate(Metric::MangoHudFps)
-        ),
-        Metric::Fps => format!("{value} · MangoHud {}", rate(Metric::MangoHudFps)),
-        Metric::MangoHudFps if exceed => format!(
-            "{value} · presents exceed updates, {} updates/s",
-            rate(Metric::Fps)
-        ),
+        Metric::Fps => format!("{value} · MangoHud {}{mark}", rate(Metric::MangoHudFps)),
+        Metric::MangoHudFps if mismatch.is_some() => {
+            format!("{value}{mark}, {} updates/s", rate(Metric::Fps))
+        }
         _ => value,
     }
 }

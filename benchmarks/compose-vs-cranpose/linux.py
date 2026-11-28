@@ -11,9 +11,10 @@ its OpenGL hooks to a GL one, and every leg records which one attached
 MangoHud's own settings, in `MANGOHUD_CONFIG` and no file: its HUD hidden
 (`no_display`), a log row for each frame (`log_interval=0`) in the leg's
 folder (`output_folder`), and one present setting for every app, written in
-the run's protocol: uncapped by default (`vsync=1`, Vulkan's IMMEDIATE, and
-`gl_vsync=0`, swap interval 0), or with `--vsync` at the display's refresh
-(`vsync=3`, FIFO, and `gl_vsync=1`).
+the run's protocol: presents with no wait for the display by default
+(`vsync=1`, Vulkan's IMMEDIATE, and `gl_vsync=0`, swap interval 0), each
+framework still on its own frame clock, or with `--vsync` at the display's
+refresh (`vsync=3`, FIFO, and `gl_vsync=1`).
 
 MangoHud 0.8.4 starts no log by itself while its HUD is hidden: its
 `autostart_log` waits for a HUD update that `no_display` skips. The harness
@@ -28,9 +29,12 @@ Beside the presents, each app writes a line for each frame it moves on to,
 harness stamps as it reads it: the content updates. `fps` and
 `fps_by_second` count the updates from the launch, warm-up included, as
 `desktop.py` counts the pictures that changed; `mangohud_fps` and
-`mangohud_fps_by_second` count MangoHud's presents. Over the span both cover,
-a leg whose presents outnumber its updates is marked
-`presents_exceed_updates`: it presented pictures that held no new frame.
+`mangohud_fps_by_second` count MangoHud's presents over the same span. Over
+the span both cover, a leg whose presents outnumber its updates is marked
+`presents_exceed_updates`: it presented pictures that held no new frame; one
+whose updates outnumber its presents is marked `updates_exceed_presents`:
+it moved on to frames it never showed. A leg whose window the window manager
+left at another size than 1280 x 820 is marked `window_mismatch`.
 
 Every launch is measured from its start for `--run` seconds, the same span for
 every app, in rounds of two starts as `desktop.py` measures: the first after
@@ -110,9 +114,11 @@ BUILT_VERSIONS = HERE / 'linux-versions.json'
 # The present setting every app gets, by MangoHud's options.
 PRESENT = {
     'uncapped': {'options': ('vsync=1', 'gl_vsync=0'),
-                 'label': 'uncapped: Vulkan IMMEDIATE, GL swap interval 0 (MangoHud vsync=1, gl_vsync=0)'},
+                 'label': 'presents with no wait for the display: Vulkan IMMEDIATE, GL swap interval 0 (MangoHud '
+                          "vsync=1, gl_vsync=0), each framework on its own frame clock"},
     'vsync': {'options': ('vsync=3', 'gl_vsync=1'),
-              'label': "at the display's refresh: Vulkan FIFO, GL swap interval 1 (MangoHud vsync=3, gl_vsync=1)"},
+              'label': "presents at the display's refresh: Vulkan FIFO, GL swap interval 1 (MangoHud vsync=3, "
+                       'gl_vsync=1)'},
 }
 
 # How often the harness looks for MangoHud's control socket of a new app, and
@@ -490,13 +496,16 @@ def measure(name, args, server, stage, label, home):
     app = App(name, args, server, stage, label, home, folder)
     control = Control(app)
     try:
-        deadline, stopped = launched + args.run, False
+        deadline, stopped, judged = launched + args.run, False, launched
         while (now := time.monotonic()) < deadline:
             if app.process.poll() is not None:
                 raise RuntimeError(f'{name} ended {now - launched:.1f} s after its launch; {app.state()}')
-            if app.updates and slow(app.updates, app.updates[0][0], now):
-                deadline, stopped = now, True
-                break
+            # The slow rule speaks of whole seconds: it is read once a second.
+            if now - judged >= 1.0:
+                judged = now
+                if app.updates and slow(app.updates, app.updates[0][0], now):
+                    deadline, stopped = now, True
+                    break
             time.sleep(0.05)
         ended = time.monotonic()
         mine = tree(app.pid)
@@ -532,6 +541,9 @@ def measure(name, args, server, stage, label, home):
         'cpu_cores': round(cores, 2), 'server_cores': round(server_cpu / wall, 2),
         'other_cores': round(max(0.0, busy - cores), 2), 'ram_mb': ram,
         'mangohud_attach': hooks, 'graphics_api': apis, 'window': window,
+        # The window manager left the window at another size than every
+        # app asks for: a screen smaller than the window clamps it.
+        'window_mismatch': window is not None and window != '{} x {}'.format(*desktop.DESKTOP_WINDOW),
         'no_scanout': not scans_out(outputs()),
         'mangohud_log': f'mangohud/{label}.csv.gz' if logs else None,
         'mangohud_rows': len(rows),
@@ -566,7 +578,8 @@ def present_counts(presents, launched, run_s, updates):
     if not presents:
         return {'mangohud_fps': None, 'mangohud_fps_by_second': [], 'mangohud_from_s': None, 'present_ms': [],
                 'presents': 0, 'updates_in_presents_span': None, 'updates_before_mangohud': None,
-                'presents_exceed_updates': None, 'interval_p50_ms': None, 'interval_p99_ms': None}
+                'presents_exceed_updates': None, 'updates_exceed_presents': None, 'interval_p50_ms': None,
+                'interval_p99_ms': None}
     start = presents[0]
     # An app moves on to a frame before it presents it: the last update
     # before MangoHud's first present is the frame that present showed.
@@ -582,6 +595,9 @@ def present_counts(presents, launched, run_s, updates):
         # The updates before MangoHud's first row, which its log cannot show.
         'updates_before_mangohud': None if covered is None else len(updates) - covered,
         'presents_exceed_updates': None if covered is None else exceeds(len(presents), covered),
+        # Frames the app moved on to and never presented: content that should
+        # have moved on the screen and did not.
+        'updates_exceed_presents': None if covered is None else exceeds(covered, len(presents)),
         'interval_p50_ms': round(desktop.percentile(intervals, 0.50), 2),
         'interval_p99_ms': round(desktop.percentile(intervals, 0.99), 2),
     }
@@ -626,7 +642,8 @@ def summarize(legs, apps, start):
         medians = {key: round(statistics.median(values), 2) for key in SUMMARY
                    if (values := [leg[key] for leg in kept if leg.get(key) is not None])}
         if kept:
-            medians['presents_exceed_updates_legs'] = sum(1 for leg in kept if leg.get('presents_exceed_updates'))
+            for mark in ('presents_exceed_updates', 'updates_exceed_presents'):
+                medians[f'{mark}_legs'] = sum(1 for leg in kept if leg.get(mark))
         summary[name] = medians
     return summary
 

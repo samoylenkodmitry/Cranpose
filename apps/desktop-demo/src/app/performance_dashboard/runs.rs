@@ -304,17 +304,26 @@ impl PerfRun {
             .copied()
     }
 
-    // Whether a leg of the subject presented more frames than it moved on
-    // to, by MangoHud's count against the app's own: pictures that held no
-    // new frame.
-    pub(super) fn presents_exceed_updates(
+    // Where a leg of the subject presented more pictures than the frames it
+    // moved on to, by MangoHud's count against the app's own, or moved on to
+    // frames it never presented: what the subject's rates must say.
+    pub(super) fn count_mismatch(
         &self,
         scenario: &str,
         start: &str,
         subject: usize,
-    ) -> bool {
-        self.median(scenario, start, subject, "presents_exceed_updates_legs")
-            .is_some_and(|legs| legs > 0.0)
+    ) -> Option<&'static str> {
+        let marked = |key| {
+            self.median(scenario, start, subject, key)
+                .is_some_and(|legs| legs > 0.0)
+        };
+        if marked("presents_exceed_updates_legs") {
+            Some("presents exceed updates")
+        } else if marked("updates_exceed_presents_legs") {
+            Some("updates exceed presents")
+        } else {
+            None
+        }
     }
 
     // The folder on the perf-data branch that holds MangoHud's raw log of

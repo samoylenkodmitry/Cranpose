@@ -21,8 +21,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 DATA_BRANCH = 'perf-data'
-SUMMARY_METRICS = ['fps', 'mangohud_fps', 'presents_exceed_updates_legs', 'first_frame_s', 'cpu_ms_per_frame',
-                   'cpu_cores', 'desired_to_present_p50_ms', 'janky_pct', 'ram_mb', 'gpu_ram_mb', 'cpu_mhz', 'gpu_mhz']
+SUMMARY_METRICS = ['fps', 'mangohud_fps', 'presents_exceed_updates_legs', 'updates_exceed_presents_legs',
+                   'first_frame_s', 'cpu_ms_per_frame', 'cpu_cores', 'desired_to_present_p50_ms', 'janky_pct', 'ram_mb',
+                   'gpu_ram_mb', 'cpu_mhz', 'gpu_mhz']
 
 
 # Attempts at a push GitHub refuses, and the seconds between them, times the

@@ -8,9 +8,10 @@ publish = false
 
 [dependencies]
 # Zed's GPUI as `gpui-pre` publishes it, with the macOS platform and its
-# CoreText text system (`font-kit`).
+# CoreText text system (`font-kit`), and on Linux its X11 client: without
+# `x11` the Linux platform opens no window.
 gpui = { package = "gpui-pre", version = "=0.3.14" }
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.14", features = ["font-kit"] }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.14", features = ["font-kit", "x11"] }
 # GPUI's image frames, for the avatars and the chat's animated picture.
 image = { version = "0.25", default-features = false, features = ["gif"] }
 log = "0.4"
