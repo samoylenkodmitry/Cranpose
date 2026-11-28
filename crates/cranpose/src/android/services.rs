@@ -456,18 +456,11 @@ fn deliver_haptic_command(app: &android_activity::AndroidApp, command: &HapticCo
     };
     let result = with_android_activity_env(app, |env, activity| match command {
         HapticCommand::Perform(feedback) => {
-            let kind: jint = match feedback {
-                HapticFeedback::ImpactLight | HapticFeedback::Selection => 0,
-                HapticFeedback::ImpactMedium => 1,
-                HapticFeedback::ImpactHeavy => 2,
-                HapticFeedback::Success => 3,
-                HapticFeedback::Warning | HapticFeedback::Error => 4,
-            };
             env.call_method(
                 &activity,
                 jni_str!("cranposeHaptic"),
                 jni_sig!("(I)V"),
-                &[JValue::Int(kind)],
+                &[JValue::Int(haptic_feedback_kind(*feedback))],
             )
             .map_err(|error| {
                 clear_pending_android_jni_exception(env);
@@ -569,6 +562,18 @@ fn deliver_haptic_command(app: &android_activity::AndroidApp, command: &HapticCo
     });
     if let Err(error) = result {
         log::warn!("Android {what} failed: {error}");
+    }
+}
+
+// The kind that `CranposeHapticFeedback.constant` turns into a
+// `HapticFeedbackConstants` value.
+pub(crate) fn haptic_feedback_kind(feedback: HapticFeedback) -> jint {
+    match feedback {
+        HapticFeedback::ImpactLight | HapticFeedback::Selection => 0,
+        HapticFeedback::ImpactMedium => 1,
+        HapticFeedback::ImpactHeavy => 2,
+        HapticFeedback::Success => 3,
+        HapticFeedback::Warning | HapticFeedback::Error => 4,
     }
 }
 

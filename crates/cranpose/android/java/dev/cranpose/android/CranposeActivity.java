@@ -22,7 +22,6 @@ import android.os.Vibrator;
 import android.os.VibratorManager;
 import android.util.SparseArray;
 import android.util.SparseIntArray;
-import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.view.WindowManager;
 import android.window.BackEvent;
@@ -3150,24 +3149,8 @@ public class CranposeActivity extends NativeActivity {
     /** Performs haptic feedback ({@code kind} maps cranpose's HapticFeedback).
      * Called from Rust over JNI (any thread). */
     public void cranposeHaptic(final int kind) {
-        runOnUiThread(() -> {
-            View decor = getWindow().getDecorView();
-            int constant;
-            switch (kind) {
-                case 1: constant = HapticFeedbackConstants.KEYBOARD_TAP; break;
-                case 2: constant = HapticFeedbackConstants.LONG_PRESS; break;
-                case 3: constant = Build.VERSION.SDK_INT >= 30
-                        ? HapticFeedbackConstants.CONFIRM
-                        : HapticFeedbackConstants.LONG_PRESS; break;
-                case 4: constant = Build.VERSION.SDK_INT >= 30
-                        ? HapticFeedbackConstants.REJECT
-                        : HapticFeedbackConstants.LONG_PRESS; break;
-                default: constant = Build.VERSION.SDK_INT >= 27
-                        ? HapticFeedbackConstants.TEXT_HANDLE_MOVE
-                        : HapticFeedbackConstants.KEYBOARD_TAP; break;
-            }
-            decor.performHapticFeedback(constant);
-        });
+        runOnUiThread(() -> getWindow().getDecorView()
+                .performHapticFeedback(CranposeHapticFeedback.constant(kind)));
     }
 
     /** The system vibrator, or {@code null} where the device has none. */

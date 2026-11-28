@@ -1331,8 +1331,7 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
         share: jni::sys::jboolean,
     ) {
         let settings = self.into_settings();
-        crate::android::process::start_for_service(env, class, context, share, &settings);
-        crate::android::input_method::install(settings);
+        crate::android::process::start_for_service(env, class, context, share, settings);
     }
 
     /// Run the application (Web platform).

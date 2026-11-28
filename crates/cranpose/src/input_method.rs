@@ -8,6 +8,16 @@
 //! extension's `NSExtensionPrincipalClass` is `CranposeInputViewController`.
 //! The board reads [`local_input_connection`] to type into the focused text
 //! field and to learn what that field asks for.
+//!
+//! The board plays haptic feedback through
+//! [`local_haptics`](cranpose_services::local_haptics). On Android it plays
+//! on the keyboard's own view. The view needs no `VIBRATE` permission and
+//! follows the system's touch feedback setting. It plays a vibration, a
+//! pattern or an effect as the closest
+//! [`HapticFeedback`](cranpose_services::HapticFeedback). On iOS
+//! the keyboard extension plays it only with Full Access: the extension's
+//! `Info.plist` sets `RequestsOpenAccess`, and the person allows Full Access
+//! in Settings. Without Full Access the calls play nothing.
 
 use cranpose_core::{CompositionLocal, compositionLocalOf};
 use cranpose_ui::{ImeAction, KeyboardCapitalization, KeyboardType, Size};
