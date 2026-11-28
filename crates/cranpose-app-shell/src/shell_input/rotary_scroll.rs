@@ -1,7 +1,16 @@
 // The rotary input of a surface: a watch's crown or bezel, which reaches the focused node's chain
 // or the chain under the cursor, and then the window's own handler.
 
-use super::*;
+use std::{fmt::Debug, rc::Rc};
+
+use cranpose_core::{NodeId, enter_event_handler_scope, run_in_mutable_snapshot};
+use cranpose_foundation::{PointerEvent, PointerEventKind};
+use cranpose_render_common::{HitTestTarget, RenderScene, Renderer};
+use cranpose_ui::RotaryScrollEvent;
+use cranpose_ui_graphics::Point;
+
+use super::Stop;
+use crate::{SurfaceMut, hit_path_tracker};
 
 #[expect(clippy::multiple_inherent_impl, reason = "one file per shell concern")]
 impl<R> SurfaceMut<'_, R>
