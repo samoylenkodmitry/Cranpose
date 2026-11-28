@@ -16,7 +16,11 @@ import re
 import sys
 
 STAMP = re.compile(r"I \((\d+)\) ")
-FRAMES = re.compile(r"(\d+) frames in ([\d.]+) s: (?:update ([\d.]+) ms, draw and send ([\d.]+) ms|busy ([\d.]+) ms)")
+# A Cranpose window's line names its update time and the next line its draw
+# time ("draw and send"), as the console takes a line of 64 bytes at once.
+# The other apps name the whole frame ("busy").
+FRAMES = re.compile(r"(\d+) frames in ([\d.]+) s: (?:update ([\d.]+) ms(?:, draw and send ([\d.]+) ms)?|busy ([\d.]+) ms)")
+DRAW = re.compile(r"\) \S+: draw and send ([\d.]+) ms")
 PERF = re.compile(r"PERF ([\d.]+) s (\S+) (\d+) (\S+) (\d+)(?: idle ([\d.]+) s)?")
 SENT = re.compile(r"sent ([\d.]+) KB a frame")
 HEAP = re.compile(r"HEAP internal free (\d+) lowest (\d+)")
@@ -39,10 +43,15 @@ def windows(lines):
             if match.group(5):
                 busy = float(match.group(5))
             else:
-                busy = float(match.group(3)) + float(match.group(4))
+                busy = float(match.group(3)) + float(match.group(4) or 0)
             sent = SENT.search(line)
             frames.append((end, seconds, int(match.group(1)) / seconds, busy,
                            float(sent.group(1)) if sent else None))
+        elif frames and (match := DRAW.search(line)):
+            end_, seconds, rate, busy, sent = frames[-1]
+            frames[-1] = (end_, seconds, rate, busy + float(match.group(1)), sent)
+        elif frames and frames[-1][4] is None and (match := SENT.search(line)):
+            frames[-1] = (*frames[-1][:4], float(match.group(1)))
         elif match := PERF.search(line):
             perf.append((end, float(match.group(1)), match))
         elif match := HEAP.search(line):

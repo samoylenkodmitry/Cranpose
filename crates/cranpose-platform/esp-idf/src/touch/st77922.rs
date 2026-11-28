@@ -10,6 +10,7 @@ use esp_idf_svc::{
 };
 
 use super::{Interrupt, Orientation, Touch};
+use crate::console::{self, Level};
 
 const I2C_TIMEOUT_MS: u64 = 20;
 /// How long the reset line stays low, and how long the controller then takes
@@ -113,12 +114,12 @@ impl<'d> St77922Touch<'d> {
             u16::from_be_bytes([limits[0], limits[1]]),
             u16::from_be_bytes([limits[2], limits[3]]),
         );
-        log::info!(
-            "touch panel firmware {}, largest X {}, largest Y {}, {} fingers",
-            version[0],
-            self.size.0,
-            self.size.1,
-            limits[4],
+        console::write_or_drop(
+            Level::Info,
+            format_args!(
+                "touch firmware {}, {} by {}, {} fingers",
+                version[0], self.size.0, self.size.1, limits[4],
+            ),
         );
         Ok(())
     }
@@ -197,7 +198,10 @@ impl Touch for St77922Touch<'_> {
                     Ok(None)
                 }
                 Err(error) if reads + 1 < SETUP_READS => {
-                    log::warn!("the touch panel did not answer yet ({error}); reading it again");
+                    console::write_or_drop(
+                        Level::Warn,
+                        format_args!("touch setup read again: {error}"),
+                    );
                     let until = now + SETUP_RETRY;
                     self.setup = Setup::Starting {
                         until,

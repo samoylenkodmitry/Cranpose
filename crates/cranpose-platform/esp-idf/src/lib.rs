@@ -11,6 +11,8 @@
 #[cfg(feature = "bench-frames")]
 #[path = "../../../../benchmarks/esp32/boot_frames.rs"]
 mod boot_frames;
+mod console;
+mod frame_stats;
 mod memory;
 mod panel;
 mod present;
@@ -44,7 +46,11 @@ pub use touch::{NoTouch, Orientation, St77922Touch, Touch, Xpt2046Calibration, X
 #[global_allocator]
 static ALLOCATOR: SmallBlockAllocator = SmallBlockAllocator;
 
-use crate::present::Presenter;
+use crate::{
+    console::Level,
+    frame_stats::{FramePhases, FrameStats},
+    present::Presenter,
+};
 
 /// A failure that stops [`run`].
 #[derive(Debug, thiserror::Error)]
@@ -76,7 +82,8 @@ pub struct DisplayConfig {
     /// fewer draw and transfer calls a picture.
     pub strip_rows: u32,
     /// How often the loop logs its frame statistics: the frames, their
-    /// average update and draw times, the bytes sent and the heap left.
+    /// average update and draw times, the bytes sent, the heap left and the
+    /// console lines dropped.
     pub stats_window: Duration,
 }
 
@@ -171,9 +178,15 @@ impl Wake {
 ///
 /// The calling task becomes the UI thread. Its stack holds composition and
 /// layout, so give it at least 28 KB (`CONFIG_ESP_MAIN_TASK_STACK_SIZE` for
-/// the main task); the stats line logged every 5 s tells the bytes of it that
+/// the main task); the stats lines logged every 5 s tell the bytes of it that
 /// the run never used. An `esp_timer` wakes the task at each frame or timed
 /// event, so frame timing does not depend on `CONFIG_FREERTOS_HZ`.
+///
+/// The loop writes its lines to the console only when the console's FIFO
+/// takes a whole line at once, so a host that reads nothing never holds a
+/// frame back. A line that does not fit waits for a later frame (the first
+/// frame's times and the statistics) or is dropped; the statistics count the
+/// dropped lines.
 pub fn run(
     panel: Panel<'_>,
     mut touch: impl Touch,
@@ -224,9 +237,9 @@ pub fn run(
         config,
         start,
         finger: None,
-        stats: None,
+        stats: FrameStats::new(config.stats_window, start),
         #[cfg(feature = "bench-frames")]
-        boot_frames: boot_frames::BootFrames::new(timers),
+        boot_frames: boot_frames::BootFrames::new(timers, config.frame_interval),
         last_tick: None,
     };
     let mut pacer = Pacer {
@@ -282,7 +295,7 @@ struct Screen<'d, 't> {
     start: Instant,
     /// Where the finger is while it touches the panel.
     finger: Option<(u16, u16)>,
-    stats: Option<FrameStats>,
+    stats: FrameStats,
     #[cfg(feature = "bench-frames")]
     boot_frames: boot_frames::BootFrames,
     /// The start of the last tick. The next one waits `frame_interval` after
@@ -321,13 +334,7 @@ impl Screen<'_, '_> {
             present: presented.duration_since(updated),
             sent,
         };
-        FrameStats::record_into(
-            &mut self.stats,
-            self.config.stats_window,
-            self.start,
-            phases,
-            presented,
-        );
+        self.stats.record(phases, presented);
         Ok(())
     }
 
@@ -355,7 +362,7 @@ impl Screen<'_, '_> {
         let sample = match self.touch.read() {
             Ok(sample) => sample,
             Err(error) => {
-                log::warn!("reading the touch panel failed: {error}");
+                console::write_or_drop(Level::Warn, format_args!("touch read: {error}"));
                 return;
             }
         };
@@ -415,100 +422,5 @@ impl Pacer {
             self.slept = true;
         }
         Ok(())
-    }
-}
-
-#[derive(Clone, Copy)]
-struct FramePhases {
-    update: Duration,
-    present: Duration,
-    // The bytes the frame sent to the panel.
-    sent: usize,
-}
-
-struct FrameStats {
-    window_start: Instant,
-    frames: u32,
-    update: Duration,
-    present: Duration,
-    slowest: Duration,
-    sent: usize,
-}
-
-impl FrameStats {
-    fn new(window_start: Instant) -> Self {
-        Self {
-            window_start,
-            frames: 0,
-            update: Duration::ZERO,
-            present: Duration::ZERO,
-            slowest: Duration::ZERO,
-            sent: 0,
-        }
-    }
-
-    /// Counts a frame into `stats`, which the first frame, logged on its
-    /// own, starts.
-    fn record_into(
-        stats: &mut Option<Self>,
-        window: Duration,
-        start: Instant,
-        phases: FramePhases,
-        presented: Instant,
-    ) {
-        match stats.as_mut() {
-            Some(stats) => stats.record(window, phases, presented),
-            None => *stats = Some(Self::first(start, phases, presented)),
-        }
-    }
-
-    // Logs the first frame and starts counting after it. Cold, as the
-    // reports below: the loop runs every frame, a report seldom.
-    #[cold]
-    #[inline(never)]
-    fn first(start: Instant, phases: FramePhases, presented: Instant) -> Self {
-        log::info!(
-            "first frame after {} ms: update {} ms, draw and send {} ms",
-            presented.duration_since(start).as_millis(),
-            phases.update.as_millis(),
-            phases.present.as_millis(),
-        );
-        Self::new(presented)
-    }
-
-    fn record(&mut self, length: Duration, phases: FramePhases, presented: Instant) {
-        self.frames += 1;
-        self.update += phases.update;
-        self.present += phases.present;
-        self.sent += phases.sent;
-        self.slowest = self.slowest.max(phases.update + phases.present);
-        let window = presented.duration_since(self.window_start);
-        if window >= length {
-            self.report(window, presented);
-        }
-    }
-
-    // Logs the window that ended at `presented` and starts the next one.
-    #[cold]
-    #[inline(never)]
-    fn report(&mut self, window: Duration, presented: Instant) {
-        let average = |total: Duration| total.as_secs_f32() * 1000.0 / self.frames as f32;
-        let memory = memory::MemoryReport::now();
-        log::info!(
-            "{} frames in {:.1} s: update {:.2} ms, draw and send {:.2} ms, slowest {:.1} ms, \
-             sent {:.1} KB a frame; heap {} KB free, {} KB in one block, {} KB at least; \
-             stack {} bytes never used",
-            self.frames,
-            window.as_secs_f32(),
-            average(self.update),
-            average(self.present),
-            self.slowest.as_secs_f32() * 1000.0,
-            self.sent as f32 / 1024.0 / self.frames as f32,
-            memory.heap_free / 1024,
-            memory.heap_largest / 1024,
-            memory.heap_lowest / 1024,
-            memory.stack_unused,
-        );
-        *self = Self::new(presented);
     }
 }
