@@ -74,7 +74,9 @@ impl DragGesture {
                     };
                 }
 
-                let event_delta = event.position - self.last_position;
+                // A node that moves under the pointer gets the previous place as it stands now
+                let event_delta =
+                    event.position - event.previous_position.unwrap_or(self.last_position);
                 self.last_position = event.position;
                 event.consume();
                 DragGestureEvent::Dragged {

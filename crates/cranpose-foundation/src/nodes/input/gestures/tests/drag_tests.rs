@@ -51,3 +51,26 @@ fn drag_reports_delta_after_start() {
         }
     );
 }
+
+#[test]
+fn a_node_that_moves_under_the_pointer_drags_by_the_pointers_travel() {
+    let mut gesture = DragGesture::new();
+    gesture.handle_event(&pointer(PointerEventKind::Down, 0.0, 0.0));
+    gesture.handle_event(&pointer(PointerEventKind::Move, 20.0, 0.0));
+    // The drag moved the node 15 px right, so the pointer, 20 px further on, stands 5 px further
+    // into it, and the place of its last move maps to 5 px
+    let moved = PointerEvent::new(
+        PointerEventKind::Move,
+        Point { x: 25.0, y: 0.0 },
+        Point { x: 40.0, y: 0.0 },
+    )
+    .copy_with_local_positions(Point { x: 25.0, y: 0.0 }, Some(Point { x: 5.0, y: 0.0 }));
+    assert_eq!(
+        gesture.handle_event(&moved),
+        DragGestureEvent::Dragged {
+            delta: Point { x: 20.0, y: 0.0 },
+            total: Point { x: 25.0, y: 0.0 },
+            current: Point { x: 25.0, y: 0.0 },
+        }
+    );
+}

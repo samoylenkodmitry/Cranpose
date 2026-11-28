@@ -82,13 +82,17 @@ fn screen(with_list: bool) -> Screen {
     screen
 }
 
+// The tag of the list in a sheet.
+const LIST: &str = "list";
+
 #[cranpose_macros::composable]
 fn SheetList(scroll: ScrollState) {
     Column(
         Modifier::empty()
             .fill_max_width()
             .height(240.0)
-            .vertical_scroll(scroll, false),
+            .vertical_scroll(scroll, false)
+            .test_tag(LIST),
         ColumnSpec::default(),
         || {
             for row in 0..20 {
@@ -211,10 +215,45 @@ fn a_list_scrolls_before_the_sheet_moves() {
 fn a_list_at_its_top_hands_the_drag_down_to_the_sheet() {
     let mut screen = screen(true);
     let row = screen.center_of("Row 0").expect("the list is open");
-    screen.robot.drag(row.x, row.y, row.x, HEIGHT - 4.0);
+    // 100 px in 80 ms, short of half the sheet's 268 px: only the fling closes it
+    screen.robot.drag(row.x, row.y, row.x, row.y + 100.0);
     screen.robot.wait_for_motion();
     assert_eq!(screen.scroll(), 0.0);
     assert_eq!(screen.dismissed.get(), 1);
+}
+
+#[test]
+fn a_list_at_its_top_moves_the_sheet_as_far_as_the_pointer() {
+    let mut screen = screen(true);
+    screen.robot.shell_mut().set_semantics_enabled(true);
+    let top = |screen: &mut Screen| {
+        screen
+            .robot
+            .find_by_tag(LIST)
+            .bounds()
+            .expect("the list shows")
+            .y
+    };
+    let rest = top(&mut screen);
+    let row = screen.center_of("Row 0").expect("the list is open");
+    // Ten moves of 21.6 px, 8 ms apart, held before the release. The list hands each move past
+    // the slop to the sheet whole, the first one included.
+    let travel = HEIGHT - 4.0 - row.y;
+    screen.robot.mouse_move(row.x, row.y);
+    screen.robot.mouse_down();
+    for step in 1..=10 {
+        screen.robot.advance_time(8_000_000);
+        screen
+            .robot
+            .mouse_move(row.x, row.y + travel * step as f32 / 10.0);
+    }
+    let moved = top(&mut screen) - rest;
+    screen.robot.mouse_up();
+    assert_eq!(screen.scroll(), 0.0);
+    assert!(
+        (moved - travel).abs() < 1.0,
+        "the sheet moved {moved} px under a pointer that moved {travel} px"
+    );
 }
 
 #[test]

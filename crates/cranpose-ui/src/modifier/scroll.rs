@@ -6,15 +6,17 @@ use std::{
 use cranpose_core::{NodeId, current_runtime_handle, internal::FrameCallbackRegistration};
 use cranpose_foundation::{
     DRAG_THRESHOLD, DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities,
-    NodeState, PointerButton, PointerButtons, ScrollId, lazy::LazyListState,
+    NodeState, PointerButton, PointerButtons, lazy::LazyListState,
 };
 use cranpose_ui_layout::Axis;
 
 mod drag_gesture;
 mod draggable;
 mod release_motion;
+mod scroll_gesture_state;
 mod scroll_target;
 use drag_gesture::{DragGesture, nested_drag_gesture_input};
+use scroll_gesture_state::ScrollGestureState;
 use scroll_target::{NestedTarget, ScrollTarget};
 
 use super::{Modifier, Point, PointerEvent, PointerEventKind, inspector_metadata};
@@ -48,72 +50,6 @@ pub fn reset_last_fling_velocity() {
 #[inline]
 fn set_last_fling_velocity(velocity: f32) {
     crate::render_state::record_last_fling_velocity(velocity);
-}
-
-struct ScrollGestureState {
-    disposed: bool,
-    drag_down_position: Option<Point>,
-
-    last_position: Option<Point>,
-
-    is_dragging: bool,
-
-    /// Whether the press stopped a scroll animation the app started, so
-    /// letting go settles even without a drag.
-    interrupted_animation: bool,
-
-    axis_locked_out: bool,
-
-    velocity: GestureVelocity,
-
-    fling_animation: Option<FlingAnimation>,
-
-    is_overscrolling: bool,
-
-    settle_animation: Option<SettleAnimation>,
-
-    wheel_settle_watcher: Option<WheelSettleWatcher>,
-
-    // The running scroll of the target that the fling or the settle holds.
-    running_scroll: Option<ScrollId>,
-}
-
-impl Default for ScrollGestureState {
-    fn default() -> Self {
-        Self {
-            disposed: false,
-            drag_down_position: None,
-            last_position: None,
-            is_dragging: false,
-            interrupted_animation: false,
-            axis_locked_out: false,
-            velocity: GestureVelocity::new(),
-            fling_animation: None,
-            is_overscrolling: false,
-            settle_animation: None,
-            wheel_settle_watcher: None,
-            running_scroll: None,
-        }
-    }
-}
-
-impl ScrollGestureState {
-    fn is_active(&self) -> bool {
-        self.is_dragging
-            || self.is_overscrolling
-            || self
-                .fling_animation
-                .as_ref()
-                .is_some_and(FlingAnimation::is_running)
-            || self
-                .settle_animation
-                .as_ref()
-                .is_some_and(SettleAnimation::is_running)
-            || self
-                .wheel_settle_watcher
-                .as_ref()
-                .is_some_and(|watcher| watcher.is_running.get())
-    }
 }
 
 #[inline]
@@ -236,7 +172,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             return false;
         };
 
-        let Some(last_pos) = gs.last_position else {
+        let Some(last_pos) = event.previous_position.or(gs.last_position) else {
             gs.last_position = Some(position);
             return false;
         };

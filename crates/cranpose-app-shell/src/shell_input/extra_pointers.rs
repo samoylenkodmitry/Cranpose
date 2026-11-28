@@ -356,7 +356,7 @@ where
         event_time: PointerEventTime,
     ) -> bool {
         let state = self.surface_mut().independent_pointers.entry(pointer);
-        state.at = at;
+        let previous = std::mem::replace(&mut state.at, at);
         let buttons = state.buttons;
         if buttons != PointerButtons::NONE {
             let targets = self.resolve_gesture_targets(pointer);
@@ -364,6 +364,7 @@ where
             else {
                 return false;
             };
+            let event = event.with_previous_position(previous);
             if targets.is_empty() {
                 return false;
             }
