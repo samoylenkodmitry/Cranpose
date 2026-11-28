@@ -213829,6 +213829,142 @@
      }
     }
    }
+  },
+  {
+   "file": "runs/2026-11-28-esp32-8e67cbd21-E32R35T.json",
+   "kind": "esp32",
+   "started_at": "2026-11-28T09:47:05+00:00",
+   "device": "E32R35T",
+   "main": "8e67cbd215d5598ce92d18d26fe6dc746de95faa",
+   "release": null,
+   "subjects": [
+    {
+     "name": "cranpose",
+     "label": "Cranpose 8e67cbd21",
+     "source": "apps/esp32-demo/src/main.rs"
+    },
+    {
+     "name": "lvgl",
+     "label": "LVGL 9.3.0",
+     "source": "benchmarks/esp32/lvgl-app/main/main.c"
+    },
+    {
+     "name": "slint",
+     "label": "Slint 1.18.1",
+     "source": "benchmarks/esp32/slint-app/ui/dashboard.slint"
+    }
+   ],
+   "duration_s": null,
+   "protocol": {
+    "run_s": 5,
+    "starts": [
+     "first",
+     "second"
+    ],
+    "panel_hz": 60.06
+   },
+   "scenarios": {
+    "demo": {
+     "legs": 4,
+     "app_bytes": {
+      "cranpose": 3190864,
+      "lvgl": 488512
+     },
+     "unimplemented": [],
+     "starts": {
+      "first": {
+       "summary": {
+        "cranpose": {
+         "fps": 56.4,
+         "shown_fps": 56.396,
+         "frame_period_ms": 16.667,
+         "first_frame_s": 0.301
+        },
+        "lvgl": {
+         "fps": 58.6,
+         "shown_fps": 56.348,
+         "frame_period_ms": 16.0,
+         "first_frame_s": 0.309
+        }
+       },
+       "verdicts": {},
+       "failures": {},
+       "disturbed": [],
+       "confirmed": []
+      },
+      "second": {
+       "summary": {
+        "cranpose": {
+         "fps": 56.4,
+         "shown_fps": 56.396,
+         "frame_period_ms": 16.667,
+         "first_frame_s": 0.301
+        },
+        "lvgl": {
+         "fps": 58.8,
+         "shown_fps": 56.348,
+         "frame_period_ms": 16.0,
+         "first_frame_s": 0.309
+        }
+       },
+       "verdicts": {},
+       "failures": {},
+       "disturbed": [],
+       "confirmed": []
+      }
+     }
+    },
+    "dashboard": {
+     "legs": 4,
+     "app_bytes": {
+      "lvgl": 535024,
+      "slint": 1095664
+     },
+     "unimplemented": [],
+     "starts": {
+      "first": {
+       "summary": {
+        "lvgl": {
+         "fps": 7.8,
+         "shown_fps": 7.8,
+         "frame_period_ms": 16.0,
+         "first_frame_s": 0.637
+        },
+        "slint": {
+         "fps": 10.4,
+         "shown_fps": 10.4,
+         "frame_period_ms": 16.667,
+         "first_frame_s": 0.476
+        }
+       },
+       "verdicts": {},
+       "failures": {},
+       "disturbed": [],
+       "confirmed": []
+      },
+      "second": {
+       "summary": {
+        "lvgl": {
+         "fps": 7.8,
+         "shown_fps": 7.8,
+         "frame_period_ms": 16.0,
+         "first_frame_s": 0.637
+        },
+        "slint": {
+         "fps": 10.4,
+         "shown_fps": 10.4,
+         "frame_period_ms": 16.667,
+         "first_frame_s": 0.476
+        }
+       },
+       "verdicts": {},
+       "failures": {},
+       "disturbed": [],
+       "confirmed": []
+      }
+     }
+    }
+   }
   }
  ]
 }
