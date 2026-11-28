@@ -4,8 +4,14 @@ use super::wire_escape::unescape_wire_field as unescape;
 
 pub(crate) fn decode_launch_arguments(payload: &str) -> LaunchArgs {
     let mut lines = payload.split('\n');
-    let debuggable = matches!(lines.next(), Some("1"));
-    LaunchArgs::new(lines.filter_map(decode_record), debuggable)
+    let mut header = lines.next().unwrap_or_default().split('\t');
+    let debuggable = matches!(header.next(), Some("1"));
+    let component = header.next().map(unescape).filter(|name| !name.is_empty());
+    let args = LaunchArgs::new(lines.filter_map(decode_record), debuggable);
+    match component {
+        Some(class_name) => args.with_component_class_name(class_name),
+        None => args,
+    }
 }
 
 fn decode_record(record: &str) -> Option<(String, LaunchArgValue)> {

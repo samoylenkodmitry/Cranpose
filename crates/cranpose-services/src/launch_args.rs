@@ -72,6 +72,7 @@ pub enum LaunchArgValue {
 pub struct LaunchArgs {
     entries: Vec<(Box<str>, LaunchArgValue)>,
     debuggable: bool,
+    component_class_name: Option<Box<str>>,
 }
 
 /// Shared handle to a [`LaunchArgs`] snapshot, readable from any thread.
@@ -97,7 +98,28 @@ impl LaunchArgs {
         Self {
             entries: collected,
             debuggable,
+            component_class_name: None,
         }
+    }
+
+    /// The same snapshot, with the class name of the component that the launching intent
+    /// named. Platform backends call this.
+    pub fn with_component_class_name(mut self, class_name: impl Into<Box<str>>) -> Self {
+        self.component_class_name = Some(class_name.into());
+        self
+    }
+
+    /// The class name of the component that the launching intent named: Android's
+    /// `intent.component?.className`.
+    ///
+    /// A launch through an `<activity-alias>` names the alias, so an app can tell its entry
+    /// points apart. An alias declared with `android:permission` admits only callers that hold
+    /// that permission, which makes it the entry for arguments that no other app may pass.
+    /// Jetpack Compose has no such API: a Compose activity reads `intent.component` itself.
+    ///
+    /// `None` on platforms without intents, and for an intent that named no component.
+    pub fn component_class_name(&self) -> Option<&str> {
+        self.component_class_name.as_deref()
     }
 
     /// Whether the OS considers this build debuggable — Android's

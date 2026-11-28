@@ -100,6 +100,17 @@ fn the_command_line_stops_at_a_bare_double_dash() {
 }
 
 #[test]
+fn a_command_line_names_no_component() {
+    assert_eq!(command_line(&["--host=lobby"]).component_class_name(), None);
+    assert_eq!(
+        args(&[])
+            .with_component_class_name("dev.example.Entry")
+            .component_class_name(),
+        Some("dev.example.Entry")
+    );
+}
+
+#[test]
 fn the_first_value_wins_when_a_name_repeats() {
     let args = args(&[
         ("level", LaunchArgValue::Int(1)),
