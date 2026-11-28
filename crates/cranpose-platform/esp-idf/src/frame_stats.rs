@@ -173,13 +173,15 @@ impl<T: LineText> Lines<T> {
     }
 }
 
-// `value` over `count`, in units of `unit_us` microseconds, saturating.
-fn per(value: Duration, count: u32, unit_us: u64) -> u32 {
-    let micros = value
-        .as_secs()
-        .saturating_mul(1_000_000)
-        .saturating_add(u64::from(value.subsec_micros()));
-    u32::try_from(micros / unit_us / u64::from(count.max(1))).unwrap_or(u32::MAX)
+// `value` over `count`, in units of `unit_us` microseconds. In 32 bits,
+// which the chips divide in one instruction: it saturates at 71 minutes.
+fn per(value: Duration, count: u32, unit_us: u32) -> u32 {
+    let micros = u32::try_from(value.as_secs())
+        .ok()
+        .and_then(|secs| secs.checked_mul(1_000_000))
+        .and_then(|micros| micros.checked_add(value.subsec_micros()))
+        .unwrap_or(u32::MAX);
+    micros / unit_us / count.max(1)
 }
 
 impl FrameStats {

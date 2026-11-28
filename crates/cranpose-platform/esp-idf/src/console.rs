@@ -58,7 +58,8 @@ pub(crate) enum Level {
 
 // Writes `I (STAMP) cranpose: TEXT` when the console takes the whole line
 // now, and returns whether it did. A line longer than `LINE_BYTES` never
-// goes out.
+// goes out. Out of line: one copy serves every line.
+#[inline(never)]
 pub(crate) fn write(stamp: Stamp, level: Level, text: fmt::Arguments<'_>) -> bool {
     let mut line = Line {
         bytes: [0; LINE_BYTES],
