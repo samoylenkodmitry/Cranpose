@@ -7,16 +7,22 @@ use std::{
 };
 
 use cranpose_core::debug_toggles::{debug_toggle_os, set_debug_toggle_os};
-use cranpose_render_common::{Renderer, graph::LayerNode};
+use cranpose_render_common::{
+    Renderer,
+    graph::{CachePolicy, LayerNode, ProjectiveTransform, RenderNode},
+};
 use cranpose_render_wgpu::{CapturedFrame, pipelines_created, pipelines_created_off_frame};
 use cranpose_ui_graphics::{
     Brush, Color, CornerRadii, DrawPrimitive, LiquidGlassRect, LiquidGlassSpec, Rect, RenderEffect,
-    Stroke, liquid_glass_effect,
+    Size, Stroke, liquid_glass_effect,
 };
 
-use crate::support::{
-    self,
-    glass_page::{GlassFolds, panes_page},
+use crate::{
+    shared_test_support,
+    support::{
+        self,
+        glass_page::{GlassFolds, panes_page},
+    },
 };
 
 const CACHE_FILE: &str = "CRANPOSE_PIPELINE_CACHE_FILE";
@@ -1086,11 +1092,7 @@ fn a_relaunch_uploads_its_kept_outputs_a_share_a_frame() {
     );
     drop(reference);
     let page = grid(&shader, Offscreen, 0.0, GRID);
-    let mut launch = support::LockedRenderer::beside_locked().expect("GPU required");
-    settle_kept(&mut launch, &page, GRID.size());
-    drop(launch);
-
-    let mut relaunch = support::LockedRenderer::beside_locked().expect("GPU required");
+    let mut relaunch = relaunch_after_kept(&page, GRID.size());
     let mut uploads = Vec::new();
     let mut frame = None;
     for _ in 0..8 {
@@ -1139,11 +1141,7 @@ fn a_kept_output_past_a_frames_share_uploads_in_the_first_frame() {
     let files = CacheFiles::new();
     files.select("kept-large-upload.bin");
     let page = grid(&shader(), Offscreen, 0.25, GRID);
-    let mut launch = support::LockedRenderer::beside_locked().expect("GPU required");
-    settle_kept(&mut launch, &page, GRID.size());
-    drop(launch);
-
-    let mut relaunch = support::LockedRenderer::beside_locked().expect("GPU required");
+    let mut relaunch = relaunch_after_kept(&page, GRID.size());
     support::capture_graph(&mut relaunch, &page, width, height);
     let stats = relaunch.last_frame_stats().expect("frame statistics");
     drop(relaunch);
@@ -1152,6 +1150,66 @@ fn a_kept_output_past_a_frames_share_uploads_in_the_first_frame() {
         (1080 * 1080 * 4, 0),
         "the output comes from the file in the first frame: {stats:?}"
     );
+}
+
+// Kept outputs inside two offscreen parents that the cache keeps from the
+// frame of the outputs' fills. The next frame draws the outer parent from
+// the cache and visits no output. The parent's cache hit shows the outputs
+// inside it again, so they go to the file. A relaunch uploads them all.
+#[test]
+fn kept_outputs_inside_a_cached_parent_go_to_the_file() {
+    use cranpose_ui_graphics::CompositingStrategy::Offscreen;
+
+    use crate::offscreen_shader_layers::{Grid, cells, shader};
+
+    const GRID: Grid = Grid {
+        cell: 24,
+        columns: 4,
+        rows: 4,
+    };
+    let (width, height) = GRID.size();
+    let _lock = support::gpu_test_lock();
+    let files = CacheFiles::new();
+    files.select("kept-in-parents.bin");
+    let inner = offscreen_parent(cells(&shader(), Offscreen, 1.0, GRID), GRID.size());
+    let outer = offscreen_parent(vec![inner], GRID.size());
+    let page = support::page_graph(width, height, vec![outer]);
+    let mut relaunch = relaunch_after_kept(&page, GRID.size());
+    support::capture_graph(&mut relaunch, &page, width, height);
+    let stats = relaunch.last_frame_stats().expect("frame statistics");
+    drop(relaunch);
+    assert_eq!(
+        (stats.kept_upload_bytes, stats.effect_applies),
+        (16 * 24 * 24 * 4, 0),
+        "every output comes from the file: {stats:?}"
+    );
+}
+
+// A layer the app draws offscreen, of `size`, holding `children`.
+fn offscreen_parent(children: Vec<RenderNode>, (width, height): (u32, u32)) -> RenderNode {
+    let layer = cranpose_ui_graphics::GraphicsLayer {
+        compositing_strategy: cranpose_ui_graphics::CompositingStrategy::Offscreen,
+        ..cranpose_ui_graphics::GraphicsLayer::default()
+    };
+    let mut node = shared_test_support::layer_node(
+        Rect::from_size(Size::new(width as f32, height as f32)),
+        ProjectiveTransform::identity(),
+        layer,
+        children,
+    );
+    // as the scene builder marks a layer the app draws offscreen
+    node.isolation.explicit_offscreen = true;
+    node.cache_policy = CachePolicy::Offscreen;
+    RenderNode::Layer(Box::new(node))
+}
+
+// A renderer launched over the file of a first launch that drew `page`
+// until it settled.
+fn relaunch_after_kept(page: &LayerNode, size: (u32, u32)) -> support::LockedRenderer {
+    let mut launch = support::LockedRenderer::beside_locked().expect("GPU required");
+    settle_kept(&mut launch, page, size);
+    drop(launch);
+    support::LockedRenderer::beside_locked().expect("GPU required")
 }
 
 fn draw_kept_settled(renderer: &mut support::LockedRenderer, page: &LayerNode) {

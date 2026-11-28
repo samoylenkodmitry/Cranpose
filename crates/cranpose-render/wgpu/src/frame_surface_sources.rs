@@ -77,6 +77,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             plan.surface_logical,
         );
         let mark = self.renderer.stand_in_mark();
+        let kept = self.renderer.layer_cache.disk.mark();
         self.render_layer(
             &child.content,
             child_page,
@@ -93,6 +94,11 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 None,
             )
         });
+        if let Some(key) = retained {
+            // a frame that draws the surface from the cache visits none of
+            // the kept outputs drawn inside it
+            self.renderer.layer_cache.disk.kept_around(key, kept);
+        }
         Ok(plan.surface(
             CompositeSource {
                 texture,

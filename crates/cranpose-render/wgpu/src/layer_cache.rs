@@ -191,7 +191,14 @@ impl LayerCache {
         if entry.retained.pixels == StandInPixels::Interim {
             self.interim_reads += 1;
         }
-        Some(entry.retained.clone())
+        let retained = entry.retained.clone();
+        let entries = &self.entries;
+        self.disk.shown(key, &retained.texture, |inside| {
+            entries
+                .peek(inside)
+                .map(|entry| Rc::clone(&entry.retained.texture))
+        });
+        Some(retained)
     }
 
     // How many reads so far returned an entry that may hold a stand-in.

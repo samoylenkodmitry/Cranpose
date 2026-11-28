@@ -3,7 +3,9 @@
 // one drew in place of drawing them again. The file names each output by
 // what it draws, so an output whose shader or uniforms changed is drawn
 // afresh. An output goes to the file when the frame after its fill shows it
-// again, so a layer drawn anew every frame never does. An output no launch
+// again, so a layer drawn anew every frame never does. A parent that the
+// cache keeps around outputs shows them again when the next frame draws it
+// from the cache. An output no launch
 // used for a few launches goes. A frame uploads at most FRAME_UPLOAD_BYTES of
 // pixels past its first output. Each upload holds a staging copy of its
 // pixels until the GPU is done with the frame. A start that shows many
@@ -14,6 +16,7 @@ use std::{
     fs::File,
     hash::{Hash, Hasher},
     io::{Read, Seek, SeekFrom},
+    ops::Range,
     path::PathBuf,
     rc::Rc,
 };
@@ -49,8 +52,8 @@ struct KeptFile {
     used: HashSet<u64>,
     // the outputs this frame drew, and those the last submitted frame drew,
     // which this frame keeps when it shows them again
-    drawn: Vec<u64>,
-    last_drawn: Vec<u64>,
+    drawn: FrameOutputs,
+    last_drawn: FrameOutputs,
     // the device and queue that draw the outputs, from the first kept one
     gpu: Option<(wgpu::Device, wgpu::Queue)>,
     // outputs drawn this frame, to copy once the frame is submitted
@@ -64,6 +67,31 @@ struct KeptFile {
     upload: Vec<u8>,
     // the bytes this frame uploaded
     uploaded: u64,
+}
+
+// The outputs a frame drew. A parent that the cache kept around some of
+// them names the outputs drawn inside it.
+#[derive(Default)]
+struct FrameOutputs {
+    outputs: Vec<LayerRasterCacheKey>,
+    // each kept parent with the range of `outputs` drawn inside it
+    parents: Vec<(LayerRasterCacheKey, Range<usize>)>,
+}
+
+impl FrameOutputs {
+    fn clear(&mut self) {
+        self.outputs.clear();
+        self.parents.clear();
+    }
+
+    // The outputs drawn inside `parent`.
+    fn inside(&self, parent: &LayerRasterCacheKey) -> &[LayerRasterCacheKey] {
+        self.parents
+            .iter()
+            .find(|(kept, _)| kept == parent)
+            .and_then(|(_, range)| self.outputs.get(range.clone()))
+            .unwrap_or_default()
+    }
 }
 
 struct Requested {
@@ -132,8 +160,8 @@ impl KeptPixels {
                 earlier,
                 index,
                 used: HashSet::default(),
-                drawn: Vec::new(),
-                last_drawn: Vec::new(),
+                drawn: FrameOutputs::default(),
+                last_drawn: FrameOutputs::default(),
                 gpu: None,
                 requested: Vec::new(),
                 reading: Vec::new(),
@@ -210,39 +238,70 @@ impl KeptPixels {
         Some(stats)
     }
 
-    // Notes that this frame drew the output named `key`.
-    pub(crate) fn drew(&mut self, key: u64) {
+    // Notes that this frame drew the output under `key` with `device`.
+    pub(crate) fn drew(
+        &mut self,
+        (device, queue): (&wgpu::Device, &wgpu::Queue),
+        key: LayerRasterCacheKey,
+    ) {
         if let Some(file) = self.file.as_mut() {
-            file.drawn.push(key);
+            file.gpu
+                .get_or_insert_with(|| (device.clone(), queue.clone()));
+            file.drawn.outputs.push(key);
         }
     }
 
-    // Keeps the output under `key`, which `target` of `device` shows again,
-    // when the last submitted frame drew it.
+    // Where the outputs this frame draws from now on start: the outputs
+    // drawn inside a parent start at its mark.
+    pub(crate) fn mark(&self) -> usize {
+        self.file
+            .as_ref()
+            .map_or(0, |file| file.drawn.outputs.len())
+    }
+
+    // Notes that the cache keeps `parent`, inside which this frame drew the
+    // outputs since `mark`.
+    pub(crate) fn kept_around(&mut self, parent: LayerRasterCacheKey, mark: usize) {
+        let Some(file) = self.file.as_mut() else {
+            return;
+        };
+        let drawn = file.drawn.outputs.len();
+        if mark < drawn {
+            file.drawn.parents.push((parent, mark..drawn));
+        }
+    }
+
+    // Keeps the outputs that the cache entry under `key` shows again when
+    // the last submitted frame drew them: the entry's own output in `target`
+    // with the outputs drawn inside it, whose targets `kept` finds.
     pub(crate) fn shown(
         &mut self,
-        (device, queue): (&wgpu::Device, &wgpu::Queue),
         key: &LayerRasterCacheKey,
         target: &Rc<OffscreenTarget>,
+        kept: impl Fn(&LayerRasterCacheKey) -> Option<Rc<OffscreenTarget>>,
     ) {
         let Some(file) = self.file.as_mut() else {
             return;
         };
-        if file.last_drawn.is_empty() {
+        let last = &file.last_drawn;
+        if last.outputs.is_empty() {
             return;
         }
-        let key = disk_key(key);
-        let Some(at) = file.last_drawn.iter().position(|drawn| *drawn == key) else {
-            return;
+        let (used, requested) = (&mut file.used, &mut file.requested);
+        let mut request = |key: &LayerRasterCacheKey, target: Rc<OffscreenTarget>| {
+            let key = disk_key(key);
+            if used.insert(key) {
+                requested.push(Requested { key, target });
+            }
         };
-        file.last_drawn.swap_remove(at);
-        file.used.insert(key);
-        file.gpu
-            .get_or_insert_with(|| (device.clone(), queue.clone()));
-        file.requested.push(Requested {
-            key,
-            target: Rc::clone(target),
-        });
+        if last.outputs.contains(key) {
+            request(key, Rc::clone(target));
+        }
+        for inside in last.inside(key) {
+            if let Some(target) = kept(inside) {
+                request(inside, target);
+            }
+        }
     }
 
     // Forgets the outputs of a frame that submitted nothing: their targets
@@ -258,7 +317,7 @@ impl KeptPixels {
     pub(crate) fn awaits_frame(&self) -> bool {
         self.file
             .as_ref()
-            .is_some_and(|file| !file.last_drawn.is_empty() || !file.reading.is_empty())
+            .is_some_and(|file| !file.last_drawn.outputs.is_empty() || !file.reading.is_empty())
     }
 
     // Ends a frame: copies the outputs it drew to buffers the CPU reads, and

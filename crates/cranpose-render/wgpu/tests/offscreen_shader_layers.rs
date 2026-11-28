@@ -66,14 +66,25 @@ impl Grid {
     }
 }
 
-// The cells of `grid`, each a layer drawn by `shader` alone with a shade of
-// its own, drawn with `strategy`. The first cell's shade is `first`.
+// A page of the cells of `grid`.
 pub(crate) fn grid(
     shader: &RuntimeShader,
     strategy: CompositingStrategy,
     first: f32,
     grid: Grid,
 ) -> LayerNode {
+    let (width, height) = grid.size();
+    support::page_graph(width, height, cells(shader, strategy, first, grid))
+}
+
+// The cells of `grid`, each a layer drawn by `shader` alone with a shade of
+// its own, drawn with `strategy`. The first cell's shade is `first`.
+pub(crate) fn cells(
+    shader: &RuntimeShader,
+    strategy: CompositingStrategy,
+    first: f32,
+    grid: Grid,
+) -> Vec<RenderNode> {
     let count = grid.columns * grid.rows;
     let side = grid.cell as f32;
     let cells = (0..count).map(|index| {
@@ -105,8 +116,7 @@ pub(crate) fn grid(
         };
         RenderNode::Layer(Box::new(node))
     });
-    let (width, height) = grid.size();
-    support::page_graph(width, height, cells.collect())
+    cells.collect()
 }
 
 #[test]
