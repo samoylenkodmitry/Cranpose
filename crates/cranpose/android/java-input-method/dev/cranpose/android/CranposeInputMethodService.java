@@ -365,6 +365,30 @@ public class CranposeInputMethodService extends InputMethodService
         }
     }
 
+    /**
+     * Plays haptic feedback of {@code kind} (see {@link CranposeHapticFeedback})
+     * on the board's view, which needs no vibrate permission and follows the
+     * system's touch feedback setting. Rust calls it from any thread; a call
+     * from another thread plays on the main thread a moment later.
+     */
+    static void haptic(int kind) {
+        CranposeInputMethodService service = current;
+        if (service == null) {
+            return;
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            service.playHaptic(kind);
+        } else {
+            service.handler.post(() -> service.playHaptic(kind));
+        }
+    }
+
+    private void playHaptic(int kind) {
+        if (surfaceView != null) {
+            surfaceView.performHapticFeedback(CranposeHapticFeedback.constant(kind));
+        }
+    }
+
     private static InputConnection connection() {
         CranposeInputMethodService service = current;
         return service == null ? null : service.getCurrentInputConnection();

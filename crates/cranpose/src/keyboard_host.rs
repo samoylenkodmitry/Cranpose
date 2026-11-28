@@ -12,6 +12,7 @@ use std::{
 
 use cranpose_app_shell::{TouchRouter, TouchSample};
 use cranpose_core::{MutableState, rememberMutableStateOf};
+use cranpose_services::{HapticsRef, local_haptics};
 use cranpose_ui::{EdgeInsets, PointerSource, Size, local_safe_area_insets};
 
 use crate::{
@@ -42,6 +43,9 @@ pub(crate) trait KeyboardWindow: Sized + 'static {
 
     // Asks the platform for a frame. Any thread may call it.
     fn request_frame();
+
+    // The haptics the board reads through `local_haptics`.
+    fn haptics() -> HapticsRef;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -322,11 +326,15 @@ impl<W: KeyboardWindow> KeyboardState<W> {
     fn root(&self, content: fn()) -> impl FnMut() + 'static {
         let field = self.field.clone();
         let insets = self.insets.clone();
+        let haptics = W::haptics();
         move || {
             let field = field.state().get();
             let insets = insets.state();
             cranpose_core::CompositionLocalProvider(
-                [local_safe_area_insets().provides_computed(move |_| insets.get())],
+                [
+                    local_safe_area_insets().provides_computed(move |_| insets.get()),
+                    local_haptics().provides(Arc::clone(&haptics)),
+                ],
                 || {
                     crate::input_method::provide(
                         InputConnection::new(field.editor, field.session),

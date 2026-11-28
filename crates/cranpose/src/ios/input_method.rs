@@ -12,6 +12,7 @@
 
 use std::ffi::{CString, c_char, c_int, c_void};
 
+use cranpose_services::{HapticsRef, default_haptics};
 use cranpose_ui::Size;
 use dispatch2::{DispatchQueue, DispatchTime};
 use objc2::{
@@ -97,6 +98,13 @@ impl KeyboardWindow for KeyboardLayer {
     fn request_frame() {
         DispatchQueue::main().exec_async(wake);
     }
+
+    // UIKit plays feedback in a keyboard extension only with Full Access:
+    // the extension asks for it with `RequestsOpenAccess`, and the person
+    // grants it in Settings. Without it the generators play nothing.
+    fn haptics() -> HapticsRef {
+        default_haptics()
+    }
 }
 
 // The controller on screen and what it shows the board with.
@@ -143,6 +151,7 @@ pub(crate) fn run(settings: AppSettings) -> ! {
     super::host::register();
     super::app_info::register();
     super::device_info::register();
+    super::haptics::register();
     crate::process_info::install();
     settings.start_process();
     with_keyboard(|keyboard| keyboard.install(settings));

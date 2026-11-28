@@ -7,6 +7,9 @@
 //! thread through the service.
 #![expect(unsafe_code, reason = "JNI and NDK calls into the Android system")]
 
+use std::sync::Arc;
+
+use cranpose_services::{HapticFeedback, Haptics, HapticsRef, set_platform_haptics};
 use cranpose_ui::{EdgeInsets, Size};
 use jni::{
     EnvUnowned, Outcome, jni_sig, jni_str,
@@ -67,6 +70,29 @@ impl KeyboardWindow for AndroidWindow {
                 .map(|_| ())
         });
     }
+
+    fn haptics() -> HapticsRef {
+        Arc::new(InputViewHaptics)
+    }
+}
+
+// Haptic feedback on the service's input view. A view needs no VIBRATE
+// permission, so the trait's other methods fall back to `perform`.
+struct InputViewHaptics;
+
+impl Haptics for InputViewHaptics {
+    fn perform(&self, feedback: HapticFeedback) {
+        let kind = super::services::haptic_feedback_kind(feedback);
+        call_service(|env, class| {
+            env.call_static_method(
+                class,
+                jni_str!("haptic"),
+                jni_sig!("(I)V"),
+                &[JValue::Int(kind)],
+            )
+            .map(|_| ())
+        });
+    }
 }
 
 fn with_keyboard<R>(f: impl FnOnce(&KeyboardState<AndroidWindow>) -> R) -> R {
@@ -76,6 +102,14 @@ fn with_keyboard<R>(f: impl FnOnce(&KeyboardState<AndroidWindow>) -> R) -> R {
 // Keeps the settings of a process that has a keyboard, for the service.
 pub(crate) fn install(settings: AppSettings) {
     with_keyboard(|keyboard| keyboard.install(settings));
+}
+
+// Plays `default_haptics` on the keyboard's view when `settings` name a
+// keyboard.
+pub(crate) fn serve_platform_haptics(settings: &AppSettings) {
+    if settings.input_method.is_some() {
+        set_platform_haptics(Arc::new(InputViewHaptics));
+    }
 }
 
 pub(crate) fn commit_text(text: &str) {

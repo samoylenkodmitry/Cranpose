@@ -90,21 +90,24 @@ pub(crate) fn start_for_activity(app: &android_activity::AndroidApp, settings: &
     start(settings, || AndroidContext::of_activity(app));
 }
 
-/// Starts the process for a service, from `CranposeProcess.nativeStart`.
-///
-/// With `share` the process has no activity, and the context is also set
-/// where crates such as cpal read it, which the activity's start sets
-/// otherwise. `CranposeProcess.beforeActivity` hands it back with
-/// `nativeYieldContext` before an activity sets it.
+// Starts the process for a service, from `CranposeProcess.nativeStart`, and
+// keeps the settings for the keyboard's service.
+//
+// With `share` the process has no activity, and the context is also set
+// where crates such as cpal read it, which the activity's start sets
+// otherwise. `CranposeProcess.beforeActivity` hands it back with
+// `nativeYieldContext` before an activity sets it. With no activity the
+// keyboard's view also plays `default_haptics`, until an activity starts
+// and installs its own.
 pub(crate) fn start_for_service(
     mut env: EnvUnowned<'_>,
     _class: JClass<'_>,
     context: JObject<'_>,
     share: bool,
-    settings: &AppSettings,
+    settings: AppSettings,
 ) {
     let started = env.with_env(|env| -> jni::errors::Result<()> {
-        start(settings, || {
+        start(&settings, || {
             let context = AndroidContext::new(env, &context)?;
             if share {
                 share_with_ndk(&context)?;
@@ -116,6 +119,10 @@ pub(crate) fn start_for_service(
     if let Outcome::Err(_) | Outcome::Panic(_) = started.into_outcome() {
         log::error!("the process start for a service failed");
     }
+    if share {
+        super::input_method::serve_platform_haptics(&settings);
+    }
+    super::input_method::install(settings);
 }
 
 fn share_with_ndk(context: &AndroidContext) -> Result<(), String> {
