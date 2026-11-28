@@ -3,8 +3,6 @@
 // nothing, draws nothing and asks for no frame, and a crystal button with nothing around it asks
 // for no frame while it holds still.
 
-use std::time::{Duration, Instant};
-
 use super::*;
 use crate::{ChoiceForm, HologramStage, SpatialChoiceGroup, pointers::direct_touch_tests::touch};
 
@@ -112,10 +110,7 @@ fn a_hologram_that_hid_composes_nothing_draws_nothing_and_asks_for_no_frame() {
         "the clock of a page with a stage runs while it shows"
     );
     bench.controls.visible.set(false);
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while !bench.headset.space.panels().is_empty() && Instant::now() < deadline {
-        bench.draw_once();
-    }
+    bench.draw_until_hidden();
     assert!(
         bench.headset.space.panels().is_empty(),
         "the hidden hologram holds no panel and no volume"
@@ -310,10 +305,7 @@ fn a_gem_turns_while_it_shows_and_its_clock_stops_when_it_hides() {
         "the gem draws in the scene"
     );
     bench.controls.visible.set(false);
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while !bench.headset.space.panels().is_empty() && Instant::now() < deadline {
-        bench.draw_once();
-    }
+    bench.draw_until_hidden();
     bench.headset.guest.shell().update();
     assert!(
         bench.headset.space.panels().is_empty()
