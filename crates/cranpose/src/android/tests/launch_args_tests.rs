@@ -70,3 +70,35 @@ fn decoding_a_launch_without_extras_keeps_the_debuggable_flag() {
     assert!(args.is_empty());
     assert!(args.is_debuggable());
 }
+
+#[test]
+fn decoding_names_the_component_that_the_intent_named() {
+    let args = decode_launch_arguments("0\tdev.example.app.ShellEntry\nb\tconnect\t1");
+
+    assert_eq!(
+        args.component_class_name(),
+        Some("dev.example.app.ShellEntry")
+    );
+    assert!(!args.is_debuggable());
+    assert_eq!(args.boolean("connect"), Some(true));
+}
+
+#[test]
+fn decoding_an_intent_without_a_component_names_none() {
+    assert_eq!(
+        decode_launch_arguments("1\nb\tconnect\t1").component_class_name(),
+        None
+    );
+    assert_eq!(
+        decode_launch_arguments("1\t\nb\tconnect\t1").component_class_name(),
+        None
+    );
+    assert_eq!(decode_launch_arguments("").component_class_name(), None);
+}
+
+#[test]
+fn decoding_restores_an_escaped_component_name() {
+    let args = decode_launch_arguments("1\tdev.example.Odd%09Name");
+
+    assert_eq!(args.component_class_name(), Some("dev.example.Odd\tName"));
+}

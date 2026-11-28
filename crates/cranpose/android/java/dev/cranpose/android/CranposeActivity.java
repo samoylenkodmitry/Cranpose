@@ -2972,8 +2972,11 @@ public class CranposeActivity extends NativeActivity {
      *
      * <p>The whole {@link android.os.Bundle} crosses JNI as one string rather than one
      * call per extra. The first line is {@code 1} or {@code 0} for
-     * {@code ApplicationInfo.FLAG_DEBUGGABLE}; each following line is
-     * {@code <type>\t<name>\t<value>} with {@code type} one of {@code b i l f s}.
+     * {@code ApplicationInfo.FLAG_DEBUGGABLE}, followed by {@code \t} and the class name
+     * of the component that the intent named when it named one; each following line is
+     * {@code <type>\t<name>\t<value>} with {@code type} one of {@code b i l f s}. A launch
+     * through an {@code <activity-alias>} names the alias, which lets the app tell its
+     * entry points apart.
      * Extras Cranpose has no typed API for (arrays, {@code Parcelable}s, nested
      * bundles) are omitted rather than guessed at.
      */
@@ -2984,6 +2987,10 @@ public class CranposeActivity extends NativeActivity {
         Intent intent = getIntent();
         if (intent == null) {
             return payload.toString();
+        }
+        android.content.ComponentName component = intent.getComponent();
+        if (component != null) {
+            payload.append('\t').append(escapeLaunchArgument(component.getClassName()));
         }
         Bundle extras;
         try {
